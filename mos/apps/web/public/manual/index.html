@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VoyageOS 全流程操作手册</title>
+  <style>
+    :root {
+      --sea-deep: #0B1F2A;
+      --sea-mid: #123047;
+      --accent: #1A9B96;
+      --accent-soft: #2BB5B0;
+      --foam: #eef3f6;
+      --ink: #0f1c28;
+      --muted: #5a6e7d;
+      --border: #d7e0e6;
+      --ok: #1e7a46;
+      --warn: #b7791f;
+      --surface: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Ubuntu, "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--foam);
+      line-height: 1.55;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .layout {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    .toc {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      overflow: auto;
+      background: var(--sea-deep);
+      color: #e8f1f5;
+      padding: 1.25rem 1rem 2rem;
+    }
+    .toc strong { display: block; font-size: 0.95rem; margin-bottom: 0.85rem; letter-spacing: 0.02em; }
+    .toc a {
+      display: block;
+      color: #9eb2bf;
+      font-size: 0.86rem;
+      padding: 0.35rem 0.45rem;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .toc a:hover { background: rgba(255,255,255,0.06); color: #fff; }
+    .main { padding: 1.5rem 2rem 3rem; max-width: 920px; }
+    header.hero {
+      background: linear-gradient(160deg, var(--sea-deep), var(--sea-mid));
+      color: #eef3f6;
+      border-radius: 16px;
+      padding: 1.5rem 1.6rem;
+      margin-bottom: 1.5rem;
+    }
+    header.hero h1 { margin: 0 0 0.4rem; font-size: 1.65rem; letter-spacing: -0.02em; }
+    header.hero p { margin: 0; color: #b7c7d2; max-width: 40em; }
+    .badge {
+      display: inline-block;
+      margin-top: 0.85rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      background: rgba(43,181,176,0.22);
+      color: #9ef0ea;
+    }
+    h2 {
+      margin: 2rem 0 0.75rem;
+      font-size: 1.25rem;
+      color: var(--sea-deep);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.4rem;
+    }
+    h3 { margin: 1.25rem 0 0.45rem; font-size: 1.05rem; }
+    p, li { font-size: 0.95rem; }
+    .muted { color: var(--muted); }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.15rem;
+      margin: 0.75rem 0;
+    }
+    .verdict {
+      border-left: 4px solid var(--accent);
+      background: #f3fbfa;
+    }
+    .warn-box {
+      border-left: 4px solid var(--warn);
+      background: #fff8ea;
+    }
+    .ok-box {
+      border-left: 4px solid var(--ok);
+      background: #eef8f1;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      background: var(--surface);
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    th, td {
+      text-align: left;
+      padding: 0.65rem 0.7rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { background: #f3f7f9; color: var(--sea-mid); font-size: 0.82rem; }
+    .step {
+      counter-increment: step;
+      position: relative;
+      padding-left: 2.4rem;
+      margin: 1rem 0;
+    }
+    .steps { counter-reset: step; }
+    .step::before {
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1.7rem;
+      height: 1.7rem;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      font-size: 0.85rem;
+      display: grid;
+      place-items: center;
+    }
+    .step h3 { margin-top: 0; }
+    code, .path {
+      font-family: "Ubuntu Mono", Consolas, monospace;
+      font-size: 0.86em;
+      background: #e8eef2;
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      align-items: center;
+      margin: 0.75rem 0 1rem;
+    }
+    .flow span {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.4rem 0.65rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .flow i { color: var(--muted); font-style: normal; }
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      .toc { position: relative; height: auto; max-height: none; }
+    }
+    @media print {
+      .toc { display: none; }
+      .layout { display: block; }
+      .main { max-width: none; padding: 0; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav class="toc" aria-label="目录">
+      <strong>VoyageOS 操作手册</strong>
+      <a href="#verdict">1. 能否用于全流程</a>
+      <a href="#accounts">2. 演示账号</a>
+      <a href="#chain">3. 商务全链路</a>
+      <a href="#ops">4. 航次运营</a>
+      <a href="#finance">5. 滞期与财务</a>
+      <a href="#tech">6. 船管与大屏</a>
+      <a href="#admin">7. 管理与平台</a>
+      <a href="#test">8. 全链路测试结果</a>
+      <a href="#limits">9. 边界与建议</a>
+    </nav>
+
+    <article class="main">
+      <header class="hero">
+        <h1>VoyageOS 全流程操作手册</h1>
+        <p>面向航运公司日常工作演练：从估算成交、航次执行、滞期索赔到财务结算与管理大屏。本地演示入口 <code style="background:rgba(255,255,255,.12);color:#fff">http://localhost:3000</code>。</p>
+        <span class="badge">手册版本 · 与 API 全链路测试同步 · 本地时间</span>
+      </header>
+
+      <section id="verdict">
+        <h2>1. 当前系统可否用于全流程日常工作？</h2>
+        <div class="card verdict">
+          <p><strong>结论：可用于「试点 / PoC / 培训演练」级的全流程日常台面；尚不宜作为大型航运公司生产环境的唯一核心系统全面替代。</strong></p>
+          <p class="muted" style="margin-bottom:0">
+            商业主干（估算 → 租约 → 航次 → 装卸时间/索赔 → 燃油 → 发票收付款）在产品台面与自动化测试中已打通；
+            邮件深度业务、ERP 深集成、船期甘特硬冲突、情境 AI、部分报表钻取等仍偏演示或待加深。
+          </p>
+        </div>
+        <div class="flow" aria-label="主链路">
+          <span>估算 TCE</span><i>→</i>
+          <span>租约审批</span><i>→</i>
+          <span>航次执行</span><i>→</i>
+          <span>SOF / 午报</span><i>→</i>
+          <span>Laytime</span><i>→</i>
+          <span>索赔 / 发票</span><i>→</i>
+          <span>收付款 / GL</span><i>→</i>
+          <span>损益 / 大屏</span>
+        </div>
+      </section>
+
+      <section id="accounts">
+        <h2>2. 演示账号（租户 demo）</h2>
+        <p class="muted">密码统一 <code>Demo1234!</code>。平台运营租户码 <code>sys</code> / <code>ops@voyageos.platform</code> / <code>Ops1234!</code>。</p>
+        <table>
+          <thead>
+            <tr><th>邮箱</th><th>角色</th><th>建议演练入口</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>charterer@demo.voyageos</code></td><td>租船</td><td>估算 · 租约 · 邮件复核</td></tr>
+            <tr><td><code>ops@demo.voyageos</code></td><td>航次操作</td><td>航次 · 挂靠港 / 午报 / SOF · 孪生</td></tr>
+            <tr><td><code>demurrage@demo.voyageos</code></td><td>滞期</td><td>财务台 · Laytime · 索赔</td></tr>
+            <tr><td><code>finance@demo.voyageos</code></td><td>财务</td><td>发票 · 收付款 · 航次损益 · 账龄</td></tr>
+            <tr><td><code>tech@demo.voyageos</code></td><td>机务</td><td>船舶管理 · 证书 / PMS</td></tr>
+            <tr><td><code>mgmt@demo.voyageos</code></td><td>管理层</td><td>工作台 · 实时大屏</td></tr>
+            <tr><td><code>admin@demo.voyageos</code></td><td>租户管理员</td><td>控制平面 · 用户安全 · Office</td></tr>
+          </tbody>
+        </table>
+        <p>顶栏可切换 <strong>中文 | EN</strong>；全局搜索 <strong>Ctrl+K</strong>；帮助：侧栏底部「知识中心」。</p>
+      </section>
+
+      <section id="chain" class="steps">
+        <h2>3. 商务全链路操作（租船视角）</h2>
+
+        <div class="step">
+          <h3>登录并进入工作台</h3>
+          <ol>
+            <li>打开 <span class="path">/login</span>，租户码 <code>demo</code>，使用租船账号登录。</li>
+            <li>进入 <span class="path">/home</span> 工作台，确认角色快捷入口与小部件。</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>主数据确认</h3>
+          <ol>
+            <li>打开船舶 / 港口 / 对手方主数据页，确认有可用船舶、装卸港与租家。</li>
+            <li>若对手方制裁状态为 blocked，租约将无法激活（合规拦截）。</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>航次估算（Estimate）</h3>
+          <ol>
+            <li>进入 <span class="path">/estimates</span>，新建估算：选择船舶、对手方，填写货量、运价/包干、佣金、航次天数、燃油与港口费等。</li>
+            <li>点击<strong>计算</strong>得到 TCE；可克隆方案做<strong>对比</strong>与敏感度。</li>
+            <li>满意后执行<strong>转租约（To CP）</strong>，生成草稿租约。</li>
+          </ol>
+          <p class="muted">页面路径：<span class="path">/estimates</span></p>
+        </div>
+
+        <div class="step">
+          <h3>租约审批与激活</h3>
+          <ol>
+            <li>进入 <span class="path">/charters</span>，打开由估算生成的租约。</li>
+            <li>状态流转：<code>draft</code> → <code>pending_approval</code> → <code>active</code>（不可跳过）。</li>
+            <li>激活后系统可关联生成航次（视种子与链路配置）。</li>
+            <li>COA 场景可在租约台记录 lifting。</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="ops" class="steps">
+        <h2>4. 航次运营（操作视角）</h2>
+        <div class="step">
+          <h3>开航与挂靠港</h3>
+          <ol>
+            <li>使用操作账号登录，打开 <span class="path">/operations/voyages</span>。</li>
+            <li>将航次状态切至进行中；新增装港 / 卸港挂靠（顺序、ETA、代理等）。</li>
+            <li>录入午报（船位、航速、ROB、下一港 ETA）；系统可提示 ETA 偏差。</li>
+            <li>在挂靠港下登记 SOF 事件（如 NOR），注意使用<strong>本地时区</strong>。</li>
+          </ol>
+        </div>
+        <div class="step">
+          <h3>船队孪生</h3>
+          <ol>
+            <li>打开 <span class="path">/twin</span> 查看船队态势；可运行 what-if 推演（演示级）。</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="finance" class="steps">
+        <h2>5. 装卸时间、索赔与财务</h2>
+        <div class="step">
+          <h3>Laytime 与滞期索赔</h3>
+          <ol>
+            <li>滞期或财务角色进入 <span class="path">/finance</span>。</li>
+            <li>创建装卸时间单：关联航次 / 挂靠港，录入允许时间、周转时间、滞期费率与时间段（含除外时间）。</li>
+            <li><strong>计算 → 定稿</strong>后，可发起 demurrage 索赔并流转谈判 / 结清。</li>
+          </ol>
+        </div>
+        <div class="step">
+          <h3>港口使费、燃油、发票</h3>
+          <ol>
+            <li>港口使费：PDA 编制 → 提交 → 批准 → FDA（记录差异）。</li>
+            <li>燃油订单：询价 → 下单 → 交付，校验 ROB 守恒。</li>
+            <li>运费发票：草稿 → 待批 → 开立 → 分次收款至 paid → GL 过账辅助。</li>
+            <li>查看动态航次损益（估算 vs 实际 vs 差异）与 AR 账龄。</li>
+          </ol>
+          <p class="muted">分析报表入口：<span class="path">/analytics</span></p>
+        </div>
+      </section>
+
+      <section id="tech" class="steps">
+        <h2>6. 船管、审批与管理大屏</h2>
+        <div class="step">
+          <h3>船舶管理</h3>
+          <ol>
+            <li>机务账号打开 <span class="path">/ship</span>：证书、PMS 工单、缺陷与船员快照（模块深度因许可证/对接而异）。</li>
+          </ol>
+        </div>
+        <div class="step">
+          <h3>审批收件箱</h3>
+          <ol>
+            <li>租约 / 发票等进入待批后，可在 <span class="path">/workflows/inbox</span> 处理。</li>
+          </ol>
+        </div>
+        <div class="step">
+          <h3>实时大屏</h3>
+          <ol>
+            <li>打开 <span class="path">/dashboards</span>，按角色进入指挥墙；支持全屏与定时刷新。</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="admin">
+        <h2>7. 租户管理与平台运维</h2>
+        <div class="card">
+          <h3>租户控制平面 <span class="path">/settings</span></h3>
+          <ul>
+            <li>公司品牌、组织、用户角色、登录安全、语言术语</li>
+            <li>权限矩阵、工作流定义、订阅用量</li>
+            <li>SelfCheck、迁入向导、备份、AI Hub、集成中枢、Office 生态、许可证、API 密钥</li>
+          </ul>
+          <h3>平台运营 <span class="path">/platform</span></h3>
+          <ul>
+            <li>租户供给、产品品牌、IdP、语言库、套餐用量、健康度</li>
+            <li>数据与部署：<span class="path">/platform/ops</span>（数据源、初始化、部署档案、监控）</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="test">
+        <h2>8. 全链路自动化测试结果</h2>
+        <div class="card ok-box">
+          <p><strong>本次执行：</strong> <code>apps/api/tests</code> 全量 pytest</p>
+          <p><strong>结果：47 passed</strong>（约 166s），含：</p>
+          <ul>
+            <li><code>test_full_chain.py</code>：估算计算 → 转租约 → 审批激活 → 航次进行 → 挂靠/午报/SOF → Laytime 定稿 → 索赔 → PDA/FDA → 燃油 → 发票收款与 GL → 市场/排放/分析 → Pool/Risk/Berth → Twin what-if → SelfCheck → 航次完成</li>
+            <li>制裁拦截、状态机非法跳转、身份/SaaS/Office/知识中心/平台运维/冒烟面等</li>
+          </ul>
+          <p class="muted" style="margin-bottom:0">说明：自动化覆盖的是 API 业务链路正确性；浏览器 UI 请按本手册各角色路径做一次人工走查。</p>
+        </div>
+        <h3>建议人工走查清单</h3>
+        <table>
+          <thead><tr><th>序号</th><th>检查项</th><th>账号</th><th>期望</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>中英文切换（未登录门户 + 登录后）</td><td>—</td><td>文案切换，无 hydration 红错</td></tr>
+            <tr><td>2</td><td>估算计算与转租约</td><td>租船</td><td>TCE 出数，生成草稿 CP</td></tr>
+            <tr><td>3</td><td>租约审批激活</td><td>租船/管理</td><td>状态合法流转</td></tr>
+            <tr><td>4</td><td>挂靠港 + SOF + 午报</td><td>操作</td><td>时间线可见，本地时区</td></tr>
+            <tr><td>5</td><td>Laytime 定稿与索赔</td><td>滞期</td><td>金额正确，可结清</td></tr>
+            <tr><td>6</td><td>发票收款</td><td>财务</td><td>部分付 → 已付 → GL</td></tr>
+            <tr><td>7</td><td>控制平面图标卡</td><td>管理员</td><td>图标+标题可点，无「打开→」</td></tr>
+            <tr><td>8</td><td>角色大屏全屏</td><td>管理层</td><td>刷新与全屏正常</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="limits">
+        <h2>9. 边界说明与落地建议</h2>
+        <div class="card warn-box">
+          <ul>
+            <li><strong>适合：</strong> 流程培训、售前演示、中小团队试点台面、与现有系统并行验证。</li>
+            <li><strong>慎用为唯一生产核心，直至：</strong> 邮件/单据深度闭环、ERP 过账、船期可视化冲突策略、关键连接器与审计合规达到贵司验收标准。</li>
+            <li>租户独立库可登记绑定，当前业务会话默认仍走主库；云厂商「一键部署」多为模板指引。</li>
+            <li>知识中心问答为检索增强 FAQ，非实时大模型生成。</li>
+          </ul>
+        </div>
+        <p>更多产品说明见仓库 <span class="path">docs/user-guide.md</span>、<span class="path">docs/product-capabilities.md</span>；登录后亦可使用应用内知识中心。</p>
+      </section>
+
+      <footer>
+        <p>© VoyageOS · 本手册供内部演练与客户培训使用 · 生成时 pytest <strong>47 passed</strong></p>
+        <p>在线打开：开发环境 <a href="/manual/">/manual/</a> · 打印可用浏览器「打印 → PDF」。</p>
+      </footer>
+    </article>
+  </div>
+</body>
+</html>

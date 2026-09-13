@@ -1,0 +1,24 @@
+# Git
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+*.local
+.idea/
+.vscode/
+!.vscode/extensions.json
+mos/apps/api/.venv/
+mos/apps/web/node_modules/
+mos/apps/web/.next/
+mos/deploy/compose/.env

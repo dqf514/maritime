@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VoyageOS — 航运商业操作系统</title>
+  <meta name="description" content="VoyageOS：面向船东、租家与船舶运营方的航运商业操作系统。把租船、操作与结算收进同一日常工作台。" />
+  <style>
+    :root {
+      --sea-deep: #0a1628;
+      --sea-mid: #123047;
+      --foam: #e8f1f5;
+      --ink: #0f1c28;
+      --muted: #5a6e7d;
+      --accent: #1a8a8a;
+      --accent-soft: #2bb5b0;
+      --line: rgba(255, 255, 255, 0.12);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: Ubuntu, "Noto Sans CJK SC", "Source Han Sans SC", "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--foam);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    .hero {
+      min-height: 100vh;
+      min-height: 100dvh;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      color: #f4f8fb;
+      overflow: hidden;
+      background:
+        radial-gradient(ellipse 90% 70% at 70% 20%, rgba(43, 181, 176, 0.22), transparent 55%),
+        radial-gradient(ellipse 60% 50% at 10% 80%, rgba(26, 90, 138, 0.35), transparent 50%),
+        linear-gradient(165deg, var(--sea-deep) 0%, var(--sea-mid) 48%, #0d2438 100%);
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: linear-gradient(to bottom, rgba(0,0,0,0.5), transparent 85%);
+      pointer-events: none;
+      animation: gridDrift 28s linear infinite;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      left: -20%;
+      right: -20%;
+      bottom: -18%;
+      height: 42%;
+      background: radial-gradient(ellipse at center, rgba(43, 181, 176, 0.18), transparent 65%);
+      animation: swell 8s ease-in-out infinite;
+      pointer-events: none;
+    }
+    @keyframes gridDrift { from { transform: translateY(0); } to { transform: translateY(64px); } }
+    @keyframes swell {
+      0%, 100% { transform: translateY(0); opacity: 0.7; }
+      50% { transform: translateY(-12px); opacity: 1; }
+    }
+    @keyframes riseIn {
+      from { opacity: 0; transform: translateY(18px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .top {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 1.25rem 6vw;
+    }
+    .logo { font-size: 1.15rem; font-weight: 700; letter-spacing: 0.04em; }
+    .top a.contact {
+      font-size: 0.9rem;
+      opacity: 0.85;
+      border-bottom: 1px solid transparent;
+    }
+    .top a.contact:hover { opacity: 1; border-color: rgba(255,255,255,0.45); }
+    .hero-main {
+      position: relative;
+      z-index: 2;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 2rem 6vw 4rem;
+      max-width: 920px;
+      animation: riseIn 0.8s cubic-bezier(0.2, 0, 0, 1) both;
+    }
+    .brand {
+      font-size: clamp(3rem, 9vw, 5.5rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      margin-bottom: 1.25rem;
+    }
+    .brand em { font-style: normal; color: var(--accent-soft); }
+    .tagline {
+      font-size: clamp(1.05rem, 2.4vw, 1.35rem);
+      font-weight: 500;
+      max-width: 28em;
+      opacity: 0.95;
+      margin-bottom: 0.75rem;
+    }
+    .lead {
+      font-size: 1rem;
+      max-width: 36em;
+      color: rgba(232, 241, 245, 0.72);
+      margin-bottom: 2rem;
+    }
+    .cta-row { display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0.7rem 1.35rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.15s, background 0.2s;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn-primary { background: var(--accent-soft); color: var(--sea-deep); }
+    .btn-ghost {
+      background: transparent;
+      color: #f4f8fb;
+      border: 1px solid var(--line);
+    }
+    main { background: var(--foam); }
+    section {
+      padding: 4rem 6vw;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    section h2 {
+      font-size: clamp(1.4rem, 3vw, 1.75rem);
+      letter-spacing: -0.02em;
+      margin-bottom: 0.65rem;
+    }
+    section .sub { color: var(--muted); max-width: 40em; margin-bottom: 1.75rem; }
+    .pillars {
+      display: grid;
+      gap: 1.5rem;
+      list-style: none;
+    }
+    .pillars li strong {
+      display: block;
+      font-size: 1.05rem;
+      margin-bottom: 0.35rem;
+      color: var(--sea-deep);
+    }
+    .pillars li p { font-size: 0.95rem; color: var(--muted); }
+    footer {
+      padding: 1.5rem 6vw 2rem;
+      border-top: 1px solid rgba(15, 28, 40, 0.08);
+      color: var(--muted);
+      font-size: 0.85rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1.5rem;
+      justify-content: space-between;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="top">
+      <div class="logo">VoyageOS</div>
+      <a class="contact" href="#contact">联系我们</a>
+    </div>
+    <div class="hero-main">
+      <h1 class="brand">Voyage<em>OS</em></h1>
+      <p class="tagline">航运商业运营的操作系统。</p>
+      <p class="lead">
+        面向船东、租家、Operator 与船舶管理公司。把租船、操作与结算收进同一日常工作台，协作更清晰，责任更明确。
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#contact">预约演示</a>
+        <a class="btn btn-ghost" href="#why">了解更多</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section id="why" aria-labelledby="why-title">
+      <h2 id="why-title">为何选择 VoyageOS</h2>
+      <p class="sub">不是屏幕清单，而是一种更顺畅的航运商务协作方式。</p>
+      <ul class="pillars">
+        <li>
+          <strong>一条链路，日常可用</strong>
+          <p>把商业航次相关工作收进同一工作台，减少在表格、邮箱与多个工具之间来回切换。</p>
+        </li>
+        <li>
+          <strong>贴合航运岗位习惯</strong>
+          <p>围绕角色、审批、本地时间与行业用语设计，让关键岗位愿意每天打开使用。</p>
+        </li>
+        <li>
+          <strong>融入现有协作方式</strong>
+          <p>支持企业身份登录，并可与 Microsoft 365 等日常协作方式衔接，而不强行更换协作栈。</p>
+        </li>
+      </ul>
+    </section>
+
+    <section id="contact" aria-labelledby="cta-title">
+      <h2 id="cta-title">准备看看真实流程了吗？</h2>
+      <p class="sub">我们可以按您的船型与组织规模安排演示，帮助团队快速了解是否适合日常使用。</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="mailto:sales@voyageos.example" style="background:var(--accent-soft);color:var(--sea-deep)">发送邮件咨询</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div>© <span id="y"></span> VoyageOS</div>
+    <div>Commercial Voyage Management</div>
+  </footer>
+  <script>
+    document.getElementById("y").textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>
