@@ -5,7 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OmniSearch } from "@/components/OmniSearch";
 import { NavIcon, sectionIconId } from "@/components/NavIcon";
-import { apiGet, apiMe, type Me } from "@/lib/api";
+import { clearLookupCache } from "@/components/LookupSelect";
+import { apiGet, apiLogout, apiMe, type Me } from "@/lib/api";
 import { LanguageSwitcher, useI18n } from "@/lib/i18n";
 
 export type NavSection = {
@@ -18,6 +19,13 @@ export type ShellBootstrap = {
   roles: string[];
   profile_tier: string;
   is_platform: boolean;
+  tenant?: { id: string; code: string; name: string };
+  company?: {
+    display_name?: string | null;
+    logo_url?: string | null;
+    brand_primary?: string | null;
+    brand_secondary?: string | null;
+  };
   navigation: NavSection[];
   workspaces: { id: string; label: string }[];
   active_workspace: string;
@@ -65,6 +73,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [secOpen, setSecOpen] = useState<Record<string, boolean>>({});
   const [navHint, setNavHint] = useState<{ text: string; x: number; y: number } | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const pathname = usePathname();
@@ -81,11 +90,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const hideNavHint = useCallback(() => setNavHint(null), []);
 
   const load = useCallback(async () => {
-    const token = localStorage.getItem("voyageos_token");
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
+    // Session lives in an HttpOnly cookie (sent via credentials:"include");
+    // the legacy localStorage token is only a fallback header credential.
+    // Probe /me directly — a 401 lands in the catch below and redirects to /login.
     const [m, s, b] = await Promise.all([
       apiMe(),
       apiGet("/api/v1/shell/bootstrap"),
@@ -95,6 +102,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setShell(s);
     if (b?.icon_url) setIconUrl(b.icon_url);
     if (b?.product_name) setProductName(b.product_name);
+    if (s?.company?.logo_url) setIconUrl(s.company.logo_url);
+    if (s?.company?.display_name) setProductName(s.company.display_name);
+    if (s?.company?.brand_primary && typeof document !== "undefined") {
+      document.documentElement.style.setProperty("--brand", s.company.brand_primary);
+      document.documentElement.style.setProperty("--accent", s.company.brand_primary);
+    }
     await reload();
 
     const storedSecs = localStorage.getItem(SEC_COLLAPSE_KEY);
@@ -133,6 +146,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener("mousedown", onDoc);
   }, [userMenuOpen]);
 
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMobileNavOpen(false);
+    }
+    if (!mobileNavOpen) return;
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [mobileNavOpen]);
+
+  function closeMobileNav() {
+    setMobileNavOpen(false);
+  }
+
   function toggleNavCollapsed() {
     setNavCollapsed((prev) => {
       const next = !prev;
@@ -150,8 +185,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     });
   }
 
-  function signOut() {
-    localStorage.removeItem("voyageos_token");
+  async function signOut() {
+    // Clear the server-side HttpOnly cookie first, then local state.
+    await apiLogout();
+    localStorage.removeItem("voyageos_token"); // legacy token cleanup
+    clearLookupCache();
     router.replace("/login");
   }
 
@@ -170,16 +208,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     : t("shell.collapse_nav", "收起导航");
 
   return (
-    <div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>
+    <div
+      className={`app-shell ${navCollapsed ? "nav-collapsed" : ""} ${mobileNavOpen ? "mobile-nav-open" : ""}`}
+    >
       <header className="topbar">
-        <Link href="/home" className="brand brand-link">
+        <button
+          type="button"
+          className="nav-hamburger"
+          aria-label={mobileNavOpen ? t("shell.close_nav", "关闭导航") : t("shell.open_nav", "打开导航")}
+          aria-expanded={mobileNavOpen}
+          aria-controls="app-sidenav"
+          onClick={() => setMobileNavOpen((o) => !o)}
+        >
+          <span className="nav-hamburger-box" aria-hidden>
+            <span />
+            <span />
+            <span />
+          </span>
+        </button>
+        <Link href="/home" className="brand brand-link" onClick={closeMobileNav}>
           <img src={iconUrl} alt="" width={28} height={28} />
           <span className="brand-text">
             {productName}
             <span>{shell.is_platform ? t("shell.platform", "平台") : me.tenant.name}</span>
           </span>
         </Link>
-        <OmniSearch />
+        <div className="topbar-search">
+          <OmniSearch />
+        </div>
         <div className="topbar-right">
           <LanguageSwitcher />
           <div className="user-menu" ref={userMenuRef}>
@@ -221,7 +277,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       <div className="body">
-        <nav className="sidenav" aria-label={t("shell.main_nav", "主导航")}>
+        <div
+          className="nav-backdrop"
+          hidden={!mobileNavOpen}
+          onClick={closeMobileNav}
+          aria-hidden={!mobileNavOpen}
+        />
+        <nav id="app-sidenav" className="sidenav" aria-label={t("shell.main_nav", "主导航")}>
+          <div className="sidenav-mobile-head">
+            <strong>{t("shell.main_nav", "主导航")}</strong>
+            <button type="button" className="nav-drawer-close" onClick={closeMobileNav} aria-label={t("shell.close_nav", "关闭导航")}>
+              ×
+            </button>
+          </div>
           <div className="sidenav-inner">
             {shell.navigation.map((sec) => {
               const open = navCollapsed ? true : secOpen[sec.section] !== false;
@@ -259,6 +327,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                             className={isActive(item.href) ? "active" : ""}
                             title={navCollapsed ? undefined : label}
                             aria-label={label}
+                            onClick={closeMobileNav}
                             onMouseEnter={(e) => revealNavHint(e.currentTarget, label)}
                             onMouseLeave={hideNavHint}
                             onFocus={(e) => revealNavHint(e.currentTarget, label)}
@@ -283,6 +352,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               className={pathname.startsWith("/help") ? "active" : ""}
               title={navCollapsed ? undefined : t("help.centre", "帮助中心")}
               aria-label={t("help.centre", "帮助中心")}
+              onClick={closeMobileNav}
               onMouseEnter={(e) => revealNavHint(e.currentTarget, t("help.centre", "帮助中心"))}
               onMouseLeave={hideNavHint}
               onFocus={(e) => revealNavHint(e.currentTarget, t("help.centre", "帮助中心"))}
@@ -326,7 +396,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               })}
             </span>
             <span className="muted">{roleLabel}</span>
-            <span>{t("shell.omni_search", "搜索 (Ctrl+K)")}</span>
+            <span className="statusbar-search-hint">{t("shell.omni_search", "搜索 (Ctrl+K)")}</span>
             <span className="ok-dot">{t("common.online", "在线")}</span>
           </footer>
         </div>
@@ -337,8 +407,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
 export function useShellBootstrap() {
   const [shell, setShell] = useState<ShellBootstrap | null>(null);
+  const [error, setError] = useState(false);
+  const [nonce, setNonce] = useState(0);
   useEffect(() => {
-    apiGet("/api/v1/shell/bootstrap").then(setShell).catch(() => setShell(null));
-  }, []);
-  return shell;
+    let cancelled = false;
+    setError(false);
+    apiGet("/api/v1/shell/bootstrap")
+      .then((s) => {
+        if (!cancelled) setShell(s);
+      })
+      .catch(() => {
+        if (!cancelled) setError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nonce]);
+  return { shell, error, retry: () => setNonce((n) => n + 1) };
 }

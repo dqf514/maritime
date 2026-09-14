@@ -26,7 +26,7 @@ def test_platform_identity_settings(client):
     assert put.json()["default_require_email_verify"] is True
 
 
-def test_tenant_policy_invite_and_accept(client, auth_headers):
+def test_tenant_policy_invite_and_accept(client, auth_headers, mail_capture):
     h = auth_headers
     pol = client.put(
         "/api/v1/admin/security/policy",
@@ -47,7 +47,9 @@ def test_tenant_policy_invite_and_accept(client, auth_headers):
         json={"email": "newhire@example.com", "full_name": "New Hire", "role_codes": ["viewer"]},
     )
     assert inv.status_code == 200, inv.text
-    token = inv.json()["demo_token"]
+    # Raw tokens are no longer returned in API responses
+    assert "demo_token" not in inv.json()
+    token = mail_capture.extract_token("invite")
     assert token
 
     blocked = client.post(
@@ -89,7 +91,7 @@ def test_email_verify_gate(client, auth_headers):
     client.put("/api/v1/admin/security/policy", headers=h, json={"require_email_verify": False})
 
 
-def test_oauth_stub_flow(client):
+def test_oauth_stub_flow(client, oauth_stub):
     start = client.post(
         "/api/v1/auth/oauth/microsoft/start",
         json={"tenant_code": "demo", "provider": "microsoft", "intent": "login"},
@@ -119,7 +121,7 @@ def test_oauth_stub_flow(client):
     assert any(i["provider"] == "microsoft" for i in sec.json()["identities"])
 
 
-def test_magic_link(client, auth_headers):
+def test_magic_link(client, auth_headers, mail_capture):
     h = auth_headers
     client.put(
         "/api/v1/admin/security/policy",
@@ -131,7 +133,8 @@ def test_magic_link(client, auth_headers):
         json={"email": "admin@demo.voyageos", "tenant_code": "demo"},
     )
     assert req.status_code == 200, req.text
-    token = req.json()["demo_token"]
+    assert "demo_token" not in req.json()
+    token = mail_capture.extract_token("magic_link")
     conf = client.post("/api/v1/auth/magic-link/confirm", json={"token": token})
     assert conf.status_code == 200
     assert conf.json()["access_token"]

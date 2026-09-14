@@ -1,10 +1,28 @@
+# Build context must be the `mos/` directory (fixtures live at mos/fixtures and
+# checks/registry.py resolves them via parents[3]):
+#   docker build -f apps/api/Dockerfile -t voyageos-api mos/
 FROM python:3.12-slim
-WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
-RUN pip install -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt
-COPY app ./app
-COPY checks ./checks
-ENV PYTHONPATH=/app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 appuser
+
+WORKDIR /srv/mos/apps/api
+
+COPY apps/api/requirements.txt .
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
+
+# Repo layout preserved so checks/registry.py finds mos/fixtures
+COPY apps/api/app ./app
+COPY apps/api/checks ./checks
+COPY fixtures /srv/mos/fixtures
+
+ENV PYTHONPATH=/srv/mos/apps/api \
+    PYTHONUNBUFFERED=1
+
+USER appuser
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS http://localhost:8000/healthz || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

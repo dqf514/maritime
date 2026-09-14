@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiGet } from "@/lib/api";
+import { API_BASE, apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 export default function PermissionsPage() {
@@ -24,11 +24,11 @@ export default function PermissionsPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.perm.admin_required", "Tenant admin required")));
+    load().catch(() => setMsg(t("page.perm.admin_required", "需要租户管理员")));
   }, [t]);
 
   async function toggle(role_code: string, feature_code: string, allowed: boolean) {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000"}/api/v1/admin/features`, {
+    const res = await fetch(`${API_BASE}/api/v1/admin/features`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -37,7 +37,7 @@ export default function PermissionsPage() {
       body: JSON.stringify({ role_code, feature_code, allowed }),
     });
     if (!res.ok) throw new Error("failed");
-    setMsg(`${role_code} · ${feature_code} = ${allowed}`);
+    setMsg(`${role_code} · ${feature_code} = ${allowed ? t("page.perm.allow", "允许") : t("page.perm.deny", "拒绝")}`);
     await load();
   }
 
@@ -45,14 +45,19 @@ export default function PermissionsPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.perm.title", "Feature permissions")}</h1>
-      <p className="page-sub">{t("page.perm.sub", "Fine-grained capability matrix by role.")}</p>
+      <h1 style={{ marginTop: 0 }}>{t("page.perm.title", "功能权限")}</h1>
+      <p className="page-sub">
+        {t(
+          "page.perm.sub",
+          "按角色精细控制能力。未配置的单元格默认允许（继承角色）；取消勾选会写入拒绝并在业务 API 生效。租户管理员始终放行。",
+        )}
+      </p>
       {msg ? <p>{msg}</p> : null}
       <div className="panel" style={{ overflowX: "auto" }}>
         <table className="table">
           <thead>
             <tr>
-              <th>{t("page.perm.feature", "Feature")}</th>
+              <th>{t("page.perm.feature", "功能")}</th>
               {roleCodes.map((r) => (
                 <th key={r}>{r}</th>
               ))}
@@ -69,13 +74,18 @@ export default function PermissionsPage() {
                 </td>
                 {roleCodes.map((role) => {
                   const hit = matrix.find((m) => m.role_code === role && m.feature_code === f.code);
-                  const allowed = hit ? hit.allowed : role === "tenant_admin";
+                  const allowed = role === "tenant_admin" ? true : hit ? hit.allowed : true;
                   return (
                     <td key={role}>
                       <input
                         type="checkbox"
                         checked={allowed}
-                        onChange={(e) => toggle(role, f.code, e.target.checked).catch(() => setMsg(t("page.perm.update_fail", "Update failed")))}
+                        disabled={role === "tenant_admin"}
+                        onChange={(e) =>
+                          toggle(role, f.code, e.target.checked).catch(() =>
+                            setMsg(t("page.perm.update_fail", "更新失败")),
+                          )
+                        }
                       />
                     </td>
                   );

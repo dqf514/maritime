@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, ReactNode } from "react";
+import { FormEvent, ReactNode, useState } from "react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useI18n } from "@/lib/i18n";
 
 type Props = {
@@ -28,6 +29,7 @@ export function RecordModal({
   children,
 }: Props) {
   const { t } = useI18n();
+  const [confirmDelete, setConfirmDelete] = useState(false);
   if (!open) return null;
 
   return (
@@ -59,11 +61,7 @@ export function RecordModal({
                 type="button"
                 className="btn btn-danger"
                 disabled={saving}
-                onClick={() => {
-                  if (window.confirm(t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored."))) {
-                    onDelete();
-                  }
-                }}
+                onClick={() => setConfirmDelete(true)}
               >
                 {t("common.delete", "Delete")}
               </button>
@@ -82,6 +80,17 @@ export function RecordModal({
             </div>
           </footer>
         </form>
+        <ConfirmDialog
+          open={confirmDelete}
+          title={t("common.confirm", "确认操作")}
+          message={t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored.")}
+          danger
+          onConfirm={() => {
+            setConfirmDelete(false);
+            onDelete?.();
+          }}
+          onCancel={() => setConfirmDelete(false)}
+        />
       </div>
     </div>
   );

@@ -14,6 +14,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models_office import (
     OfficeAddonInstall,
     OfficeResourceLink,
@@ -31,6 +32,8 @@ from app.services.graph_client import (
     refresh_access_token,
     token_expiry,
 )
+from app.services.identity import soft_sign_state
+from app.services.ops_crypto import decrypt_token, encrypt_token
 
 ADDON_CATALOG = [
     {
@@ -104,8 +107,8 @@ def office_status(db: Session, tenant_id: UUID) -> dict[str, Any]:
         "calendar_enabled": link.calendar_enabled,
         "defaults": link.defaults or {},
         "last_health": link.last_health or {},
-        "consent_url": admin_consent_url(state=str(tenant_id)),
-        "connected": link.status == "connected" and bool(link.access_token),
+        "consent_url": admin_consent_url(state=soft_sign_state(get_settings().jwt_secret, str(tenant_id))),
+        "connected": link.status == "connected" and bool(decrypt_token(link.access_token)),
         "addons": [
             {
                 "id": a.addon_id,
@@ -128,14 +131,15 @@ def apply_oauth_tokens(
     user_id: UUID | None = None,
 ) -> OfficeTenantLink:
     link = ensure_office_link(db, tenant_id)
-    link.access_token = tokens.get("access_token")
+    access_token = tokens.get("access_token")
+    link.access_token = encrypt_token(access_token)
     if tokens.get("refresh_token"):
-        link.refresh_token = tokens["refresh_token"]
+        link.refresh_token = encrypt_token(tokens["refresh_token"])
     link.token_expires_at = token_expiry(tokens.get("expires_in"))
     link.status = "connected"
     link.connected_by = user_id
     link.scopes = (tokens.get("scope") or "").split() if isinstance(tokens.get("scope"), str) else (link.scopes or [])
-    client = GraphClient(link.access_token or "", mode=tokens.get("mode") or graph_mode())
+    client = GraphClient(access_token or "", mode=tokens.get("mode") or graph_mode())
     try:
         link.last_health = client.health()
     except GraphError as exc:
@@ -157,23 +161,28 @@ def _as_aware(dt: datetime | None) -> datetime | None:
 def get_graph_client(db: Session, tenant_id: UUID) -> GraphClient:
     link = ensure_office_link(db, tenant_id)
     mode = graph_mode()
-    if link.status != "connected" or not link.access_token:
+    access_token = decrypt_token(link.access_token)
+    if link.status != "connected" or not access_token:
         if mode == "stub":
             # Auto-connect stub so desks work without Entra secrets
             tokens = exchange_code_for_tokens("stub-auto-connect")
             apply_oauth_tokens(db, tenant_id, tokens)
             db.commit()
             link = ensure_office_link(db, tenant_id)
+            access_token = decrypt_token(link.access_token)
         else:
             raise GraphError("office_not_connected", status=409)
     # refresh if expired
     expires = _as_aware(link.token_expires_at)
-    if expires and expires < datetime.now().astimezone() and link.refresh_token:
-        tokens = refresh_access_token(link.refresh_token)
+    refresh_token = decrypt_token(link.refresh_token)
+    if expires and expires < datetime.now().astimezone() and refresh_token:
+        tokens = refresh_access_token(refresh_token)
         apply_oauth_tokens(db, tenant_id, tokens)
         db.commit()
         link = ensure_office_link(db, tenant_id)
-    return GraphClient(link.access_token or "", mode=mode if mode == "stub" or (link.access_token or "").startswith("stub-") else "live")
+        access_token = decrypt_token(link.access_token)
+    token = access_token or ""
+    return GraphClient(token, mode=mode if mode == "stub" or token.startswith("stub-") else "live")
 
 
 def run_sync(db: Session, tenant_id: UUID, channel: str, *, direction: str = "inbound") -> OfficeSyncJob:

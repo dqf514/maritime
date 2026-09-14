@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
@@ -18,13 +18,16 @@ from app.models import Role, Tenant, User, UserRole
 from app.models_identity import OutboundMailLog, PlatformIdentitySettings, TenantAuthPolicy, UserIdentity
 from app.security import (
     AuthContext,
+    clear_session_cookie,
     create_access_token,
     get_current_auth,
     get_current_auth_optional,
     hash_password,
     require_auth,
+    set_session_cookie,
     verify_password,
 )
+from app.services.audit import audit
 from app.services.identity import (
     build_oauth_authorize_url,
     consume_challenge,
@@ -39,6 +42,7 @@ from app.services.identity import (
     public_auth_options,
     send_mail,
 )
+from app.services.ratelimit import rate_limit
 
 router = APIRouter(tags=["Identity"])
 
@@ -95,6 +99,9 @@ class TenantPolicyIn(BaseModel):
     invite_only: bool | None = None
     allowed_domains: list[str] | None = None
     session_hours: int | None = None
+    microsoft_tenant_hint: str | None = None
+    google_hosted_domain: str | None = None
+    sso_notes: str | None = None
 
 
 class InviteIn(BaseModel):
@@ -155,13 +162,32 @@ def _policy_out(p: TenantAuthPolicy) -> dict:
         "invite_only": p.invite_only,
         "allowed_domains": p.allowed_domains or [],
         "session_hours": p.session_hours,
+        "microsoft_tenant_hint": p.microsoft_tenant_hint,
+        "google_hosted_domain": p.google_hosted_domain,
+        "sso_notes": p.sso_notes,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }
 
 
-def _issue_token(user: User) -> dict:
+def _issue_token(user: User, response: Response, db: Session, via: str) -> dict:
     user.last_login_at = now_local()
-    token = create_access_token(user_id=user.id, tenant_id=user.tenant_id, email=user.email)
+    token = create_access_token(
+        user_id=user.id, tenant_id=user.tenant_id, email=user.email, pwv=user.password_version or 1
+    )
+    # Callers commit before invoking us, so persist the audit row (and the
+    # last_login_at touch above) in its own transaction.
+    audit(
+        db,
+        tenant_id=user.tenant_id,
+        actor_user_id=user.id,
+        action="auth.token_issued",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email, "via": via},
+        commit=True,
+    )
+    # Token goes out both ways: JSON body (backward compatible) + HttpOnly cookie
+    set_session_cookie(response, token)
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -298,6 +324,7 @@ def create_invite(
     body: InviteIn,
     auth: AuthContext = Depends(require_roles("tenant_admin")),
     db: Session = Depends(get_db),
+    _rl: None = Depends(rate_limit("auth.invite")),
 ):
     policy = ensure_tenant_policy(db, auth.tenant_id)
     email = body.email.lower().strip()
@@ -322,7 +349,7 @@ def create_invite(
         db,
         to_email=email,
         subject="You're invited to VoyageOS",
-        body=f"Accept your invite:\n{link}\n\nToken (demo): {raw}",
+        body=f"Accept your invite:\n{link}",
         purpose="invite",
         tenant_id=auth.tenant_id,
         meta={"challenge_id": str(challenge.id)},
@@ -343,7 +370,7 @@ def create_invite(
             if role:
                 db.add(UserRole(user_id=user.id, role_id=role.id))
     db.commit()
-    return {"ok": True, "email": email, "expires_at": challenge.expires_at.isoformat(), "demo_token": raw}
+    return {"ok": True, "email": email, "expires_at": challenge.expires_at.isoformat()}
 
 
 @router.get("/admin/security/invites")
@@ -396,9 +423,47 @@ def tenant_mail_logs(
     ]
 
 
+# —— Tenant admin: security audit trail ——
+@router.get("/admin/security/audit-logs")
+def list_audit_logs(
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+    action: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """Tenant-scoped audit trail, newest first. tenant_admin only."""
+    from app.models_audit import AuditLog
+
+    stmt = select(AuditLog).where(AuditLog.tenant_id == auth.tenant_id)
+    if action:
+        stmt = stmt.where(AuditLog.action == action)
+    total = len(db.scalars(stmt).all())
+    rows = db.scalars(stmt.order_by(AuditLog.created_at.desc()).limit(limit).offset(offset)).all()
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": [
+            {
+                "id": str(r.id),
+                "tenant_id": str(r.tenant_id) if r.tenant_id else None,
+                "actor_user_id": str(r.actor_user_id) if r.actor_user_id else None,
+                "action": r.action,
+                "entity_type": r.entity_type,
+                "entity_id": r.entity_id,
+                "detail": r.detail or {},
+                "ip": r.ip,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
 # —— Auth: accept invite / verify / magic / oauth ——
 @router.post("/auth/invites/accept")
-def accept_invite(body: InviteAcceptIn, db: Session = Depends(get_db)):
+def accept_invite(body: InviteAcceptIn, response: Response, db: Session = Depends(get_db)):
     ch = consume_challenge(db, "invite", body.token)
     if not ch or not ch.tenant_id:
         raise HTTPException(400, "Invalid or expired invite")
@@ -412,11 +477,12 @@ def accept_invite(body: InviteAcceptIn, db: Session = Depends(get_db)):
             if role:
                 db.add(UserRole(user_id=user.id, role_id=role.id))
     user.password_hash = hash_password(body.password)
+    user.password_version = (user.password_version or 1) + 1
     user.full_name = body.full_name or ch.payload.get("full_name") or user.full_name
     user.status = "active"
     mark_email_verified(user)
     db.commit()
-    return _issue_token(user)
+    return _issue_token(user, response, db, via="invite_accept")
 
 
 @router.post("/auth/email/verify/request")
@@ -424,6 +490,7 @@ def request_email_verify(
     body: VerifyRequestIn,
     db: Session = Depends(get_db),
     auth: AuthContext | None = Depends(get_current_auth_optional),
+    _rl: None = Depends(rate_limit("auth.email_verify")),
 ):
     user = None
     tenant_id = None
@@ -455,13 +522,13 @@ def request_email_verify(
         db,
         to_email=email,
         subject="Verify your VoyageOS email",
-        body=f"Verify email:\n{link}\n\nDemo token: {raw}",
+        body=f"Verify email:\n{link}",
         purpose="email_verify",
         tenant_id=tenant_id,
         meta={"challenge_id": str(challenge.id)},
     )
     db.commit()
-    return {"ok": True, "demo_token": raw}
+    return {"ok": True}
 
 
 @router.post("/auth/email/verify/confirm")
@@ -478,7 +545,11 @@ def confirm_email_verify(body: VerifyConfirmIn, db: Session = Depends(get_db)):
 
 
 @router.post("/auth/magic-link/request")
-def magic_link_request(body: MagicLinkRequestIn, db: Session = Depends(get_db)):
+def magic_link_request(
+    body: MagicLinkRequestIn,
+    db: Session = Depends(get_db),
+    _rl: None = Depends(rate_limit("auth.magic_link")),
+):
     tenant = db.scalar(select(Tenant).where(Tenant.code == body.tenant_code))
     if not tenant:
         raise HTTPException(404, "Tenant not found")
@@ -501,17 +572,17 @@ def magic_link_request(body: MagicLinkRequestIn, db: Session = Depends(get_db)):
         db,
         to_email=email,
         subject="Your VoyageOS sign-in link",
-        body=f"Sign in:\n{link}\n\nDemo token: {raw}",
+        body=f"Sign in:\n{link}",
         purpose="magic_link",
         tenant_id=tenant.id,
         meta={"challenge_id": str(challenge.id)},
     )
     db.commit()
-    return {"ok": True, "demo_token": raw}
+    return {"ok": True}
 
 
 @router.post("/auth/magic-link/confirm")
-def magic_link_confirm(body: MagicLinkConfirmIn, db: Session = Depends(get_db)):
+def magic_link_confirm(body: MagicLinkConfirmIn, response: Response, db: Session = Depends(get_db)):
     ch = consume_challenge(db, "magic_link", body.token)
     if not ch or not ch.user_id:
         raise HTTPException(400, "Invalid or expired link")
@@ -522,7 +593,7 @@ def magic_link_confirm(body: MagicLinkConfirmIn, db: Session = Depends(get_db)):
     _check_verified_or_raise(user, policy)
     mark_email_verified(user)
     db.commit()
-    return _issue_token(user)
+    return _issue_token(user, response, db, via="magic_link")
 
 
 @router.post("/auth/oauth/{provider}/start")
@@ -549,7 +620,12 @@ def oauth_start(provider: str, body: OAuthStartIn, db: Session = Depends(get_db)
         hours=0.25,
         payload={"provider": provider, "tenant_code": tenant.code, "intent": body.intent},
     )
-    built = build_oauth_authorize_url(provider, state=raw_state)
+    built = build_oauth_authorize_url(
+        provider,
+        state=raw_state,
+        microsoft_tenant=policy.microsoft_tenant_hint,
+        google_hosted_domain=policy.google_hosted_domain,
+    )
     db.commit()
     return {
         "provider": provider,
@@ -654,12 +730,30 @@ def oauth_callback(
     except HTTPException:
         return RedirectResponse(f"{web}/login?oauth_error=email_not_verified")
     db.commit()
-    token = create_access_token(user_id=user.id, tenant_id=user.tenant_id, email=user.email)
-    return RedirectResponse(f"{web}/login/oauth-done?token={token}")
+    # Token issued on the redirect path (not via _issue_token) — audit it here
+    audit(
+        db,
+        tenant_id=user.tenant_id,
+        actor_user_id=user.id,
+        action="auth.token_issued",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email, "via": f"oauth_{provider}"},
+        commit=True,
+    )
+    token = create_access_token(
+        user_id=user.id, tenant_id=user.tenant_id, email=user.email, pwv=user.password_version or 1
+    )
+    # Cookie is set on the redirect itself (top-level navigation, stored natively).
+    # The ?token= query is kept for backward compatibility but is deprecated —
+    # the frontend no longer persists it.
+    redirect = RedirectResponse(f"{web}/login/oauth-done?token={token}")
+    set_session_cookie(redirect, token)
+    return redirect
 
 
 @router.post("/auth/oauth/stub/complete")
-def oauth_stub_complete(body: StubOAuthCompleteIn, db: Session = Depends(get_db)):
+def oauth_stub_complete(body: StubOAuthCompleteIn, response: Response, db: Session = Depends(get_db)):
     """Dev/demo completion when Microsoft/Google secrets are not configured."""
     if not get_settings().oauth_allow_stub:
         raise HTTPException(403, "Stub OAuth disabled")
@@ -706,7 +800,18 @@ def oauth_stub_complete(body: StubOAuthCompleteIn, db: Session = Depends(get_db)
         )
     _check_verified_or_raise(user, policy)
     db.commit()
-    return _issue_token(user)
+    return _issue_token(user, response, db, via="oauth_stub")
+
+
+# —— Sign-out ——
+@router.post("/auth/logout")
+def logout(response: Response):
+    # No server-side revocation needed here: token invalidation after password
+    # change / admin action is already enforced via the password_version (pwv)
+    # claim checked on every request. Logout just drops the browser cookie;
+    # the (unreadable to JS) cookie is the only thing being discarded.
+    clear_session_cookie(response)
+    return {"ok": True}
 
 
 # —— User account security ——
@@ -743,8 +848,29 @@ def change_password(
     assert user
     if user.password_hash:
         if not body.current_password or not verify_password(body.current_password, user.password_hash):
+            # commit=True: the 400 below would roll the audit row back
+            audit(
+                db,
+                tenant_id=auth.tenant_id,
+                actor_user_id=auth.user_id,
+                action="auth.password_change_failed",
+                entity_type="user",
+                entity_id=user.id,
+                detail={"reason": "bad_current_password"},
+                commit=True,
+            )
             raise HTTPException(400, "Current password incorrect")
     user.password_hash = hash_password(body.new_password)
+    user.password_version = (user.password_version or 1) + 1
+    # Audit row commits atomically with the password change itself
+    audit(
+        db,
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        action="auth.password_changed",
+        entity_type="user",
+        entity_id=user.id,
+    )
     db.commit()
     return {"ok": True}
 

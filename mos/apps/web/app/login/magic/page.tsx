@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+import { API_BASE as API } from "@/lib/api";
 
-export default function MagicLinkPage() {
+function MagicLinkPage() {
   const sp = useSearchParams();
   const router = useRouter();
   const { t } = useI18n();
@@ -21,13 +21,14 @@ export default function MagicLinkPage() {
     }
     fetch(`${API}/api/v1/auth/magic-link/confirm`, {
       method: "POST",
+      credentials: "include", // required so the Set-Cookie session is stored
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
     })
       .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
+        await res.json().catch(() => ({}));
         if (!res.ok) throw new Error("fail");
-        localStorage.setItem("voyageos_token", data.access_token);
+        // Cookie session planted by the server — just navigate.
         router.replace("/home");
       })
       .catch(() => setErrorKey("bad"));
@@ -55,5 +56,13 @@ export default function MagicLinkPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function MagicLinkPageWrapper() {
+  return (
+    <Suspense>
+      <MagicLinkPage />
+    </Suspense>
   );
 }

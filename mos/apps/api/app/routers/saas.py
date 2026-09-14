@@ -46,6 +46,17 @@ from app.services.saas_engine import (
 router = APIRouter(tags=["SaaS"])
 
 
+def _sniff_image_type(raw: bytes) -> str | None:
+    """Detect image type from magic bytes (content-based, not extension-based)."""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
 def _branding_out(row: PlatformBranding) -> dict:
     return {
         "product_name": row.product_name,
@@ -145,8 +156,13 @@ async def upload_platform_branding_asset(
         raise HTTPException(400, detail={"code": "FILE_TOO_LARGE", "max_bytes": 2500000})
     name = (file.filename or "asset").lower()
     ext = Path(name).suffix.lower()
-    if ext not in {".png", ".jpg", ".jpeg", ".svg", ".webp", ".ico", ".gif"}:
+    # Raster formats only — SVG is scriptable markup and must never be served as an image
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
         raise HTTPException(400, detail={"code": "UNSUPPORTED_TYPE", "ext": ext})
+    sniffed = _sniff_image_type(raw)
+    expected = "jpg" if ext == ".jpeg" else ext.lstrip(".")
+    if sniffed != expected:
+        raise HTTPException(400, detail={"code": "INVALID_CONTENT", "message": "File content does not match an allowed image type"})
     upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads" / "branding"
     upload_dir.mkdir(parents=True, exist_ok=True)
     dest_name = f"{kind}{ext}"
@@ -329,7 +345,244 @@ def platform_saas_overview(auth: AuthContext = Depends(require_roles("platform_a
     }
 
 
-# ───────── Tenant subscription & wallet ─────────
+def _raise_self_checkout_disabled() -> None:
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "SELF_CHECKOUT_DISABLED",
+            "message": "Online checkout is not enabled. Ask the platform administrator to assign a plan or credit usage.",
+        },
+    )
+
+
+def _apply_plan_to_tenant(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    plan: SaaSPlan,
+    user_id: UUID | None,
+    grant_quotas: bool = True,
+    note: str | None = None,
+) -> TenantSubscription:
+    """Activate/replace subscription and sync module licenses (+ optional included quotas)."""
+    for old in db.scalars(
+        select(TenantSubscription).where(
+            TenantSubscription.tenant_id == tenant_id,
+            TenantSubscription.status.in_(["active", "trialing"]),
+        )
+    ).all():
+        old.status = "cancelled"
+    sub = TenantSubscription(
+        tenant_id=tenant_id,
+        plan_id=plan.id,
+        status="active",
+        started_on=date.today(),
+        current_period_end=date.today() + timedelta(days=365 if plan.billing_period == "yearly" else 30),
+        auto_renew=True,
+        meta={"assigned_by": "platform", "note": note},
+    )
+    db.add(sub)
+    db.flush()
+    now = datetime.now().astimezone()
+    for mod, enabled in (plan.included_modules or {}).items():
+        if not enabled:
+            continue
+        lic = db.scalar(
+            select(TenantModuleLicense).where(
+                TenantModuleLicense.tenant_id == tenant_id,
+                TenantModuleLicense.module_code == mod,
+            )
+        )
+        if not lic:
+            db.add(
+                TenantModuleLicense(
+                    tenant_id=tenant_id,
+                    module_code=mod,
+                    status="active",
+                    activated_at=now,
+                    features={},
+                )
+            )
+        else:
+            lic.status = "active"
+    if grant_quotas:
+        for meter, qty in (plan.included_quotas or {}).items():
+            credit_usage(
+                db,
+                tenant_id=tenant_id,
+                meter_code=meter,
+                quantity=Decimal(str(qty)),
+                ref_type="subscription",
+                ref_id=str(sub.id),
+                note=note or f"Plan {plan.code} included quota",
+                user_id=user_id,
+            )
+    return sub
+
+
+def _credit_pack_to_tenant(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    pack: UsagePack,
+    user_id: UUID | None,
+    note: str | None = None,
+) -> dict:
+    credit_usage(
+        db,
+        tenant_id=tenant_id,
+        meter_code=pack.meter_code,
+        quantity=Decimal(str(pack.quantity)),
+        ref_type="usage_pack",
+        ref_id=str(pack.id),
+        note=note or f"Platform credit {pack.code}",
+        user_id=user_id,
+    )
+    return {"meter_code": pack.meter_code, "quantity": float(pack.quantity), "pack_code": pack.code}
+
+
+# ───────── Platform: assign subscription / credit (until online payment) ─────────
+@router.get("/platform/saas/subscriptions")
+def list_platform_subscriptions(auth: AuthContext = Depends(require_roles("platform_admin")), db: Session = Depends(get_db)):
+    _ = auth
+    rows = db.scalars(select(TenantSubscription).order_by(TenantSubscription.created_at.desc()).limit(200)).all()
+    out = []
+    for s in rows:
+        tenant = db.get(Tenant, s.tenant_id)
+        plan = db.get(SaaSPlan, s.plan_id)
+        out.append(
+            {
+                "id": str(s.id),
+                "tenant_id": str(s.tenant_id),
+                "tenant_code": tenant.code if tenant else None,
+                "tenant_name": tenant.name if tenant else None,
+                "status": s.status,
+                "started_on": s.started_on.isoformat() if s.started_on else None,
+                "current_period_end": s.current_period_end.isoformat() if s.current_period_end else None,
+                "plan": _plan_out(plan) if plan else None,
+            }
+        )
+    return out
+
+
+class PlatformAssignPlanIn(BaseModel):
+    plan_code: str
+    grant_quotas: bool = True
+    note: str | None = None
+
+
+@router.post("/platform/saas/tenants/{tenant_id}/assign-plan")
+def platform_assign_plan(
+    tenant_id: UUID,
+    body: PlatformAssignPlanIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant:
+        raise HTTPException(404, "Tenant not found")
+    plan = db.scalar(select(SaaSPlan).where(SaaSPlan.code == body.plan_code, SaaSPlan.status == "active"))
+    if not plan:
+        raise HTTPException(404, "Plan not found")
+    # Record a platform-fulfilled order for audit
+    order = PaymentOrder(
+        tenant_id=tenant_id,
+        provider_code="manual",
+        purpose="subscription",
+        amount=plan.price_amount,
+        currency=plan.currency,
+        status="paid",
+        ref_type="plan",
+        ref_id=str(plan.id),
+        paid_at=datetime.now().astimezone(),
+        meta={"plan_code": plan.code, "fulfilled_by": "platform_admin", "note": body.note},
+    )
+    db.add(order)
+    sub = _apply_plan_to_tenant(
+        db,
+        tenant_id=tenant_id,
+        plan=plan,
+        user_id=auth.user_id,
+        grant_quotas=body.grant_quotas,
+        note=body.note or f"Platform assigned {plan.code}",
+    )
+    db.commit()
+    return {
+        "ok": True,
+        "subscription_id": str(sub.id),
+        "tenant_code": tenant.code,
+        "plan_code": plan.code,
+        "status": sub.status,
+        "current_period_end": sub.current_period_end.isoformat() if sub.current_period_end else None,
+    }
+
+
+class PlatformCreditPackIn(BaseModel):
+    pack_code: str
+    note: str | None = None
+
+
+@router.post("/platform/saas/tenants/{tenant_id}/credit-pack")
+def platform_credit_pack(
+    tenant_id: UUID,
+    body: PlatformCreditPackIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant:
+        raise HTTPException(404, "Tenant not found")
+    pack = db.scalar(select(UsagePack).where(UsagePack.code == body.pack_code, UsagePack.status == "active"))
+    if not pack:
+        raise HTTPException(404, "Pack not found")
+    order = PaymentOrder(
+        tenant_id=tenant_id,
+        provider_code="manual",
+        purpose="usage_pack",
+        amount=pack.price_amount,
+        currency=pack.currency,
+        status="paid",
+        ref_type="usage_pack",
+        ref_id=str(pack.id),
+        paid_at=datetime.now().astimezone(),
+        meta={"pack_code": pack.code, "fulfilled_by": "platform_admin", "note": body.note},
+    )
+    db.add(order)
+    credited = _credit_pack_to_tenant(
+        db,
+        tenant_id=tenant_id,
+        pack=pack,
+        user_id=auth.user_id,
+        note=body.note or f"Platform credit {pack.code}",
+    )
+    db.commit()
+    return {"ok": True, "tenant_code": tenant.code, **credited}
+
+
+@router.post("/platform/saas/tenants/{tenant_id}/cancel-subscription")
+def platform_cancel_subscription(
+    tenant_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant:
+        raise HTTPException(404, "Tenant not found")
+    cancelled = 0
+    for sub in db.scalars(
+        select(TenantSubscription).where(
+            TenantSubscription.tenant_id == tenant_id,
+            TenantSubscription.status.in_(["active", "trialing"]),
+        )
+    ).all():
+        sub.status = "cancelled"
+        cancelled += 1
+    db.commit()
+    return {"ok": True, "tenant_code": tenant.code, "cancelled": cancelled}
+
+
+# ───────── Tenant subscription & wallet (read + future checkout) ─────────
 @router.get("/billing/subscription")
 def my_subscription(auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
     sub = db.scalar(
@@ -339,7 +592,7 @@ def my_subscription(auth: AuthContext = Depends(require_roles("tenant_admin")), 
         .limit(1)
     )
     if not sub:
-        return {"status": "none", "plan": None}
+        return {"status": "none", "plan": None, "self_checkout": False}
     plan = db.get(SaaSPlan, sub.plan_id)
     return {
         "id": str(sub.id),
@@ -348,6 +601,7 @@ def my_subscription(auth: AuthContext = Depends(require_roles("tenant_admin")), 
         "current_period_end": sub.current_period_end.isoformat() if sub.current_period_end else None,
         "auto_renew": sub.auto_renew,
         "plan": _plan_out(plan) if plan else None,
+        "self_checkout": False,
     }
 
 
@@ -358,99 +612,36 @@ class SubscribeIn(BaseModel):
 
 @router.post("/billing/subscribe")
 def subscribe(body: SubscribeIn, auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
-    plan = db.scalar(select(SaaSPlan).where(SaaSPlan.code == body.plan_code, SaaSPlan.status == "active"))
-    if not plan:
-        raise HTTPException(404, "Plan not found")
-    order = PaymentOrder(
-        tenant_id=auth.tenant_id,
-        provider_code=body.provider_code,
-        purpose="subscription",
-        amount=plan.price_amount,
-        currency=plan.currency,
-        status="pending",
-        ref_type="plan",
-        ref_id=str(plan.id),
-        checkout_url=f"voyageos://pay/manual/{uuid4()}",
-        meta={"plan_code": plan.code},
-    )
-    db.add(order)
-    db.commit()
-    db.refresh(order)
-    return {"order_id": str(order.id), "amount": float(order.amount), "checkout_url": order.checkout_url, "status": order.status}
+    """Reserved for future online payment. Currently platform assigns plans."""
+    _ = body, auth, db
+    _raise_self_checkout_disabled()
 
 
 @router.post("/billing/orders/{order_id}/confirm-paid")
-def confirm_paid(order_id: UUID, auth: AuthContext = Depends(get_current_auth), db: Session = Depends(get_db)):
-    """Manual/dev payment capture — production would use provider webhooks."""
+def confirm_paid(order_id: UUID, auth: AuthContext = Depends(require_roles("platform_admin")), db: Session = Depends(get_db)):
+    """Platform-only payment capture until provider webhooks are wired."""
     order = db.get(PaymentOrder, order_id)
-    if not order or order.tenant_id != auth.tenant_id:
-        # platform admin can confirm any
-        if "platform_admin" not in auth.roles or not order:
-            raise HTTPException(404, "Order not found")
+    if not order:
+        raise HTTPException(404, "Order not found")
     if order.status == "paid":
         return {"status": "paid", "order_id": str(order.id)}
     order.status = "paid"
-    order.paid_at = datetime.now(timezone.utc)
+    order.paid_at = datetime.now().astimezone()
     if order.purpose == "subscription" and order.ref_id:
         plan = db.get(SaaSPlan, UUID(order.ref_id))
         if plan:
-            sub = TenantSubscription(
+            _apply_plan_to_tenant(
+                db,
                 tenant_id=order.tenant_id,
-                plan_id=plan.id,
-                status="active",
-                started_on=date.today(),
-                current_period_end=date.today() + timedelta(days=365 if plan.billing_period == "yearly" else 30),
-                auto_renew=True,
+                plan=plan,
+                user_id=auth.user_id,
+                grant_quotas=True,
+                note=f"Order {order.id} paid",
             )
-            db.add(sub)
-            db.flush()
-            # sync module licenses from plan
-            now = datetime.now(timezone.utc)
-            for mod, enabled in (plan.included_modules or {}).items():
-                if not enabled:
-                    continue
-                lic = db.scalar(
-                    select(TenantModuleLicense).where(
-                        TenantModuleLicense.tenant_id == order.tenant_id,
-                        TenantModuleLicense.module_code == mod,
-                    )
-                )
-                if not lic:
-                    db.add(
-                        TenantModuleLicense(
-                            tenant_id=order.tenant_id,
-                            module_code=mod,
-                            status="active",
-                            activated_at=now,
-                            features={},
-                        )
-                    )
-                else:
-                    lic.status = "active"
-            for meter, qty in (plan.included_quotas or {}).items():
-                credit_usage(
-                    db,
-                    tenant_id=order.tenant_id,
-                    meter_code=meter,
-                    quantity=Decimal(str(qty)),
-                    ref_type="subscription",
-                    ref_id=str(sub.id),
-                    note=f"Plan {plan.code} included quota",
-                    user_id=auth.user_id,
-                )
     elif order.purpose == "usage_pack" and order.ref_id:
         pack = db.get(UsagePack, UUID(order.ref_id))
         if pack:
-            credit_usage(
-                db,
-                tenant_id=order.tenant_id,
-                meter_code=pack.meter_code,
-                quantity=Decimal(str(pack.quantity)),
-                ref_type="usage_pack",
-                ref_id=str(pack.id),
-                note=f"Top-up {pack.code}",
-                user_id=auth.user_id,
-            )
+            _credit_pack_to_tenant(db, tenant_id=order.tenant_id, pack=pack, user_id=auth.user_id)
     db.commit()
     return {"status": "paid", "order_id": str(order.id)}
 
@@ -462,24 +653,10 @@ class TopUpIn(BaseModel):
 
 @router.post("/billing/topup")
 def topup(body: TopUpIn, auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
-    pack = db.scalar(select(UsagePack).where(UsagePack.code == body.pack_code, UsagePack.status == "active"))
-    if not pack:
-        raise HTTPException(404, "Pack not found")
-    order = PaymentOrder(
-        tenant_id=auth.tenant_id,
-        provider_code=body.provider_code,
-        purpose="usage_pack",
-        amount=pack.price_amount,
-        currency=pack.currency,
-        status="pending",
-        ref_type="usage_pack",
-        ref_id=str(pack.id),
-        checkout_url=f"voyageos://pay/manual/{uuid4()}",
-        meta={"pack_code": pack.code},
-    )
-    db.add(order)
-    db.commit()
-    return {"order_id": str(order.id), "amount": float(order.amount), "checkout_url": order.checkout_url}
+    """Reserved for future online payment. Currently platform credits packs."""
+    _ = body, auth, db
+    _raise_self_checkout_disabled()
+
 
 
 @router.get("/billing/wallet")
@@ -601,18 +778,30 @@ def list_org_units(auth: AuthContext = Depends(require_roles("tenant_admin")), d
     rows = db.scalars(
         select(OrgUnit).where(OrgUnit.tenant_id == auth.tenant_id, OrgUnit.status != "deleted")
     ).all()
-    return [
-        {
-            "id": str(r.id),
-            "code": r.code,
-            "name": r.name,
-            "parent_id": str(r.parent_id) if r.parent_id else None,
-            "unit_type": r.unit_type,
-            "manager_user_id": str(r.manager_user_id) if r.manager_user_id else None,
-            "status": r.status,
-        }
-        for r in rows
-    ]
+    out = []
+    for r in rows:
+        member_ids = list(
+            db.scalars(
+                select(UserOrgMembership.user_id).where(
+                    UserOrgMembership.org_unit_id == r.id, UserOrgMembership.is_primary.is_(True)
+                )
+            ).all()
+        )
+        manager = db.get(User, r.manager_user_id) if r.manager_user_id else None
+        out.append(
+            {
+                "id": str(r.id),
+                "code": r.code,
+                "name": r.name,
+                "parent_id": str(r.parent_id) if r.parent_id else None,
+                "unit_type": r.unit_type,
+                "manager_user_id": str(r.manager_user_id) if r.manager_user_id else None,
+                "manager_name": manager.full_name if manager else None,
+                "status": r.status,
+                "member_count": len(member_ids),
+            }
+        )
+    return out
 
 
 @router.post("/admin/org-units")
@@ -642,18 +831,11 @@ def update_org_unit(
     row = db.get(OrgUnit, unit_id)
     if not row or row.tenant_id != auth.tenant_id or row.status == "deleted":
         raise HTTPException(404, "Org unit not found")
-    if body.code is not None:
-        row.code = body.code
-    if body.name is not None:
-        row.name = body.name
-    if body.unit_type is not None:
-        row.unit_type = body.unit_type
-    if body.parent_id is not None:
-        row.parent_id = body.parent_id
-    if body.manager_user_id is not None:
-        row.manager_user_id = body.manager_user_id
-    if body.status is not None and body.status != "deleted":
-        row.status = body.status
+    data = body.model_dump(exclude_unset=True)
+    if "status" in data and data["status"] == "deleted":
+        data.pop("status")
+    for k, v in data.items():
+        setattr(row, k, v)
     db.commit()
     return {"id": str(row.id), "code": row.code, "name": row.name, "status": row.status}
 
@@ -686,16 +868,74 @@ def assign_user_org(
     auth: AuthContext = Depends(require_roles("tenant_admin")),
     db: Session = Depends(get_db),
 ):
+    """Assign primary org unit (query: org_unit_id). Use PUT with null to clear."""
+    return _set_user_org(db, auth, user_id, org_unit_id)
+
+
+class UserOrgIn(BaseModel):
+    org_unit_id: UUID | None = None
+
+
+@router.put("/admin/users/{user_id}/org")
+def put_user_org(
+    user_id: UUID,
+    body: UserOrgIn,
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    return _set_user_org(db, auth, user_id, body.org_unit_id)
+
+
+def _set_user_org(db: Session, auth: AuthContext, user_id: UUID, org_unit_id: UUID | None) -> dict:
     user = db.get(User, user_id)
-    unit = db.get(OrgUnit, org_unit_id)
-    if not user or user.tenant_id != auth.tenant_id or not unit or unit.tenant_id != auth.tenant_id or unit.status == "deleted":
-        raise HTTPException(404, "User or org unit not found")
-    existing = db.scalar(select(UserOrgMembership).where(UserOrgMembership.user_id == user_id, UserOrgMembership.is_primary.is_(True)))
-    if existing:
-        existing.is_primary = False
-    db.add(UserOrgMembership(user_id=user_id, org_unit_id=org_unit_id, is_primary=True))
+    if not user or user.tenant_id != auth.tenant_id or user.status == "deleted":
+        raise HTTPException(404, "User not found")
+    for m in db.scalars(
+        select(UserOrgMembership).where(UserOrgMembership.user_id == user_id, UserOrgMembership.is_primary.is_(True))
+    ).all():
+        m.is_primary = False
+    if org_unit_id:
+        unit = db.get(OrgUnit, org_unit_id)
+        if not unit or unit.tenant_id != auth.tenant_id or unit.status == "deleted":
+            raise HTTPException(404, "Org unit not found")
+        existing = db.scalar(
+            select(UserOrgMembership).where(UserOrgMembership.user_id == user_id, UserOrgMembership.org_unit_id == org_unit_id)
+        )
+        if existing:
+            existing.is_primary = True
+        else:
+            db.add(UserOrgMembership(user_id=user_id, org_unit_id=org_unit_id, is_primary=True))
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "org_unit_id": str(org_unit_id) if org_unit_id else None}
+
+
+@router.get("/admin/org-units/{unit_id}/members")
+def list_org_members(
+    unit_id: UUID,
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    unit = db.get(OrgUnit, unit_id)
+    if not unit or unit.tenant_id != auth.tenant_id or unit.status == "deleted":
+        raise HTTPException(404, "Org unit not found")
+    memberships = db.scalars(
+        select(UserOrgMembership).where(UserOrgMembership.org_unit_id == unit_id, UserOrgMembership.is_primary.is_(True))
+    ).all()
+    out = []
+    for m in memberships:
+        user = db.get(User, m.user_id)
+        if not user or user.status == "deleted":
+            continue
+        out.append(
+            {
+                "id": str(user.id),
+                "email": user.email,
+                "full_name": user.full_name,
+                "status": user.status,
+                "is_manager": str(user.id) == str(unit.manager_user_id) if unit.manager_user_id else False,
+            }
+        )
+    return out
 
 
 @router.get("/admin/features/catalog")
@@ -780,7 +1020,43 @@ def upsert_workflow(body: WorkflowDefIn, auth: AuthContext = Depends(require_rol
         row.steps = {"steps": body.steps}
         row.enabled = body.enabled
     db.commit()
-    return {"id": str(row.id), "code": row.code}
+    return {"id": str(row.id), "code": row.code, "enabled": row.enabled, "steps": row.steps}
+
+
+class WorkflowPatchIn(BaseModel):
+    name: str | None = None
+    entity_type: str | None = None
+    steps: list[dict] | None = None
+    enabled: bool | None = None
+
+
+@router.patch("/admin/workflows/{workflow_id}")
+def patch_workflow(
+    workflow_id: UUID,
+    body: WorkflowPatchIn,
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(WorkflowDefinition, workflow_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Workflow not found")
+    if body.name is not None:
+        row.name = body.name
+    if body.entity_type is not None:
+        row.entity_type = body.entity_type
+    if body.steps is not None:
+        row.steps = {"steps": body.steps}
+    if body.enabled is not None:
+        row.enabled = body.enabled
+    db.commit()
+    return {
+        "id": str(row.id),
+        "code": row.code,
+        "name": row.name,
+        "entity_type": row.entity_type,
+        "steps": row.steps,
+        "enabled": row.enabled,
+    }
 
 
 @router.get("/workflows/inbox")
@@ -820,8 +1096,11 @@ def workflow_decide(
     auth: AuthContext = Depends(get_current_auth),
     db: Session = Depends(get_db),
 ):
+    from app.services.saas_engine import assert_feature
+
     if body.decision not in {"approve", "reject"}:
         raise HTTPException(400, "decision must be approve|reject")
+    assert_feature(db, auth.tenant_id, auth.roles, "workflow.approve")
     inst = advance_workflow(
         db,
         instance_id=instance_id,

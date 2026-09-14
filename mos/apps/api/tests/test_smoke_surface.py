@@ -46,7 +46,7 @@ def test_smoke_help_ask_and_search(client):
     assert art.json()["slug"] == "welcome"
 
 
-def test_smoke_office_connect_stub(client):
+def test_smoke_office_connect_stub(client, oauth_stub):
     h = _login(client)
     c = client.get("/api/v1/office/connect", headers=h)
     assert c.status_code == 200

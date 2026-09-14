@@ -32,6 +32,8 @@ export default function EmissionsPage() {
     fo_mt: "120",
     do_mt: "20",
     lng_mt: "0",
+    cargo_mt: "",
+    distance_nm: "",
     eu_share: "1",
     ets_price_eur: "70",
   });
@@ -60,6 +62,8 @@ export default function EmissionsPage() {
         fo_mt: Number(form.fo_mt) || 0,
         do_mt: Number(form.do_mt) || 0,
         lng_mt: Number(form.lng_mt) || 0,
+        cargo_mt: Number(form.cargo_mt) || 0,
+        distance_nm: Number(form.distance_nm) || 0,
         eu_share: Number(form.eu_share) || 1,
         ets_price_eur: Number(form.ets_price_eur) || 70,
       });
@@ -140,6 +144,14 @@ export default function EmissionsPage() {
             <input value={form.lng_mt} onChange={(e) => setForm({ ...form, lng_mt: e.target.value })} />
           </label>
           <label>
+            {t("page.emissions.cargo_mt", "Cargo mt")}
+            <input value={form.cargo_mt} onChange={(e) => setForm({ ...form, cargo_mt: e.target.value })} placeholder={t("common.optional", "Optional")} />
+          </label>
+          <label>
+            {t("page.emissions.distance_nm", "Distance nm")}
+            <input value={form.distance_nm} onChange={(e) => setForm({ ...form, distance_nm: e.target.value })} placeholder={t("common.optional", "Optional")} />
+          </label>
+          <label>
             EU {t("page.emissions.eu_share", "EU share")}
             <input value={form.eu_share} onChange={(e) => setForm({ ...form, eu_share: e.target.value })} />
           </label>
@@ -156,6 +168,27 @@ export default function EmissionsPage() {
       {result ? (
         <div className="panel" style={{ marginTop: "1rem" }}>
           <h3 style={{ marginTop: 0 }}>{t("page.emissions.result", "Results")}</h3>
+          {result.eu_share != null ? (
+            <p style={{ margin: "0 0 0.5rem" }}>
+              EU share: <strong>{String(result.eu_share)}</strong>{" "}
+              <span className="badge badge-warn">
+                {result.eu_share_source === "manual"
+                  ? t("page.emissions.share_manual", "手动 manual")
+                  : t("page.emissions.share_auto", "自动 auto")}
+              </span>
+              {result.borne_by === "charterer" ? (
+                <span className="badge badge-pass" style={{ marginLeft: "0.4rem" }}>
+                  {t("page.emissions.borne_charterer", "由租家承担")}
+                </span>
+              ) : null}
+            </p>
+          ) : null}
+          {result.eeoi != null ? (
+            <p style={{ margin: "0 0 0.5rem" }}>
+              EEOI: <strong>{Number(result.eeoi).toExponential(4)}</strong>{" "}
+              <span className="muted">{t("page.emissions.eeoi_unit", "吨CO₂/吨海里")}</span>
+            </p>
+          ) : null}
           <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.85rem" }}>{JSON.stringify(result, null, 2)}</pre>
         </div>
       ) : null}

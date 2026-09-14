@@ -1,0 +1,26 @@
+{
+  "id": "tce_gold_05",
+  "note": "Multi-leg itinerary: sea_days = sum(distance/speed/24) = 2880/12/24 + 4320/12/24 = 10 + 15 = 25; port_days = 2 + 3 = 5; cargo_qty summed from legs = 50000",
+  "inputs": {
+    "legs": [
+      {"from_port": "SGSIN", "to_port": "AUPHE", "distance_nm": 2880, "speed_kn": 12, "port_days": 2, "cargo_qty": 30000},
+      {"from_port": "AUPHE", "to_port": "CNSHA", "distance_nm": 4320, "speed_kn": 12, "port_days": 3, "cargo_qty": 20000}
+    ],
+    "freight_rate": 18.5,
+    "commission_pct": 2.5,
+    "bunker_sea_tpd": 28,
+    "bunker_port_tpd": 3.5,
+    "bunker_price": 450,
+    "port_costs": 80000,
+    "other_costs": 10000,
+    "currency": "USD"
+  },
+  "expect": {
+    "tce": 16300.0,
+    "voyage_cost": 412875.0,
+    "gross_freight": 925000.0,
+    "sea_days": 25.0,
+    "port_days": 5.0,
+    "total_days": 30.0
+  }
+}

@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
-type Kpi = { label: string; value: string | number; unit?: string; delta?: string | null; tone?: string };
+type Kpi = { label: string; value: string | number; unit?: string; delta?: string | null; tone?: string; synthetic?: boolean };
 type SeriesPoint = { t: string | number; v: number };
 type Chart = { id: string; title: string; type: string; series: SeriesPoint[] };
 type Snapshot = {
@@ -24,6 +24,7 @@ type Snapshot = {
   heatmap?: { label: string; value: number }[];
   table?: { title: string; columns: string[]; rows: Record<string, unknown>[] };
 };
+type Screen = { role: string; title: string; subtitle: string; accent: string; href: string };
 
 function Sparkline({ series, color }: { series: SeriesPoint[]; color: string }) {
   if (!series.length) {
@@ -117,13 +118,17 @@ function OceanMap({ positions }: { positions: NonNullable<Snapshot["fleet_positi
 
 export default function RoleDashboardPage() {
   const { t } = useI18n();
+  const router = useRouter();
   const params = useParams();
   const role = String(params.role || "management");
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [error, setError] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
   const [clock, setClock] = useState("");
+  const [screens, setScreens] = useState<Screen[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const switcherRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(() => {
     apiGet(`/api/v1/dashboards/${role}/snapshot`)
@@ -133,6 +138,12 @@ export default function RoleDashboardPage() {
       })
       .catch(() => setError(t("page.dash.error", "Unable to load dashboard (role/permission).")));
   }, [role, t]);
+
+  useEffect(() => {
+    apiGet("/api/v1/dashboards/catalog")
+      .then((c) => setScreens(c.screens || []))
+      .catch(() => setScreens([]));
+  }, []);
 
   useEffect(() => {
     load();
@@ -155,11 +166,38 @@ export default function RoleDashboardPage() {
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (!switcherRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    if (menuOpen) {
+      document.addEventListener("mousedown", onDoc);
+      document.addEventListener("keydown", onKey);
+    }
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [role]);
+
   async function toggleFs() {
     const el = rootRef.current;
     if (!el) return;
     if (!document.fullscreenElement) await el.requestFullscreen();
     else await document.exitFullscreen();
+  }
+
+  function switchScreen(href: string, nextRole: string) {
+    setMenuOpen(false);
+    if (nextRole === role) return;
+    router.push(href);
   }
 
   const accent = snap?.accent || "#2bb5b0";
@@ -177,7 +215,44 @@ export default function RoleDashboardPage() {
       <header className="dash-top">
         <div>
           <p className="dash-eyebrow">VoyageOS · {role}</p>
-          <h1>{snap?.title || t("page.dash.loading", "Loading wall…")}</h1>
+          <div className="dash-title-row" ref={switcherRef}>
+            <h1>{snap?.title || t("page.dash.loading", "Loading wall…")}</h1>
+            {screens.length > 1 ? (
+              <div className={`dash-switcher ${menuOpen ? "open" : ""}`}>
+                <button
+                  type="button"
+                  className="dash-switcher-btn"
+                  aria-haspopup="listbox"
+                  aria-expanded={menuOpen}
+                  aria-label={t("page.dash.switch", "切换数据大屏")}
+                  onClick={() => setMenuOpen((o) => !o)}
+                >
+                  <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden>
+                    <path fill="currentColor" d="M5.3 7.3a1 1 0 0 1 1.4 0L10 10.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 0-1.4z" />
+                  </svg>
+                </button>
+                {menuOpen ? (
+                  <ul className="dash-switcher-menu" role="listbox">
+                    {screens.map((s) => (
+                      <li key={s.role} role="option" aria-selected={s.role === role}>
+                        <button
+                          type="button"
+                          className={s.role === role ? "active" : ""}
+                          onClick={() => switchScreen(s.href, s.role)}
+                        >
+                          <i style={{ background: s.accent }} />
+                          <span>
+                            <strong>{s.title}</strong>
+                            <small>{s.subtitle}</small>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
           <p>{snap?.subtitle}</p>
         </div>
         <div className="dash-top-actions">
@@ -186,16 +261,16 @@ export default function RoleDashboardPage() {
             <span>{headerMeta}</span>
           </div>
           <button type="button" className="dash-btn" onClick={load}>
-            {t("page.dash.refresh", "Refresh")}
+            {t("page.dash.refresh", "刷新")}
           </button>
           <button type="button" className="dash-btn primary" onClick={toggleFs}>
-            {fullscreen ? t("page.dash.exit_fs", "Exit fullscreen") : t("page.dash.fullscreen", "Fullscreen")}
+            {fullscreen ? t("page.dash.exit_fs", "退出全屏") : t("page.dash.fullscreen", "全屏")}
           </button>
           <Link href="/dashboards" className="dash-btn">
-            {t("page.dash.all", "All walls")}
+            {t("page.dash.all", "全部大屏")}
           </Link>
           <Link href="/home" className="dash-btn">
-            {t("page.dash.workbench", "Workbench")}
+            {t("page.dash.workbench", "工作台")}
           </Link>
         </div>
       </header>
@@ -205,7 +280,10 @@ export default function RoleDashboardPage() {
       <section className="dash-kpis">
         {kpis.map((k) => (
           <article key={k.label} className={`dash-kpi tone-${k.tone || "neutral"}`}>
-            <span>{k.label}</span>
+            <span>
+              {k.label}
+              {k.synthetic ? <small className="dash-kpi-demo">{t("page.dash.synthetic", "演示")}</small> : null}
+            </span>
             <strong>
               {k.value}
               {k.unit ? <small> {k.unit}</small> : null}

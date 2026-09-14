@@ -22,7 +22,7 @@ class OfficeTenantLink(Base):
     status: Mapped[str] = mapped_column(Text, default="draft")  # draft|connected|error|disabled
     # Graph scopes granted / requested
     scopes: Mapped[list] = mapped_column(JSON, default=list)
-    # Cached tokens (server-only). Prefer encrypt at rest in production.
+    # Cached tokens (server-only), Fernet-encrypted at rest via ops_crypto (v1: prefix)
     access_token: Mapped[str | None] = mapped_column(Text)
     refresh_token: Mapped[str | None] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

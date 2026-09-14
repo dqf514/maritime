@@ -16,7 +16,7 @@ type Branding = {
   hero_subtitle: string;
 };
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+import { API_BASE as API } from "@/lib/api";
 
 export default function PlatformBrandingPage() {
   const { t } = useI18n();

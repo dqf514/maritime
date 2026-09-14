@@ -2,11 +2,10 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { LookupSelect } from "@/components/LookupSelect";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, apiPut, generateTempPassword } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
 type Tenant = {
   id: string;
@@ -33,6 +32,8 @@ export default function PlatformTenantsPage() {
   const [edit, setEdit] = useState({ name: "", profile_tier: "M", default_locale: "en", default_timezone: "Asia/Shanghai" });
   const [licenses, setLicenses] = useState<LicRow[]>([]);
   const [busy, setBusy] = useState(false);
+  const [initialPw, setInitialPw] = useState("");
+  const [confirm, setConfirm] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
 
   async function load() {
     setRows(await apiGet("/api/v1/platform/tenants"));
@@ -64,16 +65,18 @@ export default function PlatformTenantsPage() {
 
   async function create(e: FormEvent) {
     e.preventDefault();
+    const adminPassword = generateTempPassword();
     const res = await apiPost("/api/v1/platform/tenants", {
       name,
       code,
       profile_tier: "M",
       admin_email: adminEmail,
       admin_name: "Tenant Admin",
-      admin_password: "Demo1234!",
+      admin_password: adminPassword,
     });
+    setInitialPw(adminPassword);
     setMsg(
-      t("page.tenants.created", "已创建租户 {code}；管理员 {email} / Demo1234!", {
+      t("page.tenants.created", "已创建租户 {code}；管理员 {email}。初始密码已生成，请通过安全渠道传达。", {
         code: res.code,
         email: res.admin_email,
       }),
@@ -84,7 +87,28 @@ export default function PlatformTenantsPage() {
     await load();
   }
 
+  async function copyInitialPw() {
+    try {
+      await navigator.clipboard.writeText(initialPw);
+    } catch {
+      window.prompt(t("page.tenants.copy_manual", "请手动复制初始密码："), initialPw);
+    }
+    setInitialPw("");
+  }
+
   async function setStatus(id: string, status: string) {
+    if (status === "suspended") {
+      setConfirm({
+        message: t("page.tenants.confirm_suspend", "暂停租户后，该租户全部用户将立即无法登录（数据保留）。确认暂停？"),
+        danger: true,
+        action: () => applyStatus(id, status).catch(() => setMsg(t("common.failed", "失败"))),
+      });
+      return;
+    }
+    await applyStatus(id, status);
+  }
+
+  async function applyStatus(id: string, status: string) {
     await apiPost(`/api/v1/platform/tenants/${id}/status`, { status });
     await load();
     if (selected?.id === id) await openTenant({ ...selected, status });
@@ -93,15 +117,7 @@ export default function PlatformTenantsPage() {
   async function saveEdit(e: FormEvent) {
     e.preventDefault();
     if (!selected) return;
-    const res = await fetch(`${API}/api/v1/platform/tenants/${selected.id}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify(edit),
-    });
-    if (!res.ok) throw new Error("save failed");
+    await apiPut(`/api/v1/platform/tenants/${selected.id}`, edit);
     setMsg(t("page.tenants.saved", "租户资料已保存"));
     await load();
     await openTenant(selected);
@@ -110,6 +126,23 @@ export default function PlatformTenantsPage() {
   async function toggleLicense(mod: LicRow) {
     if (!selected || mod.is_core) return;
     const next = mod.status === "active" ? "inactive" : "active";
+    if (next === "inactive") {
+      setConfirm({
+        message: t(
+          "page.tenants.confirm_disable_mod",
+          "停用模块 {mod} 后，该租户用户将立即失去此模块的访问入口。确认停用？",
+          { mod: mod.module_code },
+        ),
+        danger: true,
+        action: () => applyLicense(mod, next).catch(() => setMsg(t("common.failed", "失败"))),
+      });
+      return;
+    }
+    await applyLicense(mod, next);
+  }
+
+  async function applyLicense(mod: LicRow, next: string) {
+    if (!selected) return;
     await apiPost(`/api/v1/platform/tenants/${selected.id}/licenses`, {
       module_code: mod.module_code,
       status: next,
@@ -128,6 +161,14 @@ export default function PlatformTenantsPage() {
         )}
       </p>
       {msg ? <p className="flash">{msg}</p> : null}
+      {initialPw ? (
+        <p className="flash">
+          {t("page.tenants.pw_ready", "初始密码已生成（仅此一次，复制后即不再显示）。")}{" "}
+          <button type="button" className="btn btn-ghost" onClick={() => copyInitialPw().catch(() => setInitialPw(""))}>
+            {t("page.tenants.copy_pw", "复制初始密码")}
+          </button>
+        </p>
+      ) : null}
 
       <form className="panel" onSubmit={(e) => create(e).catch(() => setMsg(t("page.tenants.create_fail", "创建失败")))}>
         <h2 style={{ marginTop: 0 }}>{t("page.tenants.provision", "开通租户")}</h2>
@@ -279,6 +320,18 @@ export default function PlatformTenantsPage() {
       ) : (
         <p className="muted">{t("page.tenants.pick", "请选择上方租户行，以编辑资料与许可证。")}</p>
       )}
+      <ConfirmDialog
+        open={Boolean(confirm)}
+        title={t("common.confirm", "确认操作")}
+        message={confirm?.message || ""}
+        danger={confirm?.danger}
+        onConfirm={() => {
+          const fn = confirm?.action;
+          setConfirm(null);
+          fn?.();
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </AppShell>
   );
 }

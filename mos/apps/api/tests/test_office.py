@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _stub_oauth(oauth_stub):
+    """Office tests exercise the dev stub Graph flow (OAUTH_ALLOW_STUB off by default)."""
+    yield
+
 
 def _login(client, email="admin@demo.voyageos"):
     login = client.post(
@@ -109,6 +117,8 @@ def test_connectors_catalog_has_office(client):
 
 
 def test_healthz_office_version(client):
+    from app.config import get_settings
+
     hz = client.get("/healthz")
     assert hz.status_code == 200
-    assert "office" in hz.json()["version"] or hz.json()["version"].startswith("1.5")
+    assert hz.json()["version"] == get_settings().app_version

@@ -5,7 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+import { API_BASE as API } from "@/lib/api";
 
 export default function TenantI18nPage() {
   const { t, term, reload } = useI18n();

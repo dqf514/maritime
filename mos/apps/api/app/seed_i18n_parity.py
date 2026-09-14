@@ -210,4 +210,7 @@ UI_MESSAGES_PARITY: list[tuple[str, str, str, str]] = [
     ("page.trading.quote_ok", "app", "Quote saved", "行情已写入"),
     ("page.apikeys.default_name", "app", "Integration key", "集成密钥"),
     ("page.voyages.agent", "app", "Agent", "代理"),
+    ("login.microsoft_full", "app", "Continue with Microsoft", "使用 Microsoft 继续"),
+    ("login.google_full", "app", "Continue with Google", "使用 Google 继续"),
+    ("login.or_email", "app", "or continue with email", "或使用邮箱继续"),
 ]

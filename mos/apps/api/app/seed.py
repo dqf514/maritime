@@ -477,6 +477,39 @@ def seed_saas_catalog(db: Session) -> None:
             db.add(OrgUnit(tenant_id=demo.id, parent_id=root.id, code="OPS", name="Operations", unit_type="dept"))
             db.add(OrgUnit(tenant_id=demo.id, parent_id=root.id, code="FIN", name="Finance", unit_type="dept"))
 
+        # Link demo users to departments (idempotent)
+        from app.models import User
+        from app.models_saas import UserOrgMembership
+
+        dept_map = {
+            "charterer@demo.voyageos": "CHARTER",
+            "ops@demo.voyageos": "OPS",
+            "finance@demo.voyageos": "FIN",
+            "mgmt@demo.voyageos": "HQ",
+            "admin@demo.voyageos": "HQ",
+        }
+        for email, code in dept_map.items():
+            user = db.scalar(select(User).where(User.tenant_id == demo.id, User.email == email))
+            unit = db.scalar(select(OrgUnit).where(OrgUnit.tenant_id == demo.id, OrgUnit.code == code))
+            if not user or not unit:
+                continue
+            if db.scalar(
+                select(UserOrgMembership).where(
+                    UserOrgMembership.user_id == user.id, UserOrgMembership.org_unit_id == unit.id
+                )
+            ):
+                continue
+            # demote existing primary
+            for m in db.scalars(
+                select(UserOrgMembership).where(UserOrgMembership.user_id == user.id, UserOrgMembership.is_primary.is_(True))
+            ).all():
+                m.is_primary = False
+            db.add(UserOrgMembership(user_id=user.id, org_unit_id=unit.id, is_primary=True))
+            if code == "HQ" and email == "admin@demo.voyageos" and not unit.manager_user_id:
+                unit.manager_user_id = user.id
+            if code != "HQ" and not unit.manager_user_id:
+                unit.manager_user_id = user.id
+
         fleet = db.scalar(select(SaaSPlan).where(SaaSPlan.code == "fleet"))
         if fleet and not db.scalar(select(TenantSubscription).where(TenantSubscription.tenant_id == demo.id).limit(1)):
             sub = TenantSubscription(

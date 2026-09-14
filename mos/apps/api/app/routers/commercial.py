@@ -3,23 +3,44 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from uuid import UUID, uuid4
+from decimal import Decimal, ROUND_HALF_UP
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional
-from sqlalchemy import and_, select
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Literal, Optional
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models_domain import Charter, CoaLifting, Estimate, ScheduleBlock, Voyage
+from app.models_domain import (
+    Charter,
+    CharterAmendment,
+    CoaLifting,
+    Estimate,
+    OffHireEvent,
+    ScheduleBlock,
+    Voyage,
+)
 from app.models_wave1 import Counterparty, Vessel
 from app.security import AuthContext, require_module
+from app.services.doc_numbering import next_doc_number
 from app.services.estimate_engine import compute_estimate, sensitivity
 from app.services.recycle import soft_delete
-from app.services.state_machine import CHARTER_TRANSITIONS, transition
+from app.services.tenant_guard import scoped_get
+from app.services.state_machine import (
+    CHARTER_AMENDMENT_TRANSITIONS,
+    CHARTER_TRANSITIONS,
+    COA_LIFTING_TRANSITIONS,
+    OFFHIRE_TRANSITIONS,
+    transition,
+)
 
 router = APIRouter(tags=["Commercial"])
+
+
+def _f(v) -> float | None:
+    return float(v) if v is not None else None
 
 
 def _alive(status: str | None) -> bool:
@@ -48,7 +69,40 @@ class EstimateOut(BaseModel):
     parent_id: UUID | None = None
 
 
-class CharterIn(BaseModel):
+class _CharterTermsMixin(BaseModel):
+    """Shared CP commercial terms with validation/normalization."""
+
+    demurrage_rate: float | None = None
+    despatch_rate: float | None = None
+    laytime_terms: str | None = None
+    cp_form: str | None = None
+    freight_rate: float | None = None
+    freight_basis: Literal["per_mt", "lumpsum", "worldscale"] | None = None
+    cargo_qty: float | None = None
+    load_rate_pd: float | None = None
+    disch_rate_pd: float | None = None
+    address_comm_pct: float | None = None
+    brokerage_pct: float | None = None
+    hire_per_day: float | None = None
+    hire_cycle_days: int | None = None
+    delivery_port_id: UUID | None = None
+    redelivery_port_id: UUID | None = None
+    delivery_at: datetime | None = None
+    redelivery_at: datetime | None = None
+    ets_responsibility: Literal["owner", "charterer"] | None = None
+
+    @field_validator("laytime_terms")
+    @classmethod
+    def _upper_laytime_terms(cls, v: str | None) -> str | None:
+        return v.strip().upper() if v else v
+
+    @field_validator("cp_form")
+    @classmethod
+    def _upper_cp_form(cls, v: str | None) -> str | None:
+        return v.strip().upper() if v else v
+
+
+class CharterIn(_CharterTermsMixin):
     charter_type: str = "voyage"
     vessel_id: UUID | None = None
     counterparty_id: UUID | None = None
@@ -75,6 +129,24 @@ class CharterOut(BaseModel):
     freight_terms: dict
     clauses: dict
     sanctions_blocked: bool
+    demurrage_rate: float | None = None
+    despatch_rate: float | None = None
+    laytime_terms: str | None = None
+    cp_form: str | None = None
+    freight_rate: float | None = None
+    freight_basis: str | None = None
+    cargo_qty: float | None = None
+    load_rate_pd: float | None = None
+    disch_rate_pd: float | None = None
+    address_comm_pct: float | None = None
+    brokerage_pct: float | None = None
+    hire_per_day: float | None = None
+    hire_cycle_days: int | None = None
+    delivery_port_id: UUID | None = None
+    redelivery_port_id: UUID | None = None
+    delivery_at: datetime | None = None
+    redelivery_at: datetime | None = None
+    ets_responsibility: str | None = None
 
 
 class ScheduleIn(BaseModel):
@@ -110,6 +182,10 @@ def list_estimates(auth: AuthContext = Depends(require_module("estimate")), db: 
 
 @router.post("/estimates", response_model=EstimateOut)
 def create_estimate(body: EstimateIn, auth: AuthContext = Depends(require_module("estimate")), db: Session = Depends(get_db)):
+    if body.vessel_id is not None and scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Vessel not found")
+    if body.counterparty_id is not None and scoped_get(db, Counterparty, body.counterparty_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Counterparty not found")
     row = Estimate(
         tenant_id=auth.tenant_id,
         title=body.title,
@@ -162,10 +238,14 @@ def update_estimate(
     if body.clear_vessel or ("vessel_id" in fields and body.vessel_id is None):
         row.vessel_id = None
     elif body.vessel_id is not None:
+        if scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Vessel not found")
         row.vessel_id = body.vessel_id
     if body.clear_counterparty or ("counterparty_id" in fields and body.counterparty_id is None):
         row.counterparty_id = None
     elif body.counterparty_id is not None:
+        if scoped_get(db, Counterparty, body.counterparty_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Counterparty not found")
         row.counterparty_id = body.counterparty_id
     if body.inputs is not None:
         row.inputs = body.inputs
@@ -200,7 +280,10 @@ def calculate_estimate(estimate_id: UUID, auth: AuthContext = Depends(require_mo
     row = db.get(Estimate, estimate_id)
     if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Estimate not found")
-    row.results = compute_estimate(row.inputs or {})
+    try:
+        row.results = compute_estimate(row.inputs or {})
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     row.status = "calculated"
     row.updated_at = datetime.now().astimezone()
     db.commit()
@@ -241,7 +324,10 @@ def estimate_sensitivity(
     row = db.get(Estimate, estimate_id)
     if not row or row.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Estimate not found")
-    return sensitivity(row.inputs or {}, field, [-0.1, -0.05, 0.0, 0.05, 0.1])
+    try:
+        return sensitivity(row.inputs or {}, field, [-0.1, -0.05, 0.0, 0.05, 0.1])
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
 
 
 @router.post("/estimates/compare")
@@ -263,17 +349,30 @@ def estimate_to_charter(estimate_id: UUID, auth: AuthContext = Depends(require_m
     if not est or est.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Estimate not found")
     if not est.results:
-        est.results = compute_estimate(est.inputs or {})
+        try:
+            est.results = compute_estimate(est.inputs or {})
+        except ValueError as exc:
+            raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
+    basis_map = {"rate": "per_mt", "lump_sum": "lumpsum", "worldscale": "worldscale"}
+    inputs = est.inputs or {}
+    results = est.results or {}
     charter = Charter(
         tenant_id=auth.tenant_id,
-        charter_no=f"CP-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:6].upper()}",
+        charter_no=next_doc_number(db, auth.tenant_id, Charter, Charter.charter_no, "CP"),
         charter_type="voyage" if est.mode == "voyage" else "tct",
         vessel_id=est.vessel_id,
         counterparty_id=est.counterparty_id,
         estimate_id=est.id,
-        freight_terms={"from_estimate": est.results},
+        freight_terms={"from_estimate": results},
         clauses={},
         status="draft",
+        cargo_qty=inputs.get("cargo_qty"),
+        freight_rate=inputs.get("freight_rate"),
+        freight_basis=basis_map.get(results.get("freight_basis")),
+        address_comm_pct=inputs.get("address_comm_pct") or inputs.get("commission_pct"),
+        brokerage_pct=inputs.get("brokerage_pct"),
+        hire_per_day=inputs.get("hire_per_day"),
+        demurrage_rate=inputs.get("demurrage_rate"),
     )
     if est.counterparty_id:
         party = db.get(Counterparty, est.counterparty_id)
@@ -301,17 +400,77 @@ def _charter_out(c: Charter) -> CharterOut:
         freight_terms=c.freight_terms or {},
         clauses=c.clauses or {},
         sanctions_blocked=c.sanctions_blocked,
+        demurrage_rate=_f(c.demurrage_rate),
+        despatch_rate=_f(c.despatch_rate),
+        laytime_terms=c.laytime_terms,
+        cp_form=c.cp_form,
+        freight_rate=_f(c.freight_rate),
+        freight_basis=c.freight_basis,
+        cargo_qty=_f(c.cargo_qty),
+        load_rate_pd=_f(c.load_rate_pd),
+        disch_rate_pd=_f(c.disch_rate_pd),
+        address_comm_pct=_f(c.address_comm_pct),
+        brokerage_pct=_f(c.brokerage_pct),
+        hire_per_day=_f(c.hire_per_day),
+        hire_cycle_days=c.hire_cycle_days,
+        delivery_port_id=c.delivery_port_id,
+        redelivery_port_id=c.redelivery_port_id,
+        delivery_at=c.delivery_at,
+        redelivery_at=c.redelivery_at,
+        ets_responsibility=c.ets_responsibility,
     )
 
 
 @router.get("/charters", response_model=list[CharterOut])
-def list_charters(auth: AuthContext = Depends(require_module("chartering")), db: Session = Depends(get_db)):
+def list_charters(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
     rows = db.scalars(
         select(Charter)
         .where(Charter.tenant_id == auth.tenant_id, Charter.status != "deleted")
         .order_by(Charter.created_at.desc())
+        .offset(offset)
+        .limit(limit)
     ).all()
     return [_charter_out(r) for r in rows]
+
+
+CHARTER_TERM_FIELDS = (
+    "demurrage_rate",
+    "despatch_rate",
+    "laytime_terms",
+    "cp_form",
+    "freight_rate",
+    "freight_basis",
+    "cargo_qty",
+    "load_rate_pd",
+    "disch_rate_pd",
+    "address_comm_pct",
+    "brokerage_pct",
+    "hire_per_day",
+    "hire_cycle_days",
+    "delivery_port_id",
+    "redelivery_port_id",
+    "delivery_at",
+    "redelivery_at",
+    "ets_responsibility",
+)
+
+
+# Key commercial terms that are locked once the charter is active/completed;
+# changing them requires an approved CharterAmendment (DDS change-order flow).
+CHARTER_AMENDABLE_FIELDS = (
+    "demurrage_rate",
+    "freight_rate",
+    "freight_basis",
+    "cargo_qty",
+    "laycan_from",
+    "laycan_to",
+    "hire_per_day",
+)
 
 
 @router.post("/charters", response_model=CharterOut)
@@ -319,11 +478,17 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
     blocked = False
     if body.counterparty_id:
         party = db.get(Counterparty, body.counterparty_id)
-        if party and party.sanctions_status != "clear":
+        if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+            raise HTTPException(404, "Counterparty not found")
+        if party.sanctions_status != "clear":
             blocked = True
+    if body.vessel_id is not None and scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Vessel not found")
+    if body.estimate_id is not None and scoped_get(db, Estimate, body.estimate_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Estimate not found")
     row = Charter(
         tenant_id=auth.tenant_id,
-        charter_no=f"CP-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:6].upper()}",
+        charter_no=next_doc_number(db, auth.tenant_id, Charter, Charter.charter_no, "CP"),
         charter_type=body.charter_type,
         vessel_id=body.vessel_id,
         counterparty_id=body.counterparty_id,
@@ -334,6 +499,7 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
         freight_terms=body.freight_terms,
         clauses=body.clauses,
         sanctions_blocked=blocked,
+        **{f: getattr(body, f) for f in CHARTER_TERM_FIELDS},
     )
     db.add(row)
     db.commit()
@@ -341,7 +507,7 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
     return _charter_out(row)
 
 
-class CharterUpdate(BaseModel):
+class CharterUpdate(_CharterTermsMixin):
     charter_type: str | None = None
     vessel_id: Optional[UUID] = None
     counterparty_id: Optional[UUID] = None
@@ -365,17 +531,33 @@ def update_charter(
     if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Charter not found")
     fields = body.model_fields_set
+    if row.status in ("active", "completed"):
+        locked = sorted(set(CHARTER_AMENDABLE_FIELDS) & fields)
+        if locked:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "AMENDMENT_REQUIRED",
+                    "message": f"Charter is {row.status}; key terms {locked} can only change via an approved amendment",
+                    "fields": locked,
+                },
+            )
     if "charter_type" in fields and body.charter_type is not None:
         row.charter_type = body.charter_type
     if body.clear_vessel or ("vessel_id" in fields and body.vessel_id is None):
         row.vessel_id = None
     elif body.vessel_id is not None:
+        vessel = scoped_get(db, Vessel, body.vessel_id, auth.tenant_id)
+        if not vessel:
+            raise HTTPException(404, "Vessel not found")
         row.vessel_id = body.vessel_id
     if body.clear_counterparty or ("counterparty_id" in fields and body.counterparty_id is None):
         row.counterparty_id = None
     elif body.counterparty_id is not None:
-        row.counterparty_id = body.counterparty_id
         party = db.get(Counterparty, body.counterparty_id)
+        if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+            raise HTTPException(404, "Counterparty not found")
+        row.counterparty_id = body.counterparty_id
         row.sanctions_blocked = bool(party and party.sanctions_status != "clear")
     if "laycan_from" in fields:
         row.laycan_from = body.laycan_from
@@ -383,6 +565,9 @@ def update_charter(
         row.laycan_to = body.laycan_to
     if "commission_pct" in fields:
         row.commission_pct = body.commission_pct
+    for f in CHARTER_TERM_FIELDS:
+        if f in fields:
+            setattr(row, f, getattr(body, f))
     if body.freight_terms is not None:
         row.freight_terms = body.freight_terms
     if body.clauses is not None:
@@ -460,7 +645,7 @@ def charter_transition(
 
     if body.target == "active" and row.vessel_id:
         # auto-create voyage + schedule occupancy
-        vno = f"V-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:4].upper()}"
+        vno = next_doc_number(db, auth.tenant_id, Voyage, Voyage.voyage_no, "V")
         voyage = Voyage(
             tenant_id=auth.tenant_id,
             voyage_no=vno,
@@ -514,6 +699,432 @@ def add_lifting(
     db.add(lift)
     db.commit()
     return {"id": str(lift.id), "period_label": period_label, "planned_qty": planned_qty}
+
+
+# ---- COA lifting lifecycle (planned → nominated → fixed → completed / withdrawn) ----
+
+
+class CoaLiftingOut(BaseModel):
+    id: UUID
+    charter_id: UUID
+    period_label: str
+    planned_qty: float | None = None
+    actual_qty: float | None = None
+    status: str
+    voyage_id: UUID | None = None
+    laycan_from: datetime | None = None
+    laycan_to: datetime | None = None
+
+
+def _lifting_out(lift: CoaLifting) -> CoaLiftingOut:
+    return CoaLiftingOut(
+        id=lift.id,
+        charter_id=lift.charter_id,
+        period_label=lift.period_label,
+        planned_qty=_f(lift.planned_qty),
+        actual_qty=_f(lift.actual_qty),
+        status=lift.status,
+        voyage_id=lift.voyage_id,
+        laycan_from=lift.laycan_from,
+        laycan_to=lift.laycan_to,
+    )
+
+
+def _get_lifting(db: Session, auth: AuthContext, lifting_id: UUID) -> CoaLifting:
+    lift = db.get(CoaLifting, lifting_id)
+    if not lift:
+        raise HTTPException(404, "COA lifting not found")
+    charter = db.get(Charter, lift.charter_id)
+    if not charter or charter.tenant_id != auth.tenant_id or not _alive(charter.status):
+        raise HTTPException(404, "COA lifting not found")
+    return lift
+
+
+@router.get("/charters/{charter_id}/liftings", response_model=list[CoaLiftingOut])
+def list_liftings(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(Charter, charter_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Charter not found")
+    rows = db.scalars(
+        select(CoaLifting).where(CoaLifting.charter_id == row.id).order_by(CoaLifting.period_label)
+    ).all()
+    return [_lifting_out(lift) for lift in rows]
+
+
+class LiftingNominateIn(BaseModel):
+    laycan_from: datetime
+    laycan_to: datetime
+
+
+@router.post("/coa-liftings/{lifting_id}/nominate", response_model=CoaLiftingOut)
+def nominate_lifting(
+    lifting_id: UUID,
+    body: LiftingNominateIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    lift = _get_lifting(db, auth, lifting_id)
+    if body.laycan_to < body.laycan_from:
+        raise HTTPException(422, detail={"code": "INVALID_LAYCAN", "message": "laycan_to must not be before laycan_from"})
+    lift.status = transition("coa_lifting", lift.status, "nominated", COA_LIFTING_TRANSITIONS)
+    lift.laycan_from = body.laycan_from
+    lift.laycan_to = body.laycan_to
+    db.commit()
+    db.refresh(lift)
+    return _lifting_out(lift)
+
+
+class LiftingFixIn(BaseModel):
+    voyage_id: UUID
+
+
+@router.post("/coa-liftings/{lifting_id}/fix", response_model=CoaLiftingOut)
+def fix_lifting(
+    lifting_id: UUID,
+    body: LiftingFixIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    lift = _get_lifting(db, auth, lifting_id)
+    voyage = db.get(Voyage, body.voyage_id)
+    if not voyage or voyage.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Voyage not found")
+    lift.status = transition("coa_lifting", lift.status, "fixed", COA_LIFTING_TRANSITIONS)
+    lift.voyage_id = voyage.id
+    db.commit()
+    db.refresh(lift)
+    return _lifting_out(lift)
+
+
+class LiftingCompleteIn(BaseModel):
+    actual_qty: float | None = None
+
+
+@router.post("/coa-liftings/{lifting_id}/complete", response_model=CoaLiftingOut)
+def complete_lifting(
+    lifting_id: UUID,
+    body: LiftingCompleteIn | None = None,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    lift = _get_lifting(db, auth, lifting_id)
+    lift.status = transition("coa_lifting", lift.status, "completed", COA_LIFTING_TRANSITIONS)
+    if body and body.actual_qty is not None:
+        lift.actual_qty = body.actual_qty
+    db.commit()
+    db.refresh(lift)
+    return _lifting_out(lift)
+
+
+# ---- Charter amendments (change orders for locked key terms) ----
+
+
+class CharterAmendmentIn(BaseModel):
+    changes: dict
+    reason: str | None = None
+
+
+class CharterAmendmentOut(BaseModel):
+    id: UUID
+    charter_id: UUID
+    seq: int
+    changes: dict
+    reason: str | None = None
+    status: str
+    approved_by: UUID | None = None
+    created_at: datetime | None = None
+
+
+def _amendment_out(a: CharterAmendment) -> CharterAmendmentOut:
+    return CharterAmendmentOut(
+        id=a.id,
+        charter_id=a.charter_id,
+        seq=a.seq,
+        changes=a.changes or {},
+        reason=a.reason,
+        status=a.status,
+        approved_by=a.approved_by,
+        created_at=a.created_at,
+    )
+
+
+def _validate_amendment_changes(changes: dict) -> None:
+    if not changes:
+        raise HTTPException(422, detail={"code": "EMPTY_AMENDMENT", "message": "changes must not be empty"})
+    unknown = sorted(set(changes) - set(CHARTER_AMENDABLE_FIELDS))
+    if unknown:
+        raise HTTPException(
+            422,
+            detail={
+                "code": "INVALID_AMENDMENT_FIELDS",
+                "message": f"Fields {unknown} are not amendable; allowed: {list(CHARTER_AMENDABLE_FIELDS)}",
+            },
+        )
+
+
+@router.post("/charters/{charter_id}/amendments", response_model=CharterAmendmentOut)
+def create_amendment(
+    charter_id: UUID,
+    body: CharterAmendmentIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(Charter, charter_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Charter not found")
+    _validate_amendment_changes(body.changes)
+    max_seq = db.scalar(select(func.max(CharterAmendment.seq)).where(CharterAmendment.charter_id == row.id)) or 0
+    amd = CharterAmendment(
+        tenant_id=auth.tenant_id,
+        charter_id=row.id,
+        seq=max_seq + 1,
+        changes=body.changes,
+        reason=body.reason,
+        status="proposed",
+    )
+    db.add(amd)
+    db.commit()
+    db.refresh(amd)
+    return _amendment_out(amd)
+
+
+@router.get("/charters/{charter_id}/amendments", response_model=list[CharterAmendmentOut])
+def list_amendments(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(Charter, charter_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Charter not found")
+    rows = db.scalars(
+        select(CharterAmendment).where(CharterAmendment.charter_id == row.id).order_by(CharterAmendment.seq)
+    ).all()
+    return [_amendment_out(a) for a in rows]
+
+
+def _get_amendment(db: Session, auth: AuthContext, amendment_id: UUID) -> tuple[CharterAmendment, Charter]:
+    amd = db.get(CharterAmendment, amendment_id)
+    if not amd or amd.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Charter amendment not found")
+    charter = db.get(Charter, amd.charter_id)
+    if not charter or charter.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Charter amendment not found")
+    return amd, charter
+
+
+@router.post("/charter-amendments/{amendment_id}/approve", response_model=CharterAmendmentOut)
+def approve_amendment(
+    amendment_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    amd, charter = _get_amendment(db, auth, amendment_id)
+    amd.status = transition("charter_amendment", amd.status, "approved", CHARTER_AMENDMENT_TRANSITIONS)
+    amd.approved_by = auth.user_id
+    for k, v in (amd.changes or {}).items():
+        if k in ("laycan_from", "laycan_to") and isinstance(v, str):
+            v = date.fromisoformat(v)
+        setattr(charter, k, v)
+    charter.updated_at = datetime.now().astimezone()
+    db.commit()
+    db.refresh(amd)
+    return _amendment_out(amd)
+
+
+@router.post("/charter-amendments/{amendment_id}/reject", response_model=CharterAmendmentOut)
+def reject_amendment(
+    amendment_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    amd, _charter = _get_amendment(db, auth, amendment_id)
+    amd.status = transition("charter_amendment", amd.status, "rejected", CHARTER_AMENDMENT_TRANSITIONS)
+    db.commit()
+    db.refresh(amd)
+    return _amendment_out(amd)
+
+
+# ---- Off-hire events (TC hire deduction) ----
+
+
+class OffHireIn(BaseModel):
+    start_at: datetime
+    reason: str | None = None
+    deduct_hire: bool = True
+    charter_id: UUID | None = None
+
+
+class OffHireCloseIn(BaseModel):
+    end_at: datetime | None = None
+
+
+class OffHireOut(BaseModel):
+    id: UUID
+    voyage_id: UUID
+    charter_id: UUID | None
+    start_at: datetime
+    end_at: datetime | None
+    reason: str | None
+    deduct_hire: bool
+    status: str
+    deducted_days: float | None = None
+
+
+def _offhire_days(ev: OffHireEvent) -> float | None:
+    if ev.end_at is None:
+        return None
+    hours = (ev.end_at - ev.start_at).total_seconds() / 3600.0
+    return float((Decimal(str(hours)) / Decimal("24")).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+
+
+def _offhire_out(ev: OffHireEvent) -> OffHireOut:
+    return OffHireOut(
+        id=ev.id,
+        voyage_id=ev.voyage_id,
+        charter_id=ev.charter_id,
+        start_at=ev.start_at,
+        end_at=ev.end_at,
+        reason=ev.reason,
+        deduct_hire=ev.deduct_hire,
+        status=ev.status,
+        deducted_days=_offhire_days(ev),
+    )
+
+
+@router.post("/voyages/{voyage_id}/off-hire", response_model=OffHireOut)
+def open_off_hire(
+    voyage_id: UUID,
+    body: OffHireIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    voyage = db.get(Voyage, voyage_id)
+    if not voyage or voyage.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Voyage not found")
+    charter_id = body.charter_id or voyage.charter_id
+    if charter_id:
+        charter = db.get(Charter, charter_id)
+        if not charter or charter.tenant_id != auth.tenant_id:
+            raise HTTPException(404, "Charter not found")
+    ev = OffHireEvent(
+        tenant_id=auth.tenant_id,
+        voyage_id=voyage.id,
+        charter_id=charter_id,
+        start_at=body.start_at,
+        reason=body.reason,
+        deduct_hire=body.deduct_hire,
+        status="open",
+    )
+    db.add(ev)
+    db.commit()
+    db.refresh(ev)
+    return _offhire_out(ev)
+
+
+@router.post("/off-hire/{event_id}/close", response_model=OffHireOut)
+def close_off_hire(
+    event_id: UUID,
+    body: OffHireCloseIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    ev = db.get(OffHireEvent, event_id)
+    if not ev or ev.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Off-hire event not found")
+    end_at = body.end_at or datetime.now(timezone.utc)
+    start_at = ev.start_at if ev.start_at.tzinfo else ev.start_at.replace(tzinfo=timezone.utc)
+    if end_at <= start_at:
+        raise HTTPException(422, detail={"code": "INVALID_OFFHIRE_WINDOW", "message": "end_at must be after start_at"})
+    ev.status = transition("off_hire", ev.status, "closed", OFFHIRE_TRANSITIONS)
+    ev.end_at = end_at
+    db.commit()
+    db.refresh(ev)
+    return _offhire_out(ev)
+
+
+@router.get("/voyages/{voyage_id}/off-hire", response_model=list[OffHireOut])
+def list_off_hire(
+    voyage_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    voyage = db.get(Voyage, voyage_id)
+    if not voyage or voyage.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Voyage not found")
+    rows = db.scalars(
+        select(OffHireEvent)
+        .where(OffHireEvent.tenant_id == auth.tenant_id, OffHireEvent.voyage_id == voyage_id)
+        .order_by(OffHireEvent.start_at)
+    ).all()
+    return [_offhire_out(r) for r in rows]
+
+
+@router.get("/charters/{charter_id}/hire-summary")
+def charter_hire_summary(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """Billable TC hire: hire_per_day × (charter days − deductible off-hire days).
+
+    Output shape is a stable contract consumed by the finance hire-invoice endpoint:
+    {charter_id, hire_per_day, gross_days, offhire_days, billable_days, amount_due, currency}
+    """
+    row = db.get(Charter, charter_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Charter not found")
+    if row.hire_per_day is None:
+        raise HTTPException(422, detail={"code": "HIRE_RATE_MISSING", "message": "Charter has no hire_per_day"})
+
+    if row.delivery_at and row.redelivery_at:
+        gross = Decimal(str((row.redelivery_at - row.delivery_at).total_seconds())) / Decimal("86400")
+    elif row.hire_cycle_days:
+        gross = Decimal(row.hire_cycle_days)
+    else:
+        raise HTTPException(
+            422,
+            detail={"code": "HIRE_PERIOD_MISSING", "message": "Set delivery_at/redelivery_at or hire_cycle_days"},
+        )
+
+    voyage_ids = db.scalars(
+        select(Voyage.id).where(Voyage.tenant_id == auth.tenant_id, Voyage.charter_id == row.id)
+    ).all()
+    events = db.scalars(
+        select(OffHireEvent).where(
+            OffHireEvent.tenant_id == auth.tenant_id,
+            OffHireEvent.deduct_hire.is_(True),
+            OffHireEvent.end_at.isnot(None),
+            or_(
+                OffHireEvent.charter_id == row.id,
+                OffHireEvent.voyage_id.in_(voyage_ids) if voyage_ids else False,
+            ),
+        )
+    ).all()
+    offhire = sum(
+        (Decimal(str((ev.end_at - ev.start_at).total_seconds())) / Decimal("86400") for ev in events),
+        Decimal("0"),
+    )
+
+    q = Decimal("0.0001")
+    gross_days = gross.quantize(q, rounding=ROUND_HALF_UP)
+    offhire_days = offhire.quantize(q, rounding=ROUND_HALF_UP)
+    billable_days = max(gross_days - offhire_days, Decimal("0"))
+    amount_due = (Decimal(row.hire_per_day) * billable_days).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return {
+        "charter_id": str(row.id),
+        "hire_per_day": float(row.hire_per_day),
+        "gross_days": float(gross_days),
+        "offhire_days": float(offhire_days),
+        "billable_days": float(billable_days),
+        "amount_due": float(amount_due),
+        "currency": (row.freight_terms or {}).get("currency") or "USD",
+    }
+
 
 
 def _has_conflict(db: Session, tenant_id: UUID, vessel_id: UUID, start: datetime, end: datetime) -> bool:

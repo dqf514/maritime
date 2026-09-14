@@ -11,6 +11,9 @@ from sqlalchemy.pool import StaticPool
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
 os.environ["LICENSE_DEV_UNLOCK"] = "all"
 os.environ["JWT_SECRET"] = "test-secret"
+# Demo data is seeded by the db_engine fixture; rate limiting is exercised in test_security_fixes.py
+os.environ["SEED_DEMO"] = "true"
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 
 from app.db import Base, get_db  # noqa: E402
 import app.models  # noqa: E402, F401
@@ -80,3 +83,39 @@ def auth_headers(client: TestClient) -> dict[str, str]:
     )
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+@pytest.fixture()
+def oauth_stub(monkeypatch):
+    """Enable dev stub OAuth for tests that exercise the stub flow (off by default)."""
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "oauth_allow_stub", True)
+
+
+@pytest.fixture()
+def mail_capture(monkeypatch):
+    """Capture send_mail kwargs so tests can extract challenge tokens from email links."""
+    import re
+    from types import SimpleNamespace
+
+    from app.routers import identity as identity_router
+
+    sent: list[dict] = []
+    real_send_mail = identity_router.send_mail
+
+    def _capture(db, **kwargs):
+        sent.append(kwargs)
+        return real_send_mail(db, **kwargs)
+
+    monkeypatch.setattr(identity_router, "send_mail", _capture)
+
+    def _token(purpose: str) -> str:
+        for kw in reversed(sent):
+            if kw.get("purpose") == purpose:
+                m = re.search(r"token=([^\s&]+)", kw.get("body") or "")
+                if m:
+                    return m.group(1)
+        raise AssertionError(f"no mail captured for purpose={purpose}")
+
+    return SimpleNamespace(sent=sent, extract_token=_token)

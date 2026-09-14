@@ -14,7 +14,16 @@ type Port = {
   unlocode: string | null;
   country: string | null;
   timezone: string;
+  holidays?: string[] | null;
+  is_eu?: boolean;
 };
+
+function parseHolidays(v: string): string[] {
+  return v
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 export default function PortsPage() {
   const { t } = useI18n();
@@ -23,9 +32,11 @@ export default function PortsPage() {
   const [unlocode, setUnlocode] = useState("");
   const [country, setCountry] = useState("CN");
   const [timezone, setTimezone] = useState("Asia/Shanghai");
+  const [holidays, setHolidays] = useState("");
+  const [isEu, setIsEu] = useState(false);
   const [msg, setMsg] = useState("");
   const [open, setOpen] = useState<Port | null>(null);
-  const [edit, setEdit] = useState({ name: "", unlocode: "", country: "", timezone: "UTC" });
+  const [edit, setEdit] = useState({ name: "", unlocode: "", country: "", timezone: "UTC", holidays: "", is_eu: false });
   const [saving, setSaving] = useState(false);
 
   async function load() {
@@ -43,9 +54,13 @@ export default function PortsPage() {
       unlocode: unlocode || null,
       country: country || null,
       timezone: timezone || "UTC",
+      holidays: parseHolidays(holidays),
+      is_eu: isEu,
     });
     setName("");
     setUnlocode("");
+    setHolidays("");
+    setIsEu(false);
     setMsg(t("page.ports.created", "Port created"));
     await load();
   }
@@ -57,6 +72,8 @@ export default function PortsPage() {
       unlocode: r.unlocode || "",
       country: r.country || "",
       timezone: r.timezone || "UTC",
+      holidays: (r.holidays || []).join(", "),
+      is_eu: Boolean(r.is_eu),
     });
   }
 
@@ -69,6 +86,8 @@ export default function PortsPage() {
         unlocode: edit.unlocode || null,
         country: edit.country || null,
         timezone: edit.timezone || "UTC",
+        holidays: parseHolidays(edit.holidays),
+        is_eu: edit.is_eu,
       });
       setMsg(t("common.saved", "Saved"));
       setOpen(null);
@@ -124,6 +143,14 @@ export default function PortsPage() {
             {t("page.ports.timezone", "Time zone")}
             <LookupSelect dataset="timezones" value={timezone} onChange={setTimezone} allowEmpty={false} />
           </label>
+          <label>
+            {t("page.ports.holidays", "Holidays")}
+            <input value={holidays} onChange={(e) => setHolidays(e.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <input type="checkbox" checked={isEu} onChange={(e) => setIsEu(e.target.checked)} />
+            {t("page.ports.is_eu", "EU/EEA 港口")}
+          </label>
           <button className="btn btn-primary" type="submit">
             {t("page.ports.add", "New port")}
           </button>
@@ -138,6 +165,7 @@ export default function PortsPage() {
               <th>UN/LOCODE</th>
               <th>{t("page.ports.country", "Country")}</th>
               <th>{t("page.ports.timezone", "Time zone")}</th>
+              <th>EU</th>
             </tr>
           </thead>
           <tbody>
@@ -147,6 +175,7 @@ export default function PortsPage() {
                 <td>{r.unlocode || "—"}</td>
                 <td>{r.country || "—"}</td>
                 <td>{r.timezone}</td>
+                <td>{r.is_eu ? <span className="badge badge-pass">EU</span> : "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -181,6 +210,18 @@ export default function PortsPage() {
             onChange={(v) => setEdit({ ...edit, timezone: v })}
             allowEmpty={false}
           />
+        </label>
+        <label>
+          {t("page.ports.holidays", "Holidays")}
+          <input
+            value={edit.holidays}
+            onChange={(e) => setEdit({ ...edit, holidays: e.target.value })}
+            placeholder="YYYY-MM-DD, YYYY-MM-DD"
+          />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          <input type="checkbox" checked={edit.is_eu} onChange={(e) => setEdit({ ...edit, is_eu: e.target.checked })} />
+          {t("page.ports.is_eu", "EU/EEA 港口")}
         </label>
       </RecordModal>
     </AppShell>

@@ -6,7 +6,7 @@ import { HubTile } from "@/components/HubTile";
 import { useI18n } from "@/lib/i18n";
 
 export default function WorkbenchPage() {
-  const shell = useShellBootstrap();
+  const { shell, error, retry } = useShellBootstrap();
   const { t } = useI18n();
 
   return (
@@ -42,7 +42,21 @@ export default function WorkbenchPage() {
         {(shell?.home_widgets || []).map((w) => (
           <HubTile key={w.id} href={w.href} title={w.title} description={w.hint} />
         ))}
-        {!shell?.home_widgets?.length ? (
+        {error ? (
+          <div className="wb-tile wb-tile-icon" style={{ cursor: "default" }}>
+            <span className="wb-tile-icon-mark" aria-hidden>
+              !
+            </span>
+            <span className="wb-tile-body">
+              <h3>{t("home.load_failed", "加载失败")}</h3>
+              <p>{t("home.load_failed_hint", "工作台数据加载失败，请检查网络后重试。")}</p>
+              <button type="button" className="btn btn-ghost" onClick={retry}>
+                {t("common.retry", "重试")}
+              </button>
+            </span>
+          </div>
+        ) : null}
+        {!error && shell && !shell.home_widgets?.length ? (
           <div className="wb-tile wb-tile-icon" style={{ cursor: "default" }}>
             <span className="wb-tile-icon-mark" aria-hidden>
               —

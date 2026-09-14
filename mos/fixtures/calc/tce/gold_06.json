@@ -1,0 +1,29 @@
+{
+  "id": "tce_gold_06",
+  "note": "Same voyage economics as gold_01 (tce 9953.13, voyage_cost 503750) plus cargo tolerance ±10% MOL (min 45000 / max 55000) and a stowage overflow warning: 50000 mt × 1.5 m3/mt = 75000 m3 > 70000 m3 hold capacity. vessel_deadweight 60000 mt > cargo, so no deadweight warning. Warnings never block the calculation.",
+  "inputs": {
+    "cargo_qty": 50000,
+    "cargo_tolerance_pct": 10,
+    "stowage_factor": 1.5,
+    "hold_capacity_m3": 70000,
+    "vessel_deadweight": 60000,
+    "freight_rate": 18.5,
+    "commission_pct": 2.5,
+    "sea_days": 30,
+    "port_days": 10,
+    "bunker_sea_tpd": 28,
+    "bunker_port_tpd": 3.5,
+    "bunker_price": 450,
+    "port_costs": 80000,
+    "canal_costs": 20000,
+    "other_costs": 10000,
+    "currency": "USD"
+  },
+  "expect": {
+    "tce": 9953.13,
+    "voyage_cost": 503750.0,
+    "cargo_qty_min": 45000.0,
+    "cargo_qty_max": 55000.0
+  },
+  "expect_warnings": ["STOWAGE_OVERFLOW"]
+}

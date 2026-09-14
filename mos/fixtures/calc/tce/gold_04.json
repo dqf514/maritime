@@ -1,0 +1,25 @@
+{
+  "id": "tce_gold_04",
+  "note": "Multi-grade bunker pricing: sea consumption priced at bunker_grade (VLSFO 450), port/ECA at bunker_eca_grade (MGO 620). Sea fuel 30*20=600 mt @450 = 270000; port fuel 4*5=20 mt @620 = 12400; bunker_cost = 282400",
+  "inputs": {
+    "cargo_qty": 50000,
+    "freight_rate": 18.5,
+    "commission_pct": 2.5,
+    "sea_days": 20,
+    "port_days": 5,
+    "bunker_sea_tpd": 30,
+    "bunker_port_tpd": 4,
+    "bunker_prices": {"VLSFO": 450, "MGO": 620},
+    "bunker_grade": "VLSFO",
+    "bunker_eca_grade": "MGO",
+    "port_costs": 60000,
+    "other_costs": 10000,
+    "currency": "USD"
+  },
+  "expect": {
+    "tce": 21979.0,
+    "bunker_cost": 282400.0,
+    "voyage_cost": 352400.0,
+    "fuel_mt": 620.0
+  }
+}

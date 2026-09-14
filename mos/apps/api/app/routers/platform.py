@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 import hashlib
 import secrets
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -45,8 +45,11 @@ from app.security import (
     create_access_token,
     get_current_auth,
     require_module,
+    set_session_cookie,
     verify_password,
 )
+from app.services.audit import audit
+from app.services.ratelimit import rate_limit
 from app.services.recycle import soft_delete
 from app.services.search_acl import allowed_omni_hits, filter_omni_query
 from checks.registry import run_all_checks, score_results
@@ -55,11 +58,26 @@ router = APIRouter()
 
 
 @router.post("/auth/login", response_model=TokenOut, tags=["Auth"])
-def login(body: LoginIn, db: Session = Depends(get_db)):
+def login(
+    body: LoginIn,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
+    _rl: None = Depends(rate_limit("auth.login", max_hits=5, window_seconds=60)),
+):
     from app.services.identity import ensure_tenant_policy, now_local
 
+    ip = request.client.host if request.client else None
     tenant = db.scalar(select(Tenant).where(Tenant.code == body.tenant_code))
     if not tenant:
+        # commit=True: the 401 below would otherwise roll the audit row back
+        audit(
+            db,
+            action="auth.login_failed",
+            detail={"email": body.email, "tenant_code": body.tenant_code, "reason": "unknown_tenant"},
+            ip=ip,
+            commit=True,
+        )
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if tenant.status == "suspended":
         raise HTTPException(status_code=403, detail={"code": "TENANT_SUSPENDED", "message": "Tenant suspended"})
@@ -68,8 +86,30 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail={"code": "PASSWORD_DISABLED", "message": "Password login disabled"})
     user = db.scalar(select(User).where(User.tenant_id == tenant.id, User.email == body.email))
     if not user or not user.password_hash or not verify_password(body.password, user.password_hash):
+        audit(
+            db,
+            tenant_id=tenant.id,
+            actor_user_id=user.id if user else None,
+            action="auth.login_failed",
+            entity_type="user",
+            entity_id=user.id if user else None,
+            detail={"email": body.email, "reason": "bad_credentials"},
+            ip=ip,
+            commit=True,
+        )
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if user.status != "active":
+        audit(
+            db,
+            tenant_id=tenant.id,
+            actor_user_id=user.id,
+            action="auth.login_failed",
+            entity_type="user",
+            entity_id=user.id,
+            detail={"email": body.email, "reason": "user_inactive"},
+            ip=ip,
+            commit=True,
+        )
         raise HTTPException(status_code=403, detail="User inactive")
     if policy.require_email_verify and not user.email_verified_at:
         raise HTTPException(
@@ -77,8 +117,22 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
             detail={"code": "EMAIL_NOT_VERIFIED", "message": "Email verification required before sign-in"},
         )
     user.last_login_at = now_local()
+    # Audit row rides this commit, atomically with last_login_at
+    audit(
+        db,
+        tenant_id=tenant.id,
+        actor_user_id=user.id,
+        action="auth.login_success",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email},
+        ip=ip,
+    )
     db.commit()
-    token = create_access_token(user_id=user.id, tenant_id=tenant.id, email=user.email)
+    token = create_access_token(user_id=user.id, tenant_id=tenant.id, email=user.email, pwv=user.password_version or 1)
+    # Browser session: token is also planted as an HttpOnly cookie; the JSON
+    # body keeps access_token for backward compatibility with header clients.
+    set_session_cookie(response, token)
     return TokenOut(access_token=token)
 
 
@@ -198,14 +252,91 @@ def create_backup(
     auth: AuthContext = Depends(require_module("dataops")),
     db: Session = Depends(get_db),
 ):
+    import json
+    from pathlib import Path
+
+    from app.models_saas import OrgUnit, TenantCompanyProfile, UserOrgMembership, WorkflowDefinition
+    from app.models_identity import TenantAuthPolicy
+
+    job_id = uuid4()
+    rel = f"backups/{auth.tenant_id}/{job_id}.json"
+    # Backups live outside the public /uploads static mount
+    root = Path(__file__).resolve().parent.parent / "data"
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    users = db.scalars(select(User).where(User.tenant_id == auth.tenant_id, User.status != "deleted")).all()
+    units = db.scalars(select(OrgUnit).where(OrgUnit.tenant_id == auth.tenant_id, OrgUnit.status != "deleted")).all()
+    memberships = db.scalars(
+        select(UserOrgMembership).where(UserOrgMembership.user_id.in_([u.id for u in users] or [uuid4()]))
+    ).all()
+    workflows = db.scalars(select(WorkflowDefinition).where(WorkflowDefinition.tenant_id == auth.tenant_id)).all()
+    company = db.scalar(select(TenantCompanyProfile).where(TenantCompanyProfile.tenant_id == auth.tenant_id))
+    policy = db.scalar(select(TenantAuthPolicy).where(TenantAuthPolicy.tenant_id == auth.tenant_id))
+    licenses = db.scalars(
+        select(TenantModuleLicense).where(TenantModuleLicense.tenant_id == auth.tenant_id, TenantModuleLicense.status == "active")
+    ).all()
+
+    payload = {
+        "version": 1,
+        "tenant_id": str(auth.tenant_id),
+        "created_at": datetime.now().astimezone().isoformat(),
+        "created_by": str(auth.user_id),
+        "users": [{"id": str(u.id), "email": u.email, "full_name": u.full_name, "status": u.status} for u in users],
+        "org_units": [
+            {
+                "id": str(u.id),
+                "code": u.code,
+                "name": u.name,
+                "parent_id": str(u.parent_id) if u.parent_id else None,
+                "unit_type": u.unit_type,
+                "manager_user_id": str(u.manager_user_id) if u.manager_user_id else None,
+            }
+            for u in units
+        ],
+        "memberships": [
+            {"user_id": str(m.user_id), "org_unit_id": str(m.org_unit_id), "is_primary": m.is_primary} for m in memberships
+        ],
+        "workflows": [
+            {
+                "code": w.code,
+                "name": w.name,
+                "entity_type": w.entity_type,
+                "steps": w.steps,
+                "enabled": w.enabled,
+            }
+            for w in workflows
+        ],
+        "company": {
+            "display_name": company.display_name if company else None,
+            "legal_name": company.legal_name if company else None,
+            "brand_primary": company.brand_primary if company else None,
+        }
+        if company
+        else None,
+        "auth_policy": {
+            "password_enabled": policy.password_enabled,
+            "microsoft_enabled": policy.microsoft_enabled,
+            "google_enabled": policy.google_enabled,
+            "allowed_domains": policy.allowed_domains,
+            "invite_only": policy.invite_only,
+        }
+        if policy
+        else None,
+        "licenses": [{"module_code": l.module_code, "status": l.status} for l in licenses],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, indent=2)
+    path.write_text(raw, encoding="utf-8")
+    checksum = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
     job = BackupJob(
         tenant_id=auth.tenant_id,
         status="completed",
         trigger="manual",
-        storage_path=f"backups/{auth.tenant_id}/{uuid4()}.snapshot",
-        checksum="wave0-placeholder",
+        storage_path=rel,
+        checksum=checksum,
         created_by=auth.user_id,
-        finished_at=datetime.now(timezone.utc),
+        finished_at=datetime.now().astimezone(),
     )
     db.add(job)
     db.commit()
@@ -215,6 +346,7 @@ def create_backup(
         status=job.status,
         trigger=job.trigger,
         storage_path=job.storage_path,
+        checksum=job.checksum,
         created_at=job.created_at,
         finished_at=job.finished_at,
         error=job.error,
@@ -238,6 +370,7 @@ def list_backups(
             status=r.status,
             trigger=r.trigger,
             storage_path=r.storage_path,
+            checksum=r.checksum,
             created_at=r.created_at,
             finished_at=r.finished_at,
             error=r.error,
@@ -326,10 +459,19 @@ async def upload_excel(
     from openpyxl import load_workbook
     import io
 
+    MAX_EXCEL_BYTES = 10 * 1024 * 1024
+
     job = db.get(MigrationJob, job_id)
     if not job or job.tenant_id != auth.tenant_id:
         raise HTTPException(status_code=404, detail="Migration job not found")
-    raw = await file.read()
+    name = (file.filename or "").lower()
+    if not name.endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail={"code": "UNSUPPORTED_TYPE", "allowed": [".xlsx", ".xlsm"]})
+    raw = await file.read(MAX_EXCEL_BYTES + 1)
+    if len(raw) > MAX_EXCEL_BYTES:
+        raise HTTPException(status_code=413, detail={"code": "FILE_TOO_LARGE", "max_bytes": MAX_EXCEL_BYTES})
+    if not raw.startswith(b"PK\x03\x04"):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_CONTENT", "message": "Not a valid xlsx (zip) file"})
     wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
@@ -528,6 +670,7 @@ def create_api_key(
         key_hash=key_hash,
         scopes=body.scopes,
         status="active",
+        user_id=auth.user_id,
     )
     db.add(row)
     db.commit()

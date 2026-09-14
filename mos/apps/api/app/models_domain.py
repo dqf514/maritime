@@ -45,6 +45,7 @@ class Estimate(Base):
 
 class Charter(Base):
     __tablename__ = "charters"
+    __table_args__ = (UniqueConstraint("tenant_id", "charter_no"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
@@ -60,8 +61,44 @@ class Charter(Base):
     freight_terms: Mapped[dict] = mapped_column(JSON, default=dict)
     clauses: Mapped[dict] = mapped_column(JSON, default=dict)
     sanctions_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # P0 commercial terms (DDS CP fixture fields)
+    demurrage_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    despatch_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    laytime_terms: Mapped[str | None] = mapped_column(String(32))  # SHINC/SHEX/SSHEX ...
+    cp_form: Mapped[str | None] = mapped_column(String(32))  # GENCON/NYPE/SHELLTIME ...
+    freight_rate: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    freight_basis: Mapped[str | None] = mapped_column(String(16))  # per_mt/lumpsum/worldscale
+    cargo_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3))
+    load_rate_pd: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))  # mt per day
+    disch_rate_pd: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    address_comm_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    brokerage_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    hire_per_day: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    hire_cycle_days: Mapped[int | None] = mapped_column()
+    delivery_port_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    redelivery_port_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    redelivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ets_responsibility: Mapped[str | None] = mapped_column(String(16))  # owner/charterer
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OffHireEvent(Base):
+    """Off-hire window during a time charter; closed events deduct from billable hire."""
+
+    __tablename__ = "off_hire_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    voyage_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("voyages.id"), nullable=False)
+    charter_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("charters.id"))
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(Text)
+    deduct_hire: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class CoaLifting(Base):
@@ -72,7 +109,26 @@ class CoaLifting(Base):
     period_label: Mapped[str] = mapped_column(Text, nullable=False)
     planned_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3))
     actual_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3))
-    status: Mapped[str] = mapped_column(Text, default="planned")
+    status: Mapped[str] = mapped_column(Text, default="planned")  # planned|nominated|fixed|completed|withdrawn
+    voyage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("voyages.id"))
+    laycan_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    laycan_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CharterAmendment(Base):
+    """Change order for a charter whose key terms are locked (active/completed)."""
+
+    __tablename__ = "charter_amendments"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    charter_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("charters.id"), nullable=False)
+    seq: Mapped[int] = mapped_column(default=1)
+    changes: Mapped[dict] = mapped_column(JSON, default=dict)
+    reason: Mapped[str | None] = mapped_column(Text)
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(String(16), default="proposed")  # proposed|approved|rejected
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ScheduleBlock(Base):
@@ -92,6 +148,7 @@ class ScheduleBlock(Base):
 
 class Voyage(Base):
     __tablename__ = "voyages"
+    __table_args__ = (UniqueConstraint("tenant_id", "voyage_no"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
@@ -120,6 +177,9 @@ class PortCall(Base):
     etd: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ata: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     atd: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    nor_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    eosp_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    bl_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     agent: Mapped[str | None] = mapped_column(Text)
     timezone: Mapped[str] = mapped_column(Text, default="UTC")
 
@@ -139,6 +199,10 @@ class NoonReport(Base):
     eta_next: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     remarks: Mapped[str | None] = mapped_column(Text)
     eta_deviation_hours: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    # weather observations (weather-routing reserve; all nullable)
+    wind_bf: Mapped[Decimal | None] = mapped_column(Numeric(4, 1))  # Beaufort scale
+    sea_state: Mapped[str | None] = mapped_column(String(32))
+    current_kn: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # current speed, kn (+fair / -adverse)
 
 
 class SofEvent(Base):
@@ -180,6 +244,7 @@ class Claim(Base):
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     time_bar: Mapped[date | None] = mapped_column(Date)
     settlement_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    deductions: Mapped[list | None] = mapped_column(JSON)  # [{reason, amount}]
     notes: Mapped[str | None] = mapped_column(Text)
 
 
@@ -215,10 +280,18 @@ class BunkerOrder(Base):
     rob_after: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
     consumption: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
+    # BDN (Bunker Delivery Note) captured fields
+    bdn_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3))
+    density_kg_m3: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    sulphur_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 3))
+    bdn_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    supplier: Mapped[str | None] = mapped_column(String(128))
+    barge: Mapped[str | None] = mapped_column(String(128))
 
 
 class Invoice(Base):
     __tablename__ = "invoices"
+    __table_args__ = (UniqueConstraint("tenant_id", "invoice_no"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
@@ -229,6 +302,9 @@ class Invoice(Base):
     voyage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("voyages.id"))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
+    base_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))  # amount in tenant base currency
+    fx_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    credit_note_of_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)  # red-flush source invoice
     tax_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
     paid_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
     issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

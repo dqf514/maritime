@@ -41,9 +41,17 @@ export default function BunkerDeskPage() {
     qty_ordered: "100",
     unit_price: "550",
     rob_before: "200",
+    index_symbol: "",
+    price_differential: "",
   });
   const [deliverQty, setDeliverQty] = useState("");
+  const [bdnQty, setBdnQty] = useState("");
   const [consumption, setConsumption] = useState("");
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [inquiries, setInquiries] = useState<Array<{ id: string; supplier: string; quoted_price: number; status: string }>>([]);
+  const [inqSupplier, setInqSupplier] = useState("");
+  const [inqPrice, setInqPrice] = useState("");
+  const [alloc, setAlloc] = useState<Record<string, unknown> | null>(null);
 
   const load = useCallback(async () => {
     const [b, v, voy] = await Promise.all([
@@ -64,16 +72,85 @@ export default function BunkerDeskPage() {
     e.preventDefault();
     setBusy(true);
     try {
+      const useIndex = form.index_symbol.trim() !== "";
       await apiPost("/api/v1/bunker-orders", {
         vessel_id: form.vessel_id || null,
         voyage_id: form.voyage_id || null,
         grade: form.grade,
         qty_ordered: Number(form.qty_ordered) || 0,
-        unit_price: Number(form.unit_price) || 0,
+        ...(useIndex
+          ? { index_symbol: form.index_symbol.trim(), price_differential: Number(form.price_differential) || 0 }
+          : { unit_price: Number(form.unit_price) || 0 }),
         rob_before: form.rob_before === "" ? null : Number(form.rob_before),
       });
       setMsg(t("page.bunker.created", "Bunker order created"));
       await load();
+    } catch (ex: any) {
+      if (ex?.status === 422 && ex?.detail?.code === "NO_INDEX_QUOTE") {
+        setErr(t("page.bunker.no_index_quote", "该指数暂无市场报价（NO_INDEX_QUOTE），请先在 Integration Hub 配置报价或改用固定单价"));
+      } else {
+        setErr(String(ex));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadInquiries(orderId: string) {
+    const rows: Array<{ id: string; supplier: string; quoted_price: number; status: string }> = await apiGet(
+      `/api/v1/bunker-orders/${orderId}/inquiries`,
+    ).catch(() => []);
+    setInquiries(Array.isArray(rows) ? rows : []);
+  }
+
+  async function addInquiry() {
+    if (!open) return;
+    if (!inqSupplier.trim() || inqPrice === "") {
+      setErr(t("page.bunker.inq_need", "请填写供应商与报价"));
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await apiPost(`/api/v1/bunker-orders/${open.id}/inquiries`, {
+        supplier: inqSupplier.trim(),
+        quoted_price: Number(inqPrice),
+      });
+      await loadInquiries(open.id);
+      setInqSupplier("");
+      setInqPrice("");
+      setMsg(t("page.bunker.inq_ok", "报价已登记"));
+    } catch (ex) {
+      setErr(String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function acceptInquiry(id: string) {
+    if (!open) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await apiPost(`/api/v1/bunker-inquiries/${id}/accept`);
+      await loadInquiries(open.id);
+      setOpen({ ...open, unit_price: res.unit_price });
+      setForm((f) => ({ ...f, unit_price: String(res.unit_price) }));
+      setMsg(t("page.bunker.inq_accepted", "已采纳报价并回写订单价格"));
+      await load();
+    } catch (ex) {
+      setErr(String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadAllocation() {
+    if (!open?.voyage_id) return;
+    setBusy(true);
+    setErr("");
+    try {
+      setAlloc(await apiGet(`/api/v1/voyages/${open.voyage_id}/bunker-allocation`));
     } catch (ex) {
       setErr(String(ex));
     } finally {
@@ -83,11 +160,14 @@ export default function BunkerDeskPage() {
 
   async function move(id: string, target: string) {
     setBusy(true);
+    setWarnings([]);
     try {
       const q = new URLSearchParams({ target });
       if (deliverQty) q.set("qty_delivered", deliverQty);
+      if (target === "delivered" && bdnQty) q.set("bdn_qty", bdnQty);
       if (consumption) q.set("consumption", consumption);
-      await apiPost(`/api/v1/bunker-orders/${id}/transition?${q.toString()}`);
+      const res = await apiPost(`/api/v1/bunker-orders/${id}/transition?${q.toString()}`);
+      if (Array.isArray(res?.warnings) && res.warnings.length) setWarnings(res.warnings.map((w: unknown) => String(w)));
       setMsg(t("page.bunker.moved", "Status → {target}", { target }));
       setOpen(null);
       await load();
@@ -129,9 +209,18 @@ export default function BunkerDeskPage() {
       qty_ordered: String(r.qty_ordered),
       unit_price: String(r.unit_price),
       rob_before: r.rob_before != null ? String(r.rob_before) : "",
+      index_symbol: "",
+      price_differential: "",
     });
     setDeliverQty(r.qty_delivered != null ? String(r.qty_delivered) : String(r.qty_ordered));
+    setBdnQty("");
     setConsumption("");
+    setWarnings([]);
+    setInquiries([]);
+    setInqSupplier("");
+    setInqPrice("");
+    setAlloc(null);
+    loadInquiries(r.id).catch(() => undefined);
   }
 
   return (
@@ -147,6 +236,15 @@ export default function BunkerDeskPage() {
       </div>
       {msg ? <p className="flash">{msg}</p> : null}
       {err ? <p className="flash-err">{err}</p> : null}
+      {warnings.length ? (
+        <div className="panel" style={{ borderColor: "var(--warn)" }}>
+          {warnings.map((w, i) => (
+            <p key={i} style={{ color: "var(--warn)", fontWeight: 600, margin: "0.25rem 0" }}>
+              {w}
+            </p>
+          ))}
+        </div>
+      ) : null}
 
       <form className="panel" onSubmit={create}>
         <div className="form-grid">
@@ -186,9 +284,20 @@ export default function BunkerDeskPage() {
             <input value={form.qty_ordered} onChange={(e) => setForm({ ...form, qty_ordered: e.target.value })} />
           </label>
           <label>
-            {t("page.bunker.price", "Unit price")}
-            <input value={form.unit_price} onChange={(e) => setForm({ ...form, unit_price: e.target.value })} />
+            {t("page.bunker.index_symbol", "Index symbol")}
+            <input value={form.index_symbol} onChange={(e) => setForm({ ...form, index_symbol: e.target.value })} placeholder="SIN380 (可选)" />
           </label>
+          {form.index_symbol.trim() !== "" ? (
+            <label>
+              {t("page.bunker.price_diff", "Price differential")}
+              <input value={form.price_differential} onChange={(e) => setForm({ ...form, price_differential: e.target.value })} placeholder="+12" />
+            </label>
+          ) : (
+            <label>
+              {t("page.bunker.price", "Unit price")}
+              <input value={form.unit_price} onChange={(e) => setForm({ ...form, unit_price: e.target.value })} />
+            </label>
+          )}
           <label>
             ROB before
             <input value={form.rob_before} onChange={(e) => setForm({ ...form, rob_before: e.target.value })} />
@@ -261,9 +370,85 @@ export default function BunkerDeskPage() {
           <input value={deliverQty} onChange={(e) => setDeliverQty(e.target.value)} />
         </label>
         <label>
+          {t("page.bunker.bdn_qty", "BDN qty")}
+          <input value={bdnQty} onChange={(e) => setBdnQty(e.target.value)} placeholder={t("common.optional", "Optional")} />
+        </label>
+        <label>
           {t("page.bunker.consumption", "Consumption")}
           <input value={consumption} onChange={(e) => setConsumption(e.target.value)} />
         </label>
+        <div className="desk-section" style={{ margin: "0.5rem 0" }}>
+          <h3 style={{ marginTop: 0 }}>{t("page.bunker.inquiries", "询比价 Inquiries")}</h3>
+          {inquiries.length ? (
+            <table className="table">
+              <tbody>
+                {inquiries.map((q) => (
+                  <tr key={q.id}>
+                    <td>{q.supplier}</td>
+                    <td>{q.quoted_price.toLocaleString()}</td>
+                    <td>
+                      <span className={`badge ${q.status === "accepted" ? "badge-pass" : q.status === "rejected" ? "badge-fail" : "badge-warn"}`}>
+                        {q.status}
+                      </span>
+                    </td>
+                    <td>
+                      {q.status === "quoted" ? (
+                        <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => acceptInquiry(q.id)}>
+                          {t("page.bunker.accept", "采纳")}
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="muted" style={{ margin: 0 }}>{t("page.bunker.no_inquiries", "暂无报价")}</p>
+          )}
+          <div className="form-grid" style={{ marginTop: "0.5rem" }}>
+            <label>
+              {t("page.bunker.supplier", "Supplier")}
+              <input value={inqSupplier} onChange={(e) => setInqSupplier(e.target.value)} />
+            </label>
+            <label>
+              {t("page.bunker.quoted_price", "Quoted price")}
+              <input type="number" step="any" value={inqPrice} onChange={(e) => setInqPrice(e.target.value)} />
+            </label>
+            <div style={{ display: "flex", alignItems: "end" }}>
+              <button className="btn btn-sm" type="button" disabled={busy} onClick={addInquiry}>
+                {t("page.bunker.add_inquiry", "登记报价")}
+              </button>
+            </div>
+          </div>
+        </div>
+        {open?.voyage_id ? (
+          <div className="desk-section" style={{ margin: "0.5rem 0" }}>
+            <div className="desk-toolbar" style={{ margin: 0 }}>
+              <h3 style={{ margin: 0, fontSize: "0.95rem" }}>{t("page.bunker.allocation", "航次分摊估算")}</h3>
+              <button className="btn btn-sm" type="button" disabled={busy} onClick={loadAllocation}>
+                {t("page.bunker.alloc_run", "查询分摊")}
+              </button>
+            </div>
+            {alloc ? (
+              <div className="desk-results" style={{ marginTop: "0.5rem" }}>
+                <div className="kv-box">
+                  <span>{t("page.bunker.alloc_consumption", "Consumption mt")}</span>
+                  <strong>{String(alloc.consumption_mt ?? "—")}</strong>
+                </div>
+                <div className="kv-box">
+                  <span>{t("page.bunker.alloc_wavg", "Weighted avg price")}</span>
+                  <strong>{alloc.weighted_avg_price != null ? String(alloc.weighted_avg_price) : "—"}</strong>
+                </div>
+                <div className="kv-box">
+                  <span>{t("page.bunker.alloc_amount", "Allocated amount")}</span>
+                  <strong>
+                    {alloc.allocated_amount != null ? `${String(alloc.allocated_amount)} ${String(alloc.currency || "")}` : "—"}
+                  </strong>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="desk-toolbar">
           {open?.status === "planned" ? (
             <button type="button" className="btn btn-sm" onClick={() => open && move(open.id, "inquiry")}>

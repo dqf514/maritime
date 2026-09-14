@@ -1,0 +1,25 @@
+{
+  "id": "tce_gold_02",
+  "note": "Commission split: address commission deducted from revenue, brokerage in voyage_cost",
+  "inputs": {
+    "cargo_qty": 50000,
+    "freight_rate": 18.5,
+    "address_comm_pct": 2.5,
+    "brokerage_pct": 1.25,
+    "sea_days": 30,
+    "port_days": 10,
+    "bunker_sea_tpd": 28,
+    "bunker_port_tpd": 3.5,
+    "bunker_price": 450,
+    "port_costs": 80000,
+    "canal_costs": 20000,
+    "other_costs": 10000,
+    "currency": "USD"
+  },
+  "expect": {
+    "tce": 9664.06,
+    "voyage_cost": 515312.5,
+    "address_commission": 23125.0,
+    "brokerage": 11562.5
+  }
+}

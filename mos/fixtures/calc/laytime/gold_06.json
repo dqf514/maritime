@@ -1,0 +1,32 @@
+{
+  "id": "laytime_gold_06",
+  "note": "Reversible laytime: load port demurrage 12h offsets discharge port despatch 8h -> pooled settlement is net demurrage 4h @ 24000/day = 4000",
+  "inputs": {
+    "reversible": true,
+    "terms": "SHINC",
+    "demurrage_rate_per_day": 24000,
+    "despatch_rate_per_day": 12000,
+    "port_events": [
+      {
+        "port": "SGSIN",
+        "allowed_hours": 24,
+        "events": [
+          {"start": "2026-09-01T00:00:00", "end": "2026-09-02T12:00:00", "excluded": false}
+        ]
+      },
+      {
+        "port": "NLRTM",
+        "allowed_hours": 24,
+        "events": [
+          {"start": "2026-09-10T00:00:00", "end": "2026-09-10T16:00:00", "excluded": false}
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "result_type": "demurrage",
+    "amount": 4000.0,
+    "used_hours": 52.0,
+    "allowed_hours": 48.0
+  }
+}

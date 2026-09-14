@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -30,26 +31,17 @@ export default function BillingPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.billing.admin_required", "Tenant admin required")));
+    load().catch(() => setMsg(t("page.billing.admin_required", "需要租户管理员")));
   }, [t]);
-
-  async function subscribe(plan_code: string) {
-    const order = await apiPost("/api/v1/billing/subscribe", { plan_code, provider_code: "manual" });
-    await apiPost(`/api/v1/billing/orders/${order.order_id}/confirm-paid`);
-    setMsg(t("page.billing.subscribed", "Subscribed to {plan}", { plan: plan_code }));
-    await load();
-  }
-
-  async function topup(pack_code: string) {
-    const order = await apiPost("/api/v1/billing/topup", { pack_code, provider_code: "manual" });
-    await apiPost(`/api/v1/billing/orders/${order.order_id}/confirm-paid`);
-    setMsg(t("page.billing.topped", "Topped up {pack}", { pack: pack_code }));
-    await load();
-  }
 
   async function invokeAi() {
     const res = await apiPost("/api/v1/billing/ai/invoke-demo");
-    setMsg(t("page.billing.ai_metered", "AI metered: -{tokens} tokens, balance {balance}", { tokens: res.tokens_charged, balance: res.balance }));
+    setMsg(
+      t("page.billing.ai_metered", "AI 计量: -{tokens} tokens，余额 {balance}", {
+        tokens: res.tokens_charged,
+        balance: res.balance,
+      }),
+    );
     await load();
   }
 
@@ -57,22 +49,37 @@ export default function BillingPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.billing.title", "Subscription & usage")}</h1>
-      <p className="page-sub">{t("page.billing.sub", "Plans, AI packs, wallet and ledger.")}</p>
+      <h1 style={{ marginTop: 0 }}>{t("page.billing.title", "订阅与用量")}</h1>
+      <p className="page-sub">
+        {t(
+          "page.billing.sub_readonly",
+          "查看当前套餐与用量。订阅与充值由平台管理员开通；线上支付开通后再支持自助下单。",
+        )}
+      </p>
       {msg ? <p>{msg}</p> : null}
 
+      <div className="panel" style={{ borderLeft: "3px solid var(--accent, #1A9B96)" }}>
+        <p style={{ margin: 0 }}>
+          {t(
+            "page.billing.platform_managed",
+            "自助订阅/购买暂未开放。如需变更套餐或充值 AI 用量，请联系平台管理员（sys）。",
+          )}{" "}
+          <Link href="/help">{t("nav.help", "帮助中心")}</Link>
+        </p>
+      </div>
+
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>{t("page.billing.current", "Current subscription")}</h3>
+        <h3 style={{ marginTop: 0 }}>{t("page.billing.current", "当前订阅")}</h3>
         {plan ? (
           <p>
-            <b>{String(plan.name)}</b> ({String(plan.code)}) · {t("common.status", "Status")} {String(sub?.status)} ·{" "}
-            {t("page.billing.renews", "renews")} {String(sub?.current_period_end || "—")}
+            <b>{String(plan.name)}</b> ({String(plan.code)}) · {t("common.status", "状态")} {String(sub?.status)} ·{" "}
+            {t("page.billing.renews", "到期")} {String(sub?.current_period_end || "—")}
           </p>
         ) : (
-          <p>{t("page.billing.no_sub", "No active subscription")}</p>
+          <p>{t("page.billing.no_sub", "暂无有效订阅")}</p>
         )}
         <button className="btn" type="button" onClick={() => invokeAi().catch((e) => setMsg(String(e)))}>
-          {t("page.billing.invoke_ai", "Invoke metered AI (demo)")}
+          {t("page.billing.invoke_ai", "试调用计量 AI（演示）")}
         </button>
       </div>
 
@@ -81,58 +88,65 @@ export default function BillingPage() {
           <div key={w.meter_code} className="wb-tile">
             <h3>{w.meter_code}</h3>
             <div className="metric">{w.balance.toLocaleString()}</div>
-            <p>{t("page.billing.wallet_balance", "Wallet balance")}</p>
+            <p>{t("page.billing.wallet_balance", "钱包余额")}</p>
           </div>
         ))}
+        {!wallet.length ? (
+          <div className="wb-tile">
+            <h3>—</h3>
+            <div className="metric">0</div>
+            <p>{t("page.billing.wallet_empty", "尚无用量余额")}</p>
+          </div>
+        ) : null}
       </div>
 
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>{t("page.billing.plans", "Plans")}</h3>
+        <h3 style={{ marginTop: 0 }}>{t("page.billing.plans", "套餐目录（只读）")}</h3>
         <table className="table">
           <thead>
             <tr>
-              <th>{t("page.billing.plan", "Plan")}</th>
-              <th>{t("page.billing.price", "Price")}</th>
-              <th>{t("page.billing.seats", "Seats")}</th>
-              <th></th>
+              <th>{t("page.billing.plan", "套餐")}</th>
+              <th>{t("page.billing.price", "价格")}</th>
+              <th>{t("page.billing.seats", "席位")}</th>
+              <th>{t("common.status", "状态")}</th>
             </tr>
           </thead>
           <tbody>
-            {plans.map((p) => (
-              <tr key={String(p.code)}>
-                <td>
-                  <b>{String(p.name)}</b>
-                  <div style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{String(p.description || "")}</div>
-                </td>
-                <td>
-                  {String(p.price_amount)} {String(p.currency)} / {String(p.billing_period)}
-                </td>
-                <td>{p.seat_limit == null ? t("page.billing.unlimited", "Unlimited") : String(p.seat_limit)}</td>
-                <td>
-                  <button
-                    className="btn btn-primary"
-                    type="button"
-                    onClick={() => subscribe(String(p.code)).catch(() => setMsg(t("page.billing.subscribe_fail", "Subscribe failed")))}
-                  >
-                    {t("page.billing.subscribe", "Subscribe")}
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {plans.map((p) => {
+              const current = plan && String(plan.code) === String(p.code) && String(sub?.status) === "active";
+              return (
+                <tr key={String(p.code)}>
+                  <td>
+                    <b>{String(p.name)}</b>
+                    <div style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{String(p.description || "")}</div>
+                  </td>
+                  <td>
+                    {String(p.price_amount)} {String(p.currency)} / {String(p.billing_period)}
+                  </td>
+                  <td>{p.seat_limit == null ? t("page.billing.unlimited", "不限") : String(p.seat_limit)}</td>
+                  <td>
+                    {current ? (
+                      <span className="badge">{t("page.billing.current_badge", "当前套餐")}</span>
+                    ) : (
+                      <span className="muted">{t("page.billing.contact_platform", "联系平台开通")}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>{t("page.billing.packs", "Usage top-up packs")}</h3>
+        <h3 style={{ marginTop: 0 }}>{t("page.billing.packs", "用量包目录（只读）")}</h3>
         <table className="table">
           <thead>
             <tr>
-              <th>{t("page.billing.pack", "Pack")}</th>
-              <th>{t("page.billing.meter", "Meter")}</th>
-              <th>{t("page.billing.qty", "Qty")}</th>
-              <th>{t("page.billing.price", "Price")}</th>
-              <th></th>
+              <th>{t("page.billing.pack", "用量包")}</th>
+              <th>{t("page.billing.meter", "计量项")}</th>
+              <th>{t("page.billing.qty", "数量")}</th>
+              <th>{t("page.billing.price", "价格")}</th>
             </tr>
           </thead>
           <tbody>
@@ -144,11 +158,6 @@ export default function BillingPage() {
                 <td>
                   {String(p.price_amount)} {String(p.currency)}
                 </td>
-                <td>
-                  <button className="btn" type="button" onClick={() => topup(String(p.code)).catch(() => setMsg(t("page.billing.topup_fail", "Top-up failed")))}>
-                    {t("page.billing.buy", "Buy")}
-                  </button>
-                </td>
               </tr>
             ))}
           </tbody>
@@ -156,14 +165,14 @@ export default function BillingPage() {
       </div>
 
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>{t("page.billing.ledger", "Usage ledger")}</h3>
+        <h3 style={{ marginTop: 0 }}>{t("page.billing.ledger", "用量流水")}</h3>
         <table className="table">
           <thead>
             <tr>
-              <th>{t("page.billing.meter", "Meter")}</th>
-              <th>{t("page.billing.dir", "Dir")}</th>
-              <th>{t("page.billing.qty", "Qty")}</th>
-              <th>{t("common.notes", "Notes")}</th>
+              <th>{t("page.billing.meter", "计量项")}</th>
+              <th>{t("page.billing.dir", "方向")}</th>
+              <th>{t("page.billing.qty", "数量")}</th>
+              <th>{t("common.notes", "备注")}</th>
             </tr>
           </thead>
           <tbody>
@@ -175,6 +184,13 @@ export default function BillingPage() {
                 <td>{String(u.note || "")}</td>
               </tr>
             ))}
+            {!usage.length ? (
+              <tr>
+                <td colSpan={4} className="muted">
+                  {t("common.none", "无")}
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>

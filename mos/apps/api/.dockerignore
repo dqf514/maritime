@@ -1,0 +1,12 @@
+# Build-context ignores (context = mos/, see Dockerfile header)
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/*.db
+**/uploads
+**/data/backups
+.git
+.env
+.env.*

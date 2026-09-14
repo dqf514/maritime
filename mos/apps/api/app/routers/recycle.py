@@ -41,8 +41,14 @@ ENTITY_LOOKUP: dict[str, tuple[type, bool]] = {
 }
 
 
+def _require_admin(auth: AuthContext) -> None:
+    if "tenant_admin" not in auth.roles and "platform_admin" not in auth.roles:
+        raise HTTPException(403, detail={"code": "ADMIN_REQUIRED"})
+
+
 @router.get("")
 def recycle_list(auth: AuthContext = Depends(get_current_auth), db: Session = Depends(get_db)):
+    _require_admin(auth)
     rows = list_recycle(db, auth.tenant_id)
     return [item_public(r) for r in rows]
 
@@ -53,8 +59,7 @@ def recycle_restore(
     auth: AuthContext = Depends(get_current_auth),
     db: Session = Depends(get_db),
 ):
-    if "tenant_admin" not in auth.roles and "platform_admin" not in auth.roles:
-        raise HTTPException(403, detail={"code": "ADMIN_REQUIRED"})
+    _require_admin(auth)
     item = get_recycle_item(db, auth.tenant_id, item_id)
     if not item or item.restored_at:
         raise HTTPException(404, detail={"code": "NOT_FOUND"})
@@ -85,8 +90,7 @@ def recycle_purge(
     db: Session = Depends(get_db),
 ):
     """Permanent purge — remove recycle entry (source row stays soft-deleted / orphaned)."""
-    if "tenant_admin" not in auth.roles and "platform_admin" not in auth.roles:
-        raise HTTPException(403, detail={"code": "ADMIN_REQUIRED"})
+    _require_admin(auth)
     item = get_recycle_item(db, auth.tenant_id, item_id)
     if not item:
         raise HTTPException(404, detail={"code": "NOT_FOUND"})

@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiGet, apiPost } from "@/lib/api";
+import { API_BASE, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 type Org = {
@@ -33,7 +33,7 @@ export default function OrgPage() {
 
   async function save(e: FormEvent) {
     e.preventDefault();
-    await fetch(`${process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000"}/api/v1/admin/organization`, {
+    await fetch(`${API_BASE}/api/v1/admin/organization`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",

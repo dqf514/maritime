@@ -1,0 +1,20 @@
+{
+  "id": "laytime_gold_05",
+  "note": "SHEX on a port holiday worked 'even if used': event flagged even_if_used counts in full",
+  "inputs": {
+    "allowed_hours": 24,
+    "demurrage_rate_per_day": 24000,
+    "terms": "SHEX",
+    "port_holidays": ["2026-09-08"],
+    "events": [
+      {"start": "2026-09-08T00:00:00", "end": "2026-09-09T00:00:00", "even_if_used": true}
+    ]
+  },
+  "expect": {
+    "result_type": "on_time",
+    "amount": 0.0,
+    "used_hours": 24.0,
+    "excluded_hours": 0.0,
+    "allowed_hours": 24.0
+  }
+}

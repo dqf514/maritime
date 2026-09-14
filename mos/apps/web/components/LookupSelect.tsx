@@ -26,7 +26,27 @@ type Props = {
   showCode?: boolean;
 };
 
-const cache = new Map<string, LookupItem[]>();
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+const cache = new Map<string, { at: number; rows: LookupItem[] }>();
+
+function tenantScope(): string {
+  if (typeof window === "undefined") return "ssr";
+  const token = localStorage.getItem("voyageos_token") || "";
+  let h = 0;
+  for (let i = 0; i < token.length; i++) h = (h * 31 + token.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function cacheGet(key: string): LookupItem[] | null {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > CACHE_TTL_MS) {
+    cache.delete(key);
+    return null;
+  }
+  return hit.rows;
+}
 
 export function LookupSelect({
   dataset,
@@ -40,23 +60,24 @@ export function LookupSelect({
   showCode = true,
 }: Props) {
   const { t, locale } = useI18n();
-  const [items, setItems] = useState<LookupItem[]>(cache.get(dataset) || []);
+  const [items, setItems] = useState<LookupItem[]>([]);
   const [filter, setFilter] = useState("");
-  const [loaded, setLoaded] = useState(cache.has(dataset));
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const loc = locale?.startsWith("zh") ? "zh-CN" : "en";
-    const key = `${dataset}:${loc}`;
-    if (cache.has(key)) {
-      setItems(cache.get(key)!);
+    const key = `${tenantScope()}:${dataset}:${loc}`;
+    const cached = cacheGet(key);
+    if (cached) {
+      setItems(cached);
       setLoaded(true);
       return;
     }
     apiGet(`/api/v1/reference/${encodeURIComponent(dataset)}/items?locale=${encodeURIComponent(loc)}`)
       .then((rows: LookupItem[]) => {
         if (cancelled) return;
-        cache.set(key, rows);
+        cache.set(key, { at: Date.now(), rows });
         setItems(rows);
         setLoaded(true);
       })
@@ -121,13 +142,13 @@ export function LookupSelect({
   );
 }
 
-/** 清除 LookupSelect 内存缓存（管理页保存后调用） */
+/** 清除 LookupSelect 内存缓存（管理页保存后、退出登录时调用） */
 export function clearLookupCache(dataset?: string) {
   if (!dataset) {
     cache.clear();
     return;
   }
   for (const k of [...cache.keys()]) {
-    if (k === dataset || k.startsWith(`${dataset}:`)) cache.delete(k);
+    if (k.split(":")[1] === dataset) cache.delete(k);
   }
 }

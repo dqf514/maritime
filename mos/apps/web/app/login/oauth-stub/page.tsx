@@ -1,13 +1,14 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
+import { API_BASE } from "@/lib/api";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+const STUB_ENABLED = process.env.NEXT_PUBLIC_OAUTH_STUB === "1";
 
-export default function OAuthStubPage() {
+function OAuthStubPage() {
   const sp = useSearchParams();
   const router = useRouter();
   const { t } = useI18n();
@@ -28,8 +29,9 @@ export default function OAuthStubPage() {
   async function complete(e: FormEvent) {
     e.preventDefault();
     setError("");
-    const res = await fetch(`${API}/api/v1/auth/oauth/stub/complete`, {
+    const res = await fetch(`${API_BASE}/api/v1/auth/oauth/stub/complete`, {
       method: "POST",
+      credentials: "include", // required so the Set-Cookie session is stored
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ state, email, full_name: name, subject: `stub:${provider}:${email}` }),
     });
@@ -38,8 +40,23 @@ export default function OAuthStubPage() {
       setError(data?.detail?.message || data?.detail || t("login.oauth_stub_fail", "Stub OAuth failed"));
       return;
     }
-    localStorage.setItem("voyageos_token", data.access_token);
+    // Cookie session planted by the server — just navigate.
     router.replace("/home");
+  }
+
+  if (!STUB_ENABLED) {
+    return (
+      <div className="login-stage">
+        <div className="login-stage-bg" aria-hidden />
+        <div className="login-card" style={{ maxWidth: 440, margin: "4rem auto", position: "relative", zIndex: 1 }}>
+          <h1 style={{ marginTop: 0 }}>{title}</h1>
+          <p className="muted">{t("login.oauth_stub_disabled", "此登录方式未启用。")}</p>
+          <p className="login-foot-link">
+            <Link href="/login">{t("login.oauth_stub_back", "← Back")}</Link>
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -71,5 +88,13 @@ export default function OAuthStubPage() {
         </p>
       </form>
     </div>
+  );
+}
+
+export default function OAuthStubPageWrapper() {
+  return (
+    <Suspense>
+      <OAuthStubPage />
+    </Suspense>
   );
 }

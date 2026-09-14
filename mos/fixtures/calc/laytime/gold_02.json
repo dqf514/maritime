@@ -1,0 +1,19 @@
+{
+  "id": "laytime_gold_02",
+  "note": "SHEX across a weekend: Sat 2026-09-05 + Sun 2026-09-06 (48h) auto-excluded",
+  "inputs": {
+    "allowed_hours": 40,
+    "demurrage_rate_per_day": 24000,
+    "terms": "SHEX",
+    "events": [
+      {"start": "2026-09-04T08:00:00", "end": "2026-09-08T08:00:00"}
+    ]
+  },
+  "expect": {
+    "result_type": "demurrage",
+    "amount": 8000.0,
+    "used_hours": 48.0,
+    "excluded_hours": 48.0,
+    "allowed_hours": 40.0
+  }
+}

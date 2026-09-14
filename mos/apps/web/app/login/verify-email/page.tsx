@@ -1,13 +1,13 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+import { API_BASE as API } from "@/lib/api";
 
-export default function VerifyEmailPage() {
+function VerifyEmailPage() {
   const sp = useSearchParams();
   const { t } = useI18n();
   const [token, setToken] = useState(sp.get("token") || "");
@@ -78,5 +78,13 @@ export default function VerifyEmailPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function VerifyEmailPageWrapper() {
+  return (
+    <Suspense>
+      <VerifyEmailPage />
+    </Suspense>
   );
 }

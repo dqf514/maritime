@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiGet } from "@/lib/api";
+import { API_BASE, apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 export default function CompanyBrandPage() {
@@ -27,7 +27,7 @@ export default function CompanyBrandPage() {
 
   async function save(e: FormEvent) {
     e.preventDefault();
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000"}/api/v1/admin/company-profile`, {
+    const res = await fetch(`${API_BASE}/api/v1/admin/company-profile`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",

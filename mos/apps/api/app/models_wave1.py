@@ -71,6 +71,8 @@ class Port(Base):
     timezone: Mapped[str] = mapped_column(Text, default="UTC")
     latitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
     longitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    holidays: Mapped[list | None] = mapped_column(JSON)  # 港口节假日 ["YYYY-MM-DD"]，供 laytime SHINC/SHEX 扣除
+    is_eu: Mapped[bool] = mapped_column(Boolean, default=False)  # EU/EEA port — drives EU ETS eu_share inference
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

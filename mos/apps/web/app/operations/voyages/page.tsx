@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { DateTimeInput } from "@/components/DateInput";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -17,7 +18,38 @@ type PortCall = {
   eta: string | null;
   etd: string | null;
   agent: string | null;
+  nor_at: string | null;
+  eosp_at: string | null;
+  bl_date: string | null;
 };
+type OffHire = {
+  id: string;
+  start_at: string | null;
+  end_at: string | null;
+  reason: string | null;
+  deduct_hire?: boolean;
+  deducted_days?: number | null;
+};
+type SofSummary = {
+  events: Array<{ id: string; event_code: string; event_at: string | null }>;
+  working_hours: number | null;
+  waiting_hours: number | null;
+};
+
+const SOF_CODES = [
+  "NOR",
+  "EOSP",
+  "ANCHOR",
+  "AWSP",
+  "POB",
+  "DOCKED",
+  "SHIFTED_BERTH",
+  "COMMENCED",
+  "COMPLETED",
+  "HOSES_OFF",
+  "BL_DATE",
+  "SAILED",
+];
 type Schedule = {
   id: string;
   title: string;
@@ -43,7 +75,8 @@ function toLocalInput(iso: string | null | undefined) {
 
 function fromLocalInput(v: string) {
   if (!v) return null;
-  return new Date(v).toISOString();
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 export default function VoyagesPage() {
@@ -73,14 +106,30 @@ export default function VoyagesPage() {
 
   const [sofCode, setSofCode] = useState("NOR");
   const [sofAt, setSofAt] = useState("");
+  const [sofSummary, setSofSummary] = useState<{ pc: string; data: SofSummary | null } | null>(null);
+
+  const [offHires, setOffHires] = useState<OffHire[]>([]);
+  const [ohStart, setOhStart] = useState("");
+  const [ohReason, setOhReason] = useState("");
+  const [ohDeduct, setOhDeduct] = useState(true);
+  const [ohCloseAt, setOhCloseAt] = useState("");
 
   const [noonLat, setNoonLat] = useState("");
   const [noonLon, setNoonLon] = useState("");
   const [noonSpeed, setNoonSpeed] = useState("");
   const [noonFo, setNoonFo] = useState("");
   const [noonDo, setNoonDo] = useState("");
+  const [noonWind, setNoonWind] = useState("");
+  const [noonSea, setNoonSea] = useState("");
+  const [noonCurrent, setNoonCurrent] = useState("");
   const [noonEta, setNoonEta] = useState("");
   const [noonRemarks, setNoonRemarks] = useState("");
+  const [lastNoon, setLastNoon] = useState<{
+    eta_deviation_hours: number | null;
+    wind_bf: number | null;
+    sea_state: string | null;
+    current_kn: number | null;
+  } | null>(null);
 
   const load = useCallback(async () => {
     const [v, s, p, parties] = await Promise.all([
@@ -118,7 +167,28 @@ export default function VoyagesPage() {
     } catch {
       setTwin(null);
     }
+    try {
+      const oh = await apiGet(`/api/v1/voyages/${voyageId}/off-hire`);
+      setOffHires(oh);
+    } catch {
+      setOffHires([]);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!selectedPc) return;
+    let cancelled = false;
+    apiGet(`/api/v1/port-calls/${selectedPc}/sof-summary`)
+      .then((s: SofSummary) => {
+        if (!cancelled) setSofSummary({ pc: selectedPc, data: s });
+      })
+      .catch(() => {
+        if (!cancelled) setSofSummary({ pc: selectedPc, data: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPc]);
 
   useEffect(() => {
     load()
@@ -135,6 +205,7 @@ export default function VoyagesPage() {
   async function selectVoyage(id: string) {
     setSelectedId(id);
     setTwin(null);
+    setLastNoon(null);
     setErr("");
     try {
       await loadPortCalls(id);
@@ -219,6 +290,10 @@ export default function VoyagesPage() {
   async function addPortCall(e: FormEvent) {
     e.preventDefault();
     if (!selectedId) return;
+    if ((pcEta && !fromLocalInput(pcEta)) || (pcEtd && !fromLocalInput(pcEtd))) {
+      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
@@ -247,6 +322,10 @@ export default function VoyagesPage() {
       setErr(t("page.voyages.need_pc", "Select a port call first"));
       return;
     }
+    if (sofAt && !fromLocalInput(sofAt)) {
+      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      return;
+    }
     setBusy(true);
     try {
       await apiPost("/api/v1/sof-events", {
@@ -263,12 +342,62 @@ export default function VoyagesPage() {
     }
   }
 
+  async function addOffHire(e: FormEvent) {
+    e.preventDefault();
+    if (!selectedId) return;
+    if (!ohStart || !fromLocalInput(ohStart)) {
+      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await apiPost(`/api/v1/voyages/${selectedId}/off-hire`, {
+        start_at: fromLocalInput(ohStart),
+        reason: ohReason || null,
+        deduct_hire: ohDeduct,
+      });
+      setMsg(t("page.voyages.oh_ok", "Off-hire opened"));
+      setOhStart("");
+      setOhReason("");
+      await loadPortCalls(selectedId);
+    } catch (ex) {
+      setErr(String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function closeOffHire(id: string) {
+    if (!selectedId) return;
+    if (!ohCloseAt || !fromLocalInput(ohCloseAt)) {
+      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await apiPost(`/api/v1/off-hire/${id}/close`, { end_at: fromLocalInput(ohCloseAt) });
+      setMsg(t("page.voyages.oh_closed", "Off-hire closed"));
+      setOhCloseAt("");
+      await loadPortCalls(selectedId);
+    } catch (ex) {
+      setErr(String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function addNoon(e: FormEvent) {
     e.preventDefault();
     if (!selectedId) return;
+    if (noonEta && !fromLocalInput(noonEta)) {
+      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      return;
+    }
     setBusy(true);
     try {
-      await apiPost("/api/v1/noon-reports", {
+      const res = await apiPost("/api/v1/noon-reports", {
         voyage_id: selectedId,
         report_at: new Date().toISOString(),
         lat: noonLat === "" ? null : Number(noonLat),
@@ -276,8 +405,17 @@ export default function VoyagesPage() {
         speed: noonSpeed === "" ? null : Number(noonSpeed),
         rob_fo: noonFo === "" ? null : Number(noonFo),
         rob_do: noonDo === "" ? null : Number(noonDo),
+        wind_bf: noonWind === "" ? null : Number(noonWind),
+        sea_state: noonSea || null,
+        current_kn: noonCurrent === "" ? null : Number(noonCurrent),
         eta_next: fromLocalInput(noonEta),
         remarks: noonRemarks || null,
+      });
+      setLastNoon({
+        eta_deviation_hours: res?.eta_deviation_hours ?? null,
+        wind_bf: res?.wind_bf ?? null,
+        sea_state: res?.sea_state ?? null,
+        current_kn: res?.current_kn ?? null,
       });
       setMsg(t("page.voyages.noon_ok", "Noon report filed"));
       await loadPortCalls(selectedId);
@@ -410,6 +548,9 @@ export default function VoyagesPage() {
                       <th>{t("page.voyages.purpose", "Purpose")}</th>
                       <th>ETA</th>
                       <th>ETD</th>
+                      <th>NOR</th>
+                      <th>EOSP</th>
+                      <th>B/L</th>
                       <th>{t("page.voyages.agent", "Agent")}</th>
                     </tr>
                   </thead>
@@ -426,12 +567,15 @@ export default function VoyagesPage() {
                         <td>{pc.purpose}</td>
                         <td>{pc.eta ? toLocalInput(pc.eta).replace("T", " ") : "—"}</td>
                         <td>{pc.etd ? toLocalInput(pc.etd).replace("T", " ") : "—"}</td>
+                        <td>{pc.nor_at ? toLocalInput(pc.nor_at).replace("T", " ") : "—"}</td>
+                        <td>{pc.eosp_at ? toLocalInput(pc.eosp_at).replace("T", " ") : "—"}</td>
+                        <td>{pc.bl_date || "—"}</td>
                         <td>{pc.agent || "—"}</td>
                       </tr>
                     ))}
                     {!portCalls.length ? (
                       <tr>
-                        <td colSpan={6} className="muted">
+                        <td colSpan={9} className="muted">
                           {t("common.empty", "No records")}
                         </td>
                       </tr>
@@ -465,11 +609,11 @@ export default function VoyagesPage() {
                   </label>
                   <label>
                     ETA
-                    <input type="datetime-local" value={pcEta} onChange={(e) => setPcEta(e.target.value)} />
+                    <DateTimeInput value={pcEta} onChange={setPcEta} />
                   </label>
                   <label>
                     ETD
-                    <input type="datetime-local" value={pcEtd} onChange={(e) => setPcEtd(e.target.value)} />
+                    <DateTimeInput value={pcEtd} onChange={setPcEtd} />
                   </label>
                   <label>
                     {t("page.voyages.agent", "代理")}
@@ -507,15 +651,16 @@ export default function VoyagesPage() {
                   <label>
                     {t("page.voyages.event", "Event")}
                     <select value={sofCode} onChange={(e) => setSofCode(e.target.value)}>
-                      <option value="NOR">NOR</option>
-                      <option value="COMMENCED">COMMENCED</option>
-                      <option value="COMPLETED">COMPLETED</option>
-                      <option value="SAILED">SAILED</option>
+                      {SOF_CODES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
                     </select>
                   </label>
                   <label>
                     {t("page.voyages.event_at", "Event at")}
-                    <input type="datetime-local" value={sofAt} onChange={(e) => setSofAt(e.target.value)} />
+                    <DateTimeInput value={sofAt} onChange={setSofAt} />
                   </label>
                   <div style={{ display: "flex", alignItems: "end" }}>
                     <button className="btn btn-sm" type="submit" disabled={busy}>
@@ -548,6 +693,79 @@ export default function VoyagesPage() {
                     ) : null}
                   </tbody>
                 </table>
+                {selectedPc && sofSummary?.pc === selectedPc && sofSummary.data ? (
+                  <div className="desk-results" style={{ marginTop: "0.75rem" }}>
+                    <div className="kv-box">
+                      <span>{t("page.voyages.working_hours", "Working hours")}</span>
+                      <strong>{sofSummary.data.working_hours ?? "—"}</strong>
+                    </div>
+                    <div className="kv-box">
+                      <span>{t("page.voyages.waiting_hours", "Waiting hours")}</span>
+                      <strong>{sofSummary.data.waiting_hours ?? "—"}</strong>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="desk-section">
+                <h3>{t("page.voyages.off_hire", "Off-hire")}</h3>
+                <form className="form-grid" onSubmit={addOffHire}>
+                  <label>
+                    {t("page.voyages.oh_start", "Start at")}
+                    <DateTimeInput value={ohStart} onChange={setOhStart} />
+                  </label>
+                  <label>
+                    {t("page.voyages.oh_reason", "Reason")}
+                    <input value={ohReason} onChange={(e) => setOhReason(e.target.value)} />
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <input type="checkbox" checked={ohDeduct} onChange={(e) => setOhDeduct(e.target.checked)} />
+                    {t("page.voyages.oh_deduct", "Deduct hire")}
+                  </label>
+                  <div style={{ display: "flex", alignItems: "end" }}>
+                    <button className="btn btn-sm" type="submit" disabled={busy}>
+                      {t("page.voyages.oh_open", "Open off-hire")}
+                    </button>
+                  </div>
+                </form>
+                <table className="table" style={{ marginTop: "0.75rem" }}>
+                  <thead>
+                    <tr>
+                      <th>{t("page.voyages.oh_start", "Start at")}</th>
+                      <th>{t("page.voyages.oh_end", "End at")}</th>
+                      <th>{t("page.voyages.oh_reason", "Reason")}</th>
+                      <th>{t("page.voyages.oh_deducted", "Deducted days")}</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {offHires.map((oh) => (
+                      <tr key={oh.id}>
+                        <td>{oh.start_at ? toLocalInput(oh.start_at).replace("T", " ") : "—"}</td>
+                        <td>{oh.end_at ? toLocalInput(oh.end_at).replace("T", " ") : "—"}</td>
+                        <td>{oh.reason || "—"}</td>
+                        <td>{oh.deducted_days ?? "—"}</td>
+                        <td>
+                          {!oh.end_at ? (
+                            <div className="desk-toolbar" style={{ margin: 0 }}>
+                              <DateTimeInput value={ohCloseAt} onChange={setOhCloseAt} />
+                              <button className="btn btn-sm" type="button" disabled={busy} onClick={() => closeOffHire(oh.id)}>
+                                {t("common.close", "Close")}
+                              </button>
+                            </div>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                    {!offHires.length ? (
+                      <tr>
+                        <td colSpan={5} className="muted">
+                          {t("common.no_data", "No data")}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </div>
 
               <div className="desk-section">
@@ -574,8 +792,27 @@ export default function VoyagesPage() {
                     <input type="number" step="any" value={noonDo} onChange={(e) => setNoonDo(e.target.value)} />
                   </label>
                   <label>
+                    {t("page.voyages.wind_bf", "Wind (BF)")}
+                    <input type="number" step="any" min="0" max="12" value={noonWind} onChange={(e) => setNoonWind(e.target.value)} />
+                  </label>
+                  <label>
+                    {t("page.voyages.sea_state", "Sea state")}
+                    <select value={noonSea} onChange={(e) => setNoonSea(e.target.value)}>
+                      <option value="">—</option>
+                      {["calm", "slight", "moderate", "rough", "very_rough", "high", "phenomenal"].map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    {t("page.voyages.current_kn", "Current (kn)")}
+                    <input type="number" step="any" value={noonCurrent} onChange={(e) => setNoonCurrent(e.target.value)} />
+                  </label>
+                  <label>
                     ETA next
-                    <input type="datetime-local" value={noonEta} onChange={(e) => setNoonEta(e.target.value)} />
+                    <DateTimeInput value={noonEta} onChange={setNoonEta} />
                   </label>
                   <label style={{ gridColumn: "1 / -1" }}>
                     {t("page.voyages.remarks", "Remarks")}
@@ -587,6 +824,26 @@ export default function VoyagesPage() {
                     </button>
                   </div>
                 </form>
+                {lastNoon ? (
+                  <div className="desk-results" style={{ marginTop: "0.75rem" }}>
+                    <div className="kv-box">
+                      <span>{t("page.voyages.wind_bf", "Wind (BF)")}</span>
+                      <strong>{lastNoon.wind_bf ?? "—"}</strong>
+                    </div>
+                    <div className="kv-box">
+                      <span>{t("page.voyages.sea_state", "Sea state")}</span>
+                      <strong>{lastNoon.sea_state || "—"}</strong>
+                    </div>
+                    <div className="kv-box">
+                      <span>{t("page.voyages.current_kn", "Current (kn)")}</span>
+                      <strong>{lastNoon.current_kn ?? "—"}</strong>
+                    </div>
+                    <div className="kv-box">
+                      <span>{t("page.voyages.eta_dev", "ETA dev (h)")}</span>
+                      <strong>{lastNoon.eta_deviation_hours ?? "—"}</strong>
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               <div className="desk-section">

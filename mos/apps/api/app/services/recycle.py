@@ -53,7 +53,37 @@ def row_to_payload(row: Any) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for col in row.__table__.columns:
         data[col.name] = _jsonable(getattr(row, col.name, None))
-    return data
+    return sanitize_payload(data, entity=row)
+
+
+# Columns never persisted into recycle snapshots
+SENSITIVE_COLUMNS = {"password_hash", "key_hash", "secret_ref"}
+
+
+def _secret_config_keys(connector_type: str | None) -> set[str]:
+    if not connector_type:
+        return set()
+    from app.services.integration_adapters import CATALOG
+
+    for entry in CATALOG:
+        if entry.get("connector_type") == connector_type:
+            return {f["key"] for f in entry.get("config_schema", []) if f.get("secret")}
+    return set()
+
+
+def sanitize_payload(data: dict[str, Any], *, entity: Any = None) -> dict[str, Any]:
+    """Strip credentials from a recycle snapshot payload."""
+    out = {k: v for k, v in data.items() if k not in SENSITIVE_COLUMNS}
+    config = out.get("config")
+    if isinstance(config, dict):
+        declared = _secret_config_keys(getattr(entity, "connector_type", None))
+        masked = dict(config)
+        for key, value in masked.items():
+            if key in declared or "secret" in key.lower():
+                if value not in (None, ""):
+                    masked[key] = "***"
+        out["config"] = masked
+    return out
 
 
 def soft_delete(
@@ -121,6 +151,7 @@ def get_recycle_item(db: Session, tenant_id: UUID, item_id: UUID) -> RecycleBinI
 
 
 def item_public(row: RecycleBinItem) -> dict[str, Any]:
+    payload = row.payload if isinstance(row.payload, dict) else {}
     return {
         "id": str(row.id),
         "entity_type": row.entity_type,
@@ -128,7 +159,7 @@ def item_public(row: RecycleBinItem) -> dict[str, Any]:
         "title": row.title,
         "deleted_at": row.deleted_at.isoformat() if row.deleted_at else None,
         "restored_at": row.restored_at.isoformat() if row.restored_at else None,
-        "payload": row.payload or {},
+        "payload": sanitize_payload(payload),
     }
 
 

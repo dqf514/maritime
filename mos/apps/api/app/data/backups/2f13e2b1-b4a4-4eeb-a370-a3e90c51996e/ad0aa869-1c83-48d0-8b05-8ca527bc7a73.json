@@ -1,0 +1,268 @@
+{
+  "version": 1,
+  "tenant_id": "2f13e2b1-b4a4-4eeb-a370-a3e90c51996e",
+  "created_at": "2026-09-14T21:06:56.968652+08:00",
+  "created_by": "d6540544-7ffd-4125-9095-e190715250fb",
+  "users": [
+    {
+      "id": "d6540544-7ffd-4125-9095-e190715250fb",
+      "email": "admin@demo.voyageos",
+      "full_name": "Demo Admin",
+      "status": "active"
+    },
+    {
+      "id": "b108d452-35e9-4e56-98bc-ee32487014bf",
+      "email": "charterer@demo.voyageos",
+      "full_name": "Alex Charterer",
+      "status": "active"
+    },
+    {
+      "id": "89537cd1-ae7a-459b-96f7-e790d51781c6",
+      "email": "demurrage@demo.voyageos",
+      "full_name": "Dana Demurrage",
+      "status": "active"
+    },
+    {
+      "id": "8b4e817d-44d3-4af7-8b7e-f6a734301ea4",
+      "email": "finance@demo.voyageos",
+      "full_name": "Finn Finance",
+      "status": "active"
+    },
+    {
+      "id": "a9dabe84-b126-47b7-ad0c-af6510390513",
+      "email": "mgmt@demo.voyageos",
+      "full_name": "Morgan Mgmt",
+      "status": "active"
+    },
+    {
+      "id": "692dd4b4-f063-4fea-9327-e0b24035889f",
+      "email": "ops@demo.voyageos",
+      "full_name": "Olivia Ops",
+      "status": "active"
+    },
+    {
+      "id": "9f7e08f1-44eb-4649-aed7-4d63e2d5ecb4",
+      "email": "tech@demo.voyageos",
+      "full_name": "Taylor Tech",
+      "status": "active"
+    }
+  ],
+  "org_units": [
+    {
+      "id": "3d16b494-4332-48d0-93a1-f46cb4c7ac5f",
+      "code": "HQ",
+      "name": "Headquarters",
+      "parent_id": null,
+      "unit_type": "company",
+      "manager_user_id": "d6540544-7ffd-4125-9095-e190715250fb"
+    },
+    {
+      "id": "985282d1-7de7-4429-b121-937435513c1c",
+      "code": "CHARTER",
+      "name": "Chartering",
+      "parent_id": "3d16b494-4332-48d0-93a1-f46cb4c7ac5f",
+      "unit_type": "dept",
+      "manager_user_id": null
+    },
+    {
+      "id": "ea200605-14be-472d-a14d-1374e62ec5c2",
+      "code": "OPS",
+      "name": "Operations",
+      "parent_id": "3d16b494-4332-48d0-93a1-f46cb4c7ac5f",
+      "unit_type": "dept",
+      "manager_user_id": null
+    },
+    {
+      "id": "2655762e-8336-4af4-b434-90c9fd30e7d5",
+      "code": "FIN",
+      "name": "Finance",
+      "parent_id": "3d16b494-4332-48d0-93a1-f46cb4c7ac5f",
+      "unit_type": "dept",
+      "manager_user_id": null
+    }
+  ],
+  "memberships": [
+    {
+      "user_id": "a9dabe84-b126-47b7-ad0c-af6510390513",
+      "org_unit_id": "3d16b494-4332-48d0-93a1-f46cb4c7ac5f",
+      "is_primary": true
+    },
+    {
+      "user_id": "d6540544-7ffd-4125-9095-e190715250fb",
+      "org_unit_id": "3d16b494-4332-48d0-93a1-f46cb4c7ac5f",
+      "is_primary": true
+    }
+  ],
+  "workflows": [
+    {
+      "code": "charter_approval",
+      "name": "Charter activation approval",
+      "entity_type": "charter",
+      "steps": {
+        "steps": [
+          {
+            "name": "Commercial review",
+            "role_code": "management"
+          },
+          {
+            "name": "Tenant admin confirm",
+            "role_code": "tenant_admin"
+          }
+        ]
+      },
+      "enabled": true
+    },
+    {
+      "code": "invoice_approval",
+      "name": "Invoice issue approval",
+      "entity_type": "invoice",
+      "steps": {
+        "steps": [
+          {
+            "name": "Finance lead",
+            "role_code": "finance"
+          }
+        ]
+      },
+      "enabled": true
+    }
+  ],
+  "company": {
+    "display_name": "Demo Shipping",
+    "legal_name": "Demo Shipping Pte Ltd",
+    "brand_primary": "#1a8a8a"
+  },
+  "auth_policy": {
+    "password_enabled": true,
+    "microsoft_enabled": true,
+    "google_enabled": true,
+    "allowed_domains": [],
+    "invite_only": false
+  },
+  "licenses": [
+    {
+      "module_code": "ai",
+      "status": "active"
+    },
+    {
+      "module_code": "analytics",
+      "status": "active"
+    },
+    {
+      "module_code": "apim",
+      "status": "active"
+    },
+    {
+      "module_code": "audit",
+      "status": "active"
+    },
+    {
+      "module_code": "bunker",
+      "status": "active"
+    },
+    {
+      "module_code": "chartering",
+      "status": "active"
+    },
+    {
+      "module_code": "claims",
+      "status": "active"
+    },
+    {
+      "module_code": "dataops",
+      "status": "active"
+    },
+    {
+      "module_code": "docs",
+      "status": "active"
+    },
+    {
+      "module_code": "email",
+      "status": "active"
+    },
+    {
+      "module_code": "emissions",
+      "status": "active"
+    },
+    {
+      "module_code": "estimate",
+      "status": "active"
+    },
+    {
+      "module_code": "finance",
+      "status": "active"
+    },
+    {
+      "module_code": "i18n",
+      "status": "active"
+    },
+    {
+      "module_code": "identity",
+      "status": "active"
+    },
+    {
+      "module_code": "integration",
+      "status": "active"
+    },
+    {
+      "module_code": "laytime",
+      "status": "active"
+    },
+    {
+      "module_code": "license",
+      "status": "active"
+    },
+    {
+      "module_code": "masterdata",
+      "status": "active"
+    },
+    {
+      "module_code": "notify",
+      "status": "active"
+    },
+    {
+      "module_code": "operations",
+      "status": "active"
+    },
+    {
+      "module_code": "platform",
+      "status": "active"
+    },
+    {
+      "module_code": "pooling",
+      "status": "active"
+    },
+    {
+      "module_code": "rbac",
+      "status": "active"
+    },
+    {
+      "module_code": "risk",
+      "status": "active"
+    },
+    {
+      "module_code": "selfcheck",
+      "status": "active"
+    },
+    {
+      "module_code": "shell",
+      "status": "active"
+    },
+    {
+      "module_code": "ship_mgmt",
+      "status": "active"
+    },
+    {
+      "module_code": "tenancy",
+      "status": "active"
+    },
+    {
+      "module_code": "twin",
+      "status": "active"
+    },
+    {
+      "module_code": "workflow",
+      "status": "active"
+    }
+  ]
+}

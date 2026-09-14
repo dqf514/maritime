@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+import { API_BASE as API } from "./api";
 const STORAGE_KEY = "voyageos_locale";
 
 type Term = {

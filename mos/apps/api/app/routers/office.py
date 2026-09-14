@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db
 from app.models_office import OfficeAddonInstall, OfficeResourceLink, OfficeSyncJob, WebhookEndpoint
-from app.security import AuthContext, get_current_auth_optional, require_auth, require_module
+from app.security import AuthContext, get_current_auth, require_api_scope, require_module
 from app.services.graph_client import GraphError, admin_consent_url, exchange_code_for_tokens, graph_mode
+from app.services.identity import soft_sign_state, verify_signed_state
 from app.services import office_hub as hub
 
 router = APIRouter(prefix="/office", tags=["Office Ecosystem"])
@@ -108,7 +109,7 @@ def office_connect(
         hub.apply_oauth_tokens(db, auth.tenant_id, tokens, user_id=auth.user_id)
         db.commit()
         return {"mode": "stub", "connected": True, "status": hub.office_status(db, auth.tenant_id)}
-    url = admin_consent_url(state=str(auth.tenant_id))
+    url = admin_consent_url(state=soft_sign_state(get_settings().jwt_secret, str(auth.tenant_id)))
     return {"mode": "live", "authorize_url": url, "connected": False}
 
 
@@ -132,7 +133,7 @@ def office_oauth_callback(
     state: str | None = None,
     error: str | None = None,
     db: Session = Depends(get_db),
-    auth: AuthContext | None = Depends(get_current_auth_optional),
+    auth: AuthContext = Depends(get_current_auth),
 ):
     settings = get_settings()
     web = settings.web_public_base.rstrip("/")
@@ -140,13 +141,18 @@ def office_oauth_callback(
         return RedirectResponse(f"{web}/settings/office?error={error}")
     if not code or not state:
         raise HTTPException(400, "missing code/state")
+    signed_payload = verify_signed_state(settings.jwt_secret, state)
+    if not signed_payload:
+        raise HTTPException(400, "invalid state signature")
     try:
-        tenant_id = UUID(state)
+        tenant_id = UUID(signed_payload)
     except ValueError as exc:
         raise HTTPException(400, "invalid state") from exc
+    if tenant_id != auth.tenant_id:
+        raise HTTPException(403, "state tenant mismatch")
     try:
         tokens = exchange_code_for_tokens(code)
-        hub.apply_oauth_tokens(db, tenant_id, tokens, user_id=auth.user_id if auth else None)
+        hub.apply_oauth_tokens(db, tenant_id, tokens, user_id=auth.user_id)
         db.commit()
     except GraphError as exc:
         raise _graph_http(exc) from exc
@@ -513,7 +519,7 @@ def office_health(
 @router.get("/partner/ping")
 def partner_ping(
     request: Request,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_api_scope("office")),
 ):
     """Simple ping for Office add-ins / Power Automate using JWT or X-API-Key."""
     _ = request

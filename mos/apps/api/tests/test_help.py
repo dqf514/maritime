@@ -44,6 +44,8 @@ def test_help_ask_estimate(client):
 
 
 def test_healthz_docs_version(client):
+    from app.config import get_settings
+
     hz = client.get("/healthz")
     assert hz.status_code == 200
-    assert hz.json()["version"].startswith("1.5")
+    assert hz.json()["version"] == get_settings().app_version

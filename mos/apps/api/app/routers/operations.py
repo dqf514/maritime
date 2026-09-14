@@ -12,13 +12,38 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models_domain import NoonReport, PortCall, SofEvent, TwinAlert, Voyage
+from app.models_domain import Charter, NoonReport, PortCall, SofEvent, TwinAlert, Voyage
 from app.models_wave1 import Port, Vessel
 from app.security import AuthContext, require_module
 from app.services.recycle import soft_delete
+from app.services.tenant_guard import scoped_get
 from app.services.state_machine import VOYAGE_TRANSITIONS, transition
 
 router = APIRouter(tags=["Operations"])
+
+# SOF（Statement of Facts）标准事件码表
+SOF_EVENT_CODES: dict[str, str] = {
+    "NOR": "Notice of Readiness 递交备妥通知书",
+    "EOSP": "End of Sea Passage 海上航行结束（抵港）",
+    "ANCHOR": "抛锚（抵锚地待泊）",
+    "AWSP": "All Fast 缆绳全部带妥（靠妥）",
+    "POB": "Pilot on Board 引航员登船",
+    "DOCKED": "靠泊就位",
+    "SHIFTED_BERTH": "移泊（更换泊位）",
+    "COMMENCED": "开始装卸作业",
+    "COMPLETED": "装卸作业完成",
+    "HOSES_OFF": "拆除输油软管（货油作业收尾）",
+    "BL_DATE": "提单签发日期",
+    "SAILED": "开航离港",
+}
+
+# 现实时序上早于 NOR 的事件（抵港/抛锚/引航员登船/带缆均发生在递交通知书之前），
+# 豁免"不得早于 NOR"的下界校验
+SOF_PRE_NOR_EXEMPT: frozenset[str] = frozenset({"EOSP", "ANCHOR", "POB", "AWSP"})
+
+
+def _as_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _alive(status: str | None) -> bool:
@@ -64,6 +89,9 @@ class PortCallOut(BaseModel):
     etd: datetime | None
     ata: datetime | None
     atd: datetime | None
+    nor_at: datetime | None
+    eosp_at: datetime | None
+    bl_date: datetime | None
     agent: str | None
     timezone: str
 
@@ -78,6 +106,17 @@ class NoonIn(BaseModel):
     rob_do: float | None = None
     eta_next: datetime | None = None
     remarks: str | None = None
+    wind_bf: float | None = None
+    sea_state: str | None = None
+    current_kn: float | None = None
+
+
+class NoonOut(BaseModel):
+    id: UUID
+    eta_deviation_hours: float | None = None
+    wind_bf: float | None = None
+    sea_state: str | None = None
+    current_kn: float | None = None
 
 
 class SofIn(BaseModel):
@@ -100,6 +139,10 @@ def list_voyages(auth: AuthContext = Depends(require_module("operations")), db: 
 
 @router.post("/voyages", response_model=VoyageOut)
 def create_voyage(body: VoyageIn, auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
+    if body.vessel_id is not None and scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Vessel not found")
+    if body.charter_id is not None and scoped_get(db, Charter, body.charter_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Charter not found")
     row = Voyage(
         tenant_id=auth.tenant_id,
         voyage_no=body.voyage_no,
@@ -139,6 +182,8 @@ def update_voyage(
     if body.clear_vessel or ("vessel_id" in fields and body.vessel_id is None):
         row.vessel_id = None
     elif body.vessel_id is not None:
+        if scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Vessel not found")
         row.vessel_id = body.vessel_id
     db.commit()
     db.refresh(row)
@@ -212,7 +257,37 @@ def list_port_calls(
     return [PortCallOut.model_validate(r) for r in rows]
 
 
-@router.post("/noon-reports")
+@router.get("/port-calls/{port_call_id}/sof-summary")
+def sof_summary(port_call_id: UUID, auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
+    """SOF 标准事件时间线 + 作业/等泊时长，供 laytime from-sof 消费。"""
+    pc = db.get(PortCall, port_call_id)
+    if not pc or pc.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Port call not found")
+    rows = db.scalars(
+        select(SofEvent)
+        .where(SofEvent.tenant_id == auth.tenant_id, SofEvent.port_call_id == pc.id)
+        .order_by(SofEvent.event_at.asc())
+    ).all()
+    by_code: dict[str, datetime] = {}
+    for r in rows:
+        by_code.setdefault(r.event_code.upper(), r.event_at)
+
+    def _hours(start: datetime | None, end: datetime | None) -> float | None:
+        if start and end:
+            return round((_as_utc(end) - _as_utc(start)).total_seconds() / 3600.0, 2)
+        return None
+
+    return {
+        "port_call_id": str(pc.id),
+        "port_id": str(pc.port_id) if pc.port_id else None,
+        "timezone": pc.timezone,
+        "events": [{"code": r.event_code, "at": r.event_at.isoformat() if r.event_at else None} for r in rows],
+        "working_hours": _hours(by_code.get("COMMENCED"), by_code.get("COMPLETED")),
+        "waiting_hours": _hours(by_code.get("NOR"), by_code.get("COMMENCED")),
+    }
+
+
+@router.post("/noon-reports", response_model=NoonOut)
 def create_noon(body: NoonIn, auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
     v = db.get(Voyage, body.voyage_id)
     if not v or v.tenant_id != auth.tenant_id:
@@ -247,11 +322,20 @@ def create_noon(body: NoonIn, auth: AuthContext = Depends(require_module("operat
         rob_do=body.rob_do,
         eta_next=body.eta_next,
         remarks=body.remarks,
+        wind_bf=body.wind_bf,
+        sea_state=body.sea_state,
+        current_kn=body.current_kn,
         eta_deviation_hours=deviation,
     )
     db.add(row)
     db.commit()
-    return {"id": str(row.id), "eta_deviation_hours": float(deviation) if deviation is not None else None}
+    return NoonOut(
+        id=row.id,
+        eta_deviation_hours=float(deviation) if deviation is not None else None,
+        wind_bf=body.wind_bf,
+        sea_state=body.sea_state,
+        current_kn=body.current_kn,
+    )
 
 
 @router.post("/sof-events")
@@ -259,11 +343,50 @@ def create_sof(body: SofIn, auth: AuthContext = Depends(require_module("operatio
     pc = db.get(PortCall, body.port_call_id)
     if not pc or pc.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Port call not found")
+    code = body.event_code.upper()
+    if code not in SOF_EVENT_CODES:
+        raise HTTPException(
+            422,
+            detail={
+                "code": "INVALID_SOF_EVENT_CODE",
+                "message": f"Unknown SOF event code '{body.event_code}'",
+                "allowed": sorted(SOF_EVENT_CODES),
+            },
+        )
+    existing = db.scalars(select(SofEvent).where(SofEvent.port_call_id == pc.id)).all()
+    event_at = _as_utc(body.event_at)
+    if code == "NOR":
+        # NOR 不得晚于已有最早的非豁免事件（豁免事件本就该早于 NOR）
+        non_exempt = [e for e in existing if e.event_code.upper() not in SOF_PRE_NOR_EXEMPT]
+        if non_exempt:
+            earliest = min(_as_utc(e.event_at) for e in non_exempt)
+            if event_at > earliest:
+                raise HTTPException(
+                    422,
+                    detail={"code": "SOF_SEQUENCE_VIOLATION", "message": "NOR must not be later than existing events of this port call"},
+                )
+    elif code not in SOF_PRE_NOR_EXEMPT:
+        # 非豁免事件时间不得早于同 port_call 的 NOR 时间
+        nors = [e for e in existing if e.event_code.upper() == "NOR"]
+        if nors:
+            nor_at = min(_as_utc(e.event_at) for e in nors)
+            if event_at < nor_at:
+                raise HTTPException(
+                    422,
+                    detail={"code": "SOF_SEQUENCE_VIOLATION", "message": "Event time must not be earlier than NOR of this port call"},
+                )
     row = SofEvent(tenant_id=auth.tenant_id, **body.model_dump())
     db.add(row)
-    if body.event_code.upper() == "NOR" and not pc.ata:
-        pc.ata = body.event_at
-    if body.event_code.upper() in {"COMPLETED", "SAILED"}:
+    if code == "NOR":
+        if not pc.nor_at:
+            pc.nor_at = body.event_at
+        if not pc.ata:
+            pc.ata = body.event_at
+    if code == "EOSP" and not pc.eosp_at:
+        pc.eosp_at = body.event_at
+    if code == "BL_DATE" and not pc.bl_date:
+        pc.bl_date = body.event_at
+    if code in {"COMPLETED", "SAILED"}:
         pc.atd = body.event_at
     db.commit()
     return {"id": str(row.id), "event_code": row.event_code}
@@ -359,8 +482,11 @@ def twin_whatif(
 
     _ = auth
     estimate_inputs = body.get("estimate_inputs") or body
-    base = compute_estimate(estimate_inputs)
-    faster = dict(estimate_inputs)
-    faster["sea_days"] = float(Decimal(str(estimate_inputs.get("sea_days") or 10)) * Decimal("0.9"))
-    alt = compute_estimate(faster)
+    try:
+        base = compute_estimate(estimate_inputs)
+        faster = dict(estimate_inputs)
+        faster["sea_days"] = float(Decimal(str(estimate_inputs.get("sea_days") or 10)) * Decimal("0.9"))
+        alt = compute_estimate(faster)
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     return {"level": "L4", "base_tce": base["tce"], "faster_tce": alt["tce"], "delta_tce": alt["tce"] - base["tce"]}

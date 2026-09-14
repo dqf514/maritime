@@ -141,6 +141,19 @@ class ShipSparePart(Base):
     external_ref: Mapped[str | None] = mapped_column(Text)
 
 
+class ShipWoSpare(Base):
+    """Spare-part consumption registered against a work order."""
+
+    __tablename__ = "ship_wo_spares"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    wo_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("ship_work_orders.id"), nullable=False)
+    part_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("ship_spare_parts.id"), nullable=False)
+    qty: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ExternalPmsSyncLog(Base):
     """Audit trail for external ship-management system sync."""
 

@@ -63,6 +63,10 @@ class TenantAuthPolicy(Base):
     invite_only: Mapped[bool] = mapped_column(Boolean, default=False)
     allowed_domains: Mapped[list] = mapped_column(JSON, default=list)  # empty = any
     session_hours: Mapped[int] = mapped_column(default=12)
+    # Entra / Google Workspace org hints (restrict IdP picker when live OAuth is configured)
+    microsoft_tenant_hint: Mapped[str | None] = mapped_column(Text)  # GUID or "organizations"
+    google_hosted_domain: Mapped[str | None] = mapped_column(Text)  # hd= for Google Workspace
+    sso_notes: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

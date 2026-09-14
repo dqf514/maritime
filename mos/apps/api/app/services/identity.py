@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import secrets
 import urllib.parse
 from datetime import datetime, timedelta
@@ -128,6 +129,14 @@ def consume_challenge(db: Session, purpose: str, raw_token: str) -> AuthChalleng
     return row
 
 
+def _redact_body_preview(body: str) -> str:
+    """Strip challenge tokens from stored mail previews (defense in depth:
+    the log must never persist a usable invite / verify / magic-link token)."""
+    preview = re.sub(r"(token=)[^&\s]+", r"\1***", body)
+    preview = re.sub(r"(?i)(demo token:\s*)\S+", r"\1***", preview)
+    return preview[:2000]
+
+
 def send_mail(
     db: Session,
     *,
@@ -162,7 +171,7 @@ def send_mail(
         purpose=purpose,
         channel=channel,
         status=status,
-        body_preview=body[:2000],
+        body_preview=_redact_body_preview(body),
         meta=send_meta,
     )
     db.add(log)
@@ -201,6 +210,8 @@ def build_oauth_authorize_url(
     *,
     state: str,
     settings: Settings | None = None,
+    microsoft_tenant: str | None = None,
+    google_hosted_domain: str | None = None,
 ) -> dict[str, Any]:
     s = settings or get_settings()
     runtime = provider_runtime(s)
@@ -225,7 +236,8 @@ def build_oauth_authorize_url(
             "redirect_uri": redirect_uri,
         }
     if provider == "microsoft":
-        base = f"https://login.microsoftonline.com/{s.microsoft_tenant}/oauth2/v2.0/authorize"
+        tenant_seg = (microsoft_tenant or s.microsoft_tenant or "common").strip() or "common"
+        base = f"https://login.microsoftonline.com/{tenant_seg}/oauth2/v2.0/authorize"
         q = urllib.parse.urlencode(
             {
                 "client_id": s.microsoft_client_id,
@@ -234,23 +246,23 @@ def build_oauth_authorize_url(
                 "response_mode": "query",
                 "scope": "openid profile email offline_access User.Read",
                 "state": state,
-                "code_challenge_method": "S256",  # PKCE ready — code_verifier stored in challenge payload when live
             }
         )
-        return {"mode": "live", "authorize_url": f"{base}?{q}", "redirect_uri": redirect_uri}
+        return {"mode": "live", "authorize_url": f"{base}?{q}", "redirect_uri": redirect_uri, "microsoft_tenant": tenant_seg}
     if provider == "google":
         base = "https://accounts.google.com/o/oauth2/v2/auth"
-        q = urllib.parse.urlencode(
-            {
-                "client_id": s.google_client_id,
-                "response_type": "code",
-                "redirect_uri": redirect_uri,
-                "scope": "openid email profile",
-                "state": state,
-                "access_type": "offline",
-                "prompt": "select_account",
-            }
-        )
+        params: dict[str, str] = {
+            "client_id": s.google_client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": "openid email profile",
+            "state": state,
+            "access_type": "offline",
+            "prompt": "select_account",
+        }
+        if google_hosted_domain:
+            params["hd"] = google_hosted_domain.strip()
+        q = urllib.parse.urlencode(params)
         return {"mode": "live", "authorize_url": f"{base}?{q}", "redirect_uri": redirect_uri}
     raise ValueError("unknown_provider")
 
@@ -261,8 +273,19 @@ def mark_email_verified(user: User) -> None:
 
 
 def soft_sign_state(secret: str, payload: str) -> str:
-    sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
+
+
+def verify_signed_state(secret: str, state: str) -> str | None:
+    """Return the payload when the HMAC signature matches, else None."""
+    payload, sep, sig = state.rpartition(".")
+    if not sep or not payload or not sig:
+        return None
+    expect = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expect):
+        return None
+    return payload
 
 
 def public_auth_options(db: Session, tenant: Tenant) -> dict[str, Any]:

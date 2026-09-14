@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import Module, Role, Tenant, TenantModuleLicense, User, UserRole
 from app.security import AuthContext, get_current_auth, hash_password, require_module
+from app.services.audit import audit
 from app.services.search_acl import allowed_path_prefixes
 from app.services.shell_nav import (
     build_home_widgets,
@@ -40,6 +41,8 @@ class WorkspaceIn(BaseModel):
 
 @router.get("/shell/bootstrap")
 def shell_bootstrap(auth: AuthContext = Depends(get_current_auth), db: Session = Depends(get_db)):
+    from app.models_saas import TenantCompanyProfile
+
     tenant = db.get(Tenant, auth.tenant_id)
     assert tenant
     ws = default_workspace(auth.roles)
@@ -47,10 +50,18 @@ def shell_bootstrap(auth: AuthContext = Depends(get_current_auth), db: Session =
     pref = (auth.user.locale or "").split("|")
     if len(pref) > 1 and pref[1]:
         ws = pref[1]
+    company = db.scalar(select(TenantCompanyProfile).where(TenantCompanyProfile.tenant_id == auth.tenant_id))
     return {
         "roles": auth.roles,
         "profile_tier": tenant.profile_tier,
         "is_platform": "platform_admin" in auth.roles,
+        "tenant": {"id": str(tenant.id), "code": tenant.code, "name": tenant.name},
+        "company": {
+            "display_name": (company.display_name if company else None) or tenant.name,
+            "logo_url": company.logo_url if company else None,
+            "brand_primary": (company.brand_primary if company else None) or "#1A9B96",
+            "brand_secondary": company.brand_secondary if company else None,
+        },
         "navigation": build_navigation(auth.roles, tenant.profile_tier),
         "workspaces": build_workspaces(auth.roles),
         "active_workspace": ws,
@@ -141,26 +152,59 @@ def list_roles(auth: AuthContext = Depends(require_roles("tenant_admin")), db: S
 
 
 @router.get("/admin/users")
-def list_users(auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
+def list_users(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    from app.models_saas import OrgUnit, UserOrgMembership
+
     users = db.scalars(
         select(User)
         .where(User.tenant_id == auth.tenant_id, User.status != "deleted")
         .order_by(User.email)
+        .offset(offset)
+        .limit(limit)
     ).all()
+    user_ids = [u.id for u in users]
+    # Batch-load roles / primary org memberships instead of per-user queries.
+    roles_by_user: dict[UUID, list[str]] = {uid: [] for uid in user_ids}
+    if user_ids:
+        for uid, code in db.execute(
+            select(UserRole.user_id, Role.code)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(UserRole.user_id.in_(user_ids))
+        ).all():
+            roles_by_user.setdefault(uid, []).append(code)
+    membership_by_user: dict[UUID, UserOrgMembership] = {}
+    org_by_id: dict[UUID, OrgUnit] = {}
+    if user_ids:
+        memberships = db.scalars(
+            select(UserOrgMembership).where(
+                UserOrgMembership.user_id.in_(user_ids), UserOrgMembership.is_primary.is_(True)
+            )
+        ).all()
+        membership_by_user = {m.user_id: m for m in memberships}
+        org_ids = [m.org_unit_id for m in memberships]
+        if org_ids:
+            org_by_id = {o.id: o for o in db.scalars(select(OrgUnit).where(OrgUnit.id.in_(org_ids))).all()}
     out = []
     for u in users:
-        role_codes = list(
-            db.scalars(
-                select(Role.code).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == u.id)
-            ).all()
-        )
+        membership = membership_by_user.get(u.id)
+        org_unit = org_by_id.get(membership.org_unit_id) if membership else None
+        if org_unit and org_unit.status == "deleted":
+            org_unit = None
         out.append(
             {
                 "id": str(u.id),
                 "email": u.email,
                 "full_name": u.full_name,
                 "status": u.status,
-                "roles": role_codes,
+                "roles": roles_by_user.get(u.id, []),
+                "org_unit_id": str(org_unit.id) if org_unit else None,
+                "org_unit_code": org_unit.code if org_unit else None,
+                "org_unit_name": org_unit.name if org_unit else None,
             }
         )
     return out
@@ -171,13 +215,17 @@ class UserCreate(BaseModel):
     full_name: str
     password: str = Field(min_length=8)
     role_codes: list[str] = Field(default_factory=lambda: ["viewer"])
+    org_unit_id: UUID | None = None
 
 
 @router.post("/admin/users")
 def create_user(body: UserCreate, auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
     from datetime import datetime
 
-    exists = db.scalar(select(User).where(User.tenant_id == auth.tenant_id, User.email == body.email))
+    from app.models_saas import OrgUnit, UserOrgMembership
+
+    email = body.email.strip().lower()
+    exists = db.scalar(select(User).where(User.tenant_id == auth.tenant_id, User.email == email))
     if exists and exists.status != "deleted":
         raise HTTPException(409, detail={"code": "USER_EXISTS", "message": "Email already in tenant"})
     # platform_admin cannot be granted from tenant admin
@@ -185,7 +233,7 @@ def create_user(body: UserCreate, auth: AuthContext = Depends(require_roles("ten
         raise HTTPException(403, detail={"code": "FORBIDDEN_ROLE", "message": "Cannot assign platform_admin"})
     user = User(
         tenant_id=auth.tenant_id,
-        email=body.email,
+        email=email,
         full_name=body.full_name,
         password_hash=hash_password(body.password),
         status="active",
@@ -201,14 +249,31 @@ def create_user(body: UserCreate, auth: AuthContext = Depends(require_roles("ten
         if not role:
             raise HTTPException(400, detail={"code": "UNKNOWN_ROLE", "role": code})
         db.add(UserRole(user_id=user.id, role_id=role.id))
+    if body.org_unit_id:
+        unit = db.get(OrgUnit, body.org_unit_id)
+        if not unit or unit.tenant_id != auth.tenant_id or unit.status == "deleted":
+            raise HTTPException(400, detail={"code": "INVALID_ORG_UNIT"})
+        db.add(UserOrgMembership(user_id=user.id, org_unit_id=unit.id, is_primary=True))
+    # Audit row commits atomically with the new user
+    audit(
+        db,
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        action="admin.user_created",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email, "roles": body.role_codes},
+    )
     db.commit()
-    return {"id": str(user.id), "email": user.email, "roles": body.role_codes}
+    return {"id": str(user.id), "email": user.email, "roles": body.role_codes, "org_unit_id": str(body.org_unit_id) if body.org_unit_id else None}
 
 
 class UserUpdateIn(BaseModel):
     full_name: str | None = None
     status: str | None = None
     role_codes: list[str] | None = None
+    org_unit_id: UUID | None = None
+    clear_org: bool = False
 
 
 @router.patch("/admin/users/{user_id}")
@@ -218,6 +283,8 @@ def update_user(
     auth: AuthContext = Depends(require_roles("tenant_admin")),
     db: Session = Depends(get_db),
 ):
+    from app.models_saas import OrgUnit, UserOrgMembership
+
     user = db.get(User, user_id)
     if not user or user.tenant_id != auth.tenant_id or user.status == "deleted":
         raise HTTPException(404, "User not found")
@@ -226,6 +293,17 @@ def update_user(
     if body.status is not None:
         if body.status not in {"active", "disabled", "invited"}:
             raise HTTPException(400, "Invalid status")
+        if body.status != user.status:
+            # Status transition (e.g. disable) is security-relevant — audit it
+            audit(
+                db,
+                tenant_id=auth.tenant_id,
+                actor_user_id=auth.user_id,
+                action="admin.user_status_changed",
+                entity_type="user",
+                entity_id=user.id,
+                detail={"email": user.email, "from": user.status, "to": body.status},
+            )
         user.status = body.status
     if body.role_codes is not None:
         if "platform_admin" in body.role_codes:
@@ -237,11 +315,47 @@ def update_user(
             if not role:
                 raise HTTPException(400, detail={"code": "UNKNOWN_ROLE", "role": code})
             db.add(UserRole(user_id=user.id, role_id=role.id))
+        audit(
+            db,
+            tenant_id=auth.tenant_id,
+            actor_user_id=auth.user_id,
+            action="admin.user_roles_changed",
+            entity_type="user",
+            entity_id=user.id,
+            detail={"email": user.email, "roles": body.role_codes},
+        )
+    if body.clear_org or body.org_unit_id is not None:
+        for m in db.scalars(select(UserOrgMembership).where(UserOrgMembership.user_id == user.id)).all():
+            if m.is_primary:
+                m.is_primary = False
+        if body.org_unit_id and not body.clear_org:
+            unit = db.get(OrgUnit, body.org_unit_id)
+            if not unit or unit.tenant_id != auth.tenant_id or unit.status == "deleted":
+                raise HTTPException(400, detail={"code": "INVALID_ORG_UNIT"})
+            existing = db.scalar(
+                select(UserOrgMembership).where(
+                    UserOrgMembership.user_id == user.id, UserOrgMembership.org_unit_id == unit.id
+                )
+            )
+            if existing:
+                existing.is_primary = True
+            else:
+                db.add(UserOrgMembership(user_id=user.id, org_unit_id=unit.id, is_primary=True))
     db.commit()
     roles = list(
         db.scalars(select(Role.code).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)).all()
     )
-    return {"id": str(user.id), "email": user.email, "full_name": user.full_name, "status": user.status, "roles": roles}
+    membership = db.scalar(
+        select(UserOrgMembership).where(UserOrgMembership.user_id == user.id, UserOrgMembership.is_primary.is_(True))
+    )
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "full_name": user.full_name,
+        "status": user.status,
+        "roles": roles,
+        "org_unit_id": str(membership.org_unit_id) if membership else None,
+    }
 
 
 @router.delete("/admin/users/{user_id}")
@@ -264,6 +378,15 @@ def delete_user(
         entity_type="user",
         row=user,
         title=user.email,
+    )
+    audit(
+        db,
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        action="admin.user_deleted",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email},
     )
     db.commit()
     return {"ok": True, "recycled": True}
@@ -292,6 +415,16 @@ def set_user_roles(
         if not role:
             raise HTTPException(400, detail={"code": "UNKNOWN_ROLE", "role": code})
         db.add(UserRole(user_id=user.id, role_id=role.id))
+    # Audit row commits atomically with the role assignment
+    audit(
+        db,
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        action="admin.user_roles_changed",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email, "roles": body.role_codes},
+    )
     db.commit()
     return {"id": str(user.id), "roles": body.role_codes}
 
@@ -365,9 +498,10 @@ def platform_create_tenant(body: TenantCreate, auth: AuthContext = Depends(requi
         db.add(r)
         db.flush()
         role_map[code] = r
+    admin_email = body.admin_email.strip().lower()
     admin = User(
         tenant_id=tenant.id,
-        email=body.admin_email,
+        email=admin_email,
         full_name=body.admin_name,
         password_hash=hash_password(body.admin_password),
         status="active",
@@ -404,7 +538,7 @@ def platform_create_tenant(body: TenantCreate, auth: AuthContext = Depends(requi
                 )
             )
     db.commit()
-    return {"id": str(tenant.id), "code": tenant.code, "admin_email": body.admin_email}
+    return {"id": str(tenant.id), "code": tenant.code, "admin_email": admin_email}
 
 
 class TenantStatusIn(BaseModel):

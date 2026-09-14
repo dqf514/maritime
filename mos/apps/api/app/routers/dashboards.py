@@ -1,7 +1,19 @@
 """Role-based executive / ops / chartering / finance / technical dashboards.
 
 Snapshot APIs include a live pulse (jitter) so fullscreen walls feel real-time
-when polled every few seconds. Data prefers DB seed; falls back to synthetic.
+when polled every few seconds. KPIs query the real domain tables where a data
+source exists; the rest are demo values marked ``synthetic: true`` in the KPI
+dict so walls can badge them.
+
+Still synthetic (no data source yet):
+- management: Fleet TCE, Fleet util., TCE/P&L chart series, region heatmap
+- chartering: Win rate, Mail queue, fixture-mix donut
+- operations: Twin health, fleet speed chart
+- finance: DSO, cash-in chart
+- demurrage: Avg days to settle (no settled-at timestamp on claims)
+- technical: heatmap compliance scores
+- tenant_admin: Active users, Workflow SLA, AI token burn, SelfCheck, adoption chart
+Fallback demo values (used only when the real query is empty) are also flagged.
 """
 
 from __future__ import annotations
@@ -9,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import math
 import random
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -23,12 +35,16 @@ from app.models_domain import (
     Claim,
     Estimate,
     Invoice,
+    LaytimeCalc,
     NoonReport,
+    OffHireEvent,
+    PortCall,
     TwinAlert,
     Voyage,
 )
-from app.models_ship import ShipCertificate, ShipDefect, ShipWorkOrder
-from app.models_wave1 import Vessel
+from app.models_ship import ShipCertificate, ShipDefect, ShipTechnicalProfile, ShipWorkOrder
+from app.models_wave1 import ConnectorInstance, Vessel
+from app.routers.ship_mgmt import _refresh_certificate_status
 from app.security import AuthContext, require_auth
 
 router = APIRouter(prefix="/dashboards", tags=["Dashboards"])
@@ -146,8 +162,12 @@ def dashboard_snapshot(
     }
 
 
-def _kpi(label: str, value: Any, unit: str = "", delta: str | None = None, tone: str = "neutral") -> dict:
-    return {"label": label, "value": value, "unit": unit, "delta": delta, "tone": tone}
+def _kpi(label: str, value: Any, unit: str = "", delta: str | None = None, tone: str = "neutral", synthetic: bool = False) -> dict:
+    return {"label": label, "value": value, "unit": unit, "delta": delta, "tone": tone, "synthetic": synthetic}
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _mgmt(db: Session, tid: UUID) -> dict:
@@ -162,14 +182,18 @@ def _mgmt(db: Session, tid: UUID) -> dict:
     series_tce = [{"t": i, "v": round(tce + math.sin(i / 2) * 900 + random.Random(i).uniform(-200, 200), 0)} for i in range(12)]
     series_pnl = [{"t": i, "v": round(0.4 + i * 0.08 + _pulse(f"pnl{i}", 0.05), 2)} for i in range(8)]
     fleet_map = []
+    # One batch query for the latest noon report per vessel (avoids N+1).
+    latest_noon: dict[UUID, NoonReport] = {}
+    for noon_row, vessel_id in db.execute(
+        select(NoonReport, Voyage.vessel_id)
+        .join(Voyage, Voyage.id == NoonReport.voyage_id)
+        .where(Voyage.tenant_id == tid)
+        .order_by(NoonReport.report_at.desc())
+    ).all():
+        if vessel_id not in latest_noon:
+            latest_noon[vessel_id] = noon_row
     for i, v in enumerate(vessels[:8]):
-        noon = db.scalar(
-            select(NoonReport)
-            .join(Voyage, Voyage.id == NoonReport.voyage_id)
-            .where(Voyage.vessel_id == v.id)
-            .order_by(NoonReport.report_at.desc())
-            .limit(1)
-        )
+        noon = latest_noon.get(v.id)
         lat = float(noon.lat) if noon and noon.lat is not None else 1.2 + i * 4.5
         lon = float(noon.lon) if noon and noon.lon is not None else 103.8 + i * 8.2
         fleet_map.append(
@@ -183,12 +207,12 @@ def _mgmt(db: Session, tid: UUID) -> dict:
     alerts = db.scalars(select(TwinAlert).where(TwinAlert.tenant_id == tid).limit(8)).all()
     return {
         "kpis": [
-            _kpi("Fleet TCE (live)", f"{tce:,.0f}", "USD/d", "+3.2%", "good"),
-            _kpi("Active voyages", len(active) or 3, "", None, "neutral"),
-            _kpi("Fleet util.", f"{util:.1f}", "%", "+1.1%", "good"),
-            _kpi("Open AR", f"{unpaid or 1_240_000:,.0f}", "USD", "-4%", "warn" if unpaid > revenue * 0.3 else "good"),
-            _kpi("YTD freight", f"{revenue or 8_420_000:,.0f}", "USD", "+12%", "good"),
-            _kpi("Vessels", len(vessels) or 4, "", None, "neutral"),
+            _kpi("Fleet TCE (live)", f"{tce:,.0f}", "USD/d", "+3.2%", "good", synthetic=True),
+            _kpi("Active voyages", len(active) or 3, "", None, "neutral", synthetic=not active),
+            _kpi("Fleet util.", f"{util:.1f}", "%", "+1.1%", "good", synthetic=True),
+            _kpi("Open AR", f"{unpaid or 1_240_000:,.0f}", "USD", "-4%", "warn" if unpaid > revenue * 0.3 else "good", synthetic=not unpaid),
+            _kpi("YTD freight", f"{revenue or 8_420_000:,.0f}", "USD", "+12%", "good", synthetic=not revenue),
+            _kpi("Vessels", len(vessels) or 4, "", None, "neutral", synthetic=not vessels),
         ],
         "charts": [
             {"id": "tce_trend", "title": "Rolling TCE", "type": "line", "series": series_tce},
@@ -222,6 +246,15 @@ def _chartering(db: Session, tid: UUID) -> dict:
     charters = db.scalars(select(Charter).where(Charter.tenant_id == tid)).all()
     open_est = [e for e in estimates if e.status in ("draft", "working", "submitted")]
     active_cp = [c for c in charters if c.status in ("active", "approved", "submitted")]
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    laycan_week = sum(
+        1
+        for c in charters
+        if c.laycan_from and c.laycan_from <= week_end and (c.laycan_to or c.laycan_from) >= week_start
+    )
+    bid_tces = [float((e.results or {}).get("tce_usd_day")) for e in open_est if (e.results or {}).get("tce_usd_day")]
     pipeline = []
     for e in estimates[:10]:
         tce = (e.results or {}).get("tce_usd_day") or (12000 + _pulse(str(e.id)[:6], 2000))
@@ -236,12 +269,19 @@ def _chartering(db: Session, tid: UUID) -> dict:
         )
     return {
         "kpis": [
-            _kpi("Open estimates", len(open_est) or len(estimates) or 5, "", None, "neutral"),
-            _kpi("Active fixtures", len(active_cp) or 2, "", None, "good"),
-            _kpi("Win rate", f"{42 + int(_pulse('win', 4))}", "%", "+2%", "good"),
-            _kpi("Avg bid TCE", f"{14500 + int(_pulse('bid', 400)):,}", "USD/d", None, "neutral"),
-            _kpi("Laycan this week", 3, "CPs", None, "warn"),
-            _kpi("Mail queue", 7 + int(_pulse("mail", 2)), "", None, "neutral"),
+            _kpi("Open estimates", len(open_est) or len(estimates) or 5, "", None, "neutral", synthetic=not estimates),
+            _kpi("Active fixtures", len(active_cp) or 2, "", None, "good", synthetic=not active_cp),
+            _kpi("Win rate", f"{42 + int(_pulse('win', 4))}", "%", "+2%", "good", synthetic=True),
+            _kpi(
+                "Avg bid TCE",
+                f"{int(sum(bid_tces) / len(bid_tces)) if bid_tces else 14500 + int(_pulse('bid', 400)):,}",
+                "USD/d",
+                None,
+                "neutral",
+                synthetic=not bid_tces,
+            ),
+            _kpi("Laycan this week", laycan_week, "CPs", None, "warn" if laycan_week else "neutral"),
+            _kpi("Mail queue", 7 + int(_pulse("mail", 2)), "", None, "neutral", synthetic=True),
         ],
         "charts": [
             {
@@ -306,14 +346,37 @@ def _operations(db: Session, tid: UUID) -> dict:
             {"name": "MV ATLANTIC PEARL", "lat": 51.9, "lon": 4.1, "status": "steaming", "speed": 13.1},
         ]
     eta_risk = sum(1 for a in alerts if "eta" in (a.title or "").lower() or a.level in ("high", "critical", "warn"))
+    today = date.today()
+    day_start = datetime(today.year, today.month, today.day)
+    port_calls_today = db.scalar(
+        select(func.count())
+        .select_from(PortCall)
+        .where(PortCall.tenant_id == tid, PortCall.eta >= day_start, PortCall.eta < day_start + timedelta(days=1))
+    ) or 0
+    now = datetime.now(timezone.utc)
+    open_offhire = db.scalars(
+        select(OffHireEvent).where(OffHireEvent.tenant_id == tid, OffHireEvent.status == "open")
+    ).all()
+    offhire_hours = sum(
+        max(0.0, ((_aware(e.end_at) if e.end_at else now) - _aware(e.start_at)).total_seconds()) / 3600
+        for e in open_offhire
+    )
+    noon_lag_h = round((now - _aware(noons[0].report_at)).total_seconds() / 3600) if noons else None
     return {
         "kpis": [
-            _kpi("In progress", len([v for v in voyages if v.status == "in_progress"]) or 2, "voy", None, "neutral"),
-            _kpi("ETA risk", eta_risk or 1, "alerts", None, "warn"),
-            _kpi("Noon lag", f"{max(0, 2 - int(_pulse('noon', 1)))}", "h", None, "good"),
-            _kpi("Port calls today", 4, "", None, "neutral"),
-            _kpi("Bunker ROB alert", 1, "vsl", None, "warn"),
-            _kpi("Twin health", f"{96 + int(_pulse('twin', 2))}", "%", None, "good"),
+            _kpi("In progress", len([v for v in voyages if v.status == "in_progress"]) or 2, "voy", None, "neutral", synthetic=not any(v.status == "in_progress" for v in voyages)),
+            _kpi("ETA risk", eta_risk or 1, "alerts", None, "warn", synthetic=not eta_risk),
+            _kpi(
+                "Noon lag",
+                f"{noon_lag_h if noon_lag_h is not None else max(0, 2 - int(_pulse('noon', 1)))}",
+                "h",
+                None,
+                "good",
+                synthetic=noon_lag_h is None,
+            ),
+            _kpi("Port calls today", port_calls_today, "", None, "neutral"),
+            _kpi("Off-hire (open)", f"{offhire_hours:.1f}", "h", None, "warn" if open_offhire else "good"),
+            _kpi("Twin health", f"{96 + int(_pulse('twin', 2))}", "%", None, "good", synthetic=True),
         ],
         "charts": [
             {
@@ -361,16 +424,17 @@ def _finance(db: Session, tid: UUID) -> dict:
             aging["61-90"] += bal
         else:
             aging["90+"] += bal
-    if sum(aging.values()) == 0:
+    aging_demo = sum(aging.values()) == 0
+    if aging_demo:
         aging = {"0-30": 820000, "31-60": 310000, "61-90": 95000, "90+": 42000}
     collected = sum(float(i.paid_amount or 0) for i in invoices)
     return {
         "kpis": [
-            _kpi("Open AR", f"{sum(aging.values()):,.0f}", "USD", None, "warn"),
-            _kpi("Collected MTD", f"{collected or 2_100_000:,.0f}", "USD", "+6%", "good"),
-            _kpi("Invoices open", len(open_inv) or 6, "", None, "neutral"),
-            _kpi("DSO", f"{38 + int(_pulse('dso', 2))}", "d", "-1d", "good"),
-            _kpi("Overdue >90d", f"{aging['90+']:,.0f}", "USD", None, "danger" if aging["90+"] > 0 else "good"),
+            _kpi("Open AR", f"{sum(aging.values()):,.0f}", "USD", None, "warn", synthetic=aging_demo),
+            _kpi("Collected MTD", f"{collected or 2_100_000:,.0f}", "USD", "+6%", "good", synthetic=not collected),
+            _kpi("Invoices open", len(open_inv) or 6, "", None, "neutral", synthetic=not open_inv),
+            _kpi("DSO", f"{38 + int(_pulse('dso', 2))}", "d", "-1d", "good", synthetic=True),
+            _kpi("Overdue >90d", f"{aging['90+']:,.0f}", "USD", None, "danger" if aging["90+"] > 0 else "good", synthetic=aging_demo),
             _kpi("GL unposted", sum(1 for i in invoices if not i.gl_posted), "", None, "warn"),
         ],
         "charts": [
@@ -413,14 +477,20 @@ def _demurrage(db: Session, tid: UUID) -> dict:
     claims = db.scalars(select(Claim).where(Claim.tenant_id == tid)).all()
     open_c = [c for c in claims if c.status in ("open", "negotiating")]
     amount = sum(float(c.amount or 0) for c in open_c)
+    today = date.today()
+    timebar_urgent = sum(1 for c in open_c if c.time_bar and 0 <= (c.time_bar - today).days < 14)
+    sof_pending = db.scalar(
+        select(func.count()).select_from(LaytimeCalc).where(LaytimeCalc.tenant_id == tid, LaytimeCalc.status != "finalized")
+    ) or 0
+    settled = sum(float(c.settlement_amount or 0) for c in claims if c.status in ("settled", "closed", "paid"))
     return {
         "kpis": [
-            _kpi("Open claims", len(open_c) or 2, "", None, "warn"),
-            _kpi("Demurrage exposure", f"{amount or 186000:,.0f}", "USD", None, "warn"),
-            _kpi("Time-bar <14d", 1, "", None, "danger"),
-            _kpi("SOF pending", 3, "", None, "neutral"),
-            _kpi("Settled YTD", f"{420000 + int(_pulse('set', 5000)):,}", "USD", None, "good"),
-            _kpi("Avg days to settle", f"{28 + int(_pulse('setd', 2))}", "d", None, "neutral"),
+            _kpi("Open claims", len(open_c) or 2, "", None, "warn", synthetic=not open_c),
+            _kpi("Demurrage exposure", f"{amount or 186000:,.0f}", "USD", None, "warn", synthetic=not amount),
+            _kpi("Time-bar <14d", timebar_urgent, "", None, "danger" if timebar_urgent else "neutral"),
+            _kpi("SOF pending", sof_pending, "", None, "neutral"),
+            _kpi("Settled YTD", f"{int(settled) if settled else 420000 + int(_pulse('set', 5000)):,}", "USD", None, "good", synthetic=not settled),
+            _kpi("Avg days to settle", f"{28 + int(_pulse('setd', 2))}", "d", None, "neutral", synthetic=True),
         ],
         "charts": [
             {
@@ -458,12 +528,19 @@ def _demurrage(db: Session, tid: UUID) -> dict:
 
 
 def _technical(db: Session, tid: UUID) -> dict:
+    _refresh_certificate_status(db, tid)
     wos = db.scalars(select(ShipWorkOrder).where(ShipWorkOrder.tenant_id == tid)).all()
     open_wo = [w for w in wos if w.status in ("open", "in_progress")]
     certs = db.scalars(select(ShipCertificate).where(ShipCertificate.tenant_id == tid)).all()
     expiring = [c for c in certs if c.status in ("expiring", "expired")]
     defects = db.scalars(select(ShipDefect).where(ShipDefect.tenant_id == tid, ShipDefect.status == "open")).all()
     vessels = db.scalars(select(Vessel).where(Vessel.tenant_id == tid)).all()
+    today = date.today()
+    drydock_90d = sum(
+        1
+        for p in db.scalars(select(ShipTechnicalProfile).where(ShipTechnicalProfile.tenant_id == tid)).all()
+        if p.next_drydock and 0 <= (p.next_drydock - today).days <= 90
+    )
     return {
         "kpis": [
             _kpi("Fleet size", len(vessels), "vsl", None, "neutral"),
@@ -471,7 +548,7 @@ def _technical(db: Session, tid: UUID) -> dict:
             _kpi("Critical WOs", sum(1 for w in open_wo if w.priority == "critical"), "", None, "danger"),
             _kpi("Certs expiring", len(expiring), "", None, "warn" if expiring else "good"),
             _kpi("Open defects", len(defects), "", None, "warn" if defects else "good"),
-            _kpi("Drydock in 90d", 1, "vsl", None, "info"),
+            _kpi("Drydock in 90d", drydock_90d, "vsl", None, "info"),
         ],
         "charts": [
             {
@@ -527,14 +604,16 @@ def _technical(db: Session, tid: UUID) -> dict:
 
 def _admin(db: Session, tid: UUID) -> dict:
     users = db.execute(select(func.count()).select_from(Voyage).where(Voyage.tenant_id == tid)).scalar() or 0
+    connectors = db.scalars(select(ConnectorInstance).where(ConnectorInstance.tenant_id == tid)).all()
+    down = [c for c in connectors if c.status != "active" or not (c.last_health or {}).get("ok", True)]
     return {
         "kpis": [
-            _kpi("Active users (7d)", 12 + int(_pulse("u", 2)), "", None, "good"),
-            _kpi("Workflow SLA", f"{94 + int(_pulse('wf', 2))}", "%", None, "good"),
-            _kpi("Connector health", "OK", "", None, "good"),
-            _kpi("AI token burn", f"{int(1.2e6 + _pulse('ai', 5e4)):,}", "", None, "neutral"),
+            _kpi("Active users (7d)", 12 + int(_pulse("u", 2)), "", None, "good", synthetic=True),
+            _kpi("Workflow SLA", f"{94 + int(_pulse('wf', 2))}", "%", None, "good", synthetic=True),
+            _kpi("Connector health", "OK" if not down else f"{len(down)} down", "", None, "good" if not down else "warn"),
+            _kpi("AI token burn", f"{int(1.2e6 + _pulse('ai', 5e4)):,}", "", None, "neutral", synthetic=True),
             _kpi("Voyages in DB", users, "", None, "neutral"),
-            _kpi("SelfCheck", "PASS", "", None, "good"),
+            _kpi("SelfCheck", "PASS", "", None, "good", synthetic=True),
         ],
         "charts": [
             {

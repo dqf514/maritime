@@ -1,0 +1,21 @@
+{
+  "id": "laytime_gold_04",
+  "note": "SSHEX with port timezone: UTC times convert to Asia/Shanghai, landing Sat 01:00 -> Sun 01:00 local, fully excepted; despatch earned",
+  "inputs": {
+    "allowed_hours": 24,
+    "demurrage_rate_per_day": 24000,
+    "terms": "SSHEX",
+    "port_timezone": "Asia/Shanghai",
+    "events": [
+      {"start": "2026-09-04T17:00:00+00:00", "end": "2026-09-05T17:00:00+00:00"}
+    ]
+  },
+  "expect": {
+    "result_type": "despatch",
+    "amount": 12000.0,
+    "used_hours": 0.0,
+    "excluded_hours": 24.0,
+    "allowed_hours": 24.0,
+    "port_timezone": "Asia/Shanghai"
+  }
+}

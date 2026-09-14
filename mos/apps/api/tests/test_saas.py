@@ -5,17 +5,31 @@ from decimal import Decimal
 
 def test_subscribe_topup_and_ai_meter(client, auth_headers):
     h = auth_headers
+    # Tenant self-checkout is disabled until online payment is enabled
+    blocked = client.post("/api/v1/billing/subscribe", headers=h, json={"plan_code": "fleet", "provider_code": "manual"})
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["code"] == "SELF_CHECKOUT_DISABLED"
+
     sub = client.get("/api/v1/billing/subscription", headers=h)
     assert sub.status_code == 200
-    assert sub.json()["status"] in {"active", "trialing", "none"} or sub.json().get("plan")
+    assert sub.json().get("self_checkout") is False
 
-    plans = client.get("/api/v1/platform/saas/plans", headers=h).json()
-    assert any(p["code"] == "fleet" for p in plans)
-
-    order = client.post("/api/v1/billing/topup", headers=h, json={"pack_code": "ai_1m", "provider_code": "manual"})
-    assert order.status_code == 200, order.text
-    paid = client.post(f"/api/v1/billing/orders/{order.json()['order_id']}/confirm-paid", headers=h)
-    assert paid.status_code == 200
+    # Platform admin assigns pack credit
+    plat = client.post(
+        "/api/v1/auth/login",
+        json={"email": "ops@voyageos.platform", "password": "Ops1234!", "tenant_code": "sys"},
+    )
+    assert plat.status_code == 200, plat.text
+    hp = {"Authorization": f"Bearer {plat.json()['access_token']}"}
+    org = client.get("/api/v1/admin/organization", headers=h).json()
+    tenants = client.get("/api/v1/platform/tenants", headers=hp).json()
+    demo = next(t for t in tenants if t["code"] == "demo")
+    credit = client.post(
+        f"/api/v1/platform/saas/tenants/{demo['id']}/credit-pack",
+        headers=hp,
+        json={"pack_code": "ai_1m", "note": "test topup"},
+    )
+    assert credit.status_code == 200, credit.text
 
     wallet = client.get("/api/v1/billing/wallet", headers=h).json()
     ai = next(w for w in wallet if w["meter_code"] == "ai.tokens")
@@ -25,6 +39,31 @@ def test_subscribe_topup_and_ai_meter(client, auth_headers):
     inv = client.post("/api/v1/billing/ai/invoke-demo", headers=h)
     assert inv.status_code == 200, inv.text
     assert inv.json()["balance"] == before - inv.json()["tokens_charged"]
+    _ = org
+
+
+def test_platform_assign_plan(client, auth_headers):
+    h = auth_headers
+    plat = client.post(
+        "/api/v1/auth/login",
+        json={"email": "ops@voyageos.platform", "password": "Ops1234!", "tenant_code": "sys"},
+    )
+    hp = {"Authorization": f"Bearer {plat.json()['access_token']}"}
+    tenants = client.get("/api/v1/platform/tenants", headers=hp).json()
+    demo = next(t for t in tenants if t["code"] == "demo")
+    assigned = client.post(
+        f"/api/v1/platform/saas/tenants/{demo['id']}/assign-plan",
+        headers=hp,
+        json={"plan_code": "fleet", "grant_quotas": False, "note": "offline contract"},
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["plan_code"] == "fleet"
+    sub = client.get("/api/v1/billing/subscription", headers=h).json()
+    assert sub["status"] == "active"
+    assert sub["plan"]["code"] == "fleet"
+    # tenant cannot confirm-paid anymore
+    deny = client.post("/api/v1/billing/topup", headers=h, json={"pack_code": "ai_1m"})
+    assert deny.status_code == 403
 
 
 def test_quota_exceeded(client, auth_headers):
@@ -65,6 +104,14 @@ def test_charter_workflow_approval(client):
     h_ch = login("charterer@demo.voyageos")
     h_mgmt = login("mgmt@demo.voyageos")
     h_admin = login("admin@demo.voyageos")
+
+    # feature matrix is fail-closed: grant management the workflow.approve feature explicitly
+    grant = client.put(
+        "/api/v1/admin/features",
+        headers=h_admin,
+        json={"role_code": "management", "feature_code": "workflow.approve", "allowed": True},
+    )
+    assert grant.status_code == 200
 
     vessels = client.get("/api/v1/masterdata/vessels", headers=h_admin).json()
     parties = client.get("/api/v1/masterdata/counterparties", headers=h_admin).json()
@@ -134,3 +181,125 @@ def test_public_branding_and_platform_update(client):
     pub2 = client.get("/api/v1/public/branding").json()
     assert pub2["hero_title"] == "Custom hero for portal"
     client.post("/api/v1/platform/branding/reset", headers=h)
+
+
+def test_user_org_membership_and_members(client, auth_headers):
+    h = auth_headers
+    users = client.get("/api/v1/admin/users", headers=h).json()
+    units = client.get("/api/v1/admin/org-units", headers=h).json()
+    assert users and units
+    charter = next(u for u in units if u["code"] == "CHARTER")
+    # seeded demo users should already be linked; also re-assign one
+    target = next(u for u in users if u["email"] == "charterer@demo.voyageos")
+    put = client.put(f"/api/v1/admin/users/{target['id']}/org", headers=h, json={"org_unit_id": charter["id"]})
+    assert put.status_code == 200, put.text
+    users2 = client.get("/api/v1/admin/users", headers=h).json()
+    row = next(u for u in users2 if u["id"] == target["id"])
+    assert row["org_unit_id"] == charter["id"]
+    assert row["org_unit_code"] == "CHARTER"
+    members = client.get(f"/api/v1/admin/org-units/{charter['id']}/members", headers=h).json()
+    assert any(m["id"] == target["id"] for m in members)
+    shell = client.get("/api/v1/shell/bootstrap", headers=h).json()
+    assert shell.get("company", {}).get("brand_primary")
+
+
+def test_feature_permission_enforced(client):
+    def login(email):
+        r = client.post("/api/v1/auth/login", json={"email": email, "password": "Demo1234!", "tenant_code": "demo"})
+        assert r.status_code == 200
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    h_admin = login("admin@demo.voyageos")
+    h_fin = login("finance@demo.voyageos")
+    deny = client.put(
+        "/api/v1/admin/features",
+        headers=h_admin,
+        json={"role_code": "finance", "feature_code": "invoice.collect", "allowed": False},
+    )
+    assert deny.status_code == 200
+    # create+issue invoice as admin then try pay as finance
+    parties = client.get("/api/v1/masterdata/counterparties", headers=h_admin).json()
+    inv = client.post(
+        "/api/v1/invoices",
+        headers=h_admin,
+        json={"counterparty_id": parties[0]["id"], "amount": 100, "currency": "USD", "invoice_type": "freight"},
+    )
+    assert inv.status_code == 200, inv.text
+    iid = inv.json()["id"]
+    # disable invoice workflow temporarily so we can issue directly as admin
+    wfs = client.get("/api/v1/admin/workflows", headers=h_admin).json()
+    inv_wf = next((w for w in wfs if w["entity_type"] == "invoice"), None)
+    if inv_wf:
+        client.patch(f"/api/v1/admin/workflows/{inv_wf['id']}", headers=h_admin, json={"enabled": False})
+    sub = client.post(f"/api/v1/invoices/{iid}/transition?target=pending_approval", headers=h_admin)
+    assert sub.status_code == 200, sub.text
+    issued = client.post(f"/api/v1/invoices/{iid}/transition?target=issued", headers=h_admin)
+    assert issued.status_code == 200, issued.text
+    blocked = client.post(f"/api/v1/invoices/{iid}/payments?amount=10", headers=h_fin)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["code"] == "FEATURE_DENIED"
+    # restore
+    client.put(
+        "/api/v1/admin/features",
+        headers=h_admin,
+        json={"role_code": "finance", "feature_code": "invoice.collect", "allowed": True},
+    )
+    if inv_wf:
+        client.patch(f"/api/v1/admin/workflows/{inv_wf['id']}", headers=h_admin, json={"enabled": True})
+
+
+def test_invoice_workflow_approval(client):
+    def login(email):
+        r = client.post("/api/v1/auth/login", json={"email": email, "password": "Demo1234!", "tenant_code": "demo"})
+        assert r.status_code == 200
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    h_fin = login("finance@demo.voyageos")
+    h_admin = login("admin@demo.voyageos")
+    parties = client.get("/api/v1/masterdata/counterparties", headers=h_admin).json()
+    inv = client.post(
+        "/api/v1/invoices",
+        headers=h_fin,
+        json={"counterparty_id": parties[0]["id"], "amount": 250, "currency": "USD"},
+    )
+    assert inv.status_code == 200, inv.text
+    iid = inv.json()["id"]
+    # ensure invoice workflow enabled
+    wfs = client.get("/api/v1/admin/workflows", headers=h_admin).json()
+    inv_wf = next(w for w in wfs if w["entity_type"] == "invoice")
+    client.patch(
+        f"/api/v1/admin/workflows/{inv_wf['id']}",
+        headers=h_admin,
+        json={"enabled": True, "steps": [{"name": "Finance lead", "role_code": "finance"}]},
+    )
+    # feature matrix is fail-closed: finance needs an explicit grant to issue invoices
+    grant = client.put(
+        "/api/v1/admin/features",
+        headers=h_admin,
+        json={"role_code": "finance", "feature_code": "invoice.issue", "allowed": True},
+    )
+    assert grant.status_code == 200
+    sub = client.post(f"/api/v1/invoices/{iid}/transition?target=pending_approval", headers=h_fin)
+    assert sub.status_code == 200, sub.text
+    blocked = client.post(f"/api/v1/invoices/{iid}/transition?target=issued", headers=h_fin)
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "WORKFLOW_REQUIRED"
+    # submitter cannot self-approve; tenant_admin decides from their inbox instead
+    inbox = client.get("/api/v1/workflows/inbox", headers=h_admin).json()
+    hit = next(i for i in inbox if i["entity_id"] == iid)
+    decided = client.post(f"/api/v1/workflows/{hit['id']}/decide", headers=h_admin, json={"decision": "approve"})
+    assert decided.status_code == 200
+    assert decided.json()["status"] == "approved"
+    rows = client.get("/api/v1/invoices", headers=h_admin).json()
+    row = next(r for r in rows if r["id"] == iid)
+    assert row["status"] == "issued"
+
+
+def test_backup_writes_json_snapshot(client, auth_headers):
+    h = auth_headers
+    job = client.post("/api/v1/settings/dataops/backups", headers=h)
+    assert job.status_code == 200, job.text
+    body = job.json()
+    assert body["status"] == "completed"
+    assert body["storage_path"].endswith(".json")
+    assert body.get("checksum") not in (None, "", "wave0-placeholder")

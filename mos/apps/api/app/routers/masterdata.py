@@ -163,6 +163,15 @@ def get_port(
     return PortOut.model_validate(row, from_attributes=True)
 
 
+def _require_port_admin(auth: AuthContext) -> None:
+    """Ports are global reference data — only tenant/platform admins may mutate them."""
+    if "tenant_admin" not in auth.roles and "platform_admin" not in auth.roles:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PORT_READ_ONLY", "message": "Global port reference data requires tenant_admin"},
+        )
+
+
 @router.patch("/ports/{port_id}", response_model=PortOut)
 def update_port(
     port_id: UUID,
@@ -170,7 +179,7 @@ def update_port(
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
-    _ = auth
+    _require_port_admin(auth)
     row = db.get(Port, port_id)
     if not row or row.deleted_at:
         raise HTTPException(404, "Port not found")
@@ -187,6 +196,7 @@ def delete_port(
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
+    _require_port_admin(auth)
     row = db.get(Port, port_id)
     if not row or row.deleted_at:
         raise HTTPException(404, "Port not found")
@@ -198,13 +208,15 @@ def delete_port(
 @router.get("/counterparties", response_model=list[CounterpartyOut])
 def list_counterparties(
     q: str = "",
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
     stmt = select(Counterparty).where(Counterparty.tenant_id == auth.tenant_id, _alive(Counterparty))
     if q.strip():
         stmt = stmt.where(Counterparty.name.ilike(f"%{q.strip()}%"))
-    rows = db.scalars(stmt.order_by(Counterparty.name)).all()
+    rows = db.scalars(stmt.order_by(Counterparty.name).offset(offset).limit(limit)).all()
     return [CounterpartyOut.model_validate(r, from_attributes=True) for r in rows]
 
 

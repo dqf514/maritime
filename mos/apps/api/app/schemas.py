@@ -67,6 +67,7 @@ class BackupJobOut(BaseModel):
     status: str
     trigger: str
     storage_path: str | None = None
+    checksum: str | None = None
     created_at: datetime
     finished_at: datetime | None = None
     error: str | None = None

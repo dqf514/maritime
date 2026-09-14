@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -14,9 +15,17 @@ type EstResults = {
   voyage_cost?: number;
   bunker_cost?: number;
   net_result?: number;
+  address_commission?: number;
+  brokerage?: number;
   freight_basis?: string;
   total_days?: number;
   total_revenue?: number;
+  fuel_mt?: number;
+  co2_mt?: number;
+  emissions_cost?: number;
+  cargo_qty_min?: number;
+  cargo_qty_max?: number;
+  warnings?: Array<{ code: string; message: string }>;
 };
 type Estimate = {
   id: string;
@@ -32,11 +41,16 @@ type Estimate = {
 
 type InputFields = {
   cargo_qty: string;
+  cargo_tolerance_pct: string;
+  stowage_factor: string;
+  hold_capacity_m3: string;
+  vessel_deadweight: string;
   freight_rate: string;
   lump_sum_freight: string;
   ws_flat: string;
   ws_pct: string;
-  commission_pct: string;
+  address_comm_pct: string;
+  brokerage_pct: string;
   sea_days: string;
   port_days: string;
   eca_days: string;
@@ -52,15 +66,23 @@ type InputFields = {
   hire_per_day: string;
   demurrage_income: string;
   other_income: string;
+  eu_ets_share: string;
+  ets_price: string;
+  co2_factor: string;
 };
 
 const EMPTY_INPUTS: InputFields = {
   cargo_qty: "",
+  cargo_tolerance_pct: "",
+  stowage_factor: "",
+  hold_capacity_m3: "",
+  vessel_deadweight: "",
   freight_rate: "",
   lump_sum_freight: "",
   ws_flat: "",
   ws_pct: "",
-  commission_pct: "2.5",
+  address_comm_pct: "1.25",
+  brokerage_pct: "1.25",
   sea_days: "",
   port_days: "",
   eca_days: "",
@@ -76,12 +98,31 @@ const EMPTY_INPUTS: InputFields = {
   hire_per_day: "",
   demurrage_income: "",
   other_income: "",
+  eu_ets_share: "",
+  ets_price: "",
+  co2_factor: "",
 };
+
+const BUNKER_GRADES = ["VLSFO", "HSFO", "MGO", "LNG"];
+
+type LegRow = {
+  from_port: string;
+  to_port: string;
+  distance_nm: string;
+  speed_kn: string;
+  port_days: string;
+  cargo_qty: string;
+};
+
+type PriceRow = { grade: string; price: string };
+
+const EMPTY_LEG: LegRow = { from_port: "", to_port: "", distance_nm: "", speed_kn: "", port_days: "", cargo_qty: "" };
 
 const DRY_BULK: Partial<InputFields> = {
   cargo_qty: "50000",
   freight_rate: "18.5",
-  commission_pct: "2.5",
+  address_comm_pct: "1.25",
+  brokerage_pct: "1.25",
   sea_days: "30",
   port_days: "10",
   bunker_sea_tpd: "28",
@@ -96,7 +137,7 @@ const TANKER: Partial<InputFields> = {
   cargo_qty: "80000",
   ws_flat: "12.5",
   ws_pct: "95",
-  commission_pct: "1.25",
+  address_comm_pct: "1.25",
   sea_days: "22",
   port_days: "6",
   eca_days: "3",
@@ -126,13 +167,46 @@ function inputsFromEst(inputs: Record<string, number | string> | undefined): Inp
   return next;
 }
 
-function buildPayload(fields: InputFields): Record<string, number> {
-  const out: Record<string, number> = {};
+type PayloadExtras = {
+  legs?: Array<Record<string, number | string>>;
+  bunker_grade?: string;
+  bunker_eca_grade?: string;
+  bunker_prices?: Record<string, number>;
+};
+
+function buildPayload(fields: InputFields, extras?: PayloadExtras): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   (Object.keys(EMPTY_INPUTS) as Array<keyof InputFields>).forEach((k) => {
     const v = num(fields[k]);
     if (v !== undefined) out[k] = v;
   });
+  if (extras?.legs?.length) {
+    out.legs = extras.legs;
+    // legs drive sea/port days automatically — drop the manual entries
+    delete out.sea_days;
+    delete out.port_days;
+  }
+  if (extras?.bunker_grade) out.bunker_grade = extras.bunker_grade;
+  if (extras?.bunker_eca_grade) out.bunker_eca_grade = extras.bunker_eca_grade;
+  if (extras?.bunker_prices && Object.keys(extras.bunker_prices).length) out.bunker_prices = extras.bunker_prices;
   return out;
+}
+
+function legRowsFromEst(inputs: Record<string, unknown> | undefined): LegRow[] {
+  const raw = inputs?.legs;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((l) => {
+    const o = (l || {}) as Record<string, unknown>;
+    const s = (v: unknown) => (v === undefined || v === null ? "" : String(v));
+    return {
+      from_port: s(o.from_port),
+      to_port: s(o.to_port),
+      distance_nm: s(o.distance_nm),
+      speed_kn: s(o.speed_kn),
+      port_days: s(o.port_days),
+      cargo_qty: s(o.cargo_qty),
+    };
+  });
 }
 
 function fmt(n: number | string | undefined | null) {
@@ -153,6 +227,10 @@ export default function EstimatesPage() {
   const [vesselId, setVesselId] = useState("");
   const [partyId, setPartyId] = useState("");
   const [fields, setFields] = useState<InputFields>(EMPTY_INPUTS);
+  const [legRows, setLegRows] = useState<LegRow[]>([]);
+  const [bunkerGrade, setBunkerGrade] = useState("VLSFO");
+  const [bunkerEcaGrade, setBunkerEcaGrade] = useState("MGO");
+  const [priceRows, setPriceRows] = useState<PriceRow[]>([]);
   const [results, setResults] = useState<EstResults>({});
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareRows, setCompareRows] = useState<Array<{ id: string; title: string; version: number; tce?: number }>>([]);
@@ -160,6 +238,7 @@ export default function EstimatesPage() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) || null, [rows, selectedId]);
 
@@ -196,8 +275,50 @@ export default function EstimatesPage() {
     setVesselId(est.vessel_id || "");
     setPartyId(est.counterparty_id || "");
     setFields(inputsFromEst(est.inputs));
+    const inp = (est.inputs || {}) as Record<string, unknown>;
+    setLegRows(legRowsFromEst(inp));
+    setBunkerGrade(typeof inp.bunker_grade === "string" ? inp.bunker_grade : "VLSFO");
+    setBunkerEcaGrade(typeof inp.bunker_eca_grade === "string" ? inp.bunker_eca_grade : "MGO");
+    const bp = inp.bunker_prices;
+    setPriceRows(
+      bp && typeof bp === "object" && !Array.isArray(bp)
+        ? Object.entries(bp as Record<string, unknown>).map(([grade, price]) => ({ grade, price: String(price) }))
+        : [],
+    );
     setResults(est.results || {});
     setSensitivity([]);
+  }
+
+  function currentExtras(): PayloadExtras {
+    const legs = legRows
+      .filter((l) => num(l.distance_nm) !== undefined && num(l.speed_kn) !== undefined)
+      .map((l) => {
+        const leg: Record<string, number | string> = {
+          distance_nm: Number(l.distance_nm),
+          speed_kn: Number(l.speed_kn),
+        };
+        if (l.from_port.trim()) leg.from_port = l.from_port.trim();
+        if (l.to_port.trim()) leg.to_port = l.to_port.trim();
+        const pd = num(l.port_days);
+        if (pd !== undefined) leg.port_days = pd;
+        const cq = num(l.cargo_qty);
+        if (cq !== undefined) leg.cargo_qty = cq;
+        return leg;
+      });
+    const bunker_prices: Record<string, number> = {};
+    priceRows.forEach((r) => {
+      const p = num(r.price);
+      if (r.grade && p !== undefined) bunker_prices[r.grade] = p;
+    });
+    return { legs, bunker_grade: bunkerGrade, bunker_eca_grade: bunkerEcaGrade, bunker_prices };
+  }
+
+  function setLeg(idx: number, key: keyof LegRow, value: string) {
+    setLegRows((prev) => prev.map((l, i) => (i === idx ? { ...l, [key]: value } : l)));
+  }
+
+  function setPrice(idx: number, key: keyof PriceRow, value: string) {
+    setPriceRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [key]: value } : r)));
   }
 
   function setField(key: keyof InputFields, value: string) {
@@ -209,12 +330,17 @@ export default function EstimatesPage() {
     setErr("");
     try {
       const merged = { ...EMPTY_INPUTS, ...(preset || fields) };
+      const extras = preset ? undefined : currentExtras();
+      if (preset) {
+        setLegRows([]);
+        setPriceRows([]);
+      }
       const est: Estimate = await apiPost("/api/v1/estimates", {
         title: presetTitle || title || "Draft estimate",
         mode,
         vessel_id: vesselId || vessels[0]?.id || null,
         counterparty_id: partyId || parties[0]?.id || null,
-        inputs: buildPayload(merged),
+        inputs: buildPayload(merged, extras),
       });
       setMsg(t("page.estimates.created", "Draft created"));
       const data = await load();
@@ -237,7 +363,7 @@ export default function EstimatesPage() {
         mode,
         vessel_id: vesselId || null,
         counterparty_id: partyId || null,
-        inputs: buildPayload(fields),
+        inputs: buildPayload(fields, currentExtras()),
       });
       setResults(est.results || {});
       setMsg(t("page.estimates.saved", "Saved"));
@@ -259,7 +385,7 @@ export default function EstimatesPage() {
         mode,
         vessel_id: vesselId || null,
         counterparty_id: partyId || null,
-        inputs: buildPayload(fields),
+        inputs: buildPayload(fields, currentExtras()),
       });
       const est: Estimate = await apiPost(`/api/v1/estimates/${selectedId}/calculate`);
       setResults(est.results || {});
@@ -335,7 +461,6 @@ export default function EstimatesPage() {
 
   async function removeEstimate() {
     if (!selectedId) return;
-    if (!window.confirm(t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored."))) return;
     setBusy(true);
     try {
       await apiDelete(`/api/v1/estimates/${selectedId}`);
@@ -355,11 +480,16 @@ export default function EstimatesPage() {
 
   const inputDefs: Array<{ key: keyof InputFields; label: string }> = [
     { key: "cargo_qty", label: t("page.estimates.cargo_qty", "Cargo qty") },
+    { key: "cargo_tolerance_pct", label: t("page.estimates.cargo_tolerance", "Cargo tolerance %") },
+    { key: "stowage_factor", label: t("page.estimates.stowage_factor", "Stowage factor m³/mt") },
+    { key: "hold_capacity_m3", label: t("page.estimates.hold_capacity", "Hold capacity m³") },
+    { key: "vessel_deadweight", label: t("page.estimates.deadweight", "Vessel DWT") },
     { key: "freight_rate", label: t("page.estimates.freight_rate", "Freight rate") },
     { key: "lump_sum_freight", label: t("page.estimates.lump_sum", "Lump sum freight") },
     { key: "ws_flat", label: t("page.estimates.ws_flat", "WS flat") },
     { key: "ws_pct", label: t("page.estimates.ws_pct", "WS %") },
-    { key: "commission_pct", label: t("page.estimates.commission", "Commission %") },
+    { key: "address_comm_pct", label: t("page.estimates.address_comm", "Address comm %") },
+    { key: "brokerage_pct", label: t("page.estimates.brokerage", "Brokerage %") },
     { key: "sea_days", label: t("page.estimates.sea_days", "Sea days") },
     { key: "port_days", label: t("page.estimates.port_days", "Port days") },
     { key: "eca_days", label: t("page.estimates.eca_days", "ECA days") },
@@ -406,43 +536,30 @@ export default function EstimatesPage() {
         <div className="panel desk-list">
           <div className="desk-toolbar">
             <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => createDraft()}>
-              {t("page.estimates.new", "New")}
+              {t("page.estimates.new", "新建")}
             </button>
             <button className="btn btn-sm" type="button" disabled={busy || compareIds.length < 2} onClick={compare}>
-              {t("page.estimates.compare", "Compare")}
+              {t("page.estimates.compare", "对比")}
             </button>
           </div>
-          <table className="table">
-            <thead>
-              <tr>
-                <th></th>
-                <th>{t("common.title", "Title")}</th>
-                <th>{t("common.status", "Status")}</th>
-                <th>TCE</th>
-                <th>{t("page.estimates.ver", "Ver")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className={r.id === selectedId ? "selected" : ""} onClick={() => selectEstimate(r)}>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={compareIds.includes(r.id)} onChange={() => toggleCompare(r.id)} />
-                  </td>
-                  <td>{r.title}</td>
-                  <td>{r.status}</td>
-                  <td>{fmt(r.results?.tce)}</td>
-                  <td>v{r.version}</td>
-                </tr>
-              ))}
-              {!rows.length ? (
-                <tr>
-                  <td colSpan={5} className="muted">
-                    {t("common.empty", "No records")}
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+          <ul className="desk-item-list">
+            {rows.map((r) => (
+              <li key={r.id} className={r.id === selectedId ? "selected" : ""}>
+                <label className="desk-item-check" onClick={(e) => e.stopPropagation()} title={t("page.estimates.compare", "对比")}>
+                  <input type="checkbox" checked={compareIds.includes(r.id)} onChange={() => toggleCompare(r.id)} />
+                </label>
+                <button type="button" className="desk-item-main" onClick={() => selectEstimate(r)}>
+                  <span className="desk-item-title">{r.title}</span>
+                  <span className="desk-item-meta">
+                    <span>{r.status}</span>
+                    <span>TCE {fmt(r.results?.tce)}</span>
+                    <span>v{r.version}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+            {!rows.length ? <li className="desk-item-empty muted">{t("common.empty", "暂无记录")}</li> : null}
+          </ul>
         </div>
 
         <div className="panel">
@@ -462,7 +579,7 @@ export default function EstimatesPage() {
             <button className="btn btn-sm" type="button" disabled={busy || !selectedId} onClick={toCp}>
               {t("page.estimates.to_cp", "To CP")}
             </button>
-            <button className="btn btn-danger btn-sm" type="button" disabled={busy || !selectedId} onClick={removeEstimate}>
+            <button className="btn btn-danger btn-sm" type="button" disabled={busy || !selectedId} onClick={() => setConfirmDel(true)}>
               {t("common.delete", "删除")}
             </button>
           </div>
@@ -504,9 +621,137 @@ export default function EstimatesPage() {
             {inputDefs.map((d) => (
               <label key={d.key}>
                 {d.label}
-                <input type="number" step="any" value={fields[d.key]} onChange={(e) => setField(d.key, e.target.value)} />
+                <input
+                  type="number"
+                  step="any"
+                  value={fields[d.key]}
+                  onChange={(e) => setField(d.key, e.target.value)}
+                  disabled={legRows.length > 0 && (d.key === "sea_days" || d.key === "port_days")}
+                  title={
+                    legRows.length > 0 && (d.key === "sea_days" || d.key === "port_days")
+                      ? t("page.estimates.legs_auto", "由航段自动推导")
+                      : undefined
+                  }
+                />
               </label>
             ))}
+          </div>
+          {legRows.length > 0 ? (
+            <p className="muted" style={{ marginTop: "0.35rem" }}>
+              {t("page.estimates.legs_auto_hint", "已配置航段（legs）：sea days / port days 由航段距离、航速与港口天自动推导。")}
+            </p>
+          ) : null}
+
+          <div className="desk-section">
+            <h3>{t("page.estimates.legs", "航段 Legs")}</h3>
+            {legRows.map((leg, i) => (
+              <div key={i} className="form-grid" style={{ marginBottom: "0.5rem" }}>
+                <label>
+                  {t("page.estimates.leg_from", "From")}
+                  <input value={leg.from_port} onChange={(e) => setLeg(i, "from_port", e.target.value)} placeholder="SIN" />
+                </label>
+                <label>
+                  {t("page.estimates.leg_to", "To")}
+                  <input value={leg.to_port} onChange={(e) => setLeg(i, "to_port", e.target.value)} placeholder="RTM" />
+                </label>
+                <label>
+                  {t("page.estimates.leg_distance", "Distance nm")}
+                  <input type="number" step="any" value={leg.distance_nm} onChange={(e) => setLeg(i, "distance_nm", e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.leg_speed", "Speed kn")}
+                  <input type="number" step="any" value={leg.speed_kn} onChange={(e) => setLeg(i, "speed_kn", e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.port_days", "Port days")}
+                  <input type="number" step="any" value={leg.port_days} onChange={(e) => setLeg(i, "port_days", e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.cargo_qty", "Cargo qty")}
+                  <input type="number" step="any" value={leg.cargo_qty} onChange={(e) => setLeg(i, "cargo_qty", e.target.value)} />
+                </label>
+                <div style={{ display: "flex", alignItems: "end" }}>
+                  <button className="btn btn-danger btn-sm" type="button" onClick={() => setLegRows((prev) => prev.filter((_, x) => x !== i))}>
+                    {t("common.delete", "删除")}
+                  </button>
+                </div>
+              </div>
+            ))}
+            <button className="btn btn-sm" type="button" onClick={() => setLegRows((prev) => [...prev, { ...EMPTY_LEG }])}>
+              {t("page.estimates.add_leg", "添加航段")}
+            </button>
+          </div>
+
+          <div className="desk-section">
+            <h3>{t("page.estimates.bunker_pricing", "燃油价格（多牌号）")}</h3>
+            <div className="form-grid">
+              <label>
+                {t("page.estimates.bunker_grade", "Bunker grade")}
+                <select value={bunkerGrade} onChange={(e) => setBunkerGrade(e.target.value)}>
+                  {BUNKER_GRADES.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t("page.estimates.bunker_eca_grade", "ECA grade")}
+                <select value={bunkerEcaGrade} onChange={(e) => setBunkerEcaGrade(e.target.value)}>
+                  {BUNKER_GRADES.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {priceRows.map((r, i) => (
+              <div key={i} className="form-grid" style={{ marginTop: "0.5rem" }}>
+                <label>
+                  {t("page.bunker.grade", "Grade")}
+                  <select value={r.grade} onChange={(e) => setPrice(i, "grade", e.target.value)}>
+                    {BUNKER_GRADES.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  {t("page.bunker.price", "Unit price")}
+                  <input type="number" step="any" value={r.price} onChange={(e) => setPrice(i, "price", e.target.value)} />
+                </label>
+                <div style={{ display: "flex", alignItems: "end" }}>
+                  <button className="btn btn-danger btn-sm" type="button" onClick={() => setPriceRows((prev) => prev.filter((_, x) => x !== i))}>
+                    {t("common.delete", "删除")}
+                  </button>
+                </div>
+              </div>
+            ))}
+            <div style={{ marginTop: "0.5rem" }}>
+              <button className="btn btn-sm" type="button" onClick={() => setPriceRows((prev) => [...prev, { grade: "VLSFO", price: "" }])}>
+                {t("page.estimates.add_price", "添加牌号价格")}
+              </button>
+            </div>
+          </div>
+
+          <div className="desk-section">
+            <h3>{t("page.estimates.carbon", "碳成本 EU ETS")}</h3>
+            <div className="form-grid">
+              <label>
+                {t("page.estimates.eu_ets_share", "EU ETS share (0-1)")}
+                <input type="number" step="any" min="0" max="1" value={fields.eu_ets_share} onChange={(e) => setField("eu_ets_share", e.target.value)} />
+              </label>
+              <label>
+                {t("page.emissions.ets_price", "ETS price (EUR)")}
+                <input type="number" step="any" value={fields.ets_price} onChange={(e) => setField("ets_price", e.target.value)} />
+              </label>
+              <label>
+                {t("page.estimates.co2_factor", "CO₂ factor")}
+                <input type="number" step="any" value={fields.co2_factor} onChange={(e) => setField("co2_factor", e.target.value)} placeholder="3.114" />
+              </label>
+            </div>
           </div>
 
           <div className="desk-section">
@@ -536,6 +781,18 @@ export default function EstimatesPage() {
                 <span>{t("page.estimates.net_result", "Net result")}</span>
                 <strong>{fmt(results.net_result)}</strong>
               </div>
+              {results.address_commission !== undefined ? (
+                <div className="kv-box">
+                  <span>{t("page.estimates.address_comm", "Address comm")}</span>
+                  <strong>{fmt(results.address_commission)}</strong>
+                </div>
+              ) : null}
+              {results.brokerage !== undefined ? (
+                <div className="kv-box">
+                  <span>{t("page.estimates.brokerage", "Brokerage")}</span>
+                  <strong>{fmt(results.brokerage)}</strong>
+                </div>
+              ) : null}
               <div className="kv-box">
                 <span>{t("page.estimates.freight_basis", "Freight basis")}</span>
                 <strong>{results.freight_basis || "—"}</strong>
@@ -544,7 +801,47 @@ export default function EstimatesPage() {
                 <span>{t("page.estimates.total_days", "Total days")}</span>
                 <strong>{fmt(results.total_days)}</strong>
               </div>
+              {results.fuel_mt !== undefined ? (
+                <div className="kv-box">
+                  <span>{t("page.estimates.fuel_mt", "Fuel mt")}</span>
+                  <strong>{fmt(results.fuel_mt)}</strong>
+                </div>
+              ) : null}
+              {results.co2_mt !== undefined ? (
+                <div className="kv-box">
+                  <span>{t("page.estimates.co2_mt", "CO₂ mt")}</span>
+                  <strong>{fmt(results.co2_mt)}</strong>
+                </div>
+              ) : null}
+              {results.emissions_cost !== undefined ? (
+                <div className="kv-box">
+                  <span>{t("page.estimates.emissions_cost", "Emissions cost")}</span>
+                  <strong>{fmt(results.emissions_cost)}</strong>
+                </div>
+              ) : null}
+              {results.cargo_qty_min !== undefined ? (
+                <div className="kv-box">
+                  <span>{t("page.estimates.cargo_qty_min", "Cargo qty min")}</span>
+                  <strong>{fmt(results.cargo_qty_min)}</strong>
+                </div>
+              ) : null}
+              {results.cargo_qty_max !== undefined ? (
+                <div className="kv-box">
+                  <span>{t("page.estimates.cargo_qty_max", "Cargo qty max")}</span>
+                  <strong>{fmt(results.cargo_qty_max)}</strong>
+                </div>
+              ) : null}
             </div>
+            {results.warnings?.length ? (
+              <div style={{ marginTop: "0.75rem" }}>
+                {results.warnings.map((w, i) => (
+                  <p key={i} style={{ color: "var(--warn)", fontWeight: 600, margin: "0.25rem 0" }}>
+                    <span className="badge badge-warn" style={{ marginRight: "0.4rem" }}>{w.code}</span>
+                    {w.message}
+                  </p>
+                ))}
+              </div>
+            ) : null}
             {selected ? (
               <p className="muted" style={{ marginTop: "0.75rem" }}>
                 {selected.status} · v{selected.version}
@@ -599,6 +896,17 @@ export default function EstimatesPage() {
           ) : null}
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmDel}
+        title={t("common.confirm", "确认操作")}
+        message={t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored.")}
+        danger
+        onConfirm={() => {
+          setConfirmDel(false);
+          removeEstimate();
+        }}
+        onCancel={() => setConfirmDel(false)}
+      />
     </AppShell>
   );
 }

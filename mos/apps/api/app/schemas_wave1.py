@@ -43,6 +43,8 @@ class PortIn(BaseModel):
     timezone: str = "UTC"
     latitude: Decimal | None = None
     longitude: Decimal | None = None
+    holidays: list[str] | None = None  # 港口节假日 ["YYYY-MM-DD"]
+    is_eu: bool = False  # EU/EEA port — EU ETS eu_share inference
 
 
 class PortOut(PortIn):

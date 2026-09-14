@@ -7,10 +7,10 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.models_saas import TenantWallet, UsageLedger, WorkflowDefinition, WorkflowInstance
+from app.models_saas import FeaturePermission, TenantWallet, UsageLedger, WorkflowDefinition, WorkflowInstance
 
 
 FEATURE_CATALOG = [
@@ -26,6 +26,41 @@ FEATURE_CATALOG = [
     {"code": "admin.billing", "name": "Manage subscription & top-up", "module": "license"},
     {"code": "workflow.approve", "name": "Approve workflow steps", "module": "workflow"},
 ]
+
+
+def feature_allowed(db: Session, tenant_id: UUID, roles: list[str], feature_code: str) -> bool:
+    """Fail-closed: explicit allow wins, explicit deny wins over nothing, no matrix rows = deny.
+
+    Tenant/platform admin always allowed.
+    """
+    if "tenant_admin" in roles or "platform_admin" in roles:
+        return True
+    if not roles:
+        return False
+    rows = db.scalars(
+        select(FeaturePermission).where(
+            FeaturePermission.tenant_id == tenant_id,
+            FeaturePermission.feature_code == feature_code,
+            FeaturePermission.role_code.in_(roles),
+        )
+    ).all()
+    if not rows:
+        return False
+    if any(r.allowed for r in rows):
+        return True
+    return False
+
+
+def assert_feature(db: Session, tenant_id: UUID, roles: list[str], feature_code: str) -> None:
+    if not feature_allowed(db, tenant_id, roles, feature_code):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "FEATURE_DENIED",
+                "feature": feature_code,
+                "message": f"Feature {feature_code} is not allowed for your roles",
+            },
+        )
 
 
 def get_or_create_wallet(db: Session, tenant_id: UUID, meter_code: str) -> TenantWallet:
@@ -51,13 +86,21 @@ def credit_usage(
     user_id: UUID | None = None,
 ) -> TenantWallet:
     wallet = get_or_create_wallet(db, tenant_id, meter_code)
-    wallet.balance = Decimal(str(wallet.balance)) + Decimal(str(quantity))
-    wallet.updated_at = datetime.now(timezone.utc)
+    qty = Decimal(str(quantity))
+    now = datetime.now(timezone.utc)
+    # Atomic balance bump (single UPDATE) — safe under concurrent writers on any backend.
+    db.execute(
+        update(TenantWallet)
+        .where(TenantWallet.id == wallet.id)
+        .values(balance=TenantWallet.balance + qty, updated_at=now)
+    )
+    db.flush()
+    db.refresh(wallet)
     db.add(
         UsageLedger(
             tenant_id=tenant_id,
             meter_code=meter_code,
-            quantity=quantity,
+            quantity=qty,
             direction="credit",
             ref_type=ref_type,
             ref_id=ref_id,
@@ -82,8 +125,18 @@ def consume_usage(
 ) -> TenantWallet:
     wallet = get_or_create_wallet(db, tenant_id, meter_code)
     qty = Decimal(str(quantity))
-    bal = Decimal(str(wallet.balance))
-    if not allow_negative and bal < qty:
+    now = datetime.now(timezone.utc)
+    # Atomic conditional debit: the balance guard is evaluated inside the UPDATE,
+    # so concurrent consumers cannot overdraw (no read-modify-write race).
+    stmt = update(TenantWallet).where(TenantWallet.id == wallet.id)
+    if not allow_negative:
+        stmt = stmt.where(TenantWallet.balance >= qty)
+    stmt = stmt.values(balance=TenantWallet.balance - qty, updated_at=now)
+    result = db.execute(stmt)
+    db.flush()
+    if result.rowcount == 0:
+        db.refresh(wallet)
+        bal = Decimal(str(wallet.balance))
         raise HTTPException(
             status_code=402,
             detail={
@@ -94,8 +147,7 @@ def consume_usage(
                 "message": "Insufficient usage balance — top up or upgrade plan",
             },
         )
-    wallet.balance = bal - qty
-    wallet.updated_at = datetime.now(timezone.utc)
+    db.refresh(wallet)
     db.add(
         UsageLedger(
             tenant_id=tenant_id,
@@ -156,10 +208,18 @@ def advance_workflow(
     inst = db.get(WorkflowInstance, instance_id)
     if not inst or inst.tenant_id != tenant_id:
         raise HTTPException(404, "Workflow not found")
+    if decision not in {"approve", "reject"}:
+        raise HTTPException(422, detail={"code": "INVALID_DECISION", "message": "decision must be approve|reject"})
     if inst.status != "running":
         raise HTTPException(409, detail={"code": "INVALID_STATE", "message": f"Workflow is {inst.status}"})
     definition = db.get(WorkflowDefinition, inst.definition_id)
     assert definition
+    allow_self_approve = bool(definition.steps.get("allow_self_approve")) if isinstance(definition.steps, dict) else False
+    if inst.started_by and inst.started_by == actor_user_id and not allow_self_approve:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "SELF_APPROVAL_BLOCKED", "message": "Initiator cannot approve their own submission"},
+        )
     steps = definition.steps.get("steps") if isinstance(definition.steps, dict) else definition.steps
     if not isinstance(steps, list):
         steps = []

@@ -1,17 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { HelpFrame } from "@/components/HelpFrame";
 import { useI18n } from "@/lib/i18n";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+import { API_BASE } from "@/lib/api";
 
 type Cat = { id: string; label: string };
 type Article = { slug: string; category: string; tags: string[]; title: string; summary: string };
 
-export default function HelpHomePage() {
+function HelpHomePage() {
   const { t, locale } = useI18n();
   const params = useSearchParams();
   const [categories, setCategories] = useState<Cat[]>([]);
@@ -177,5 +177,13 @@ export default function HelpHomePage() {
         </div>
       </div>
     </HelpFrame>
+  );
+}
+
+export default function HelpHomePageWrapper() {
+  return (
+    <Suspense>
+      <HelpHomePage />
+    </Suspense>
   );
 }

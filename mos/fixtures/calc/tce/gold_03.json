@@ -1,0 +1,27 @@
+{
+  "id": "tce_gold_03",
+  "note": "EU ETS: emissions_cost = total fuel mt x co2_factor x eu_ets_share x ets_price, added to voyage_cost. Base = gold_01; fuel = 28*30 + 3.5*10 = 875 mt; CO2 = 875*3.114 = 2724.75 mt; cost = 2724.75*1.0*80 = 217980.00",
+  "inputs": {
+    "cargo_qty": 50000,
+    "freight_rate": 18.5,
+    "commission_pct": 2.5,
+    "sea_days": 30,
+    "port_days": 10,
+    "bunker_sea_tpd": 28,
+    "bunker_port_tpd": 3.5,
+    "bunker_price": 450,
+    "port_costs": 80000,
+    "canal_costs": 20000,
+    "other_costs": 10000,
+    "eu_ets_share": 1.0,
+    "ets_price": 80,
+    "currency": "USD"
+  },
+  "expect": {
+    "tce": 4503.63,
+    "voyage_cost": 721730.0,
+    "emissions_cost": 217980.0,
+    "fuel_mt": 875.0,
+    "co2_mt": 2724.75
+  }
+}

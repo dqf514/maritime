@@ -247,6 +247,9 @@ def test_full_commercial_ops_finance_chain(client, auth_headers):
     assert pool.status_code == 200
     pid = pool.json()["id"]
     assert client.post(f"/api/v1/pools/{pid}/vessels?vessel_id={vessel_id}&points=1.25", headers=h).status_code == 200
+    dup = client.post(f"/api/v1/pools/{pid}/vessels?vessel_id={vessel_id}&points=2", headers=h)
+    assert dup.status_code == 409
+    assert dup.json()["detail"]["code"] == "VESSEL_ALREADY_IN_POOL"
     period = client.post(f"/api/v1/pools/{pid}/periods?label=2026-09&total_pool_result=1000000", headers=h)
     assert period.status_code == 200
     assert client.post(f"/api/v1/pools/periods/{period.json()['id']}/settle", headers=h).json()["status"] == "settled"

@@ -29,18 +29,27 @@ export function OmniSearch() {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    apiSearch(q)
-      .then((data) => {
-        if (!cancelled) {
-          setHits(data);
-          setActive(0);
-        }
-      })
-      .catch(() => setHits([]));
+    const handle = setTimeout(() => {
+      apiSearch(q)
+        .then((data) => {
+          if (!cancelled) {
+            setHits(data);
+            setActive(0);
+          }
+        })
+        .catch(() => setHits([]));
+    }, 200);
     return () => {
       cancelled = true;
+      clearTimeout(handle);
     };
   }, [q, open]);
+
+  useEffect(() => {
+    if (!flash) return;
+    const handle = setTimeout(() => setFlash(""), 3000);
+    return () => clearTimeout(handle);
+  }, [flash]);
 
   const go = async (hit: SearchHit) => {
     setOpen(false);
@@ -67,7 +76,10 @@ export function OmniSearch() {
   return (
     <>
       <button type="button" className="search-btn" onClick={() => setOpen(true)}>
-        {t("omni.button", "Search…  Ctrl+K")}
+        <span className="search-label-full">{t("omni.button", "Search…  Ctrl+K")}</span>
+        <span className="search-label-short" aria-hidden>
+          {t("omni.button_short", "搜索")}
+        </span>
       </button>
       {flash ? (
         <span className="muted" style={{ fontSize: "0.75rem", marginLeft: "0.35rem" }} title={flash}>

@@ -14,26 +14,26 @@ type Branding = {
   hero_subtitle: string;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+import { API_BASE } from "@/lib/api";
 
 const PROMOS = [
   {
     titleKey: "portal.promo.clarity.title",
     bodyKey: "portal.promo.clarity.body",
     title: "One place for the commercial voyage",
-    body: "Bring chartering, operations and settlement into a single daily workspace — less switching, clearer accountability.",
+    body: "Chartering, operations and settlement in one daily workspace.",
   },
   {
     titleKey: "portal.promo.trust.title",
     bodyKey: "portal.promo.trust.body",
     title: "Built for maritime teams",
-    body: "Designed around how shipping desks actually work: roles, approvals, local time, and the language of the trade.",
+    body: "Roles, approvals, local time, and the language of the trade.",
   },
   {
     titleKey: "portal.promo.connect.title",
     bodyKey: "portal.promo.connect.body",
-    title: "Connected to how you collaborate",
-    body: "Fit into your organisation’s identity and Microsoft 365 ways of working, without forcing a new collaboration stack.",
+    title: "Fits how you already work",
+    body: "Organisation identity and Microsoft 365 — without a new stack.",
   },
 ];
 
@@ -54,7 +54,7 @@ export default function PortalPage() {
           primary_color: "#1A9B96",
           hero_title: "The operating system for commercial shipping",
           hero_subtitle:
-            "A calm, connected workspace for owners, charterers, operators and ship managers — from fixture to settlement.",
+            "A calm workspace for owners, charterers, operators and ship managers — from fixture to settlement.",
         }),
       );
   }, []);
@@ -66,7 +66,7 @@ export default function PortalPage() {
     <div className="portal portal-marketing" style={{ ["--portal-accent" as string]: accent }}>
       <header className="portal-nav portal-nav-slim">
         <div className="portal-brand">
-          <img src={brand?.icon_url || "/branding/mark.svg"} alt="" width={32} height={32} />
+          <img src={brand?.icon_url || "/branding/mark.svg"} alt="" width={28} height={28} />
           <strong>{name}</strong>
         </div>
         <div className="portal-nav-actions">
@@ -77,14 +77,14 @@ export default function PortalPage() {
         </div>
       </header>
 
-      <section className="portal-hero portal-hero-single">
-        <div className="portal-hero-copy">
+      <section className="portal-hero portal-hero-bleed">
+        <div className="portal-hero-inner">
           <p className="portal-brand-mark">{name}</p>
           <h1>{t("portal.hero_title", "The operating system for commercial shipping")}</h1>
           <p className="portal-lead">
             {t(
               "portal.hero_sub",
-              "A calm, connected workspace for owners, charterers, operators and ship managers — from fixture to settlement.",
+              "A calm workspace for owners, charterers, operators and ship managers — from fixture to settlement.",
             )}
           </p>
           <div className="portal-actions">
@@ -96,20 +96,11 @@ export default function PortalPage() {
             </a>
           </div>
         </div>
-        <div className="portal-hero-visual portal-hero-atmosphere" aria-hidden>
-          <img src={brand?.logo_url || "/branding/logo.svg"} alt="" className="portal-logo-xl" />
-        </div>
       </section>
 
-      <section className="portal-promo" aria-labelledby="portal-why">
+      <section className="portal-promo portal-promo-compact" aria-labelledby="portal-why">
         <h2 id="portal-why">{t("portal.why_title", "Why teams choose VoyageOS")}</h2>
-        <p className="portal-promo-sub">
-          {t(
-            "portal.why_sub",
-            "Not a catalogue of screens — a clearer way to run the commercial voyage together.",
-          )}
-        </p>
-        <ul className="portal-promo-list">
+        <ul className="portal-promo-grid">
           {PROMOS.map((item) => (
             <li key={item.titleKey}>
               <strong>{t(item.titleKey, item.title)}</strong>

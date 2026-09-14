@@ -18,7 +18,28 @@ export default function PlatformHealthPage() {
       <h1 style={{ marginTop: 0 }}>{t("page.health.title", "Platform health")}</h1>
       <p className="page-sub">{t("page.health.sub", "Cross-tenant probes and estate status.")}</p>
       <div className="panel">
-        <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{JSON.stringify(health, null, 2)}</pre>
+        {!health ? (
+          <p className="muted">{t("common.loading", "加载中…")}</p>
+        ) : (
+          <table className="table">
+            <tbody>
+              {Object.entries(health).map(([key, val]) => (
+                <tr key={key}>
+                  <td>
+                    <code>{key}</code>
+                  </td>
+                  <td>
+                    {val === null || typeof val !== "object" ? (
+                      String(val)
+                    ) : (
+                      <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{JSON.stringify(val, null, 2)}</pre>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </AppShell>
   );

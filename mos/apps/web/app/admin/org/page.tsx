@@ -7,20 +7,43 @@ import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
-type Unit = { id: string; code: string; name: string; parent_id: string | null; unit_type: string; status?: string };
+type Unit = {
+  id: string;
+  code: string;
+  name: string;
+  parent_id: string | null;
+  unit_type: string;
+  status?: string;
+  manager_user_id?: string | null;
+  manager_name?: string | null;
+  member_count?: number;
+};
+type UserRow = { id: string; email: string; full_name: string | null };
+type Member = { id: string; email: string; full_name: string | null; status: string; is_manager: boolean };
 
 export default function OrgStructurePage() {
   const { t } = useI18n();
   const [rows, setRows] = useState<Unit[]>([]);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [msg, setMsg] = useState("");
   const [open, setOpen] = useState<Unit | null>(null);
-  const [edit, setEdit] = useState({ code: "", name: "", unit_type: "dept", status: "active" });
+  const [edit, setEdit] = useState({
+    code: "",
+    name: "",
+    unit_type: "dept",
+    status: "active",
+    parent_id: "",
+    manager_user_id: "",
+  });
+  const [members, setMembers] = useState<Member[]>([]);
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    setRows(await apiGet("/api/v1/admin/org-units"));
+    const [units, us] = await Promise.all([apiGet("/api/v1/admin/org-units"), apiGet("/api/v1/admin/users")]);
+    setRows(units);
+    setUsers(us);
   }
   useEffect(() => {
     load().catch(() => setMsg(t("page.org.admin_required", "需要租户管理员")));
@@ -40,14 +63,21 @@ export default function OrgStructurePage() {
     await load();
   }
 
-  function openRow(r: Unit) {
+  async function openRow(r: Unit) {
     setOpen(r);
     setEdit({
       code: r.code,
       name: r.name,
       unit_type: r.unit_type,
       status: r.status || "active",
+      parent_id: r.parent_id || "",
+      manager_user_id: r.manager_user_id || "",
     });
+    try {
+      setMembers(await apiGet(`/api/v1/admin/org-units/${r.id}/members`));
+    } catch {
+      setMembers([]);
+    }
   }
 
   async function save() {
@@ -59,6 +89,8 @@ export default function OrgStructurePage() {
         name: edit.name,
         unit_type: edit.unit_type,
         status: edit.status,
+        parent_id: edit.parent_id || null,
+        manager_user_id: edit.manager_user_id || null,
       });
       setMsg(t("common.saved", "已保存"));
       setOpen(null);
@@ -81,12 +113,21 @@ export default function OrgStructurePage() {
     }
   }
 
+  function parentLabel(id: string | null) {
+    if (!id) return "—";
+    const p = rows.find((r) => r.id === id);
+    return p ? `${p.code} · ${p.name}` : id.slice(0, 8);
+  }
+
   return (
     <AppShell>
       <div className="page-header">
         <div>
           <h1 style={{ margin: 0 }}>{t("page.org.title", "组织架构")}</h1>
-          <p className="page-sub">{t("page.org.sub", "总部、部门与团队。点击行打开编辑或删除。")}</p>
+          <p className="page-sub">
+            {t("page.org.sub", "总部、部门与团队。人员归属在「用户与角色」中设置，此处可查看成员与负责人。")}{" "}
+            <Link href="/admin/users">{t("page.users.title", "用户与角色")}</Link>
+          </p>
         </div>
         <Link href="/settings/recycle" className="btn btn-ghost">
           {t("nav.recycle", "回收站")}
@@ -116,6 +157,8 @@ export default function OrgStructurePage() {
               <th>{t("common.name", "名称")}</th>
               <th>{t("common.type", "类型")}</th>
               <th>{t("page.org.parent", "上级")}</th>
+              <th>{t("page.org.manager", "负责人")}</th>
+              <th>{t("page.org.members", "成员数")}</th>
             </tr>
           </thead>
           <tbody>
@@ -124,7 +167,9 @@ export default function OrgStructurePage() {
                 <td>{r.code}</td>
                 <td>{r.name}</td>
                 <td>{r.unit_type}</td>
-                <td>{r.parent_id ? r.parent_id.slice(0, 8) : "—"}</td>
+                <td>{parentLabel(r.parent_id)}</td>
+                <td>{r.manager_name || "—"}</td>
+                <td>{r.member_count ?? 0}</td>
               </tr>
             ))}
           </tbody>
@@ -156,12 +201,53 @@ export default function OrgStructurePage() {
           </select>
         </label>
         <label>
+          {t("page.org.parent", "上级")}
+          <select value={edit.parent_id} onChange={(e) => setEdit({ ...edit, parent_id: e.target.value })}>
+            <option value="">—</option>
+            {rows
+              .filter((r) => r.id !== open?.id)
+              .map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.code} · {r.name}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label>
+          {t("page.org.manager", "负责人")}
+          <select
+            value={edit.manager_user_id}
+            onChange={(e) => setEdit({ ...edit, manager_user_id: e.target.value })}
+          >
+            <option value="">—</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.full_name || u.email}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
           {t("common.status", "状态")}
           <select value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>
             <option value="active">active</option>
             <option value="disabled">disabled</option>
           </select>
         </label>
+        <div>
+          <div className="muted" style={{ marginBottom: "0.35rem" }}>
+            {t("page.org.members", "部门成员")} ({members.length})
+          </div>
+          <ul className="compact-list">
+            {members.map((m) => (
+              <li key={m.id}>
+                {m.full_name || m.email}
+                {m.is_manager ? ` · ${t("page.org.manager", "负责人")}` : ""}
+              </li>
+            ))}
+            {!members.length ? <li className="muted">{t("page.org.no_members", "暂无成员 — 请在用户管理中分配部门")}</li> : null}
+          </ul>
+        </div>
       </RecordModal>
     </AppShell>
   );

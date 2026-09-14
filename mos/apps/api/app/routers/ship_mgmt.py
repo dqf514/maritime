@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models_domain import ScheduleBlock
 from app.models_ship import (
     ExternalPmsSyncLog,
     ShipCertificate,
@@ -21,6 +22,7 @@ from app.models_ship import (
     ShipSparePart,
     ShipTechnicalProfile,
     ShipWorkOrder,
+    ShipWoSpare,
 )
 from app.models_wave1 import ConnectorInstance, Vessel
 from app.security import AuthContext, require_module
@@ -30,6 +32,76 @@ router = APIRouter(tags=["Ship Management"])
 
 def _now() -> datetime:
     return datetime.now().astimezone()
+
+
+CERT_EXPIRING_DAYS = 30
+DRYDOCK_BLOCK_DAYS = 14
+
+
+def _cert_status_for(expires_on: date | None, current: str = "valid") -> str:
+    """Three-band lifecycle from expiry; certs without an expiry keep their band."""
+    if expires_on is None:
+        return current
+    today = date.today()
+    if expires_on < today:
+        return "expired"
+    if expires_on < today + timedelta(days=CERT_EXPIRING_DAYS):
+        return "expiring"
+    return "valid"
+
+
+def _refresh_certificate_status(db: Session, tenant_id: UUID) -> None:
+    """Lazy status migration — recompute bands from expires_on, commit only changed rows."""
+    certs = db.scalars(select(ShipCertificate).where(ShipCertificate.tenant_id == tenant_id)).all()
+    changed = False
+    for c in certs:
+        new_status = _cert_status_for(c.expires_on, c.status)
+        if new_status != c.status:
+            c.status = new_status
+            changed = True
+    if changed:
+        db.commit()
+
+
+def _sync_drydock_block(db: Session, tenant_id: UUID, vessel_id: UUID, vessel_name: str, drydock_on: date | None) -> None:
+    """Keep one repair ScheduleBlock aligned with the profile's next_drydock (idempotent)."""
+    blocks = [
+        b
+        for b in db.scalars(
+            select(ScheduleBlock).where(
+                ScheduleBlock.tenant_id == tenant_id,
+                ScheduleBlock.vessel_id == vessel_id,
+                ScheduleBlock.block_type == "repair",
+            )
+        ).all()
+        if (b.meta or {}).get("source") == "drydock_profile"
+    ]
+    if drydock_on is None:
+        for b in blocks:
+            db.delete(b)
+        return
+    start = datetime(drydock_on.year, drydock_on.month, drydock_on.day, tzinfo=timezone.utc)
+    end = start + timedelta(days=DRYDOCK_BLOCK_DAYS)
+    title = f"Drydock — {vessel_name}"
+    if blocks:
+        block = blocks[0]
+        block.title = title
+        block.start_at = start
+        block.end_at = end
+        for extra in blocks[1:]:
+            db.delete(extra)
+    else:
+        db.add(
+            ScheduleBlock(
+                tenant_id=tenant_id,
+                vessel_id=vessel_id,
+                block_type="repair",
+                title=title,
+                start_at=start,
+                end_at=end,
+                meta={"source": "drydock_profile"},
+            )
+        )
 
 
 class ProfileIn(BaseModel):
@@ -75,6 +147,20 @@ class CertificateIn(BaseModel):
     external_ref: str | None = None
 
 
+class WorkOrderPatchIn(BaseModel):
+    title: str | None = None
+    category: str | None = None
+    priority: str | None = None
+    status: str | None = None
+    due_on: date | None = None
+    assignee: str | None = None
+
+
+class WoSpareIn(BaseModel):
+    part_id: UUID
+    qty: Decimal = Field(gt=0)
+
+
 class DefectIn(BaseModel):
     vessel_id: UUID
     defect_no: str
@@ -94,6 +180,18 @@ class CrewIn(BaseModel):
     contract_end: date | None = None
     status: str = "onboard"
     external_ref: str | None = None
+    certificates: list[dict] | None = None  # [{code, expires_on}] e.g. STCW-II/1, GMDSS
+
+
+class CrewPatchIn(BaseModel):
+    vessel_id: UUID | None = None
+    full_name: str | None = None
+    rank: str | None = None
+    nationality: str | None = None
+    contract_end: date | None = None
+    status: str | None = None
+    external_ref: str | None = None
+    certificates: list[dict] | None = None
 
 
 class ExternalSyncIn(BaseModel):
@@ -114,12 +212,47 @@ def _vessel_or_404(db: Session, tenant_id: UUID, vessel_id: UUID) -> Vessel:
     return v
 
 
+def _wo_or_404(db: Session, tenant_id: UUID, wo_id: UUID) -> ShipWorkOrder:
+    wo = db.get(ShipWorkOrder, wo_id)
+    if not wo or wo.tenant_id != tenant_id:
+        raise HTTPException(404, "Work order not found")
+    return wo
+
+
+def _consume_wo_spares(db: Session, wo: ShipWorkOrder) -> list[str]:
+    """Deduct registered spare consumption from stock once per work order.
+
+    Idempotent via the ``spares_consumed`` meta flag; insufficient stock never
+    blocks completion, it only produces warnings.
+    """
+    if (wo.meta or {}).get("spares_consumed"):
+        return []
+    warnings: list[str] = []
+    totals: dict[UUID, Decimal] = {}
+    for r in db.scalars(select(ShipWoSpare).where(ShipWoSpare.wo_id == wo.id)).all():
+        totals[r.part_id] = totals.get(r.part_id, Decimal(0)) + Decimal(r.qty)
+    for part_id, qty in totals.items():
+        part = db.get(ShipSparePart, part_id)
+        if not part or part.tenant_id != wo.tenant_id:
+            continue
+        part.qty_on_hand = Decimal(part.qty_on_hand or 0) - qty
+        if part.qty_on_hand < 0:
+            warnings.append(
+                f"Spare {part.part_no} stock insufficient: consumed {qty}, on hand now {part.qty_on_hand}"
+            )
+        elif part.qty_on_hand < Decimal(part.min_qty or 0):
+            warnings.append(f"Spare {part.part_no} below min_qty after consumption: on hand {part.qty_on_hand}")
+    wo.meta = {**(wo.meta or {}), "spares_consumed": True}
+    return warnings
+
+
 @router.get("/ship/fleet")
 def fleet_overview(
     auth: AuthContext = Depends(require_module("ship_mgmt")),
     db: Session = Depends(get_db),
 ):
     vessels = db.scalars(select(Vessel).where(Vessel.tenant_id == auth.tenant_id, Vessel.status == "active")).all()
+    _refresh_certificate_status(db, auth.tenant_id)
     profiles = {
         p.vessel_id: p
         for p in db.scalars(select(ShipTechnicalProfile).where(ShipTechnicalProfile.tenant_id == auth.tenant_id)).all()
@@ -181,6 +314,7 @@ def vessel_technical(
     db: Session = Depends(get_db),
 ):
     v = _vessel_or_404(db, auth.tenant_id, vessel_id)
+    _refresh_certificate_status(db, auth.tenant_id)
     p = db.scalar(
         select(ShipTechnicalProfile).where(
             ShipTechnicalProfile.tenant_id == auth.tenant_id,
@@ -295,7 +429,7 @@ def upsert_profile(
     auth: AuthContext = Depends(require_module("ship_mgmt")),
     db: Session = Depends(get_db),
 ):
-    _vessel_or_404(db, auth.tenant_id, body.vessel_id)
+    v = _vessel_or_404(db, auth.tenant_id, body.vessel_id)
     row = db.scalar(
         select(ShipTechnicalProfile).where(
             ShipTechnicalProfile.tenant_id == auth.tenant_id,
@@ -307,9 +441,10 @@ def upsert_profile(
         row = ShipTechnicalProfile(tenant_id=auth.tenant_id, **data)
         db.add(row)
     else:
-        for k, v in data.items():
-            setattr(row, k, v)
+        for k, v2 in data.items():
+            setattr(row, k, v2)
         row.updated_at = _now()
+    _sync_drydock_block(db, auth.tenant_id, body.vessel_id, v.name, body.next_drydock)
     db.commit()
     return {"ok": True, "vessel_id": str(body.vessel_id)}
 
@@ -355,6 +490,78 @@ def create_work_order(
     return {"id": str(row.id), "wo_no": row.wo_no}
 
 
+@router.patch("/ship/work-orders/{wo_id}")
+def update_work_order(
+    wo_id: UUID,
+    body: WorkOrderPatchIn,
+    auth: AuthContext = Depends(require_module("ship_mgmt")),
+    db: Session = Depends(get_db),
+):
+    wo = _wo_or_404(db, auth.tenant_id, wo_id)
+    data = body.model_dump(exclude_unset=True)
+    warnings: list[str] = []
+    for k, v in data.items():
+        setattr(wo, k, v)
+    if data.get("status") == "done":
+        wo.completed_on = wo.completed_on or date.today()
+        warnings = _consume_wo_spares(db, wo)
+    db.commit()
+    return {"id": str(wo.id), "status": wo.status, "warnings": warnings}
+
+
+@router.post("/ship/work-orders/{wo_id}/spares")
+def register_wo_spare(
+    wo_id: UUID,
+    body: WoSpareIn,
+    auth: AuthContext = Depends(require_module("ship_mgmt")),
+    db: Session = Depends(get_db),
+):
+    """Register planned spare consumption; stock is deducted when the WO completes."""
+    wo = _wo_or_404(db, auth.tenant_id, wo_id)
+    part = db.get(ShipSparePart, body.part_id)
+    if not part or part.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Spare part not found")
+    row = ShipWoSpare(tenant_id=auth.tenant_id, wo_id=wo.id, part_id=part.id, qty=body.qty)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    warnings: list[str] = []
+    if wo.status != "done" and body.qty > Decimal(part.qty_on_hand or 0):
+        warnings.append(f"Spare {part.part_no} stock may be insufficient: requested {body.qty}, on hand {part.qty_on_hand}")
+    return {
+        "id": str(row.id),
+        "wo_id": str(wo.id),
+        "part_id": str(part.id),
+        "qty": float(row.qty),
+        "qty_on_hand": float(part.qty_on_hand),
+        "warnings": warnings,
+    }
+
+
+@router.get("/ship/work-orders/{wo_id}/spares")
+def list_wo_spares(
+    wo_id: UUID,
+    auth: AuthContext = Depends(require_module("ship_mgmt")),
+    db: Session = Depends(get_db),
+):
+    wo = _wo_or_404(db, auth.tenant_id, wo_id)
+    rows = db.scalars(
+        select(ShipWoSpare).where(ShipWoSpare.wo_id == wo.id).order_by(ShipWoSpare.created_at)
+    ).all()
+    parts = {p.id: p for p in db.scalars(select(ShipSparePart).where(ShipSparePart.tenant_id == auth.tenant_id)).all()}
+    return [
+        {
+            "id": str(r.id),
+            "part_id": str(r.part_id),
+            "part_no": parts[r.part_id].part_no if r.part_id in parts else None,
+            "description": parts[r.part_id].description if r.part_id in parts else None,
+            "qty": float(r.qty),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
 @router.post("/ship/certificates")
 def create_certificate(
     body: CertificateIn,
@@ -363,6 +570,7 @@ def create_certificate(
 ):
     _vessel_or_404(db, auth.tenant_id, body.vessel_id)
     row = ShipCertificate(tenant_id=auth.tenant_id, **body.model_dump())
+    row.status = _cert_status_for(row.expires_on, row.status)
     db.add(row)
     db.commit()
     return {"id": str(row.id)}
@@ -389,10 +597,70 @@ def create_crew(
 ):
     if body.vessel_id:
         _vessel_or_404(db, auth.tenant_id, body.vessel_id)
-    row = ShipCrewMember(tenant_id=auth.tenant_id, **body.model_dump())
+    data = body.model_dump()
+    certificates = data.pop("certificates", None)
+    row = ShipCrewMember(tenant_id=auth.tenant_id, **data)
+    if certificates is not None:
+        row.meta = {"certificates": certificates}
     db.add(row)
     db.commit()
     return {"id": str(row.id)}
+
+
+@router.patch("/ship/crew/{crew_id}")
+def update_crew(
+    crew_id: UUID,
+    body: CrewPatchIn,
+    auth: AuthContext = Depends(require_module("ship_mgmt")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(ShipCrewMember, crew_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Crew member not found")
+    data = body.model_dump(exclude_unset=True)
+    certificates = data.pop("certificates", None)
+    if data.get("vessel_id"):
+        _vessel_or_404(db, auth.tenant_id, data["vessel_id"])
+    for k, v in data.items():
+        setattr(row, k, v)
+    if certificates is not None:
+        row.meta = {**(row.meta or {}), "certificates": certificates}
+    db.commit()
+    return {"id": str(row.id), "ok": True}
+
+
+@router.get("/ship/crew/cert-alerts")
+def crew_cert_alerts(
+    auth: AuthContext = Depends(require_module("ship_mgmt")),
+    db: Session = Depends(get_db),
+    days: int = 60,
+):
+    """Crew certificates (STCW etc.) expiring within ``days`` days, soonest first."""
+    today = date.today()
+    horizon = today + timedelta(days=days)
+    alerts: list[dict] = []
+    crew = db.scalars(select(ShipCrewMember).where(ShipCrewMember.tenant_id == auth.tenant_id)).all()
+    for c in crew:
+        for cert in (c.meta or {}).get("certificates") or []:
+            raw = cert.get("expires_on")
+            if not raw:
+                continue
+            try:
+                expires_on = date.fromisoformat(str(raw))
+            except ValueError:
+                continue
+            if expires_on <= horizon:
+                alerts.append(
+                    {
+                        "crew_id": str(c.id),
+                        "crew_name": c.full_name,
+                        "code": cert.get("code"),
+                        "expires_on": expires_on.isoformat(),
+                        "days_left": (expires_on - today).days,
+                    }
+                )
+    alerts.sort(key=lambda a: a["days_left"])
+    return alerts
 
 
 @router.get("/ship/integrations/adapters")
@@ -456,6 +724,7 @@ def inbound_pms_sync(
             vessel = db.get(Vessel, profile.vessel_id)
 
     created_id = None
+    warnings: list[str] = []
     if vessel and body.entity_type == "work_order":
         existing = db.scalar(
             select(ShipWorkOrder).where(
@@ -467,6 +736,9 @@ def inbound_pms_sync(
             existing.title = body.data.get("title", existing.title)
             existing.status = body.data.get("status", existing.status)
             existing.priority = body.data.get("priority", existing.priority)
+            if existing.status == "done":
+                existing.completed_on = existing.completed_on or date.today()
+                warnings = _consume_wo_spares(db, existing)
             created_id = str(existing.id)
         else:
             wo = ShipWorkOrder(
@@ -497,6 +769,7 @@ def inbound_pms_sync(
         )
         if body.data.get("expires_on"):
             cert.expires_on = date.fromisoformat(body.data["expires_on"])
+        cert.status = _cert_status_for(cert.expires_on, cert.status)
         db.add(cert)
         db.flush()
         created_id = str(cert.id)
@@ -529,6 +802,7 @@ def inbound_pms_sync(
         "accepted": True,
         "vessel_resolved": bool(vessel),
         "created_id": created_id,
+        "warnings": warnings,
         "synced_at": _now().isoformat(),
     }
 
