@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { CertOverview, VesselCertificates } from "@/components/ShipCertificates";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -40,6 +41,7 @@ type CertRow = { code: string; expires_on: string };
 
 export default function ShipManagementPage() {
   const { t } = useI18n();
+  const [tab, setTab] = useState<"fleet" | "certs">("fleet");
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [adapters, setAdapters] = useState<Adapter[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -225,6 +227,36 @@ export default function ShipManagementPage() {
       </div>
       {msg ? <p className="flash">{msg}</p> : null}
 
+      <div className="page-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "fleet"}
+          className={`page-tab ${tab === "fleet" ? "active" : ""}`}
+          onClick={() => setTab("fleet")}
+        >
+          {t("page.ship.tab_fleet", "舰队")}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "certs"}
+          className={`page-tab ${tab === "certs" ? "active" : ""}`}
+          onClick={() => setTab("certs")}
+        >
+          {t("page.ship.tab_certs", "证书总览")}
+        </button>
+      </div>
+
+      {tab === "certs" ? (
+        <CertOverview
+          onOpenVessel={(id) => {
+            setTab("fleet");
+            openVessel(id);
+          }}
+        />
+      ) : (
+        <>
       <div className="kpi-row">
         <div className="kpi-card">
           <span>{t("page.ship.kpi_fleet", "Fleet")}</span>
@@ -290,13 +322,7 @@ export default function ShipManagementPage() {
                 {detail.profile.external_system ? ` · Ext: ${detail.profile.external_system}` : ""}
               </p>
               <h3>{t("page.ship.certs", "Certificates")}</h3>
-              <ul className="compact-list">
-                {detail.certificates.map((c: any) => (
-                  <li key={c.id}>
-                    <span className={`pill ${c.status}`}>{c.status}</span> {c.cert_name} · {c.expires_on || "n/a"}
-                  </li>
-                ))}
-              </ul>
+              <VesselCertificates certs={detail.certificates || []} onChanged={refreshDetail} />
               <h3>{t("page.ship.wos", "Work orders")}</h3>
               <ul className="compact-list">
                 {detail.work_orders.map((w: any) => (
@@ -516,6 +542,8 @@ export default function ShipManagementPage() {
           {!logs.length ? <li className="muted">{t("page.ship.sync_empty", "No sync yet — use Simulate PMS inbound.")}</li> : null}
         </ul>
       </div>
+        </>
+      )}
     </AppShell>
   );
 }

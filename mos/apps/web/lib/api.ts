@@ -289,4 +289,31 @@ export async function apiUploadMigrationExcel(jobId: string, file: File) {
   return res.json();
 }
 
+export type TaskOut = {
+  id: string;
+  title: string;
+  description: string | null;
+  status: "todo" | "in_progress" | "done" | "cancelled";
+  priority: "low" | "normal" | "high" | "urgent";
+  due_at: string | null;
+  assignee: { id: string; email: string; full_name: string | null } | null;
+  created_by: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  source: string | null;
+  completed_at: string | null;
+  created_at: string;
+};
+
+export type TaskAssignee = { id: string; email: string; full_name: string | null };
+
+export type HomeSummary = {
+  tasks: { open: number; overdue: number; due_today: number; items: TaskOut[] };
+  notifications: { unread: number; items: unknown[] };
+  approvals: { count: number; items: { title?: string; href?: string }[] };
+  alerts: { kind: string; title: string; detail: string; href: string; severity: string; due_in_days: number | null }[];
+  schedule: { kind: string; title: string; subtitle: string; start: string; href: string }[];
+  kpis: { key: string; label: { en: string; zh?: string }; value: string; hint?: string; href?: string }[];
+};
+
 export { API_BASE };

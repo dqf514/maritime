@@ -220,5 +220,8 @@ class Attachment(Base):
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     mime_type: Mapped[str | None] = mapped_column(Text)
     size: Mapped[int | None] = mapped_column(Integer)
+    version_no: Mapped[int] = mapped_column(Integer, default=1)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True)
+    note: Mapped[str | None] = mapped_column(Text)
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

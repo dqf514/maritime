@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OmniSearch } from "@/components/OmniSearch";
 import { NavIcon, sectionIconId } from "@/components/NavIcon";
+import { NotificationBell } from "@/components/NotificationBell";
 import { clearLookupCache } from "@/components/LookupSelect";
 import { apiGet, apiLogout, apiMe, type Me } from "@/lib/api";
 import { LanguageSwitcher, useI18n } from "@/lib/i18n";
@@ -237,6 +238,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <OmniSearch />
         </div>
         <div className="topbar-right">
+          <NotificationBell />
           <LanguageSwitcher />
           <div className="user-menu" ref={userMenuRef}>
             <button

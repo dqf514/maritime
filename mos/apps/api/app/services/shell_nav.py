@@ -14,6 +14,7 @@ from typing import Any
 NAV_DESK: list[dict[str, Any]] = [
     {"id": "home", "label": "Workbench", "href": "/home", "roles": ["*"]},
     {"id": "dashboards", "label": "Live dashboards", "href": "/dashboards", "roles": ["*"]},
+    {"id": "tasks", "label": "Tasks", "href": "/tasks", "roles": ["*"]},
     {"id": "estimates", "label": "Estimates", "href": "/estimates", "roles": ["chartering", "management"]},
     {"id": "charters", "label": "Charters", "href": "/charters", "roles": ["chartering", "management"]},
     {"id": "email", "label": "Email Review", "href": "/email/review", "roles": ["chartering", "operations"]},
@@ -32,6 +33,7 @@ NAV_DESK: list[dict[str, Any]] = [
 NAV_ADMIN_DESK: list[dict[str, Any]] = [
     {"id": "home", "label": "Workbench", "href": "/home", "roles": ["tenant_admin"]},
     {"id": "dashboards", "label": "Live dashboards", "href": "/dashboards", "roles": ["tenant_admin"]},
+    {"id": "tasks", "label": "Tasks", "href": "/tasks", "roles": ["tenant_admin"]},
     {"id": "estimates", "label": "Estimates", "href": "/estimates", "roles": ["tenant_admin"]},
     {"id": "ops", "label": "Voyages", "href": "/operations/voyages", "roles": ["tenant_admin"]},
     {"id": "bunker", "label": "Bunker desk", "href": "/bunker", "roles": ["tenant_admin"]},

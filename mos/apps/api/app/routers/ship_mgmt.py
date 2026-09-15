@@ -24,8 +24,9 @@ from app.models_ship import (
     ShipWorkOrder,
     ShipWoSpare,
 )
-from app.models_wave1 import ConnectorInstance, Vessel
+from app.models_wave1 import Attachment, ConnectorInstance, Vessel
 from app.security import AuthContext, require_module
+from app.services.audit import audit
 
 router = APIRouter(tags=["Ship Management"])
 
@@ -143,6 +144,14 @@ class CertificateIn(BaseModel):
     issued_on: date | None = None
     expires_on: date | None = None
     status: str = "valid"
+    issuing_body: str | None = None
+    external_ref: str | None = None
+
+
+class CertificatePatchIn(BaseModel):
+    cert_name: str | None = None
+    issued_on: date | None = None
+    expires_on: date | None = None
     issuing_body: str | None = None
     external_ref: str | None = None
 
@@ -574,6 +583,129 @@ def create_certificate(
     db.add(row)
     db.commit()
     return {"id": str(row.id)}
+
+
+def _cert_or_404(db: Session, tenant_id: UUID, cert_id: UUID) -> ShipCertificate:
+    cert = db.get(ShipCertificate, cert_id)
+    if not cert or cert.tenant_id != tenant_id:
+        raise HTTPException(404, "Certificate not found")
+    return cert
+
+
+def _cert_list_row(cert: ShipCertificate, vessel_name: str | None, current_file: Attachment | None) -> dict:
+    days_to_expiry = (cert.expires_on - date.today()).days if cert.expires_on else None
+    return {
+        "id": str(cert.id),
+        "vessel_id": str(cert.vessel_id),
+        "vessel_name": vessel_name,
+        "cert_code": cert.cert_code,
+        "cert_name": cert.cert_name,
+        "issued_on": cert.issued_on.isoformat() if cert.issued_on else None,
+        "expires_on": cert.expires_on.isoformat() if cert.expires_on else None,
+        "status": cert.status,
+        "issuing_body": cert.issuing_body,
+        "external_ref": cert.external_ref,
+        "days_to_expiry": days_to_expiry,
+        "current_file": {
+            "id": str(current_file.id),
+            "file_name": current_file.file_name,
+            "version_no": current_file.version_no,
+            "download_url": f"/api/v1/files/{current_file.id}/download",
+        }
+        if current_file
+        else None,
+    }
+
+
+@router.get("/ship/certificates")
+def list_certificates(
+    auth: AuthContext = Depends(require_module("ship_mgmt")),
+    db: Session = Depends(get_db),
+    vessel_id: UUID | None = None,
+    status: str | None = None,
+    expiring_within_days: int | None = None,
+):
+    _refresh_certificate_status(db, auth.tenant_id)
+    q = select(ShipCertificate).where(ShipCertificate.tenant_id == auth.tenant_id)
+    if vessel_id:
+        q = q.where(ShipCertificate.vessel_id == vessel_id)
+    if status:
+        q = q.where(ShipCertificate.status == status)
+    certs = db.scalars(q).all()
+    vessels = {v.id: v.name for v in db.scalars(select(Vessel).where(Vessel.tenant_id == auth.tenant_id)).all()}
+    current_files: dict[UUID, Attachment] = {}
+    for a in db.scalars(
+        select(Attachment).where(
+            Attachment.tenant_id == auth.tenant_id,
+            Attachment.entity_type == "ship_certificate",
+            Attachment.is_current == True,  # noqa: E712
+        )
+    ).all():
+        current_files[a.entity_id] = a
+    rows = [_cert_list_row(c, vessels.get(c.vessel_id), current_files.get(c.id)) for c in certs]
+    if expiring_within_days is not None:
+        rows = [r for r in rows if r["days_to_expiry"] is not None and r["days_to_expiry"] <= expiring_within_days]
+    rows.sort(key=lambda r: (r["days_to_expiry"] is None, r["days_to_expiry"] or 0))
+    return rows
+
+
+@router.patch("/ship/certificates/{cert_id}")
+def update_certificate(
+    cert_id: UUID,
+    body: CertificatePatchIn,
+    auth: AuthContext = Depends(require_module("ship_mgmt")),
+    db: Session = Depends(get_db),
+):
+    cert = _cert_or_404(db, auth.tenant_id, cert_id)
+    data = body.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        setattr(cert, k, v)
+    if "expires_on" in data:
+        cert.status = _cert_status_for(cert.expires_on, "valid")
+    audit(
+        db,
+        action="ship.certificate.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="ship_certificate",
+        entity_id=cert.id,
+        detail={"fields": sorted(data.keys())},
+    )
+    db.commit()
+    return {"id": str(cert.id), "status": cert.status}
+
+
+@router.delete("/ship/certificates/{cert_id}")
+def delete_certificate(
+    cert_id: UUID,
+    auth: AuthContext = Depends(require_module("ship_mgmt")),
+    db: Session = Depends(get_db),
+):
+    from pathlib import Path  # noqa: PLC0415
+
+    cert = _cert_or_404(db, auth.tenant_id, cert_id)
+    files = db.scalars(
+        select(Attachment).where(
+            Attachment.tenant_id == auth.tenant_id,
+            Attachment.entity_type == "ship_certificate",
+            Attachment.entity_id == cert.id,
+        )
+    ).all()
+    for f in files:
+        Path(f.file_path).unlink(missing_ok=True)
+        db.delete(f)
+    audit(
+        db,
+        action="ship.certificate.delete",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="ship_certificate",
+        entity_id=cert.id,
+        detail={"cert_code": cert.cert_code, "files_removed": len(files)},
+    )
+    db.delete(cert)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/ship/defects")

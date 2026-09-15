@@ -181,3 +181,24 @@ def mark_read(
     row.read_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/notifications/read-all")
+def mark_all_read(
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy import or_, update  # noqa: PLC0415
+
+    now = datetime.now(timezone.utc)
+    res = db.execute(
+        update(Notification)
+        .where(
+            Notification.tenant_id == auth.tenant_id,
+            Notification.read_at.is_(None),
+            or_(Notification.user_id == auth.user_id, Notification.user_id.is_(None)),
+        )
+        .values(read_at=now)
+    )
+    db.commit()
+    return {"ok": True, "updated": res.rowcount}

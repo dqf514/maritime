@@ -23,14 +23,17 @@ import app.models_office  # noqa: F401
 import app.models_ops  # noqa: F401
 import app.models_recycle  # noqa: F401
 import app.models_reference  # noqa: F401
+import app.models_task  # noqa: F401
 from app.routers.admin_platform import router as admin_router
 from app.routers.ai_hub import router as ai_router
 from app.routers.commercial import router as commercial_router
 from app.routers.connectors import router as connectors_router
 from app.routers.dashboards import router as dashboards_router
 from app.routers.email_notify import router as email_router
+from app.routers.files import router as files_router
 from app.routers.finance_ext import router as finance_router
 from app.routers.help import router as help_router
+from app.routers.home import router as home_router
 from app.routers.i18n import router as i18n_router
 from app.routers.identity import router as identity_router
 from app.routers.masterdata import router as masterdata_router
@@ -42,6 +45,7 @@ from app.routers.recycle import router as recycle_router
 from app.routers.reference import router as reference_router
 from app.routers.saas import router as saas_router
 from app.routers.ship_mgmt import router as ship_router
+from app.routers.tasks import router as tasks_router
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo
 from app.seed_demo_flow import seed_full_demo_flow
 from app.seed_i18n import seed_i18n
@@ -63,8 +67,9 @@ def _ensure_sqlite_user_identity_columns() -> None:
 
     Transition note (P3): new schema changes go through Alembic (see
     alembic/README.md). These guarded ALTER patches are kept for existing dev
-    databases that predate Alembic and are never stamped; do not add new
-    patches here.
+    databases that predate Alembic and are never stamped; new patches are added
+    only when a dev SQLite database in the wild needs the column (e.g.
+    attachments versioning).
     """
     if not str(engine.url).startswith("sqlite"):
         return
@@ -153,6 +158,21 @@ def _ensure_sqlite_user_identity_columns() -> None:
             conn.execute(text("UPDATE ports SET is_eu = 0 WHERE is_eu IS NULL"))
         except Exception:  # noqa: BLE001
             log.exception("SQLite migration backfill failed for ports.is_eu")
+        # Attachment versioning columns (certificate file history)
+        try:
+            att_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(attachments)")).fetchall()}
+            if att_cols:
+                for col, decl in (
+                    ("version_no", "INTEGER"),
+                    ("is_current", "BOOLEAN"),
+                    ("note", "TEXT"),
+                ):
+                    if col not in att_cols:
+                        conn.execute(text(f"ALTER TABLE attachments ADD COLUMN {col} {decl}"))
+                conn.execute(text("UPDATE attachments SET version_no = 1 WHERE version_no IS NULL"))
+                conn.execute(text("UPDATE attachments SET is_current = 1 WHERE is_current IS NULL"))
+        except Exception:  # noqa: BLE001
+            log.exception("SQLite migration patch failed for attachments versioning")
         conn.commit()
 
 
@@ -217,6 +237,9 @@ app.include_router(commercial_router, prefix="/api/v1")
 app.include_router(operations_router, prefix="/api/v1")
 app.include_router(finance_router, prefix="/api/v1")
 app.include_router(ship_router, prefix="/api/v1")
+app.include_router(files_router, prefix="/api/v1")
+app.include_router(tasks_router, prefix="/api/v1")
+app.include_router(home_router, prefix="/api/v1")
 app.include_router(dashboards_router, prefix="/api/v1")
 app.include_router(identity_router, prefix="/api/v1")
 app.include_router(i18n_router, prefix="/api/v1")
