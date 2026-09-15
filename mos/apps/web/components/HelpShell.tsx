@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ReactNode, useEffect, useState } from "react";
+import { apiMe } from "@/lib/api";
 import { LanguageSwitcher, useI18n } from "@/lib/i18n";
 
 export function HelpShell({ children }: { children: ReactNode }) {
@@ -9,7 +10,10 @@ export function HelpShell({ children }: { children: ReactNode }) {
   const [signedIn, setSignedIn] = useState(false);
 
   useEffect(() => {
-    setSignedIn(Boolean(localStorage.getItem("voyageos_token")));
+    // Session lives in an HttpOnly cookie — probe /me instead of the legacy token.
+    apiMe()
+      .then(() => setSignedIn(true))
+      .catch(() => setSignedIn(false));
   }, []);
 
   return (

@@ -80,7 +80,7 @@ export function I18nProvider({ children, tenantCode }: { children: ReactNode; te
     const token = typeof window !== "undefined" ? localStorage.getItem("voyageos_token") : null;
     if (token) headers.Authorization = `Bearer ${token}`;
     if (stored) headers["Accept-Language"] = stored;
-    const res = await fetch(`${API}/api/v1/i18n/bundle?${qs.toString()}`, { headers });
+    const res = await fetch(`${API}/api/v1/i18n/bundle?${qs.toString()}`, { headers, credentials: "include" });
     if (!res.ok) {
       setReady(true);
       return;
@@ -111,17 +111,18 @@ export function I18nProvider({ children, tenantCode }: { children: ReactNode; te
       if (typeof document !== "undefined") {
         document.documentElement.lang = next === "zh-CN" ? "zh-CN" : "en";
       }
+      // Session is the HttpOnly cookie; always persist locale server-side.
+      // The legacy Bearer header is only kept as a fallback for pre-cookie sessions.
       const token = localStorage.getItem("voyageos_token");
-      if (token) {
-        await fetch(`${API}/api/v1/me/locale`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ locale: next }),
-        }).catch(() => undefined);
-      }
+      await fetch(`${API}/api/v1/me/locale`, {
+        method: "PUT",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ locale: next }),
+      }).catch(() => undefined);
       await reload();
     },
     [reload],

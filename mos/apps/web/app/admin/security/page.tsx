@@ -2,10 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiGet, apiPost } from "@/lib/api";
+import { API_BASE as API, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-
-import { API_BASE as API } from "@/lib/api";
 
 type Policy = {
   password_enabled: boolean;
@@ -61,24 +59,16 @@ export default function TenantSecurityPage() {
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!policy) return;
-    const res = await fetch(`${API}/api/v1/admin/security/policy`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify({
-        ...policy,
-        allowed_domains: domains
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-        microsoft_tenant_hint: msHint.trim() || null,
-        google_hosted_domain: googleHd.trim() || null,
-        sso_notes: ssoNotes.trim() || null,
-      }),
+    await apiPut("/api/v1/admin/security/policy", {
+      ...policy,
+      allowed_domains: domains
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+      microsoft_tenant_hint: msHint.trim() || null,
+      google_hosted_domain: googleHd.trim() || null,
+      sso_notes: ssoNotes.trim() || null,
     });
-    if (!res.ok) throw new Error("fail");
     setMsg(t("page.security.updated", "登录与安全策略已更新"));
     await load();
   }

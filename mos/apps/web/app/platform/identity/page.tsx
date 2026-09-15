@@ -2,10 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-
-import { API_BASE as API } from "@/lib/api";
 
 type Identity = {
   microsoft_enabled: boolean;
@@ -44,21 +42,13 @@ export default function PlatformIdentityPage() {
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!form) return;
-    const res = await fetch(`${API}/api/v1/platform/identity`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify({
-        ...form,
-        default_allowed_domains: domains
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-      }),
+    await apiPut("/api/v1/platform/identity", {
+      ...form,
+      default_allowed_domains: domains
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
     });
-    if (!res.ok) throw new Error("save failed");
     setMsg(t("page.identity.saved", "Platform identity settings saved. Client secrets stay in server env only."));
     await load();
   }

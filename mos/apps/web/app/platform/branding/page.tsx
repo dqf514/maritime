@@ -2,7 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiGet } from "@/lib/api";
+import { ImageCropModal, type CropKind } from "@/components/ImageCropModal";
+import { apiGet, apiPost, apiPut, apiUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 type Branding = {
@@ -16,13 +17,16 @@ type Branding = {
   hero_subtitle: string;
 };
 
-import { API_BASE as API } from "@/lib/api";
+const MAX_UPLOAD_BYTES = 2.5 * 1024 * 1024;
+const OK_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
 export default function PlatformBrandingPage() {
   const { t } = useI18n();
   const [form, setForm] = useState<Branding | null>(null);
   const [msg, setMsg] = useState("");
   const [uploading, setUploading] = useState<string | null>(null);
+  const [crop, setCrop] = useState<{ kind: CropKind; file: File } | null>(null);
+  const [cropErr, setCropErr] = useState("");
 
   useEffect(() => {
     apiGet("/api/v1/platform/branding")
@@ -33,48 +37,51 @@ export default function PlatformBrandingPage() {
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!form) return;
-    const res = await fetch(`${API}/api/v1/platform/branding`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify(form),
-    });
-    if (!res.ok) throw new Error("save failed");
-    setMsg(t("page.branding.updated", "产品品牌已更新 — 门户、登录与顶栏会随之生效。"));
+    try {
+      await apiPut("/api/v1/platform/branding", form);
+      setMsg(t("page.branding.updated", "产品品牌已更新 — 门户、登录与顶栏会随之生效。"));
+    } catch {
+      setMsg(t("common.failed", "保存失败"));
+    }
   }
 
   async function reset() {
-    const res = await fetch(`${API}/api/v1/platform/branding/reset`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${localStorage.getItem("voyageos_token")}` },
-    });
-    if (!res.ok) throw new Error("reset failed");
-    setForm(await res.json());
-    setMsg(t("page.branding.reset_done", "已恢复 VoyageOS 默认品牌。"));
+    try {
+      setForm(await apiPost("/api/v1/platform/branding/reset"));
+      setMsg(t("page.branding.reset_done", "已恢复 VoyageOS 默认品牌。"));
+    } catch {
+      setMsg(t("page.branding.reset_fail", "重置失败"));
+    }
   }
 
-  async function upload(kind: "logo" | "icon" | "favicon", file: File | null) {
+  function pickFile(kind: CropKind, file: File | null) {
     if (!file) return;
-    setUploading(kind);
     setMsg("");
+    if (!OK_TYPES.includes(file.type)) {
+      setMsg(t("page.branding.bad_type", "仅支持 png / jpg / webp 图片"));
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setMsg(t("page.branding.too_large", "文件超过 2.5MB，请压缩后再传"));
+      return;
+    }
+    setCropErr("");
+    setCrop({ kind, file });
+  }
+
+  async function confirmUpload(blob: Blob) {
+    if (!crop) return;
+    const { kind } = crop;
+    setUploading(kind);
+    setCropErr("");
     try {
       const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch(`${API}/api/v1/platform/branding/upload?kind=${kind}`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("voyageos_token")}` },
-        body: fd,
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.detail?.code || "upload failed");
-      }
-      setForm(await res.json());
+      fd.append("file", blob, `${kind}.png`);
+      setForm(await apiUpload(`/api/v1/platform/branding/upload?kind=${kind}`, fd));
       setMsg(t("page.branding.uploaded", "已上传 {kind}", { kind }));
+      setCrop(null);
     } catch (err: any) {
-      setMsg(t("page.branding.upload_fail", "上传失败：{err}", { err: String(err?.message || err) }));
+      setCropErr(t("page.branding.upload_fail", "上传失败：{err}", { err: String(err?.message || err) }));
     } finally {
       setUploading(null);
     }
@@ -92,7 +99,7 @@ export default function PlatformBrandingPage() {
     <AppShell>
       <h1 style={{ marginTop: 0 }}>{t("page.branding.title", "产品品牌")}</h1>
       <p className="page-sub">
-        {t("page.branding.sub", "管理公共门户 Logo / 图标 / 文案。可直接上传图片，或填写 URL。")}
+        {t("page.branding.sub", "管理公共门户 Logo / 图标 / 文案。图片直接上传，可裁剪。")}
       </p>
       {msg ? <p className="flash">{msg}</p> : null}
 
@@ -105,7 +112,7 @@ export default function PlatformBrandingPage() {
 
       <div className="panel">
         <h2 style={{ marginTop: 0 }}>{t("page.branding.upload_title", "上传素材")}</h2>
-        <p className="muted">{t("page.branding.upload_hint", "支持 png / jpg / svg / webp / ico，单文件不超过 2.5MB。")}</p>
+        <p className="muted">{t("page.branding.upload_hint", "支持 png / jpg / webp，单文件不超过 2.5MB；上传前可拖动裁剪。")}</p>
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
           {(
             [
@@ -118,26 +125,26 @@ export default function PlatformBrandingPage() {
               {uploading === kind ? "…" : `${t("page.branding.upload", "上传")} ${label}`}
               <input
                 type="file"
-                accept=".png,.jpg,.jpeg,.svg,.webp,.ico,.gif,image/*"
+                accept=".png,.jpg,.jpeg,.webp"
                 hidden
                 disabled={Boolean(uploading)}
-                onChange={(e) => upload(kind, e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  pickFile(kind, e.target.files?.[0] || null);
+                  e.target.value = "";
+                }}
               />
             </label>
           ))}
         </div>
       </div>
 
-      <form className="panel" onSubmit={(e) => save(e).catch(() => setMsg(t("common.failed", "保存失败")))}>
+      <form className="panel" onSubmit={save}>
         <h2 style={{ marginTop: 0 }}>{t("page.branding.fields", "文案与链接")}</h2>
         <div className="kv-grid">
           {(
             [
               "product_name",
               "tagline",
-              "logo_url",
-              "icon_url",
-              "favicon_url",
               "primary_color",
               "hero_title",
               "hero_subtitle",
@@ -162,11 +169,25 @@ export default function PlatformBrandingPage() {
           <button className="btn btn-primary" type="submit">
             {t("page.branding.save", "保存品牌")}
           </button>
-          <button className="btn" type="button" onClick={() => reset().catch(() => setMsg(t("page.branding.reset_fail", "重置失败")))}>
+          <button className="btn" type="button" onClick={reset}>
             {t("page.branding.reset", "恢复默认")}
           </button>
         </div>
       </form>
+
+      <ImageCropModal
+        open={Boolean(crop)}
+        kind={crop?.kind || "logo"}
+        file={crop?.file || null}
+        busy={Boolean(uploading)}
+        error={cropErr}
+        onCancel={() => {
+          if (uploading) return;
+          setCrop(null);
+          setCropErr("");
+        }}
+        onConfirm={confirmUpload}
+      />
     </AppShell>
   );
 }

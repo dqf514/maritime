@@ -258,6 +258,24 @@ export async function apiCommitMigration(jobId: string, proposal_ids: string[]) 
   return apiPost(`/api/v1/settings/dataops/migrations/${jobId}/commit`, { proposal_ids });
 }
 
+export async function apiUpload(path: string, form: FormData) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+    credentials: "include",
+    body: form,
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    const data = await res.json().catch(() => ({}));
+    const err: any = new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.message || data?.detail?.code || `POST ${path} failed`);
+    err.status = res.status;
+    err.detail = data?.detail;
+    throw err;
+  }
+  return res.json();
+}
+
 export async function apiUploadMigrationExcel(jobId: string, file: File) {
   const form = new FormData();
   form.append("file", file);

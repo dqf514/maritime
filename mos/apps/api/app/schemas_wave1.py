@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class CompanyIn(BaseModel):
@@ -45,6 +45,12 @@ class PortIn(BaseModel):
     longitude: Decimal | None = None
     holidays: list[str] | None = None  # 港口节假日 ["YYYY-MM-DD"]
     is_eu: bool = False  # EU/EEA port — EU ETS eu_share inference
+
+    @field_validator("is_eu", mode="before")
+    @classmethod
+    def _none_is_false(cls, v):
+        # 老库行的 is_eu 为 NULL（列是后加的），读取时归一为 False
+        return False if v is None else v
 
 
 class PortOut(PortIn):

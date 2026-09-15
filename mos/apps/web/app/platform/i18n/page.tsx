@@ -2,10 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-
-import { API_BASE as API } from "@/lib/api";
 
 export default function PlatformI18nPage() {
   const { t } = useI18n();
@@ -31,15 +29,7 @@ export default function PlatformI18nPage() {
 
   async function saveMessage(e: FormEvent) {
     e.preventDefault();
-    const res = await fetch(`${API}/api/v1/platform/i18n/messages`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify({ msg_key: editKey, locale, text: editText, namespace: "app" }),
-    });
-    if (!res.ok) throw new Error("fail");
+    await apiPut("/api/v1/platform/i18n/messages", { msg_key: editKey, locale, text: editText, namespace: "app" });
     setMsg(t("i18n.message_updated", "Message updated"));
     setEditKey("");
     await load();

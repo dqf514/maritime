@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { API_BASE, apiGet } from "@/lib/api";
+import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 export default function PermissionsPage() {
@@ -28,15 +28,7 @@ export default function PermissionsPage() {
   }, [t]);
 
   async function toggle(role_code: string, feature_code: string, allowed: boolean) {
-    const res = await fetch(`${API_BASE}/api/v1/admin/features`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify({ role_code, feature_code, allowed }),
-    });
-    if (!res.ok) throw new Error("failed");
+    await apiPut("/api/v1/admin/features", { role_code, feature_code, allowed });
     setMsg(`${role_code} · ${feature_code} = ${allowed ? t("page.perm.allow", "允许") : t("page.perm.deny", "拒绝")}`);
     await load();
   }

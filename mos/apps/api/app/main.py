@@ -149,6 +149,10 @@ def _ensure_sqlite_user_identity_columns() -> None:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {decl}"))
             except Exception:  # noqa: BLE001
                 log.exception("SQLite migration patch failed for %s.%s", table, col)
+        try:
+            conn.execute(text("UPDATE ports SET is_eu = 0 WHERE is_eu IS NULL"))
+        except Exception:  # noqa: BLE001
+            log.exception("SQLite migration backfill failed for ports.is_eu")
         conn.commit()
 
 

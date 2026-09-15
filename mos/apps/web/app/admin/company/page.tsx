@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { API_BASE, apiGet } from "@/lib/api";
+import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 export default function CompanyBrandPage() {
@@ -27,15 +27,7 @@ export default function CompanyBrandPage() {
 
   async function save(e: FormEvent) {
     e.preventDefault();
-    const res = await fetch(`${API_BASE}/api/v1/admin/company-profile`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify(form),
-    });
-    if (!res.ok) throw new Error("save failed");
+    await apiPut("/api/v1/admin/company-profile", form);
     setMsg(t("page.company.saved", "Company brand saved — appears in Shell & documents."));
   }
 

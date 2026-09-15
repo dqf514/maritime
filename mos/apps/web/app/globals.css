@@ -2342,3 +2342,21 @@ button, input { font: inherit; }
   position: relative;
   z-index: 1;
 }
+
+/* —— Image crop dialog —— */
+.crop-box {
+  position: relative;
+  overflow: hidden;
+  margin: 0 auto;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background:
+    repeating-conic-gradient(rgba(255, 255, 255, 0.06) 0% 25%, transparent 0% 50%) 0 0 / 16px 16px,
+    rgba(0, 0, 0, 0.25);
+  cursor: grab;
+  touch-action: none;
+}
+.crop-box:active {
+  cursor: grabbing;
+}

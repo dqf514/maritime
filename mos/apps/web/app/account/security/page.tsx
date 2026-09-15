@@ -2,10 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-
-import { API_BASE as API } from "@/lib/api";
 
 export default function AccountSecurityPage() {
   const { t } = useI18n();
@@ -38,15 +36,7 @@ export default function AccountSecurityPage() {
 
   async function changePassword(e: FormEvent) {
     e.preventDefault();
-    const res = await fetch(`${API}/api/v1/me/security/password`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify({ current_password: cur || null, new_password: next }),
-    });
-    if (!res.ok) throw new Error("fail");
+    await apiPost("/api/v1/me/security/password", { current_password: cur || null, new_password: next });
     setMsg(t("page.account.pw_updated", "Password updated."));
     setCur("");
     setNext("");
@@ -54,11 +44,7 @@ export default function AccountSecurityPage() {
   }
 
   async function unlink(provider: string) {
-    const res = await fetch(`${API}/api/v1/me/identities/${provider}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${localStorage.getItem("voyageos_token")}` },
-    });
-    if (!res.ok) throw new Error("fail");
+    await apiDelete(`/api/v1/me/identities/${provider}`);
     setMsg(t("page.account.unlinked", "Unlinked {provider}", { provider }));
     await load();
   }

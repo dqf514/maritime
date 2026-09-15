@@ -2,10 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-
-import { API_BASE as API } from "@/lib/api";
 
 export default function TenantI18nPage() {
   const { t, term, reload } = useI18n();
@@ -28,15 +26,7 @@ export default function TenantI18nPage() {
 
   async function saveSettings(e: FormEvent) {
     e.preventDefault();
-    const res = await fetch(`${API}/api/v1/admin/i18n/settings`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify(settings),
-    });
-    if (!res.ok) throw new Error("fail");
+    await apiPut("/api/v1/admin/i18n/settings", settings);
     setMsg(t("common.saved", "Saved"));
     await reload();
     await load();
@@ -44,19 +34,11 @@ export default function TenantI18nPage() {
 
   async function saveOverride(e: FormEvent) {
     e.preventDefault();
-    const res = await fetch(`${API}/api/v1/admin/i18n/terminology/overrides`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify({
-        term_key: editKey,
-        locale: settings?.default_locale || "en",
-        label: editLabel,
-      }),
+    await apiPut("/api/v1/admin/i18n/terminology/overrides", {
+      term_key: editKey,
+      locale: settings?.default_locale || "en",
+      label: editLabel,
     });
-    if (!res.ok) throw new Error("fail");
     setMsg(t("i18n.override_saved", "Override saved"));
     setEditKey("");
     setEditLabel("");

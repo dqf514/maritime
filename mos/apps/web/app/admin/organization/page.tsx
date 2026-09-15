@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { API_BASE, apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 type Org = {
@@ -33,14 +33,7 @@ export default function OrgPage() {
 
   async function save(e: FormEvent) {
     e.preventDefault();
-    await fetch(`${API_BASE}/api/v1/admin/organization`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("voyageos_token")}`,
-      },
-      body: JSON.stringify({ profile_tier: tier }),
-    });
+    await apiPatch("/api/v1/admin/organization", { profile_tier: tier });
     setMsg(t("page.organization.updated", "Organization updated — nav density follows tier (S/M/L/E)."));
     const o = await apiGet("/api/v1/admin/organization");
     setOrg(o);
