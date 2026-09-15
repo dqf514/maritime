@@ -3,3 +3,6 @@ uploads/
 __pycache__/
 .pytest_cache/
 .venv/
+
+# Runtime backup exports (PII)
+app/data/backups/
