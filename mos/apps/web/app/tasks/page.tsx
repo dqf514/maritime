@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
+import { ExportButton } from "@/components/ExportButton";
+import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { StateView } from "@/components/StateView";
 import { apiGet, apiPatch, apiPost, type TaskAssignee, type TaskOut } from "@/lib/api";
@@ -139,6 +141,8 @@ export default function TasksPage() {
           <p className="page-sub">{t("page.tasks.sub", "跟进指派给你的待办、截止与完成情况。")}</p>
         </div>
         <div className="quick-row">
+          <ExportButton entity="tasks" />
+          <PageGuide pageKey="tasks" />
           <button type="button" className="btn btn-primary" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
             {t("page.tasks.new", "新建任务")}
           </button>

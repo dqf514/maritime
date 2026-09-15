@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageGuide } from "@/components/PageGuide";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -34,8 +35,13 @@ export default function WorkflowInboxPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.inbox.title", "Approval inbox")}</h1>
-      <p className="page-sub">{t("page.inbox.sub", "Pending business approvals for your role.")}</p>
+      <div className="page-header">
+        <div>
+          <h1 style={{ margin: 0 }}>{t("page.inbox.title", "Approval inbox")}</h1>
+          <p className="page-sub">{t("page.inbox.sub", "Pending business approvals for your role.")}</p>
+        </div>
+        <PageGuide pageKey="workflows_inbox" />
+      </div>
       {msg ? <p>{msg}</p> : null}
       <div className="panel">
         <table className="table">

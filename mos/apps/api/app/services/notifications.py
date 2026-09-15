@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -31,7 +31,9 @@ def notify_once(
     level: str,
 ) -> None:
     """Create at most one notification per user + href + title per day."""
-    today_start = datetime.combine(date.today(), datetime.min.time(), tzinfo=timezone.utc)
+    # created_at is server-generated UTC (func.now()); window must be UTC too,
+    # otherwise dedupe breaks when local date != UTC date
+    today_start = datetime.combine(datetime.now(timezone.utc).date(), datetime.min.time(), tzinfo=timezone.utc)
     targets: list[UUID | None] = [u.id for u in recipients] or [None]
     for uid in targets:
         q = select(Notification).where(

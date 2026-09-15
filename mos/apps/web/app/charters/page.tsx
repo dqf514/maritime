@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
+import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -617,9 +618,12 @@ export default function ChartersPage() {
             {t("page.charters.sub", "新建租约；点击行打开弹窗编辑、删除或推进状态。")}
           </p>
         </div>
-        <Link href="/settings/recycle" className="btn btn-ghost">
-          {t("nav.recycle", "回收站")}
-        </Link>
+        <div className="quick-row">
+          <PageGuide pageKey="charters" />
+          <Link href="/settings/recycle" className="btn btn-ghost">
+            {t("nav.recycle", "回收站")}
+          </Link>
+        </div>
       </div>
 
       {msg ? <p className="flash">{msg}</p> : null}

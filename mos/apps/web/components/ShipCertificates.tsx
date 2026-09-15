@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput } from "@/components/DateInput";
+import { ExportButton } from "@/components/ExportButton";
 import { RecordModal } from "@/components/RecordModal";
 import { StateView } from "@/components/StateView";
 import { API_BASE, apiDelete, apiGet, apiPatch, apiPost, apiUpload } from "@/lib/api";
@@ -110,6 +111,7 @@ export function CertOverview({ onOpenVessel }: { onOpenVessel: (vesselId: string
           <input type="checkbox" checked={expiring30} onChange={(e) => setExpiring30(e.target.checked)} />
           {t("ship.cert.expiring_30", "30 天内到期")}
         </label>
+        <ExportButton entity="certificates" />
       </div>
       <StateView
         loading={loading}

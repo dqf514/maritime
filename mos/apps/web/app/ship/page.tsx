@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageGuide } from "@/components/PageGuide";
 import { CertOverview, VesselCertificates } from "@/components/ShipCertificates";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -215,6 +216,7 @@ export default function ShipManagementPage() {
           </p>
         </div>
         <div className="quick-row">
+          <PageGuide pageKey="ship" />
           <Link href="/dashboards/technical" className="btn btn-primary">
             {t("page.ship.wall", "Technical live wall")}
           </Link>

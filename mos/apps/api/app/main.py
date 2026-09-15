@@ -24,6 +24,7 @@ import app.models_ops  # noqa: F401
 import app.models_recycle  # noqa: F401
 import app.models_reference  # noqa: F401
 import app.models_task  # noqa: F401
+import app.models_onboarding  # noqa: F401
 from app.routers.admin_platform import router as admin_router
 from app.routers.ai_hub import router as ai_router
 from app.routers.commercial import router as commercial_router
@@ -31,14 +32,17 @@ from app.routers.connectors import router as connectors_router
 from app.routers.dashboards import router as dashboards_router
 from app.routers.email_notify import router as email_router
 from app.routers.exceptions import router as exceptions_router
+from app.routers.exports import router as exports_router
 from app.routers.files import router as files_router
 from app.routers.finance_ext import router as finance_router
+from app.routers.guides import router as guides_router
 from app.routers.help import router as help_router
 from app.routers.home import router as home_router
 from app.routers.i18n import router as i18n_router
 from app.routers.identity import router as identity_router
 from app.routers.masterdata import router as masterdata_router
 from app.routers.office import router as office_router
+from app.routers.onboarding import router as onboarding_router
 from app.routers.operations import router as operations_router
 from app.routers.platform import router as platform_router
 from app.routers.platform_ops import router as platform_ops_router
@@ -248,6 +252,9 @@ app.include_router(i18n_router, prefix="/api/v1")
 app.include_router(office_router, prefix="/api/v1")
 app.include_router(help_router, prefix="/api/v1")
 app.include_router(recycle_router, prefix="/api/v1")
+app.include_router(guides_router, prefix="/api/v1")
+app.include_router(onboarding_router, prefix="/api/v1")
+app.include_router(exports_router, prefix="/api/v1")
 
 # Only branding assets are public; backups and other uploads are never statically served
 app.mount("/uploads/branding", StaticFiles(directory=str(UPLOAD_ROOT / "branding")), name="branding")

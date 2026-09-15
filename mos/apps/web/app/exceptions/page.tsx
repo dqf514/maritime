@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageGuide } from "@/components/PageGuide";
 import { StateView } from "@/components/StateView";
 import { apiGet, type ExceptionItem, type ExceptionScan } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -94,9 +95,12 @@ export default function ExceptionsPage() {
               : ""}
           </p>
         </div>
-        <button type="button" className="btn btn-ghost" onClick={load} disabled={loading}>
-          {t("page.exceptions.refresh", "刷新")}
-        </button>
+        <div className="quick-row">
+          <PageGuide pageKey="exceptions" />
+          <button type="button" className="btn btn-ghost" onClick={load} disabled={loading}>
+            {t("page.exceptions.refresh", "刷新")}
+          </button>
+        </div>
       </div>
 
       <StateView loading={loading && !scan} error={error} empty={false} onRetry={load}>

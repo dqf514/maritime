@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageGuide } from "@/components/PageGuide";
 import { StateView } from "@/components/StateView";
 import { apiGet, type VoyageOverview } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -82,6 +83,7 @@ export default function VoyageOverviewPage() {
             {data?.charter?.counterparty_name ? ` · ${data.charter.counterparty_name}` : ""}
           </p>
         </div>
+        <PageGuide pageKey="voyage_detail" />
       </div>
 
       <StateView loading={loading && !data} error={error} empty={false} onRetry={load}>

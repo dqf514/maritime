@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell, useShellBootstrap } from "@/components/AppShell";
 import { HubTile } from "@/components/HubTile";
+import { OnboardingCard } from "@/components/OnboardingCard";
+import { PageGuide } from "@/components/PageGuide";
 import { StateView } from "@/components/StateView";
 import { apiGet, apiMe, apiPost, type HomeSummary, type TaskOut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -114,7 +116,10 @@ export default function WorkbenchPage() {
             ))}
           </div>
         ) : null}
+        <PageGuide pageKey="home" />
       </div>
+
+      <OnboardingCard />
 
       <StateView
         loading={loading && !summary}

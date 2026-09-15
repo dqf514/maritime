@@ -3,7 +3,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { ExportButton } from "@/components/ExportButton";
 import { LookupSelect } from "@/components/LookupSelect";
+import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -95,9 +97,13 @@ export default function VesselsPage() {
           <h1 style={{ margin: 0 }}>{t("page.vessels.title", "Vessels")}</h1>
           <p className="page-sub">{t("page.vessels.sub", "Fleet master data. Open a row to edit or delete.")}</p>
         </div>
-        <Link href="/settings/recycle" className="btn btn-ghost">
-          {t("nav.recycle", "Recycle bin")}
-        </Link>
+        <div className="quick-row">
+          <ExportButton entity="vessels" />
+          <PageGuide pageKey="masterdata_vessels" />
+          <Link href="/settings/recycle" className="btn btn-ghost">
+            {t("nav.recycle", "Recycle bin")}
+          </Link>
+        </div>
       </div>
       <form
         className="panel"

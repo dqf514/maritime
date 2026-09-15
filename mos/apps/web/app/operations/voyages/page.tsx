@@ -4,6 +4,8 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { DateTimeInput } from "@/components/DateInput";
+import { ExportButton } from "@/components/ExportButton";
+import { PageGuide } from "@/components/PageGuide";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -444,9 +446,13 @@ export default function VoyagesPage() {
             {t("page.voyages.sub", "航次、港序、SOF、正午报与冲突。选中航次后可在右侧编辑或删除。")}
           </p>
         </div>
-        <Link href="/settings/recycle" className="btn btn-ghost">
-          {t("nav.recycle", "回收站")}
-        </Link>
+        <div className="quick-row">
+          <ExportButton entity="voyages" />
+          <PageGuide pageKey="voyages" />
+          <Link href="/settings/recycle" className="btn btn-ghost">
+            {t("nav.recycle", "回收站")}
+          </Link>
+        </div>
       </div>
 
       {msg ? <p className="flash">{msg}</p> : null}

@@ -5,7 +5,9 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput, DateTimeInput } from "@/components/DateInput";
+import { ExportButton } from "@/components/ExportButton";
 import { LookupSelect } from "@/components/LookupSelect";
+import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -767,6 +769,7 @@ export default function FinanceHubPage() {
           </p>
         </div>
         <div className="quick-row">
+          <PageGuide pageKey="finance" />
           <Link href="/settings/recycle" className="btn btn-ghost">
             {t("nav.recycle", "Recycle bin")}
           </Link>
@@ -876,6 +879,9 @@ export default function FinanceHubPage() {
           </form>
 
           <div className="panel">
+            <div className="desk-toolbar" style={{ marginTop: 0, justifyContent: "flex-end" }}>
+              <ExportButton entity="invoices" />
+            </div>
             <div className="form-grid" style={{ marginBottom: "0.75rem", maxWidth: 280 }}>
               <label>
                 {t("page.finance.pay_amount", "Payment amount")}

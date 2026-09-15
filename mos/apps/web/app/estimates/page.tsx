@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { PageGuide } from "@/components/PageGuide";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -517,6 +518,7 @@ export default function EstimatesPage() {
           </p>
         </div>
         <div className="quick-row">
+          <PageGuide pageKey="estimates" />
           <Link href="/settings/recycle" className="btn btn-ghost">
             {t("nav.recycle", "回收站")}
           </Link>

@@ -415,4 +415,29 @@ export type VoyageOverview = {
   };
 };
 
+export type PageGuide = {
+  page_key: string;
+  title: { en: string; zh?: string };
+  purpose: { en: string; zh?: string };
+  steps: { en: string; zh?: string }[];
+  upstream: { en: string; zh?: string };
+  downstream: { en: string; zh?: string };
+  roles: { en: string; zh?: string };
+  help_slugs: string[];
+};
+
+export type OnboardingItem = {
+  key: string;
+  label: { en: string; zh?: string };
+  hint: { en: string; zh?: string };
+  done: boolean;
+  href: string;
+};
+
+export type OnboardingState = {
+  items: OnboardingItem[];
+  progress: { done: number; total: number };
+  dismissed: boolean;
+};
+
 export { API_BASE };
