@@ -178,8 +178,26 @@ export default function LoginPage() {
         <LanguageSwitcher />
       </header>
 
-      <main className="login-center">
-        <form className="login-card login-card-solo" onSubmit={onSubmit}>
+      <main className="login-split">
+        <aside className="login-brand-pane">
+          <div className="login-brand-inner">
+            <p className="login-brand-mark">{name}</p>
+            <p className="login-brand-tagline">
+              {t("login.brand_tagline", "把 Excel、邮件和计算器，变成一个为航运生意而生的系统")}
+            </p>
+            <a className="login-brand-intro" href="/intro.html">
+              {t("portal.cta_intro", "了解详情")} →
+            </a>
+          </div>
+          <svg className="login-brand-waves" viewBox="0 0 480 220" fill="none" aria-hidden>
+            <path d="M-20 150 Q60 132 120 150 T260 150 T400 150 T540 150" stroke="#2ea8ff" strokeWidth="2" opacity=".45" />
+            <path d="M-20 178 Q60 160 120 178 T260 178 T400 178 T540 178" stroke="#45d5f2" strokeWidth="1.6" opacity=".3" />
+            <path d="M-20 206 Q60 190 120 206 T260 206 T400 206 T540 206" stroke="#e9bd5c" strokeWidth="1.4" opacity=".22" />
+          </svg>
+        </aside>
+
+        <div className="login-form-pane">
+          <form className="login-card login-card-solo" onSubmit={onSubmit}>
           <div className="login-card-head">
             <h1>{t("login.welcome", "Welcome back")}</h1>
             <p>{t("login.hint_quiet", "Sign in to your organisation workspace.")}</p>
@@ -264,19 +282,20 @@ export default function LoginPage() {
               {t("login.magic_queued", "Magic link sent — check your inbox to complete sign-in.")}
             </p>
           ) : null}
-        </form>
+          </form>
 
-        <details className="login-demo-details">
-          <summary>{t("login.demo_toggle", "Demo access")}</summary>
-          <div className="preset-grid preset-grid-compact">
-            {PRESETS.map((p) => (
-              <button key={p.email + p.labelKey} type="button" className="preset-card" onClick={() => applyPreset(p)}>
-                <strong>{t(p.labelKey, p.label)}</strong>
-                <small>{p.email}</small>
-              </button>
-            ))}
-          </div>
-        </details>
+          <details className="login-demo-details">
+            <summary>{t("login.demo_toggle", "Demo access")}</summary>
+            <div className="preset-grid preset-grid-compact">
+              {PRESETS.map((p) => (
+                <button key={p.email + p.labelKey} type="button" className="preset-card" onClick={() => applyPreset(p)}>
+                  <strong>{t(p.labelKey, p.label)}</strong>
+                  <small>{p.email}</small>
+                </button>
+              ))}
+            </div>
+          </details>
+        </div>
       </main>
     </div>
   );

@@ -1,0 +1,1149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VoyageOS — 航运商业操作系统 | Commercial Voyage Management</title>
+<meta name="description" content="VoyageOS：面向船东、租家、Operator 与船舶管理公司的航运商业操作系统。航次估算→租约→执行→滞期索赔→燃油→财务结算，全链路闭环。">
+<style>
+:root{
+  --bg:#050c18;
+  --bg2:#081226;
+  --bg3:#0a1830;
+  --panel:#0c1a33;
+  --panel2:#0e2040;
+  --line:rgba(120,170,255,.14);
+  --line2:rgba(120,170,255,.24);
+  --txt:#e9f1fc;
+  --muted:#93a7c4;
+  --muted2:#6c81a3;
+  --cyan:#3fd2f0;
+  --cyan2:#2ea8ff;
+  --gold:#e6b955;
+  --gold2:#f2d38a;
+  --good:#4ade80;
+  --bad:#f87171;
+  --radius:16px;
+  --maxw:1180px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg);
+  color:var(--txt);
+  font-family:"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",system-ui,-apple-system,sans-serif;
+  line-height:1.65;
+  font-size:16px;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+::selection{background:rgba(63,210,240,.28)}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px}
+.en{font-family:"Segoe UI",system-ui,sans-serif;letter-spacing:.02em}
+
+/* ---------- 背景氛围 ---------- */
+.bg-glow{
+  position:fixed;inset:0;z-index:-2;pointer-events:none;
+  background:
+    radial-gradient(900px 480px at 12% -6%, rgba(46,168,255,.14), transparent 60%),
+    radial-gradient(800px 500px at 88% 4%, rgba(63,210,240,.10), transparent 60%),
+    radial-gradient(1000px 700px at 50% 110%, rgba(20,60,130,.25), transparent 65%),
+    var(--bg);
+}
+.bg-grid{
+  position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.5;
+  background-image:
+    linear-gradient(rgba(120,170,255,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120,170,255,.05) 1px, transparent 1px);
+  background-size:56px 56px;
+  mask-image:radial-gradient(ellipse 90% 60% at 50% 0%, #000 30%, transparent 75%);
+  -webkit-mask-image:radial-gradient(ellipse 90% 60% at 50% 0%, #000 30%, transparent 75%);
+}
+
+/* ---------- 导航 ---------- */
+.nav{
+  position:sticky;top:0;z-index:50;
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  background:rgba(5,12,24,.72);
+  border-bottom:1px solid var(--line);
+}
+.nav-inner{max-width:var(--maxw);margin:0 auto;padding:14px 28px;display:flex;align-items:center;gap:28px}
+.brand{display:flex;align-items:center;gap:11px;font-weight:700;font-size:19px;letter-spacing:.02em}
+.brand .en{color:var(--txt)}
+.brand-sub{font-size:11px;color:var(--muted2);letter-spacing:.14em;text-transform:uppercase}
+.nav-links{display:flex;gap:26px;margin-left:auto;font-size:14px;color:var(--muted)}
+.nav-links a{transition:color .2s}
+.nav-links a:hover{color:var(--cyan)}
+.nav-cta{
+  padding:9px 20px;border-radius:999px;font-size:14px;font-weight:600;
+  background:linear-gradient(135deg,var(--cyan2),var(--cyan));color:#04121f;
+  transition:transform .2s, box-shadow .2s;
+}
+.nav-cta:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(63,210,240,.35)}
+
+/* ---------- Hero ---------- */
+.hero{padding:88px 0 40px;position:relative}
+.hero-inner{display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:9px;
+  padding:6px 16px;border-radius:999px;font-size:13px;
+  border:1px solid var(--line2);color:var(--cyan);
+  background:rgba(63,210,240,.07);margin-bottom:26px;
+}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 10px var(--good)}
+h1.hero-title{
+  font-size:clamp(38px,5vw,58px);line-height:1.16;font-weight:800;letter-spacing:.01em;
+  margin-bottom:8px;
+}
+h1 .grad{
+  background:linear-gradient(120deg,#bfe9ff 0%,var(--cyan) 45%,var(--cyan2) 80%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.hero-tag{font-size:clamp(15px,1.6vw,18px);color:var(--muted);margin:20px 0 10px;max-width:540px}
+.hero-tag b{color:var(--txt);font-weight:600}
+.hero-en{font-size:13px;color:var(--muted2);letter-spacing:.1em;text-transform:uppercase;margin-bottom:34px}
+.hero-ctas{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+.btn{
+  display:inline-flex;align-items:center;gap:9px;
+  padding:14px 30px;border-radius:12px;font-size:15px;font-weight:600;
+  transition:transform .2s, box-shadow .2s, border-color .2s;
+}
+.btn-primary{
+  background:linear-gradient(135deg,var(--cyan2),var(--cyan));color:#04121f;
+  box-shadow:0 8px 30px rgba(46,168,255,.28);
+}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 12px 40px rgba(63,210,240,.4)}
+.btn-ghost{border:1px solid var(--line2);color:var(--txt);background:rgba(12,26,51,.5)}
+.btn-ghost:hover{border-color:var(--cyan);color:var(--cyan)}
+.hero-proof{display:flex;gap:30px;margin-top:44px;flex-wrap:wrap}
+.proof-item{font-size:13px;color:var(--muted)}
+.proof-item b{display:block;font-size:22px;color:var(--txt);font-weight:700}
+.proof-item b .en{color:var(--gold)}
+.hero-art{position:relative}
+.hero-art svg{width:100%;height:auto;display:block;filter:drop-shadow(0 24px 60px rgba(0,20,60,.6))}
+
+/* ---------- 通用节区 ---------- */
+section{padding:96px 0}
+.sec-head{max-width:720px;margin:0 auto 60px;text-align:center}
+.sec-kicker{
+  font-size:12.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--cyan);
+  font-weight:700;margin-bottom:14px;
+}
+.sec-kicker .en{color:var(--muted2)}
+h2.sec-title{font-size:clamp(28px,3.4vw,40px);font-weight:800;line-height:1.25;margin-bottom:16px}
+.sec-desc{color:var(--muted);font-size:16.5px}
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .7s ease,transform .7s ease}
+.reveal.in{opacity:1;transform:none}
+
+/* ---------- 痛点对比 ---------- */
+.vs-grid{display:grid;grid-template-columns:1fr 56px 1fr;gap:0;align-items:stretch}
+.vs-card{
+  background:linear-gradient(180deg,var(--panel),var(--bg3));
+  border:1px solid var(--line);border-radius:var(--radius);padding:36px 34px;
+}
+.vs-card.old{border-color:rgba(248,113,113,.22)}
+.vs-card.new{
+  border-color:rgba(63,210,240,.35);position:relative;
+  box-shadow:0 0 0 1px rgba(63,210,240,.12), 0 20px 60px rgba(20,80,160,.18);
+}
+.vs-badge{
+  display:inline-block;font-size:12px;font-weight:700;letter-spacing:.12em;
+  padding:4px 14px;border-radius:999px;margin-bottom:20px;text-transform:uppercase;
+}
+.vs-card.old .vs-badge{background:rgba(248,113,113,.12);color:var(--bad)}
+.vs-card.new .vs-badge{background:rgba(63,210,240,.12);color:var(--cyan)}
+.vs-card h3{font-size:21px;margin-bottom:20px}
+.vs-list{list-style:none;display:flex;flex-direction:column;gap:14px}
+.vs-list li{display:flex;gap:12px;font-size:14.5px;color:var(--muted);line-height:1.55}
+.vs-list li b{color:var(--txt);font-weight:600}
+.vs-ico{flex:none;width:20px;height:20px;margin-top:2px}
+.vs-mid{display:flex;align-items:center;justify-content:center}
+.vs-mid span{
+  width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--line2);background:var(--panel);
+  color:var(--cyan);font-size:18px;font-weight:800;
+}
+
+/* ---------- 闭环流程 ---------- */
+.flow-shell{
+  background:linear-gradient(180deg,var(--panel),var(--bg3));
+  border:1px solid var(--line);border-radius:20px;padding:44px 30px 30px;
+  overflow-x:auto;
+}
+.flow-shell svg{min-width:960px;width:100%;height:auto;display:block}
+.flow-note{display:flex;justify-content:center;gap:36px;margin-top:8px;flex-wrap:wrap}
+.flow-note span{font-size:13px;color:var(--muted2);display:flex;align-items:center;gap:8px}
+.flow-note i{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+/* ---------- 模块网格 ---------- */
+.mod-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.mod-card{
+  background:linear-gradient(180deg,var(--panel),var(--bg3));
+  border:1px solid var(--line);border-radius:var(--radius);padding:30px 28px;
+  transition:transform .25s, border-color .25s, box-shadow .25s;
+  display:flex;flex-direction:column;
+}
+.mod-card:hover{
+  transform:translateY(-5px);border-color:rgba(63,210,240,.4);
+  box-shadow:0 18px 50px rgba(10,50,110,.35);
+}
+.mod-ico{
+  width:50px;height:50px;border-radius:13px;margin-bottom:20px;
+  display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(145deg,rgba(63,210,240,.14),rgba(46,168,255,.06));
+  border:1px solid rgba(63,210,240,.25);
+}
+.mod-card h3{font-size:18.5px;margin-bottom:3px}
+.mod-en{font-size:11.5px;color:var(--muted2);letter-spacing:.12em;text-transform:uppercase;margin-bottom:14px}
+.mod-card ul{list-style:none;display:flex;flex-direction:column;gap:9px}
+.mod-card li{
+  font-size:13.5px;color:var(--muted);padding-left:17px;position:relative;line-height:1.5;
+}
+.mod-card li::before{
+  content:"";position:absolute;left:0;top:8px;width:6px;height:6px;border-radius:2px;
+  background:linear-gradient(135deg,var(--cyan),var(--cyan2));
+}
+.mod-card li b{color:var(--txt);font-weight:600}
+.mod-card li .gold{color:var(--gold)}
+
+/* ---------- 加固亮点 ---------- */
+.harden-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-bottom:26px}
+.h-card{
+  border:1px solid var(--line);border-radius:var(--radius);padding:28px 26px;
+  background:linear-gradient(180deg,var(--panel2),var(--bg3));
+}
+.h-card h3{font-size:17px;margin:16px 0 10px;display:flex;align-items:center;gap:10px}
+.h-card p{font-size:13.5px;color:var(--muted);line-height:1.6}
+.h-card p b{color:var(--txt)}
+.h-ico{width:44px;height:44px;border-radius:11px;display:flex;align-items:center;justify-content:center;
+  background:rgba(230,185,85,.1);border:1px solid rgba(230,185,85,.3)}
+.badge-row{
+  display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:36px;
+}
+.q-badge{
+  display:inline-flex;align-items:center;gap:9px;font-size:13.5px;color:var(--muted);
+  border:1px solid var(--line2);border-radius:999px;padding:9px 18px;background:rgba(12,26,51,.6);
+}
+.q-badge b{color:var(--gold);font-weight:700}
+.q-badge svg{flex:none}
+
+/* ---------- 数字区 ---------- */
+.stats-sec{background:linear-gradient(180deg,transparent,rgba(10,24,48,.65) 18%,rgba(10,24,48,.65) 82%,transparent)}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.stat-card{
+  border:1px solid var(--line);border-radius:var(--radius);padding:30px 28px;
+  background:linear-gradient(180deg,var(--panel),var(--bg3));
+  display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;
+}
+.stat-num{font-size:46px;font-weight:800;line-height:1.1;letter-spacing:.01em;
+  background:linear-gradient(120deg,#cdeeff,var(--cyan));
+  -webkit-background-clip:text;background-clip:text;color:transparent;font-variant-numeric:tabular-nums}
+.stat-num .unit{font-size:22px}
+.stat-label{font-size:15px;font-weight:600}
+.stat-sub{font-size:12.5px;color:var(--muted2)}
+.stat-chart{margin-top:14px}
+.stat-chart svg{width:100%;height:auto;display:block}
+
+/* ---------- 部署与集成 ---------- */
+.deploy-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:26px;align-items:stretch}
+.term{
+  border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
+  background:#070f1f;display:flex;flex-direction:column;
+}
+.term-bar{display:flex;align-items:center;gap:7px;padding:12px 16px;border-bottom:1px solid var(--line);background:rgba(12,26,51,.8)}
+.term-bar i{width:11px;height:11px;border-radius:50%;display:block}
+.term-bar i:nth-child(1){background:#ff5f57}.term-bar i:nth-child(2){background:#febc2e}.term-bar i:nth-child(3){background:#28c840}
+.term-bar span{margin-left:10px;font-size:12px;color:var(--muted2);letter-spacing:.06em}
+.term pre{
+  padding:22px 24px;font-family:"Cascadia Code","JetBrains Mono",Consolas,Menlo,monospace;
+  font-size:13px;line-height:1.8;color:#b9cdea;overflow-x:auto;flex:1;
+}
+.term .c{color:#5b7196}.term .g{color:var(--good)}.term .y{color:var(--gold)}.term .cy{color:var(--cyan)}
+.deploy-cards{display:flex;flex-direction:column;gap:18px}
+.d-card{
+  border:1px solid var(--line);border-radius:var(--radius);padding:24px 26px;flex:1;
+  background:linear-gradient(180deg,var(--panel),var(--bg3));
+  display:flex;gap:18px;align-items:flex-start;
+}
+.d-card h3{font-size:16.5px;margin-bottom:6px}
+.d-card p{font-size:13.5px;color:var(--muted)}
+.d-card p b{color:var(--txt)}
+.d-ico{flex:none;width:44px;height:44px;border-radius:11px;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(145deg,rgba(63,210,240,.14),rgba(46,168,255,.06));border:1px solid rgba(63,210,240,.25)}
+
+/* ---------- 页脚 CTA ---------- */
+.final-cta{
+  text-align:center;padding:110px 0 90px;position:relative;
+}
+.final-cta h2{font-size:clamp(30px,4vw,46px);font-weight:800;margin-bottom:18px;line-height:1.25}
+.final-cta p{color:var(--muted);max-width:560px;margin:0 auto 38px;font-size:16.5px}
+footer{border-top:1px solid var(--line);padding:44px 0 52px}
+.foot-inner{display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap;align-items:flex-start}
+.foot-brand{max-width:340px}
+.foot-brand p{font-size:13px;color:var(--muted2);margin-top:12px;line-height:1.7}
+.foot-cols{display:flex;gap:64px;flex-wrap:wrap}
+.foot-col h4{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted2);margin-bottom:14px}
+.foot-col a,.foot-col span{display:block;font-size:14px;color:var(--muted);margin-bottom:9px;transition:color .2s}
+.foot-col a:hover{color:var(--cyan)}
+.foot-copy{margin-top:40px;padding-top:24px;border-top:1px solid var(--line);
+  font-size:12.5px;color:var(--muted2);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+
+/* ---------- SVG 动画 ---------- */
+@keyframes dashMove{to{stroke-dashoffset:-120}}
+@keyframes floatY{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@keyframes waveDrift{0%{transform:translateX(0)}100%{transform:translateX(-60px)}}
+.anim-dash{stroke-dasharray:8 10;animation:dashMove 6s linear infinite}
+.anim-float{animation:floatY 5.5s ease-in-out infinite}
+.anim-pulse{animation:pulse 2.4s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){
+  .anim-dash,.anim-float,.anim-pulse{animation:none}
+  html{scroll-behavior:auto}
+  .reveal{opacity:1;transform:none;transition:none}
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width:1020px){
+  .hero-inner{grid-template-columns:1fr;gap:44px}
+  .hero{padding:60px 0 30px}
+  .mod-grid,.harden-grid,.stats-grid{grid-template-columns:repeat(2,1fr)}
+  .deploy-grid{grid-template-columns:1fr}
+}
+@media (max-width:860px){
+  .nav-links{display:none}
+  .mod-grid,.harden-grid,.stats-grid{grid-template-columns:1fr}
+  .vs-grid{grid-template-columns:1fr;gap:18px}
+  .vs-mid span{transform:rotate(90deg)}
+  section{padding:68px 0}
+  .wrap{padding:0 20px}
+  .hero-proof{gap:22px}
+}
+</style>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="bg-grid"></div>
+
+<!-- ============ 导航 ============ -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top">
+      <svg width="34" height="34" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+        <rect x="1" y="1" width="38" height="38" rx="10" fill="#0c1a33" stroke="rgba(120,170,255,.3)"/>
+        <path d="M6 26 L14 26 L16 20 L24 20 L26 26 L34 26 L31 31 L9 31 Z" fill="#3fd2f0" opacity=".9"/>
+        <path d="M15 20 L15 14 L25 14 L25 20" stroke="#e6b955" stroke-width="2" fill="none"/>
+        <path d="M4 34 Q10 32 14 34 T24 34 T36 34" stroke="#2ea8ff" stroke-width="1.6" fill="none" opacity=".7"/>
+      </svg>
+      <span>
+        <span class="en">VoyageOS</span><br>
+        <span class="brand-sub">航运商业操作系统</span>
+      </span>
+    </a>
+    <div class="nav-links">
+      <a href="#pain">痛点</a>
+      <a href="#loop">全链路闭环</a>
+      <a href="#modules">产品能力</a>
+      <a href="#hardening">工程加固</a>
+      <a href="#stats">平台数据</a>
+      <a href="#deploy">部署集成</a>
+    </div>
+    <a class="nav-cta" href="#contact">预约演示</a>
+  </div>
+</nav>
+
+<!-- ============ Hero ============ -->
+<header class="hero" id="top">
+  <div class="wrap hero-inner">
+    <div>
+      <div class="eyebrow"><span class="dot"></span>P0–P3 工程加固完成 · 222 项自动化测试全绿</div>
+      <h1 class="hero-title">
+        让每一航次的<br><span class="grad">商业价值清晰可见</span>
+      </h1>
+      <p class="hero-tag">
+        <b>VoyageOS</b> 是面向船东、租家、Operator 与船舶管理公司的航运商业操作系统：
+        从<b>航次估算</b>到<b>财务结算</b>，一个系统完成全链路闭环。
+      </p>
+      <p class="hero-en en">Commercial Voyage Management · Estimate → Fixture → Execution → Demurrage → Bunker → Settlement</p>
+      <div class="hero-ctas">
+        <a class="btn btn-primary" href="#modules">
+          探索产品能力
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h9M8.5 3.5 13 8l-4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="btn btn-ghost" href="#deploy">查看部署方案</a>
+      </div>
+      <div class="hero-proof">
+        <div class="proof-item"><b><span class="num" data-count="222">0</span></b>自动化测试<br>Automated Tests</div>
+        <div class="proof-item"><b><span class="num" data-count="12">0</span></b>SOF 标准事件码<br>Event Codes</div>
+        <div class="proof-item"><b><span class="num" data-count="108">0</span></b>数据表迁移基线<br>Table Baseline</div>
+        <div class="proof-item"><b><span class="num" data-count="61">0</span></b>多租户攻击向量门禁<br>Isolation Vectors</div>
+      </div>
+    </div>
+
+    <!-- Hero 主插画：船舶 · 航线 · 仪表盘 -->
+    <div class="hero-art">
+      <svg viewBox="0 0 640 520" fill="none" role="img" aria-label="VoyageOS 船舶与航线数据插画">
+        <defs>
+          <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#0e2a52"/><stop offset="1" stop-color="#071427"/>
+          </linearGradient>
+          <linearGradient id="hull" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#1b3c6e"/><stop offset="1" stop-color="#0d2242"/>
+          </linearGradient>
+          <linearGradient id="route" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#2ea8ff"/><stop offset="1" stop-color="#3fd2f0"/>
+          </linearGradient>
+          <radialGradient id="portGlow" cx=".5" cy=".5" r=".5">
+            <stop offset="0" stop-color="#3fd2f0" stop-opacity=".8"/><stop offset="1" stop-color="#3fd2f0" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+
+        <!-- 星空 -->
+        <g fill="#bfe0ff">
+          <circle cx="60" cy="50" r="1.4" opacity=".6"/><circle cx="140" cy="30" r="1" opacity=".4"/>
+          <circle cx="230" cy="60" r="1.6" opacity=".7"/><circle cx="330" cy="28" r="1" opacity=".5"/>
+          <circle cx="430" cy="52" r="1.4" opacity=".6"/><circle cx="540" cy="36" r="1.2" opacity=".5"/>
+          <circle cx="600" cy="90" r="1" opacity=".4"/><circle cx="90" cy="120" r="1.2" opacity=".45"/>
+          <circle cx="500" cy="120" r="1" opacity=".35"/>
+        </g>
+
+        <!-- 航线弧线与港口 -->
+        <path class="anim-dash" d="M70 300 C 180 180, 380 160, 560 250" stroke="url(#route)" stroke-width="2" fill="none" opacity=".85"/>
+        <g>
+          <circle cx="70" cy="300" r="18" fill="url(#portGlow)"/>
+          <circle cx="70" cy="300" r="5" fill="#3fd2f0"/>
+          <circle class="anim-pulse" cx="70" cy="300" r="10" stroke="#3fd2f0" stroke-width="1" fill="none"/>
+          <text x="70" y="332" text-anchor="middle" font-size="11" fill="#93a7c4" font-family="inherit">SHA 上海</text>
+        </g>
+        <g>
+          <circle cx="330" cy="196" r="14" fill="url(#portGlow)"/>
+          <circle cx="330" cy="196" r="4" fill="#e6b955"/>
+          <text x="330" y="176" text-anchor="middle" font-size="11" fill="#93a7c4" font-family="inherit">SIN 新加坡</text>
+        </g>
+        <g>
+          <circle cx="560" cy="250" r="18" fill="url(#portGlow)"/>
+          <circle cx="560" cy="250" r="5" fill="#3fd2f0"/>
+          <circle class="anim-pulse" cx="560" cy="250" r="10" stroke="#3fd2f0" stroke-width="1" fill="none"/>
+          <text x="560" y="282" text-anchor="middle" font-size="11" fill="#93a7c4" font-family="inherit">RTM 鹿特丹</text>
+        </g>
+        <!-- ETA 标签 -->
+        <g class="anim-float">
+          <rect x="238" y="128" width="186" height="34" rx="9" fill="#0c1a33" stroke="rgba(120,170,255,.3)"/>
+          <circle cx="256" cy="145" r="4" fill="#4ade80"/>
+          <text x="268" y="149" font-size="12" fill="#cde6ff" font-family="inherit">ETA 偏差 −0.4 天 · 正常</text>
+        </g>
+
+        <!-- 船舶 -->
+        <g class="anim-float">
+          <!-- 船体 -->
+          <path d="M180 372 L470 372 L448 420 Q444 428 434 428 L216 428 Q206 428 202 420 Z" fill="url(#hull)" stroke="rgba(120,200,255,.35)" stroke-width="1.2"/>
+          <rect x="180" y="366" width="290" height="7" rx="3" fill="#2ea8ff" opacity=".85"/>
+          <!-- 集装箱 -->
+          <g stroke="rgba(6,16,32,.5)" stroke-width="1">
+            <rect x="212" y="338" width="42" height="28" rx="2" fill="#2ea8ff"/>
+            <rect x="258" y="338" width="42" height="28" rx="2" fill="#3fd2f0"/>
+            <rect x="304" y="338" width="42" height="28" rx="2" fill="#e6b955"/>
+            <rect x="350" y="338" width="42" height="28" rx="2" fill="#2ea8ff"/>
+            <rect x="235" y="310" width="42" height="28" rx="2" fill="#3fd2f0" opacity=".9"/>
+            <rect x="281" y="310" width="42" height="28" rx="2" fill="#2ea8ff" opacity=".9"/>
+            <rect x="327" y="310" width="42" height="28" rx="2" fill="#e6b955" opacity=".9"/>
+          </g>
+          <!-- 驾驶台与烟囱 -->
+          <rect x="404" y="312" width="52" height="54" rx="3" fill="#16406f" stroke="rgba(120,200,255,.3)"/>
+          <rect x="410" y="320" width="40" height="9" rx="2" fill="#bfe9ff" opacity=".8"/>
+          <rect x="410" y="335" width="40" height="9" rx="2" fill="#bfe9ff" opacity=".5"/>
+          <rect x="418" y="288" width="24" height="24" rx="3" fill="#0d2242" stroke="rgba(230,185,85,.6)"/>
+          <rect x="418" y="288" width="24" height="7" rx="3" fill="#e6b955"/>
+          <!-- 雷达桅杆 -->
+          <line x1="430" y1="288" x2="430" y2="262" stroke="#5b83b8" stroke-width="2"/>
+          <circle class="anim-pulse" cx="430" cy="258" r="4" fill="#3fd2f0"/>
+        </g>
+
+        <!-- 海浪 -->
+        <g opacity=".9">
+          <path d="M0 436 Q 40 426 80 436 T 160 436 T 240 436 T 320 436 T 400 436 T 480 436 T 560 436 T 640 436 L640 520 L0 520 Z" fill="url(#sea)"/>
+          <path d="M0 452 Q 50 442 100 452 T 200 452 T 300 452 T 400 452 T 500 452 T 600 452 T 700 452" stroke="#2ea8ff" stroke-width="1.4" fill="none" opacity=".35"/>
+          <path d="M-40 470 Q 30 460 100 470 T 240 470 T 380 470 T 520 470 T 660 470" stroke="#3fd2f0" stroke-width="1.2" fill="none" opacity=".22"/>
+        </g>
+
+        <!-- 漂浮仪表盘卡片：TCE -->
+        <g class="anim-float" style="animation-delay:-2s">
+          <rect x="36" y="352" width="150" height="92" rx="12" fill="#0c1a33" stroke="rgba(120,170,255,.3)"/>
+          <text x="52" y="376" font-size="10.5" fill="#6c81a3" font-family="inherit" letter-spacing="1">TCE 美元/天</text>
+          <text x="52" y="400" font-size="22" font-weight="700" fill="#3fd2f0" font-family="inherit">28,450</text>
+          <polyline points="52,428 72,420 92,424 112,412 132,416 152,406 168,410" stroke="#4ade80" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </g>
+
+        <!-- 漂浮仪表盘卡片：CII -->
+        <g class="anim-float" style="animation-delay:-3.6s">
+          <rect x="472" y="320" width="132" height="86" rx="12" fill="#0c1a33" stroke="rgba(120,170,255,.3)"/>
+          <text x="488" y="343" font-size="10.5" fill="#6c81a3" font-family="inherit" letter-spacing="1">CII 评级</text>
+          <path d="M496 388 A 30 30 0 0 1 556 388" stroke="#22385e" stroke-width="9" fill="none" stroke-linecap="round"/>
+          <path d="M496 388 A 30 30 0 0 1 537 363" stroke="#4ade80" stroke-width="9" fill="none" stroke-linecap="round"/>
+          <text x="516" y="386" font-size="19" font-weight="700" fill="#4ade80" font-family="inherit">A</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</header>
+
+<!-- ============ 痛点对比 ============ -->
+<section id="pain">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-kicker">为什么需要 VoyageOS <span class="en">/ Why</span></div>
+      <h2 class="sec-title">告别 Excel + 邮件的航次管理</h2>
+      <p class="sec-desc">滞期费 Demurrage 算错一位小数，就是数万美元的争议。数据散落在表格与收件箱里，每一次结算都在重复对账。</p>
+    </div>
+    <div class="vs-grid reveal">
+      <div class="vs-card old">
+        <span class="vs-badge">传统方式 · Legacy</span>
+        <h3>Excel + 邮件 + 经验</h3>
+        <ul class="vs-list">
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#f87171" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <span><b>估算靠手工：</b>TCE 公式各自维护，佣金、EU ETS 碳成本漏算难追溯</span>
+          </li>
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#f87171" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <span><b>Laytime 靠翻 SOF：</b>SHINC/SHEX、节假日、港口时区逐条人工扣算，一算几天</span>
+          </li>
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#f87171" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <span><b>Timebar 靠日历提醒：</b>索赔时效错过即灭失，无人兜底</span>
+          </li>
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#f87171" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <span><b>P&amp;L 月底才见：</b>actual 与 accrual 口径混乱，航次盈亏事后才知道</span>
+          </li>
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#f87171" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <span><b>数据权属不清：</b>多租户混跑、会话裸奔、操作无审计</span>
+          </li>
+        </ul>
+      </div>
+      <div class="vs-mid"><span>→</span></div>
+      <div class="vs-card new">
+        <span class="vs-badge">VoyageOS 方式</span>
+        <h3>一个系统，全链路闭环</h3>
+        <ul class="vs-list">
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#4ade80" stroke-width="1.5"/><path d="M6.2 10.4l2.4 2.4 5-5.4" stroke="#4ade80" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>TCE 引擎：</b>Decimal 精度、金样例背书，双佣金与 EU ETS 碳成本内建</span>
+          </li>
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#4ade80" stroke-width="1.5"/><path d="M6.2 10.4l2.4 2.4 5-5.4" stroke="#4ade80" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>Laytime 引擎：</b>全条款覆盖，一键从 SOF 生成计算书，两港可逆/合并互抵</span>
+          </li>
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#4ade80" stroke-width="1.5"/><path d="M6.2 10.4l2.4 2.4 5-5.4" stroke="#4ade80" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>Timebar 自动推算：</b>届满前 14 天主动预警，部分和解全程留痕</span>
+          </li>
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#4ade80" stroke-width="1.5"/><path d="M6.2 10.4l2.4 2.4 5-5.4" stroke="#4ade80" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>双口径 P&amp;L：</b>actual / accrual 全行项实时可见，一键转发票、红冲可逆</span>
+          </li>
+          <li>
+            <svg class="vs-ico" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.4" stroke="#4ade80" stroke-width="1.5"/><path d="M6.2 10.4l2.4 2.4 5-5.4" stroke="#4ade80" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span><b>企业级底座：</b>多租户隔离 61 个攻击向量测试门禁，全量审计日志</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 全链路闭环 ============ -->
+<section id="loop">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-kicker">全链路闭环 <span class="en">/ Closed Loop</span></div>
+      <h2 class="sec-title">一次录入，全程流转</h2>
+      <p class="sec-desc">估算结果直接转租约，租约条款驱动执行校验，SOF 一键生成滞期计算书，索赔定稿一键转发票——数据不落地、不重复录入。</p>
+    </div>
+    <div class="flow-shell reveal">
+      <svg viewBox="0 0 1200 300" fill="none" role="img" aria-label="VoyageOS 全链路闭环流程图：估算、租约、执行、滞期索赔、燃油、结算">
+        <defs>
+          <linearGradient id="fl" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#2ea8ff"/><stop offset="1" stop-color="#3fd2f0"/>
+          </linearGradient>
+        </defs>
+
+        <!-- 主链路连线 -->
+        <path class="anim-dash" d="M140 130 L1060 130" stroke="url(#fl)" stroke-width="2" opacity=".55"/>
+        <!-- 回流虚线：结算数据反哺估算 -->
+        <path class="anim-dash" d="M1060 168 C 900 250, 300 250, 140 168" stroke="#e6b955" stroke-width="1.6" opacity=".6"/>
+        <text x="600" y="252" text-anchor="middle" font-size="12.5" fill="#e6b955" font-family="inherit">结算实绩 Actuals 回流，校准下一次估算</text>
+        <path d="M146 172 L138 162 L150 160 Z" fill="#e6b955" opacity=".9"/>
+
+        <!-- 节点 1 估算 -->
+        <g>
+          <circle cx="140" cy="130" r="46" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.6"/>
+          <circle cx="140" cy="130" r="46" fill="url(#fl)" opacity=".08"/>
+          <path d="M126 138 L128 122 L136 131 L144 118 L152 126 L156 121" stroke="#3fd2f0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M126 143 h30" stroke="#3fd2f0" stroke-width="1.6" stroke-linecap="round" opacity=".5"/>
+          <text x="140" y="205" text-anchor="middle" font-size="15" font-weight="600" fill="#e9f1fc" font-family="inherit">航次估算</text>
+          <text x="140" y="223" text-anchor="middle" font-size="11" fill="#6c81a3" font-family="inherit">Voyage Estimate · TCE</text>
+        </g>
+        <!-- 节点 2 租约 -->
+        <g>
+          <circle cx="324" cy="130" r="46" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.6"/>
+          <circle cx="324" cy="130" r="46" fill="url(#fl)" opacity=".08"/>
+          <rect x="312" y="114" width="24" height="30" rx="3" stroke="#3fd2f0" stroke-width="1.8" fill="none"/>
+          <path d="M317 121h14M317 127h14M317 133h9" stroke="#3fd2f0" stroke-width="1.5" stroke-linecap="round"/>
+          <text x="324" y="205" text-anchor="middle" font-size="15" font-weight="600" fill="#e9f1fc" font-family="inherit">租约管理</text>
+          <text x="324" y="223" text-anchor="middle" font-size="11" fill="#6c81a3" font-family="inherit">Fixture · VC/TC/COA</text>
+        </g>
+        <!-- 节点 3 执行 -->
+        <g>
+          <circle cx="508" cy="130" r="46" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.6"/>
+          <circle cx="508" cy="130" r="46" fill="url(#fl)" opacity=".08"/>
+          <circle cx="496" cy="140" r="3" fill="#3fd2f0"/>
+          <circle cx="508" cy="120" r="3" fill="#3fd2f0"/>
+          <circle cx="522" cy="136" r="3" fill="#3fd2f0"/>
+          <path d="M496 140 L508 120 L522 136" stroke="#3fd2f0" stroke-width="1.6" fill="none"/>
+          <text x="508" y="205" text-anchor="middle" font-size="15" font-weight="600" fill="#e9f1fc" font-family="inherit">航次执行</text>
+          <text x="508" y="223" text-anchor="middle" font-size="11" fill="#6c81a3" font-family="inherit">Execution · SOF/Noon Report</text>
+        </g>
+        <!-- 节点 4 滞期 -->
+        <g>
+          <circle cx="692" cy="130" r="46" fill="#0c1a33" stroke="#e6b955" stroke-width="1.6"/>
+          <circle cx="692" cy="130" r="46" fill="#e6b955" opacity=".07"/>
+          <path d="M683 118 h18 M683 142 h18 M685 118 c0 8 14 8 14 12 0 4-14 4-14 12 M699 118 c0 8-14 8-14 12 0 4 14 4 14 12" stroke="#e6b955" stroke-width="1.7" fill="none" stroke-linecap="round"/>
+          <text x="692" y="205" text-anchor="middle" font-size="15" font-weight="600" fill="#e9f1fc" font-family="inherit">滞期 / 索赔</text>
+          <text x="692" y="223" text-anchor="middle" font-size="11" fill="#6c81a3" font-family="inherit">Demurrage &amp; Claims</text>
+        </g>
+        <!-- 节点 5 燃油 -->
+        <g>
+          <circle cx="876" cy="130" r="46" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.6"/>
+          <circle cx="876" cy="130" r="46" fill="url(#fl)" opacity=".08"/>
+          <path d="M876 116 c7 9 10 13 10 19 a10 10 0 1 1 -20 0 c0-6 3-10 10-19 Z" stroke="#3fd2f0" stroke-width="1.8" fill="none" stroke-linejoin="round"/>
+          <text x="876" y="205" text-anchor="middle" font-size="15" font-weight="600" fill="#e9f1fc" font-family="inherit">燃油管理</text>
+          <text x="876" y="223" text-anchor="middle" font-size="11" fill="#6c81a3" font-family="inherit">Bunker · ROB/BDN</text>
+        </g>
+        <!-- 节点 6 结算 -->
+        <g>
+          <circle cx="1060" cy="130" r="46" fill="#0c1a33" stroke="#e6b955" stroke-width="1.6"/>
+          <circle cx="1060" cy="130" r="46" fill="#e6b955" opacity=".07"/>
+          <circle cx="1060" cy="130" r="16" stroke="#e6b955" stroke-width="1.8" fill="none"/>
+          <path d="M1060 121v18M1054 125h12M1054 135h12" stroke="#e6b955" stroke-width="1.6" stroke-linecap="round"/>
+          <text x="1060" y="205" text-anchor="middle" font-size="15" font-weight="600" fill="#e9f1fc" font-family="inherit">财务结算</text>
+          <text x="1060" y="223" text-anchor="middle" font-size="11" fill="#6c81a3" font-family="inherit">Settlement · P&amp;L/GL</text>
+        </g>
+
+        <!-- 步骤序号 -->
+        <g font-family="inherit" font-size="11" fill="#6c81a3">
+          <text x="140" y="76" text-anchor="middle">01</text><text x="324" y="76" text-anchor="middle">02</text>
+          <text x="508" y="76" text-anchor="middle">03</text><text x="692" y="76" text-anchor="middle">04</text>
+          <text x="876" y="76" text-anchor="middle">05</text><text x="1060" y="76" text-anchor="middle">06</text>
+        </g>
+      </svg>
+      <div class="flow-note">
+        <span><i style="background:#3fd2f0"></i>业务主链路：上游数据自动带入下游</span>
+        <span><i style="background:#e6b955"></i>实绩回流：actual 数据校准估算模型</span>
+        <span><i style="background:#4ade80"></i>全程状态机驱动，操作留痕可审计</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 模块网格 ============ -->
+<section id="modules">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-kicker">产品能力 <span class="en">/ Capabilities</span></div>
+      <h2 class="sec-title">十大模块，覆盖航运商业全场景</h2>
+      <p class="sec-desc">模块化单体架构：按需启用、统一数据模型，每一项能力均已落地实现并通过自动化测试验证。</p>
+    </div>
+    <div class="mod-grid">
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><rect x="4" y="3" width="18" height="20" rx="3" stroke="#3fd2f0" stroke-width="1.7"/><path d="M8 8h10M8 12h4" stroke="#3fd2f0" stroke-width="1.6" stroke-linecap="round"/><path d="M8 17l2.4-2.4 2.2 2.2 3.6-4" stroke="#e6b955" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>航次估算</h3>
+        <div class="mod-en">Voyage Estimation</div>
+        <ul>
+          <li><b>TCE 引擎</b>：Decimal 精度，金样例数值背书</li>
+          <li>address commission / brokerage <b>双佣金</b></li>
+          <li><b>EU ETS 碳成本</b>直接进入估算</li>
+          <li>多牌号油价（VLSFO / MGO）、多腿航线按距离/航速推天数</li>
+          <li>货量 tolerance 与积载校验、敏感度分析（乘法/加减扰动）</li>
+        </ul>
+      </div>
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M7 3h8l4 4v16H7z" stroke="#3fd2f0" stroke-width="1.7" stroke-linejoin="round"/><path d="M15 3v4h4" stroke="#3fd2f0" stroke-width="1.7" stroke-linejoin="round"/><path d="M10 12h7M10 16h7M10 20h4" stroke="#e6b955" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </div>
+        <h3>租约管理</h3>
+        <div class="mod-en">Fixture &amp; Charter Party</div>
+        <ul>
+          <li>VC / TC / COA 全租约形态</li>
+          <li><b>18 个条款字段化</b>：demurrage/despatch rate、SHINC/SHEX、GENCON/NYPE、laycan</li>
+          <li>期租 hire 周期发票与 <b>off-hire 扣减</b></li>
+          <li>租约变更单审批流</li>
+          <li><span class="gold">制裁筛查激活阻断</span>，合规前置</li>
+        </ul>
+      </div>
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><circle cx="5" cy="20" r="2.2" stroke="#3fd2f0" stroke-width="1.6"/><circle cx="13" cy="7" r="2.2" stroke="#3fd2f0" stroke-width="1.6"/><circle cx="21" cy="16" r="2.2" stroke="#e6b955" stroke-width="1.6"/><path d="M6.8 18.4 11.2 8.8M14.8 8.4l4.4 6" stroke="#3fd2f0" stroke-width="1.5" stroke-dasharray="3 3"/></svg>
+        </div>
+        <h3>航次执行</h3>
+        <div class="mod-en">Voyage Execution</div>
+        <ul>
+          <li><b>SOF 标准 12 事件码</b>（NOR/EOSP/POB/COMMENCED…）与时序校验</li>
+          <li>B/L date 字段化，单证要素结构化</li>
+          <li>午报：ROB / 天气 / <b>ETA 偏差预警</b></li>
+          <li>off-hire 事件全程记录</li>
+          <li><span class="gold">数字孪生船队视图</span>，船况一屏尽览</li>
+        </ul>
+      </div>
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M6 4h14M6 22h14M8 4c0 6 5 6 5 9s-5 3-5 9M18 4c0 6-5 6-5 9s5 3 5 9" stroke="#e6b955" stroke-width="1.7" stroke-linecap="round"/></svg>
+        </div>
+        <h3>滞期 / 索赔</h3>
+        <div class="mod-en">Demurrage &amp; Claims</div>
+        <ul>
+          <li><b>Laytime 引擎全条款</b>：SHINC/SHEX/EIU、节假日、港口时区</li>
+          <li>一键从 SOF 生成计算书，<b>可逆/合并两港互抵</b></li>
+          <li>定稿锁定与导出，计算过程可复现</li>
+          <li><span class="gold">Timebar 自动推算 + 14 天预警</span></li>
+          <li>部分和解、一键转发票</li>
+        </ul>
+      </div>
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="9.5" stroke="#3fd2f0" stroke-width="1.7"/><path d="M13 8v10M10 10.5h6M10 15.5h6" stroke="#e6b955" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </div>
+        <h3>财务结算</h3>
+        <div class="mod-en">Finance &amp; Settlement</div>
+        <ul>
+          <li>发票<b>全状态机</b> + 审批 + GL 总账</li>
+          <li>红冲 credit note、付款冲正，全程可逆</li>
+          <li><b>多币种折算</b>，汇率留痕</li>
+          <li>P&amp;L 全行项 <span class="gold">actual / accrual 双口径</span></li>
+          <li>应收应付 aging 账龄分析</li>
+        </ul>
+      </div>
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M13 3c4.5 5.5 7 8.5 7 12a7 7 0 1 1-14 0c0-3.5 2.5-6.5 7-12Z" stroke="#3fd2f0" stroke-width="1.7" stroke-linejoin="round"/><path d="M10 15a3 3 0 0 0 3 3" stroke="#e6b955" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </div>
+        <h3>燃油管理</h3>
+        <div class="mod-en">Bunker Management</div>
+        <ul>
+          <li>询比价全流程，<b>指数定价</b>（如 SIN380+12）</li>
+          <li><b>BDN 偏差告警</b>，交付量异常即时可见</li>
+          <li><span class="gold">ROB 守恒校验</span>，油账笔笔平衡</li>
+          <li>燃油成本按航次自动分摊</li>
+        </ul>
+      </div>
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="9.5" stroke="#3fd2f0" stroke-width="1.7"/><path d="M4 13h18M13 3.5c3 2.6 4.5 5.8 4.5 9.5s-1.5 6.9-4.5 9.5c-3-2.6-4.5-5.8-4.5-9.5S10 6.1 13 3.5Z" stroke="#3fd2f0" stroke-width="1.4"/><path d="M9 14.5c1.6 1.8 4.6 2 6.5.2" stroke="#4ade80" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </div>
+        <h3>排放合规</h3>
+        <div class="mod-en">Emissions &amp; Compliance</div>
+        <ul>
+          <li><b>真 CII 评级</b>：IMO MEPC 评级带，非估算值</li>
+          <li>EEOI 能效指标自动计算</li>
+          <li><span class="gold">EU ETS 自动航线分摊</span>，碳成本归属清晰</li>
+          <li>FuelEU 罚没测算，合规成本提前量化</li>
+        </ul>
+      </div>
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M13 4v3M13 19v3M4 13h3M19 13h3" stroke="#3fd2f0" stroke-width="1.7" stroke-linecap="round"/><circle cx="13" cy="13" r="5.5" stroke="#3fd2f0" stroke-width="1.7"/><path d="M13 10.5V13l2 2" stroke="#e6b955" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </div>
+        <h3>船舶管理</h3>
+        <div class="mod-en">Ship Management</div>
+        <ul>
+          <li>证书到期<b>自动预警</b>，杜绝过期航行</li>
+          <li><b>PMS 工单–备件消耗联动</b>，库存自动核减</li>
+          <li>船员 STCW 证书预警</li>
+          <li><span class="gold">Drydock 自动占船期</span>，排期不冲突</li>
+        </ul>
+      </div>
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><path d="M13 3l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z" stroke="#3fd2f0" stroke-width="1.7" stroke-linejoin="round"/><path d="M9.5 12.8l2.4 2.4 4.6-5" stroke="#4ade80" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>企业级安全</h3>
+        <div class="mod-en">Enterprise Security</div>
+        <ul>
+          <li><b>多租户隔离</b>：61 个攻击向量测试门禁</li>
+          <li>HttpOnly Cookie 会话，抵御 XSS 窃取</li>
+          <li><span class="gold">全量审计日志</span>，操作可追溯</li>
+          <li>X-Request-ID 全链路可观测性</li>
+          <li>Alembic 迁移，schema 演进有序</li>
+        </ul>
+      </div>
+
+      <div class="mod-card reveal">
+        <div class="mod-ico">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="9.5" stroke="#e6b955" stroke-width="1.7"/><path d="M8.5 13.2l3 3 6-6.4" stroke="#e6b955" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>质量工程</h3>
+        <div class="mod-en">Quality Engineering</div>
+        <ul>
+          <li><b>222 个自动化测试</b>，核心链路全覆盖</li>
+          <li><span class="gold">金样例数值断言</span>：TCE/Laytime 结果与权威样例逐一核对</li>
+          <li>SelfCheck 自检，部署后即可验证环境健康</li>
+          <li>P0–P3 加固完成，缺陷分级闭环</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============ 工程加固亮点 ============ -->
+<section id="hardening">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-kicker">工程加固 <span class="en">/ Hardening</span></div>
+      <h2 class="sec-title">P0–P3 加固完成：生产级，不是演示级</h2>
+      <p class="sec-desc">安全、质量、可观测性三位一体。每一项声明都有测试与机制背书，可验证、可审计。</p>
+    </div>
+    <div class="harden-grid">
+      <div class="h-card reveal">
+        <div class="h-ico">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2.5l7.5 2.8v5.4c0 4.6-3.2 7.9-7.5 9.3-4.3-1.4-7.5-4.7-7.5-9.3V5.3z" stroke="#e6b955" stroke-width="1.6" stroke-linejoin="round"/><path d="M8.8 12l2.2 2.2 4.2-4.6" stroke="#e6b955" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>多租户隔离 <span class="en" style="font-size:11px;color:var(--muted2)">Multi-tenancy</span></h3>
+        <p><b>61 个攻击向量</b>纳入测试门禁：跨租户读写、IDOR、会话劫持等场景逐一举证拦截。数据边界由测试而非承诺保证。</p>
+      </div>
+      <div class="h-card reveal">
+        <div class="h-ico">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2.5" stroke="#e6b955" stroke-width="1.6"/><path d="M7 10h6M7 14h10" stroke="#e6b955" stroke-width="1.6" stroke-linecap="round"/><circle cx="17.5" cy="8.5" r="1.4" fill="#e6b955"/></svg>
+        </div>
+        <h3>审计与可观测 <span class="en" style="font-size:11px;color:var(--muted2)">Auditability</span></h3>
+        <p>关键操作全量<b>审计日志</b>；<b>X-Request-ID</b> 贯穿请求全链路，一次滞期计算从 API 到数据库的每一步都可回放定位。</p>
+      </div>
+      <div class="h-card reveal">
+        <div class="h-ico">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.6" stroke="#e6b955" stroke-width="1.6"/><path d="M12 7v5l3.2 3.2" stroke="#e6b955" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>会话与传输 <span class="en" style="font-size:11px;color:var(--muted2)">Session</span></h3>
+        <p><b>HttpOnly Cookie</b> 会话凭证不暴露给脚本；Alembic 迁移管理 <b>108 表</b>基线，升级回滚皆有路径。</p>
+      </div>
+    </div>
+    <div class="badge-row reveal">
+      <span class="q-badge">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4ade80" stroke-width="1.4"/><path d="M5 8.3l2 2 4-4.4" stroke="#4ade80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <b>222</b> 自动化测试
+      </span>
+      <span class="q-badge">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2.5" stroke="#3fd2f0" stroke-width="1.4"/><path d="M5 8h6M8 5v6" stroke="#3fd2f0" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <b>金样例</b> 数值断言
+      </span>
+      <span class="q-badge">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 1.8l5.5 2v3.9c0 3.4-2.4 5.8-5.5 6.9-3.1-1.1-5.5-3.5-5.5-6.9V3.8z" stroke="#e6b955" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        <b>61</b> 攻击向量门禁
+      </span>
+      <span class="q-badge">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M3 3h10M3 8h10M3 13h6" stroke="#3fd2f0" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <b>SelfCheck</b> 自检机制
+      </span>
+      <span class="q-badge">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#3fd2f0" stroke-width="1.4"/><path d="M8 5v3l2 2" stroke="#3fd2f0" stroke-width="1.3" stroke-linecap="round"/></svg>
+        <b>X-Request-ID</b> 全链路追踪
+      </span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 平台数据 ============ -->
+<section id="stats" class="stats-sec">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-kicker">平台数据 <span class="en">/ By the Numbers</span></div>
+      <h2 class="sec-title">用数字说话</h2>
+      <p class="sec-desc">以下指标均来自当前代码基线与测试套件，真实可复核。</p>
+    </div>
+    <div class="stats-grid">
+
+      <div class="stat-card reveal">
+        <div class="stat-num"><span class="num" data-count="222">0</span><span class="unit"> 项</span></div>
+        <div class="stat-label">自动化测试 Automated Tests</div>
+        <div class="stat-sub">覆盖估算、laytime、财务状态机、多租户隔离等核心链路</div>
+        <div class="stat-chart">
+          <svg viewBox="0 0 260 64" fill="none" aria-hidden="true">
+            <g>
+              <rect x="0"   y="34" width="30" height="24" rx="3" fill="#12315c"/>
+              <rect x="38"  y="26" width="30" height="32" rx="3" fill="#16406f"/>
+              <rect x="76"  y="20" width="30" height="38" rx="3" fill="#1b508a"/>
+              <rect x="114" y="14" width="30" height="44" rx="3" fill="#2ea8ff"/>
+              <rect x="152" y="8"  width="30" height="50" rx="3" fill="#3fd2f0"/>
+              <rect x="190" y="2"  width="30" height="56" rx="3" fill="#e6b955"/>
+              <rect x="228" y="10" width="30" height="48" rx="3" fill="#4ade80"/>
+            </g>
+            <line x1="0" y1="59" x2="258" y2="59" stroke="rgba(120,170,255,.25)"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="stat-card reveal">
+        <div class="stat-num"><span class="num" data-count="12">0</span><span class="unit"> 个</span></div>
+        <div class="stat-label">SOF 标准事件码 Event Codes</div>
+        <div class="stat-sub">NOR / EOSP / POB / COMMENCED… 结构化录入，时序自动校验</div>
+        <div class="stat-chart">
+          <svg viewBox="0 0 260 64" fill="none" aria-hidden="true">
+            <g font-family="inherit" font-size="9" fill="#93a7c4">
+              <circle cx="20"  cy="32" r="7" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.4"/>
+              <circle cx="52"  cy="32" r="7" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.4"/>
+              <circle cx="84"  cy="32" r="7" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.4"/>
+              <circle cx="116" cy="32" r="7" fill="#0c1a33" stroke="#e6b955" stroke-width="1.4"/>
+              <circle cx="148" cy="32" r="7" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.4"/>
+              <circle cx="180" cy="32" r="7" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.4"/>
+              <circle cx="212" cy="32" r="7" fill="#0c1a33" stroke="#4ade80" stroke-width="1.4"/>
+              <circle cx="244" cy="32" r="7" fill="#0c1a33" stroke="rgba(120,170,255,.4)" stroke-width="1.2" stroke-dasharray="3 3"/>
+            </g>
+            <path d="M27 32h18M59 32h18M91 32h18M123 32h18M155 32h18M187 32h18M219 32h18" stroke="rgba(120,170,255,.3)"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="stat-card reveal">
+        <div class="stat-num"><span class="num" data-count="11">0</span><span class="unit"> 类</span></div>
+        <div class="stat-label">实体状态机 State Machines</div>
+        <div class="stat-sub">发票、索赔、租约等核心实体流转全部状态机驱动，非法跃迁即拒绝</div>
+        <div class="stat-chart">
+          <svg viewBox="0 0 260 64" fill="none" aria-hidden="true">
+            <rect x="8"   y="22" width="52" height="20" rx="10" fill="#0c1a33" stroke="#3fd2f0" stroke-width="1.3"/>
+            <rect x="104" y="6"  width="52" height="20" rx="10" fill="#0c1a33" stroke="#e6b955" stroke-width="1.3"/>
+            <rect x="104" y="38" width="52" height="20" rx="10" fill="#0c1a33" stroke="#e6b955" stroke-width="1.3"/>
+            <rect x="200" y="22" width="52" height="20" rx="10" fill="#0c1a33" stroke="#4ade80" stroke-width="1.3"/>
+            <path d="M60 32 C 80 32, 84 16, 104 16M60 32 C 80 32, 84 48, 104 48M156 16 C 178 16, 178 32, 200 32M156 48 C 178 48, 178 32, 200 32" stroke="rgba(120,170,255,.45)" stroke-width="1.3" fill="none"/>
+            <text x="34" y="36" text-anchor="middle" font-size="9" fill="#93a7c4" font-family="inherit">DRAFT</text>
+            <text x="130" y="20" text-anchor="middle" font-size="9" fill="#93a7c4" font-family="inherit">APPR.</text>
+            <text x="130" y="52" text-anchor="middle" font-size="9" fill="#93a7c4" font-family="inherit">REVIEW</text>
+            <text x="226" y="36" text-anchor="middle" font-size="9" fill="#93a7c4" font-family="inherit">FINAL</text>
+          </svg>
+        </div>
+      </div>
+
+      <div class="stat-card reveal">
+        <div class="stat-num"><span class="num" data-count="108">0</span><span class="unit"> 张</span></div>
+        <div class="stat-label">数据表迁移基线 Table Baseline</div>
+        <div class="stat-sub">Alembic 版本化迁移，从零到生产的 schema 演进可重放、可回滚</div>
+        <div class="stat-chart">
+          <svg viewBox="0 0 260 64" fill="none" aria-hidden="true">
+            <polyline points="8,52 44,46 80,40 116,30 152,26 188,16 224,10 252,8" stroke="#3fd2f0" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <g fill="#e6b955">
+              <circle cx="8" cy="52" r="3"/><circle cx="80" cy="40" r="3"/><circle cx="152" cy="26" r="3"/><circle cx="252" cy="8" r="3"/>
+            </g>
+            <path d="M8 52 L252 8 L252 60 L8 60 Z" fill="#3fd2f0" opacity=".06"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="stat-card reveal">
+        <div class="stat-num"><span class="num" data-count="18">0</span><span class="unit"> 项</span></div>
+        <div class="stat-label">租约条款字段化 Clause Fields</div>
+        <div class="stat-sub">demurrage/despatch rate、laytime terms、C/P form、laycan 等结构化存储</div>
+        <div class="stat-chart">
+          <svg viewBox="0 0 260 64" fill="none" aria-hidden="true">
+            <g stroke-width="0">
+              <rect x="8"   y="8"  width="76" height="10" rx="5" fill="#2ea8ff" opacity=".9"/>
+              <rect x="8"   y="24" width="112" height="10" rx="5" fill="#3fd2f0" opacity=".85"/>
+              <rect x="8"   y="40" width="60" height="10" rx="5" fill="#e6b955" opacity=".9"/>
+              <rect x="92"  y="8"  width="50" height="10" rx="5" fill="#16406f"/>
+              <rect x="128" y="24" width="70" height="10" rx="5" fill="#16406f"/>
+              <rect x="76"  y="40" width="96" height="10" rx="5" fill="#12315c"/>
+              <rect x="206" y="24" width="46" height="10" rx="5" fill="#4ade80" opacity=".7"/>
+            </g>
+          </svg>
+        </div>
+      </div>
+
+      <div class="stat-card reveal">
+        <div class="stat-num"><span class="num" data-count="14">0</span><span class="unit"> 天</span></div>
+        <div class="stat-label">Timebar 提前预警 Early Warning</div>
+        <div class="stat-sub">索赔时效自动推算，届满前 14 天触发预警，为谈判留足窗口</div>
+        <div class="stat-chart">
+          <svg viewBox="0 0 260 64" fill="none" aria-hidden="true">
+            <circle cx="130" cy="34" r="24" stroke="#22385e" stroke-width="7" fill="none"/>
+            <circle cx="130" cy="34" r="24" stroke="#e6b955" stroke-width="7" fill="none"
+              stroke-dasharray="150.8" stroke-dashoffset="40" stroke-linecap="round"
+              transform="rotate(-90 130 34)"/>
+            <text x="130" y="39" text-anchor="middle" font-size="13" font-weight="700" fill="#e6b955" font-family="inherit">T-14</text>
+            <text x="52" y="38" font-size="9.5" fill="#6c81a3" font-family="inherit">索赔时效</text>
+            <text x="196" y="38" font-size="9.5" fill="#6c81a3" font-family="inherit">预警窗口</text>
+          </svg>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============ 部署与集成 ============ -->
+<section id="deploy">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-kicker">部署与集成 <span class="en">/ Deploy &amp; Integrate</span></div>
+      <h2 class="sec-title">单机可跑，云上可扩</h2>
+      <p class="sec-desc">模块化单体架构：一条命令在本机拉起完整环境，业务增长后平滑扩展至多云。</p>
+    </div>
+    <div class="deploy-grid">
+      <div class="term reveal">
+        <div class="term-bar"><i></i><i></i><i></i><span>voyageos — deploy</span></div>
+        <pre><span class="c"># 克隆后一条命令启动完整栈</span>
+<span class="cy">$</span> docker compose up -d
+
+<span class="c"># 数据库迁移（Alembic，108 表基线）</span>
+<span class="cy">$</span> docker compose exec api alembic upgrade head
+<span class="g">INFO  [alembic] Running upgrade -> base, 108 tables</span>
+
+<span class="c"># 部署后自检：环境、迁移、核心链路</span>
+<span class="cy">$</span> docker compose exec api python -m app.selfcheck
+<span class="g">✓ database  ✓ migrations  ✓ auth  ✓ tenant isolation</span>
+<span class="g">✓ tce golden samples  ✓ laytime engine</span>
+<span class="y">SelfCheck passed — VoyageOS is ready.</span></pre>
+      </div>
+      <div class="deploy-cards">
+        <div class="d-card reveal">
+          <div class="d-ico">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 14h18l-1.6 4.2a2 2 0 0 1-1.9 1.3H6.5a2 2 0 0 1-1.9-1.3z" stroke="#3fd2f0" stroke-width="1.6" stroke-linejoin="round"/><rect x="5" y="10" width="4" height="3.4" rx=".6" fill="#3fd2f0"/><rect x="10" y="10" width="4" height="3.4" rx=".6" fill="#2ea8ff"/><rect x="7.5" y="6" width="4" height="3.4" rx=".6" fill="#e6b955"/><circle cx="19.5" cy="6" r="1.6" stroke="#3fd2f0" stroke-width="1.3"/></svg>
+          </div>
+          <div>
+            <h3>Docker Compose 单机部署</h3>
+            <p>模块化单体打包为标准容器编排，<b>不依赖云厂商</b>。内网、私有云、客户机房均可落地；架构预留多云扩展路径。</p>
+          </div>
+        </div>
+        <div class="d-card reveal">
+          <div class="d-ico">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13.5 5l-3 14" stroke="#3fd2f0" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div>
+            <h3>开放 API + Webhook</h3>
+            <p>全量业务能力经 <b>REST API</b> 开放；业务事件（定稿、审批、预警）经 <b>Webhook</b> 实时推送，轻松接入既有系统与数据管道。</p>
+          </div>
+        </div>
+        <div class="d-card reveal">
+          <div class="d-ico">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2.5" y="2.5" width="9" height="9" rx="2" fill="#2ea8ff" opacity=".9"/><rect x="12.5" y="2.5" width="9" height="9" rx="2" fill="#3fd2f0" opacity=".9"/><rect x="2.5" y="12.5" width="9" height="9" rx="2" fill="#3fd2f0" opacity=".55"/><rect x="12.5" y="12.5" width="9" height="9" rx="2" fill="#e6b955" opacity=".9"/></svg>
+          </div>
+          <div>
+            <h3>Microsoft 365 生态</h3>
+            <p>原生融入 <b>Teams / SharePoint / Outlook</b>：审批进 Teams、单证归档 SharePoint、预警走 Outlook，船员与岸基零培训上手。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 页脚 CTA ============ -->
+<section class="final-cta" id="contact">
+  <div class="wrap">
+    <div class="sec-kicker reveal">启航 <span class="en">/ Get Started</span></div>
+    <h2 class="reveal">下一个航次，<br>让系统替你把关。</h2>
+    <p class="reveal">无论是船东、租家、Operator 还是船舶管理公司，VoyageOS 都能在一个系统内完成从估算到结算的商业闭环。</p>
+    <div class="hero-ctas reveal" style="justify-content:center">
+      <a class="btn btn-primary" href="mailto:contact@voyageos.example">
+        预约产品演示
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h9M8.5 3.5 13 8l-4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+      <a class="btn btn-ghost" href="#top">返回顶部</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 页脚 ============ -->
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <div class="foot-brand">
+        <a class="brand" href="#top">
+          <svg width="30" height="30" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+            <rect x="1" y="1" width="38" height="38" rx="10" fill="#0c1a33" stroke="rgba(120,170,255,.3)"/>
+            <path d="M6 26 L14 26 L16 20 L24 20 L26 26 L34 26 L31 31 L9 31 Z" fill="#3fd2f0" opacity=".9"/>
+            <path d="M15 20 L15 14 L25 14 L25 20" stroke="#e6b955" stroke-width="2" fill="none"/>
+            <path d="M4 34 Q10 32 14 34 T24 34 T36 34" stroke="#2ea8ff" stroke-width="1.6" fill="none" opacity=".7"/>
+          </svg>
+          <span><span class="en">VoyageOS</span><br><span class="brand-sub">航运商业操作系统</span></span>
+        </a>
+        <p>Commercial Voyage Management — 航次估算、租约、执行、滞期索赔、燃油与财务结算的一体化商业操作系统。</p>
+      </div>
+      <div class="foot-cols">
+        <div class="foot-col">
+          <h4>产品</h4>
+          <a href="#loop">全链路闭环</a>
+          <a href="#modules">产品能力</a>
+          <a href="#hardening">工程加固</a>
+          <a href="#stats">平台数据</a>
+        </div>
+        <div class="foot-col">
+          <h4>部署</h4>
+          <a href="#deploy">Docker Compose</a>
+          <a href="#deploy">开放 API / Webhook</a>
+          <a href="#deploy">Microsoft 365 生态</a>
+        </div>
+        <div class="foot-col">
+          <h4>联系</h4>
+          <span>商务合作：contact@voyageos.example</span>
+          <span>技术支持：support@voyageos.example</span>
+          <span>（占位信息，上线前替换）</span>
+        </div>
+      </div>
+    </div>
+    <div class="foot-copy">
+      <span>© 2026 VoyageOS. All rights reserved.</span>
+      <span class="en">Estimate · Fixture · Execution · Demurrage · Bunker · Settlement</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+  /* 数字滚动动画 */
+  function countUp(el){
+    var target = parseInt(el.getAttribute("data-count"), 10);
+    if (isNaN(target)) return;
+    var dur = 1400, start = null;
+    function step(ts){
+      if (!start) start = ts;
+      var p = Math.min((ts - start) / dur, 1);
+      var eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(target * eased).toString();
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var nums = document.querySelectorAll(".num[data-count]");
+  var reveals = document.querySelectorAll(".reveal");
+  if (reduceMotion || !("IntersectionObserver" in window)) {
+    nums.forEach(function(el){ el.textContent = el.getAttribute("data-count"); });
+    reveals.forEach(function(el){ el.classList.add("in"); });
+    return;
+  }
+  var numObs = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting) { countUp(e.target); numObs.unobserve(e.target); }
+    });
+  }, { threshold: 0.5 });
+  nums.forEach(function(el){ numObs.observe(el); });
+  var revObs = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting) { e.target.classList.add("in"); revObs.unobserve(e.target); }
+    });
+  }, { threshold: 0.12 });
+  reveals.forEach(function(el){ revObs.observe(el); });
+})();
+</script>
+</body>
+</html>

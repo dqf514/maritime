@@ -16,24 +16,30 @@ type Branding = {
 
 import { API_BASE } from "@/lib/api";
 
-const PROMOS = [
+const HIGHLIGHTS = [
   {
-    titleKey: "portal.promo.clarity.title",
-    bodyKey: "portal.promo.clarity.body",
-    title: "One place for the commercial voyage",
-    body: "Chartering, operations and settlement in one daily workspace.",
+    titleKey: "portal.hl.dem.title",
+    bodyKey: "portal.hl.dem.body",
+    title: "滞期费，一分钱不丢",
+    body: "从 SOF 证据到索赔账单，全程留痕，应收尽收。",
   },
   {
-    titleKey: "portal.promo.trust.title",
-    bodyKey: "portal.promo.trust.body",
-    title: "Built for maritime teams",
-    body: "Roles, approvals, local time, and the language of the trade.",
+    titleKey: "portal.hl.est.title",
+    bodyKey: "portal.hl.est.body",
+    title: "估算 3 分钟变 30 秒",
+    body: "航线、货量、油价一填，TCE 立刻出来，模板一键起草。",
   },
   {
-    titleKey: "portal.promo.connect.title",
-    bodyKey: "portal.promo.connect.body",
-    title: "Fits how you already work",
-    body: "Organisation identity and Microsoft 365 — without a new stack.",
+    titleKey: "portal.hl.carbon.title",
+    bodyKey: "portal.hl.carbon.body",
+    title: "碳成本自动算",
+    body: "EU ETS / FuelEU 自动计入航次成本与报价，不用另开表。",
+  },
+  {
+    titleKey: "portal.hl.m365.title",
+    bodyKey: "portal.hl.m365.body",
+    title: "Outlook、Teams 直接用",
+    body: "不换工作方式：邮件、会议、公司账号，全部沿用。",
   },
 ];
 
@@ -80,28 +86,25 @@ export default function PortalPage() {
       <section className="portal-hero portal-hero-bleed">
         <div className="portal-hero-inner">
           <p className="portal-brand-mark">{name}</p>
-          <h1>{t("portal.hero_title", "The operating system for commercial shipping")}</h1>
+          <h1>{t("portal.hero_tagline", "把 Excel、邮件和计算器，变成一个为航运生意而生的系统")}</h1>
           <p className="portal-lead">
-            {t(
-              "portal.hero_sub",
-              "A calm workspace for owners, charterers, operators and ship managers — from fixture to settlement.",
-            )}
+            {t("portal.hero_sub", "估算、租约、航次、滞期索赔、结算——一次做对，一个系统管好。")}
           </p>
           <div className="portal-actions">
-            <Link href="/login" className="btn btn-primary">
-              {t("portal.sign_in", "Sign in")}
-            </Link>
-            <a className="btn btn-ghost portal-ghost" href="mailto:sales@voyageos.example">
-              {t("portal.cta_contact", "Talk to us")}
+            <a className="btn btn-primary portal-cta-lg" href="/intro.html">
+              {t("portal.cta_intro", "了解详情")}
             </a>
+            <Link href="/login" className="btn btn-ghost portal-ghost portal-cta-lg-ghost">
+              {t("portal.sign_in", "登录")}
+            </Link>
           </div>
         </div>
       </section>
 
       <section className="portal-promo portal-promo-compact" aria-labelledby="portal-why">
-        <h2 id="portal-why">{t("portal.why_title", "Why teams choose VoyageOS")}</h2>
-        <ul className="portal-promo-grid">
-          {PROMOS.map((item) => (
+        <h2 id="portal-why">{t("portal.why_title", "为航运生意而生")}</h2>
+        <ul className="portal-promo-grid portal-promo-grid-4">
+          {HIGHLIGHTS.map((item) => (
             <li key={item.titleKey}>
               <strong>{t(item.titleKey, item.title)}</strong>
               <p>{t(item.bodyKey, item.body)}</p>
@@ -114,7 +117,10 @@ export default function PortalPage() {
         <span>
           © {new Date().getFullYear()} {name}
         </span>
-        <Link href="/login">{t("portal.cta_signin", "Sign in →")}</Link>
+        <a href="/intro.html">{t("portal.cta_intro", "了解详情")}</a>
+        <Link href="/login" className="portal-foot-login">
+          {t("portal.cta_signin", "登录 →")}
+        </Link>
       </footer>
     </div>
   );

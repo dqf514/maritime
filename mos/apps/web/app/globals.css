@@ -2219,3 +2219,126 @@ button, input { font: inherit; }
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* —— Portal landing: intro CTA & highlight grid —— */
+.portal-cta-lg {
+  padding: 0.72rem 1.7rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.98rem;
+  background: linear-gradient(135deg, #2ea8ff, #45d5f2);
+  color: #04121f !important;
+  border: none;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.portal-cta-lg:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px rgba(69, 213, 242, 0.35);
+}
+.portal-cta-lg-ghost {
+  padding: 0.72rem 1.5rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.portal-promo-grid-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+.portal-promo-grid-4 strong {
+  color: #f4d891;
+}
+.portal-foot-login {
+  margin-left: 0.85rem !important;
+  color: #2bb5b0;
+  font-weight: 600;
+}
+
+/* —— Login: split layout (brand pane + form pane) —— */
+.login-split {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  position: relative;
+  z-index: 1;
+}
+.login-brand-pane {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 3rem clamp(2rem, 5vw, 4.5rem);
+  overflow: hidden;
+  background:
+    radial-gradient(640px 340px at 12% 8%, rgba(46, 168, 255, 0.16), transparent 60%),
+    radial-gradient(560px 380px at 88% 92%, rgba(233, 189, 92, 0.08), transparent 62%),
+    linear-gradient(160deg, #071226 0%, #0a1d3a 55%, #0d2b4d 100%);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+.login-brand-mark {
+  margin: 0;
+  font-size: clamp(2.2rem, 4.5vw, 3.2rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: #45d5f2;
+}
+.login-brand-tagline {
+  margin: 0.9rem 0 0;
+  max-width: 22em;
+  color: rgba(237, 244, 253, 0.82);
+  font-size: 1.08rem;
+  line-height: 1.65;
+}
+.login-brand-intro {
+  display: inline-block;
+  margin-top: 1.4rem;
+  color: #e9bd5c;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.login-brand-intro:hover {
+  color: #f4d891;
+  text-decoration: underline;
+}
+.login-brand-waves {
+  position: absolute;
+  right: -40px;
+  bottom: 24px;
+  width: min(480px, 80%);
+  pointer-events: none;
+}
+.login-form-pane {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem 1.25rem;
+}
+@media (max-width: 900px) {
+  .login-split {
+    grid-template-columns: 1fr;
+  }
+  .login-brand-pane {
+    align-items: flex-start;
+    padding: 1.75rem 1.25rem 3.5rem;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .login-brand-tagline {
+    font-size: 0.98rem;
+  }
+}
+@media (max-width: 800px) {
+  .portal-promo-grid-4 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 560px) {
+  .portal-promo-grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.login-brand-inner {
+  position: relative;
+  z-index: 1;
+}

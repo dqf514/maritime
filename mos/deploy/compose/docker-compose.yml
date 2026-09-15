@@ -9,7 +9,8 @@ services:
       - "5432:5432"
     volumes:
       - voyageos_pg:/var/lib/postgresql/data
-      - ../../docs/ddl.sql:/docker-entrypoint-initdb.d/01-ddl.sql:ro
+      # 注意：不要挂载 docs/ddl.sql 初始化——该文件与当前模型存在漂移，
+      # 空库由 API 启动时 create_all 建表，再执行 `alembic stamp head` 登记基线。
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-voyageos} -d ${POSTGRES_DB:-voyageos}"]
       interval: 5s
@@ -40,8 +41,9 @@ services:
 
   api:
     build:
-      context: ../../apps/api
-      dockerfile: Dockerfile
+      # 构建上下文必须是 mos/（fixtures 在 mos/fixtures，SelfCheck 依赖此布局）
+      context: ../../
+      dockerfile: apps/api/Dockerfile
     env_file:
       - .env
     environment:
