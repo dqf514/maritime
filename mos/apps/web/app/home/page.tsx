@@ -78,6 +78,8 @@ export default function WorkbenchPage() {
   const openTasks = summary?.tasks.open ?? 0;
   const unread = summary?.notifications.unread ?? 0;
   const approvals = summary?.approvals.count ?? 0;
+  const excCritical = summary?.exceptions?.critical ?? 0;
+  const excWarning = summary?.exceptions?.warning ?? 0;
 
   return (
     <AppShell>
@@ -94,6 +96,14 @@ export default function WorkbenchPage() {
             unread,
             approvals,
           })}
+          {excCritical > 0 ? (
+            <>
+              {" "}
+              <Link href="/exceptions" className="home-exc-link">
+                {t("page.home.exc_critical", "{n} 项严重异常", { n: excCritical })}
+              </Link>
+            </>
+          ) : null}
         </p>
         {shell?.quick_actions?.length ? (
           <div className="quick-row">
@@ -178,6 +188,19 @@ export default function WorkbenchPage() {
             <div className="desk-card-head">
               <h2>{t("page.home.todo_alerts", "待办与提醒")}</h2>
             </div>
+            {summary?.exceptions && (excCritical > 0 || excWarning > 0) ? (
+              <Link href="/exceptions" className="home-exc-row">
+                <span>{t("page.home.exceptions", "业务异常")}</span>
+                <span className="home-exc-badges">
+                  {excCritical > 0 ? (
+                    <span className="exc-badge critical">{excCritical}</span>
+                  ) : null}
+                  {excWarning > 0 ? (
+                    <span className="exc-badge warning">{excWarning}</span>
+                  ) : null}
+                </span>
+              </Link>
+            ) : null}
             <Link href="/workflows/inbox" className="approval-row">
               <span>{t("page.home.approvals", "待审批")}</span>
               <strong>{approvals}</strong>

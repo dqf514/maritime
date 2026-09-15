@@ -314,6 +314,105 @@ export type HomeSummary = {
   alerts: { kind: string; title: string; detail: string; href: string; severity: string; due_in_days: number | null }[];
   schedule: { kind: string; title: string; subtitle: string; start: string; href: string }[];
   kpis: { key: string; label: { en: string; zh?: string }; value: string; hint?: string; href?: string }[];
+  exceptions?: { critical: number; warning: number };
+};
+
+export type ExceptionKind =
+  | "pnl_deterioration"
+  | "eta_delay"
+  | "demurrage_open"
+  | "claim_timebar"
+  | "invoice_overdue"
+  | "cert_expired"
+  | "cert_expiring"
+  | "off_hire_open"
+  | "tc_redelivery_due"
+  | "sanctions_blocked"
+  | "dq_issue";
+
+export type ExceptionItem = {
+  kind: ExceptionKind;
+  severity: "critical" | "warning";
+  title: string;
+  detail: string;
+  value: string;
+  entity_type: string;
+  entity_id: string;
+  href: string;
+  detected_at: string;
+};
+
+export type ExceptionScan = {
+  summary: { critical: number; warning: number; total: number };
+  items: ExceptionItem[];
+};
+
+export type VoyageLifecycleStep = {
+  key: "estimate" | "charter" | "execution" | "laytime" | "invoicing" | "settlement" | "closed";
+  label: { en: string; zh?: string };
+  state: "done" | "current" | "todo";
+  href?: string | null;
+  detail?: string | null;
+};
+
+export type VoyagePnlLine = {
+  key: "revenue" | "hire" | "demurrage" | "port_costs" | "canal" | "bunker" | "commission" | "emissions" | "other";
+  estimated: number | null;
+  actual: number | null;
+  variance: number | null;
+};
+
+export type VoyageOverviewPortCall = {
+  id: string;
+  seq?: number;
+  purpose?: string | null;
+  port_id?: string | null;
+  port_name?: string | null;
+  eta?: string | null;
+  ata?: string | null;
+  etd?: string | null;
+  atd?: string | null;
+};
+
+export type VoyageOverview = {
+  voyage: {
+    id: string;
+    voyage_no?: string | null;
+    status: string;
+    vessel_id: string | null;
+    vessel_name: string | null;
+    charter_id: string | null;
+    cp_date: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+  };
+  charter: {
+    id: string;
+    charter_no: string;
+    charter_type: string;
+    status: string;
+    counterparty_name: string | null;
+    estimate_id: string | null;
+  } | null;
+  estimate: {
+    id: string;
+    status: string;
+    results_summary: { total_revenue: number | null; voyage_cost: number | null; tce: number | null } | null;
+  } | null;
+  lifecycle: VoyageLifecycleStep[];
+  port_calls: VoyageOverviewPortCall[];
+  noon_reports_count: number;
+  laytime: { id: string; status: string; result_type: string | null; amount: number | null; currency: string | null }[];
+  claims: { id: string; claim_no?: string | null; status?: string | null; amount?: number | null; currency?: string | null }[];
+  invoices: { id: string; invoice_no?: string | null; status?: string | null; amount?: number | null; currency?: string | null }[];
+  off_hire: { id: string; start_at?: string | null; end_at?: string | null; reason?: string | null; deducted_days?: number | null }[];
+  pnl: {
+    estimated_pnl: number | null;
+    actual_pnl: number | null;
+    variance_pnl: number | null;
+    currency: string;
+    lines: VoyagePnlLine[];
+  };
 };
 
 export { API_BASE };

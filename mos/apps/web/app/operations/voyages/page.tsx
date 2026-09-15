@@ -479,6 +479,7 @@ export default function VoyagesPage() {
                 <th>{t("page.voyages.no", "No")}</th>
                 <th>{t("page.voyages.cargo", "Cargo")}</th>
                 <th>{t("common.status", "Status")}</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -487,11 +488,20 @@ export default function VoyagesPage() {
                   <td>{r.voyage_no}</td>
                   <td>{r.cargo || "—"}</td>
                   <td>{r.status}</td>
+                  <td>
+                    <Link
+                      href={`/operations/voyages/${r.id}`}
+                      className="btn btn-ghost btn-sm"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {t("page.voyages.view360", "360 视图")}
+                    </Link>
+                  </td>
                 </tr>
               ))}
               {!rows.length ? (
                 <tr>
-                  <td colSpan={3} className="muted">
+                  <td colSpan={4} className="muted">
                     {t("common.empty", "No records")}
                   </td>
                 </tr>

@@ -30,6 +30,7 @@ from app.routers.commercial import router as commercial_router
 from app.routers.connectors import router as connectors_router
 from app.routers.dashboards import router as dashboards_router
 from app.routers.email_notify import router as email_router
+from app.routers.exceptions import router as exceptions_router
 from app.routers.files import router as files_router
 from app.routers.finance_ext import router as finance_router
 from app.routers.help import router as help_router
@@ -240,6 +241,7 @@ app.include_router(ship_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(home_router, prefix="/api/v1")
+app.include_router(exceptions_router, prefix="/api/v1")
 app.include_router(dashboards_router, prefix="/api/v1")
 app.include_router(identity_router, prefix="/api/v1")
 app.include_router(i18n_router, prefix="/api/v1")

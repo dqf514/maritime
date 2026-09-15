@@ -12,9 +12,22 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models_domain import Charter, NoonReport, PortCall, SofEvent, TwinAlert, Voyage
-from app.models_wave1 import Port, Vessel
+from app.models_domain import (
+    Charter,
+    Claim,
+    Estimate,
+    Invoice,
+    LaytimeCalc,
+    NoonReport,
+    OffHireEvent,
+    PortCall,
+    SofEvent,
+    TwinAlert,
+    Voyage,
+)
+from app.models_wave1 import Counterparty, Port, Vessel
 from app.security import AuthContext, require_module
+from app.services.pnl import PNL_LINE_KEYS, voyage_pnl_row
 from app.services.recycle import soft_delete
 from app.services.tenant_guard import scoped_get
 from app.services.state_machine import VOYAGE_TRANSITIONS, transition
@@ -230,6 +243,236 @@ def voyage_transition(
     db.commit()
     db.refresh(row)
     return VoyageOut.model_validate(row)
+
+
+# Estimate results → P&L line keys; keys without an estimate counterpart stay None.
+_EST_LINE_MAP = {
+    "revenue": "total_revenue",
+    "bunker": "bunker_cost",
+    "commission": "commission",
+    "emissions": "emissions_cost",
+}
+
+
+def _pnl_block(db: Session, tenant_id: UUID, voyage: Voyage, estimate: Estimate | None) -> dict:
+    row = voyage_pnl_row(db, tenant_id, voyage.id) or {}
+    results = (estimate.results if estimate else None) or {}
+    lines_actual = row.get("lines_actual") or {}
+    lines = []
+    for key in PNL_LINE_KEYS:
+        est_key = _EST_LINE_MAP.get(key)
+        estimated = float(results[est_key]) if est_key and results.get(est_key) is not None else None
+        actual = float(lines_actual[key]) if lines_actual.get(key) is not None else None
+        variance = (actual - estimated) if estimated is not None and actual is not None else None
+        lines.append({"key": key, "estimated": estimated, "actual": actual, "variance": variance})
+    return {
+        "estimated_pnl": row.get("estimated_pnl"),
+        "actual_pnl": row.get("actual_pnl"),
+        "variance_pnl": row.get("variance_pnl"),
+        "currency": results.get("currency") or "USD",
+        "lines": lines,
+    }
+
+
+def _lifecycle(
+    voyage: Voyage,
+    charter: Charter | None,
+    estimate: Estimate | None,
+    laytimes: list[LaytimeCalc],
+    invoices: list[Invoice],
+    claims: list[Claim],
+) -> list[dict]:
+    def _step(key: str, en: str, zh: str, state: str, href: str, detail: str) -> dict:
+        return {"key": key, "label": {"en": en, "zh": zh}, "state": state, "href": href, "detail": detail}
+
+    vid = voyage.id
+    finalized = [lt for lt in laytimes if lt.status == "finalized"]
+    payable = [i for i in invoices if i.status != "void"]
+    all_paid = bool(payable) and all(i.status == "paid" for i in payable)
+    open_claims = [c for c in claims if c.status in ("open", "negotiating")]
+    completed = voyage.status == "completed"
+
+    steps = [
+        _step(
+            "estimate", "Estimate", "估算",
+            "done" if estimate else "todo",
+            "/estimates",
+            f"{estimate.title} · {estimate.status}" if estimate else "No estimate linked",
+        ),
+        _step(
+            "charter", "Charter", "租约",
+            ("done" if charter and charter.status in ("active", "completed") else "current") if charter else "todo",
+            "/charters",
+            f"{charter.charter_no} · {charter.status}" if charter else "No charter linked",
+        ),
+        _step(
+            "execution", "Execution", "执行",
+            "done" if completed else ("current" if voyage.status == "in_progress" else "todo"),
+            f"/operations/voyages/{vid}",
+            f"{voyage.status}" + (f" · started {voyage.started_at.date().isoformat()}" if voyage.started_at else ""),
+        ),
+        _step(
+            "laytime", "Laytime", "滞期费",
+            "done" if finalized else ("current" if laytimes else "todo"),
+            "/finance",
+            f"{len(laytimes)} calc{'s' if len(laytimes) != 1 else ''} · {len(finalized)} finalized" if laytimes else "No laytime calc",
+        ),
+        _step(
+            "invoicing", "Invoicing", "开票",
+            "done" if all_paid else ("current" if payable else "todo"),
+            "/finance",
+            f"{len(payable)} invoice{'s' if len(payable) != 1 else ''} · {sum(1 for i in payable if i.status == 'paid')} paid"
+            if payable
+            else "No invoices",
+        ),
+        _step(
+            "settlement", "Settlement", "结算",
+            "done" if payable and all_paid and not open_claims else ("current" if payable or claims else "todo"),
+            "/finance",
+            f"{len(open_claims)} open claim{'s' if len(open_claims) != 1 else ''}" if open_claims else "Nothing outstanding",
+        ),
+        _step(
+            "closed", "Closed", "关闭",
+            ("done" if payable and all_paid and not open_claims else "current") if completed else "todo",
+            f"/operations/voyages/{vid}",
+            f"completed {voyage.completed_at.date().isoformat()}" if voyage.completed_at else "Voyage not completed",
+        ),
+    ]
+    return steps
+
+
+@router.get("/voyages/{voyage_id}/overview")
+def voyage_overview(
+    voyage_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """Voyage 360: charter, estimate, lifecycle, ops docs, laytime/claims/invoices, P&L."""
+    v = db.get(Voyage, voyage_id)
+    if not v or v.tenant_id != auth.tenant_id or not _alive(v.status):
+        raise HTTPException(404, "Voyage not found")
+    vessel = db.get(Vessel, v.vessel_id) if v.vessel_id else None
+    charter = db.get(Charter, v.charter_id) if v.charter_id else None
+    if charter and charter.tenant_id != auth.tenant_id:
+        charter = None
+    estimate = db.get(Estimate, charter.estimate_id) if charter and charter.estimate_id else None
+    counterparty = db.get(Counterparty, charter.counterparty_id) if charter and charter.counterparty_id else None
+    port_calls = db.scalars(
+        select(PortCall).where(PortCall.tenant_id == auth.tenant_id, PortCall.voyage_id == v.id).order_by(PortCall.seq)
+    ).all()
+    noon_count = len(
+        db.scalars(select(NoonReport).where(NoonReport.tenant_id == auth.tenant_id, NoonReport.voyage_id == v.id)).all()
+    )
+    laytimes = db.scalars(
+        select(LaytimeCalc).where(LaytimeCalc.tenant_id == auth.tenant_id, LaytimeCalc.voyage_id == v.id)
+    ).all()
+    claims = db.scalars(
+        select(Claim).where(Claim.tenant_id == auth.tenant_id, Claim.voyage_id == v.id, Claim.status != "deleted")
+    ).all()
+    invoices = db.scalars(
+        select(Invoice).where(Invoice.tenant_id == auth.tenant_id, Invoice.voyage_id == v.id, Invoice.status != "deleted")
+    ).all()
+    off_hire = db.scalars(
+        select(OffHireEvent).where(OffHireEvent.tenant_id == auth.tenant_id, OffHireEvent.voyage_id == v.id)
+    ).all()
+    results = (estimate.results if estimate else None) or {}
+    return {
+        "voyage": {
+            "id": str(v.id),
+            "voyage_no": v.voyage_no,
+            "status": v.status,
+            "vessel_id": str(v.vessel_id) if v.vessel_id else None,
+            "vessel_name": vessel.name if vessel else None,
+            "charter_id": str(v.charter_id) if v.charter_id else None,
+            "cp_date": v.cp_date.isoformat() if v.cp_date else None,
+            "started_at": v.started_at.isoformat() if v.started_at else None,
+            "completed_at": v.completed_at.isoformat() if v.completed_at else None,
+        },
+        "charter": {
+            "id": str(charter.id),
+            "charter_no": charter.charter_no,
+            "charter_type": charter.charter_type,
+            "status": charter.status,
+            "counterparty_name": counterparty.name if counterparty else None,
+            "estimate_id": str(charter.estimate_id) if charter.estimate_id else None,
+        }
+        if charter
+        else None,
+        "estimate": {
+            "id": str(estimate.id),
+            "status": estimate.status,
+            "results_summary": {
+                "total_revenue": results.get("total_revenue"),
+                "voyage_cost": results.get("voyage_cost"),
+                "tce": results.get("tce"),
+            },
+        }
+        if estimate
+        else None,
+        "lifecycle": _lifecycle(v, charter, estimate, laytimes, invoices, claims),
+        "port_calls": [
+            {
+                "id": str(pc.id),
+                "seq": pc.seq,
+                "purpose": pc.purpose,
+                "port_id": str(pc.port_id) if pc.port_id else None,
+                "eta": pc.eta.isoformat() if pc.eta else None,
+                "etd": pc.etd.isoformat() if pc.etd else None,
+                "ata": pc.ata.isoformat() if pc.ata else None,
+                "atd": pc.atd.isoformat() if pc.atd else None,
+                "nor_at": pc.nor_at.isoformat() if pc.nor_at else None,
+            }
+            for pc in port_calls
+        ],
+        "noon_reports_count": noon_count,
+        "laytime": [
+            {
+                "id": str(lt.id),
+                "status": lt.status,
+                "result_type": (lt.results or {}).get("result_type"),
+                "amount": (lt.results or {}).get("amount"),
+                "currency": (lt.results or {}).get("currency"),
+            }
+            for lt in laytimes
+        ],
+        "claims": [
+            {
+                "id": str(c.id),
+                "claim_no": c.claim_no,
+                "status": c.status,
+                "amount": float(c.amount or 0),
+                "currency": c.currency,
+                "time_bar": c.time_bar.isoformat() if c.time_bar else None,
+            }
+            for c in claims
+        ],
+        "invoices": [
+            {
+                "id": str(i.id),
+                "invoice_no": i.invoice_no,
+                "invoice_type": i.invoice_type,
+                "status": i.status,
+                "amount": float(i.amount or 0),
+                "tax_amount": float(i.tax_amount or 0),
+                "paid_amount": float(i.paid_amount or 0),
+                "currency": i.currency,
+                "due_date": i.due_date.isoformat() if i.due_date else None,
+            }
+            for i in invoices
+        ],
+        "off_hire": [
+            {
+                "id": str(o.id),
+                "start_at": o.start_at.isoformat() if o.start_at else None,
+                "end_at": o.end_at.isoformat() if o.end_at else None,
+                "deduct_hire": bool(o.deduct_hire),
+                "status": o.status,
+                "reason": o.reason,
+            }
+            for o in off_hire
+        ],
+        "pnl": _pnl_block(db, auth.tenant_id, v, estimate),
+    }
 
 
 @router.post("/port-calls", response_model=PortCallOut)

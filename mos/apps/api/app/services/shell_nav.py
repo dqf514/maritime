@@ -26,6 +26,7 @@ NAV_DESK: list[dict[str, Any]] = [
     {"id": "pool", "label": "Pooling", "href": "/pool", "roles": ["pool_manager", "management", "finance"]},
     {"id": "trading", "label": "Trading & risk", "href": "/trading", "roles": ["risk", "management", "chartering", "finance"]},
     {"id": "twin", "label": "Fleet Twin", "href": "/twin", "roles": ["operations", "management", "technical", "risk"]},
+    {"id": "exceptions", "label": "Exceptions", "href": "/exceptions", "roles": ["*"]},
     {"id": "analytics", "label": "Analytics", "href": "/analytics", "roles": ["management", "finance", "pool_manager"]},
 ]
 

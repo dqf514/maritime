@@ -21,10 +21,11 @@ def test_summary_structure_for_admin(client, auth_headers):
     r = client.get(f"{API}/home/summary", headers=auth_headers)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body.keys()) == {"tasks", "notifications", "approvals", "alerts", "schedule", "kpis"}
+    assert set(body.keys()) == {"tasks", "notifications", "approvals", "alerts", "schedule", "kpis", "exceptions"}
     assert set(body["tasks"].keys()) == {"open", "overdue", "due_today", "items"}
     assert set(body["notifications"].keys()) == {"unread", "items"}
     assert set(body["approvals"].keys()) == {"count", "items"}
+    assert set(body["exceptions"].keys()) == {"critical", "warning"}
     assert isinstance(body["alerts"], list)
     assert isinstance(body["schedule"], list)
     assert len(body["kpis"]) >= 1
@@ -122,6 +123,6 @@ def test_summary_viewer_role_does_not_break(client, auth_headers):
     s = client.get(f"{API}/home/summary", headers=viewer_h)
     assert s.status_code == 200, s.text
     body = s.json()
-    assert set(body.keys()) == {"tasks", "notifications", "approvals", "alerts", "schedule", "kpis"}
+    assert set(body.keys()) == {"tasks", "notifications", "approvals", "alerts", "schedule", "kpis", "exceptions"}
     keys = {k["key"] for k in body["kpis"]}
     assert "open_tasks" in keys

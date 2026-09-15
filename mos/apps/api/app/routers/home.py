@@ -11,7 +11,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Role, User, UserRole
+from app.models import User
 from app.models_domain import Charter, Estimate, Invoice, PortCall, Voyage
 from app.models_ship import ShipCertificate, ShipCrewMember, ShipDefect, ShipWorkOrder
 from app.models_task import Task
@@ -20,6 +20,7 @@ from app.routers.saas import workflow_inbox
 from app.routers.ship_mgmt import _refresh_certificate_status
 from app.routers.tasks import task_out
 from app.security import AuthContext, get_current_auth
+from app.services.notifications import notify_once, role_recipients
 
 log = logging.getLogger("voyageos.home")
 
@@ -98,27 +99,7 @@ def _approvals_section(db: Session, auth: AuthContext) -> dict:
 
 
 def _alert_recipients(db: Session, tenant_id: UUID) -> list[User]:
-    role_ids = select(Role.id).where(Role.tenant_id == tenant_id, Role.code.in_(ALERT_NOTIFY_ROLES))
-    user_ids = select(UserRole.user_id).where(UserRole.role_id.in_(role_ids))
-    return db.scalars(
-        select(User).where(User.id.in_(user_ids), User.tenant_id == tenant_id, User.status == "active")
-    ).all()
-
-
-def _notify_once(db: Session, tenant_id: UUID, recipients: list[User], *, title: str, body: str, href: str, level: str) -> None:
-    today_start = datetime.combine(date.today(), datetime.min.time(), tzinfo=timezone.utc)
-    targets: list[UUID | None] = [u.id for u in recipients] or [None]
-    for uid in targets:
-        q = select(Notification).where(
-            Notification.tenant_id == tenant_id,
-            Notification.href == href,
-            Notification.title == title,
-            Notification.created_at >= today_start,
-        )
-        q = q.where(Notification.user_id == uid) if uid else q.where(Notification.user_id.is_(None))
-        if db.scalar(q):
-            continue
-        db.add(Notification(tenant_id=tenant_id, user_id=uid, title=title, body=body, level=level, href=href))
+    return role_recipients(db, tenant_id, ALERT_NOTIFY_ROLES)
 
 
 def _ship_alerts(db: Session, auth: AuthContext) -> list[dict]:
@@ -149,7 +130,7 @@ def _ship_alerts(db: Session, auth: AuthContext) -> list[dict]:
                 "due_in_days": due_in,
             }
         )
-        _notify_once(
+        notify_once(
             db,
             auth.tenant_id,
             recipients,
@@ -184,7 +165,7 @@ def _ship_alerts(db: Session, auth: AuthContext) -> list[dict]:
                     "due_in_days": due_in,
                 }
             )
-            _notify_once(
+            notify_once(
                 db,
                 auth.tenant_id,
                 recipients,
@@ -373,7 +354,7 @@ def _kpis_section(db: Session, auth: AuthContext) -> list[dict]:
 
 @router.get("/home/summary")
 def home_summary(auth: AuthContext = Depends(get_current_auth), db: Session = Depends(get_db)):
-    summary: dict = {"tasks": {}, "notifications": {}, "approvals": {}, "alerts": [], "schedule": [], "kpis": []}
+    summary: dict = {"tasks": {}, "notifications": {}, "approvals": {}, "alerts": [], "schedule": [], "kpis": [], "exceptions": {"critical": 0, "warning": 0}}
     try:
         summary["tasks"] = _tasks_section(db, auth)
     except Exception:  # noqa: BLE001
@@ -405,4 +386,12 @@ def home_summary(auth: AuthContext = Depends(get_current_auth), db: Session = De
         db.rollback()
         summary["schedule"] = []
     summary["kpis"] = _kpis_section(db, auth)
+    try:
+        from app.services.exceptions import scan_exceptions
+
+        scan = scan_exceptions(db, auth.tenant_id, notify=False)
+        summary["exceptions"] = {"critical": scan["summary"]["critical"], "warning": scan["summary"]["warning"]}
+    except Exception:  # noqa: BLE001
+        log.exception("home summary exceptions section failed")
+        db.rollback()
     return summary
