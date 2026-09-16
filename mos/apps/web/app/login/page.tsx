@@ -9,14 +9,14 @@ import { apiLogin } from "@/lib/api";
 import { API_BASE } from "@/lib/api";
 
 const PRESETS = [
-  { labelKey: "login.preset.platform", hintKey: "login.preset.platform_h", label: "Platform operator", hint: "Tenants, plans, branding, identity", tenant: "sys", email: "ops@voyageos.platform" },
-  { labelKey: "login.preset.admin", hintKey: "login.preset.admin_h", label: "Tenant admin", hint: "Security policy & invites", tenant: "demo", email: "admin@demo.voyageos" },
-  { labelKey: "login.preset.mgmt", hintKey: "login.preset.mgmt_h", label: "Executive / director", hint: "Command wall / TCE", tenant: "demo", email: "mgmt@demo.voyageos" },
-  { labelKey: "login.preset.charter", hintKey: "login.preset.charter_h", label: "Chartering lead", hint: "Pipeline wall / CP", tenant: "demo", email: "charterer@demo.voyageos" },
-  { labelKey: "login.preset.ops", hintKey: "login.preset.ops_h", label: "Operations", hint: "Situation room / Twin", tenant: "demo", email: "ops@demo.voyageos" },
-  { labelKey: "login.preset.tech", hintKey: "login.preset.tech_h", label: "Technical / superintendent", hint: "Ship mgmt / PMS", tenant: "demo", email: "tech@demo.voyageos" },
-  { labelKey: "login.preset.fin", hintKey: "login.preset.fin_h", label: "Finance", hint: "Cash wall / AR", tenant: "demo", email: "finance@demo.voyageos" },
-  { labelKey: "login.preset.dem", hintKey: "login.preset.dem_h", label: "Demurrage", hint: "Laytime / claims wall", tenant: "demo", email: "demurrage@demo.voyageos" },
+  { labelKey: "login.preset.platform", hintKey: "login.preset.platform_h", label: "Platform operator", hint: "Tenants, plans, branding, identity", tenant: "sys", email: "ops@voyageos.platform", password: "" },
+  { labelKey: "login.preset.admin", hintKey: "login.preset.admin_h", label: "Tenant admin", hint: "Security policy & invites", tenant: "demo", email: "admin@demo.voyageos", password: "Demo1234!" },
+  { labelKey: "login.preset.mgmt", hintKey: "login.preset.mgmt_h", label: "Executive / director", hint: "Command wall / TCE", tenant: "demo", email: "mgmt@demo.voyageos", password: "Demo1234!" },
+  { labelKey: "login.preset.charter", hintKey: "login.preset.charter_h", label: "Chartering lead", hint: "Pipeline wall / CP", tenant: "demo", email: "charterer@demo.voyageos", password: "Demo1234!" },
+  { labelKey: "login.preset.ops", hintKey: "login.preset.ops_h", label: "Operations", hint: "Situation room / Twin", tenant: "demo", email: "ops@demo.voyageos", password: "Demo1234!" },
+  { labelKey: "login.preset.tech", hintKey: "login.preset.tech_h", label: "Technical / superintendent", hint: "Ship mgmt / PMS", tenant: "demo", email: "tech@demo.voyageos", password: "Demo1234!" },
+  { labelKey: "login.preset.fin", hintKey: "login.preset.fin_h", label: "Finance", hint: "Cash wall / AR", tenant: "demo", email: "finance@demo.voyageos", password: "Demo1234!" },
+  { labelKey: "login.preset.dem", hintKey: "login.preset.dem_h", label: "Demurrage", hint: "Laytime / claims wall", tenant: "demo", email: "demurrage@demo.voyageos", password: "Demo1234!" },
 ];
 
 type Branding = {
@@ -160,6 +160,7 @@ export default function LoginPage() {
   function applyPreset(p: (typeof PRESETS)[0]) {
     setTenant(p.tenant);
     setEmail(p.email);
+    setPassword(p.password);
   }
 
   const accent = brand?.primary_color || "#1A9B96";
