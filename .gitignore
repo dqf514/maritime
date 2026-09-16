@@ -22,3 +22,10 @@ mos/apps/api/.venv/
 mos/apps/web/node_modules/
 mos/apps/web/.next/
 mos/deploy/compose/.env
+
+# 内部研究/对标/规格文档（不公开）
+mos/docs/internal/
+/Voyage OS设定.md
+/VoyageOS-更新总结-*.md
+/mos/VoyageOS 完整开发规格说明书*.md
+/MariOS-更新总结-*.md
