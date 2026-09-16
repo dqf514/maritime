@@ -25,7 +25,7 @@ from app.services import dq as dq_service
 from app.services.notifications import notify_roles_once
 from app.services.pnl import voyage_pnl_rows
 
-log = logging.getLogger("voyageos.exceptions")
+log = logging.getLogger("marios.exceptions")
 
 MAX_ITEMS = 100
 

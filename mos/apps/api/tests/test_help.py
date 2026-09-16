@@ -17,7 +17,7 @@ def test_help_catalog_and_article(client):
 
     art = client.get("/api/v1/help/articles/welcome?locale=zh-CN")
     assert art.status_code == 200
-    assert "VoyageOS" in art.json()["title"] or "航运" in art.json()["body"]
+    assert "MariOS" in art.json()["title"] or "航运" in art.json()["body"]
     assert art.json().get("body")
 
 

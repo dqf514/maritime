@@ -57,7 +57,7 @@ from app.seed_i18n import seed_i18n
 from app.services.platform_ops import bootstrap_ops_catalog
 from app.services.reference_data import seed_reference_catalog
 
-log = logging.getLogger("voyageos.main")
+log = logging.getLogger("marios.main")
 # Structured logging is configured at import time so every module logger
 # (including uvicorn's) emits the same key=value format from the start.
 configure_logging()
@@ -181,6 +181,26 @@ def _ensure_sqlite_user_identity_columns() -> None:
         conn.commit()
 
 
+def _apply_rebrand_data_patches() -> None:
+    """VoyageOS -> MariOS rebrand: rewrite seeded demo emails and default branding.
+
+    Pure UPDATE statements guarded by WHERE on the old value, so reruns are
+    no-ops on any database (SQLite dev or Postgres deploy).
+    """
+    stmts = (
+        "UPDATE users SET email = REPLACE(email, 'demo.voyageos', 'demo.marios') WHERE email LIKE '%demo.voyageos%'",
+        "UPDATE users SET email = REPLACE(email, 'voyageos.platform', 'marios.platform') WHERE email LIKE '%voyageos.platform%'",
+        "UPDATE platform_branding SET product_name = 'MariOS' WHERE product_name = 'VoyageOS'",
+    )
+    with engine.connect() as conn:
+        for stmt in stmts:
+            try:
+                conn.execute(text(stmt))
+            except Exception:  # noqa: BLE001
+                log.exception("Rebrand data patch failed: %s", stmt)
+        conn.commit()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
@@ -188,6 +208,10 @@ async def lifespan(_app: FastAPI):
         _ensure_sqlite_user_identity_columns()
     except Exception:
         log.exception("SQLite compatibility migration failed")
+    try:
+        _apply_rebrand_data_patches()
+    except Exception:
+        log.exception("Rebrand data patch failed")
     try:
         with SessionLocal() as db:
             # Catalog / reference data is required for the app to function

@@ -1,4 +1,4 @@
-# 【内部文档 · 不对客户展示】VoyageOS 能力差距跟踪
+# 【内部文档 · 不对客户展示】MariOS 能力差距跟踪
 
 > **机密 / 内部**：本文仅供产品与研发规划，禁止链接到产品介绍页、知识中心或对外材料。  
 > 对标来源仅作内部能力清单参考，勿写入客户文案。
@@ -98,7 +98,7 @@ Veson = **IMOS 业务主干 + CoCaptain AI + Mail + Insights** 一体化。
 4. **Wave D — Platform 体验**：Mail 旁侧、CoCaptain 式助手、Insights 接入  
 5. **Wave E — Risk & Compliance**：敞口、ETS/FuelEU、Pooling  
 
-每波验收：**同一角色在 Veson 宣传页上能做的主路径，在 VoyageOS 可端到端演示且数据可审计。**
+每波验收：**同一角色在 Veson 宣传页上能做的主路径，在 MariOS 可端到端演示且数据可审计。**
 
 ---
 

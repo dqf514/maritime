@@ -58,7 +58,7 @@ def test_role_dashboards(client, auth_headers):
 def test_tech_user_dashboard(client):
     r = client.post(
         "/api/v1/auth/login",
-        json={"email": "tech@demo.voyageos", "password": "Demo1234!", "tenant_code": "demo"},
+        json={"email": "tech@demo.marios", "password": "Demo1234!", "tenant_code": "demo"},
     )
     assert r.status_code == 200, r.text
     h = {"Authorization": f"Bearer {r.json()['access_token']}"}

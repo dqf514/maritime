@@ -10,8 +10,8 @@ import {
   type ReactNode,
 } from "react";
 
-import { API_BASE as API } from "./api";
-const STORAGE_KEY = "voyageos_locale";
+import { API_BASE as API, readStorage, TOKEN_STORAGE_KEY } from "./api";
+const STORAGE_KEY = "marios_locale";
 
 type Term = {
   key: string;
@@ -53,7 +53,7 @@ const Ctx = createContext<I18nCtx | null>(null);
 
 function readStoredLocale(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(STORAGE_KEY);
+  return readStorage(STORAGE_KEY);
 }
 
 function hasCjk(s: string): boolean {
@@ -77,7 +77,7 @@ export function I18nProvider({ children, tenantCode }: { children: ReactNode; te
     if (stored) qs.set("locale", stored);
     if (tenantCode) qs.set("tenant_code", tenantCode);
     const headers: HeadersInit = {};
-    const token = typeof window !== "undefined" ? localStorage.getItem("voyageos_token") : null;
+    const token = typeof window !== "undefined" ? readStorage(TOKEN_STORAGE_KEY) : null;
     if (token) headers.Authorization = `Bearer ${token}`;
     if (stored) headers["Accept-Language"] = stored;
     const res = await fetch(`${API}/api/v1/i18n/bundle?${qs.toString()}`, { headers, credentials: "include" });
@@ -113,7 +113,7 @@ export function I18nProvider({ children, tenantCode }: { children: ReactNode; te
       }
       // Session is the HttpOnly cookie; always persist locale server-side.
       // The legacy Bearer header is only kept as a fallback for pre-cookie sessions.
-      const token = localStorage.getItem("voyageos_token");
+      const token = readStorage(TOKEN_STORAGE_KEY);
       await fetch(`${API}/api/v1/me/locale`, {
         method: "PUT",
         credentials: "include",

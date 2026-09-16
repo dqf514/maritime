@@ -7,8 +7,8 @@ from datetime import date, datetime, timedelta, timezone
 from tests.isolation_helpers import login
 
 API = "/api/v1"
-TECH = "tech@demo.voyageos"
-OPS = "ops@demo.voyageos"
+TECH = "tech@demo.marios"
+OPS = "ops@demo.marios"
 
 
 def _vessel_id(client, h) -> str:
@@ -112,14 +112,14 @@ def test_summary_viewer_role_does_not_break(client, auth_headers):
         f"{API}/admin/users",
         headers=h,
         json={
-            "email": "viewer-home@demo.voyageos",
+            "email": "viewer-home@demo.marios",
             "full_name": "Home Viewer",
             "password": "Demo1234!",
             "role_codes": ["viewer"],
         },
     )
     assert r.status_code == 200, r.text
-    viewer_h = login(client, "viewer-home@demo.voyageos")
+    viewer_h = login(client, "viewer-home@demo.marios")
     s = client.get(f"{API}/home/summary", headers=viewer_h)
     assert s.status_code == 200, s.text
     body = s.json()

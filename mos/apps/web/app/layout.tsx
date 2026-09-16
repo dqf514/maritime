@@ -3,8 +3,8 @@ import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "VoyageOS — Maritime commercial OS",
-  description: "VoyageOS product portal — maritime commercial operating system",
+  title: "MariOS — Maritime commercial OS",
+  description: "MariOS product portal — maritime commercial operating system",
   icons: {
     icon: [
       { url: "/branding/favicon.ico" },

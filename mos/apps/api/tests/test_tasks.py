@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, timezone
 from tests.isolation_helpers import create_tenant, login
 
 API = "/api/v1"
-TECH = "tech@demo.voyageos"
-MGMT = "mgmt@demo.voyageos"
-FIN = "finance@demo.voyageos"
+TECH = "tech@demo.marios"
+MGMT = "mgmt@demo.marios"
+FIN = "finance@demo.marios"
 
 
 def _create(client, h, **overrides):
@@ -134,7 +134,7 @@ def test_assignees_endpoint_lists_active_users(client, auth_headers):
     r = client.get(f"{API}/tasks/assignees", headers=auth_headers)
     assert r.status_code == 200, r.text
     emails = [u["email"] for u in r.json()]
-    assert "admin@demo.voyageos" in emails
+    assert "admin@demo.marios" in emails
     assert TECH in emails
     for u in r.json():
         assert set(u.keys()) == {"id", "email", "full_name"}

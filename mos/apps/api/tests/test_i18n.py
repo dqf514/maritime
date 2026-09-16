@@ -19,7 +19,7 @@ def test_platform_and_tenant_i18n_admin(client, auth_headers):
     # platform
     ops = client.post(
         "/api/v1/auth/login",
-        json={"email": "ops@voyageos.platform", "password": "Ops1234!", "tenant_code": "sys"},
+        json={"email": "ops@marios.platform", "password": "Ops1234!", "tenant_code": "sys"},
     )
     ph = {"Authorization": f"Bearer {ops.json()['access_token']}"}
     ov = client.get("/api/v1/platform/i18n/overview", headers=ph)

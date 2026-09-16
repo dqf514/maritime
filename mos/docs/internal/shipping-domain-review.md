@@ -1,4 +1,4 @@
-# 【内部文档】VoyageOS 航运业务域审查报告 + 计算引擎修复清单
+# 【内部文档】MariOS 航运业务域审查报告 + 计算引擎修复清单
 
 > 审查人视角：干散货/油轮租船、航次估算、滞期费计算、航次执行（对标 Veson IMOS / DA-Desk / Marsoft）。
 > 基线代码：`mos/apps/api`（FastAPI + SQLAlchemy）。本报告行号以审查时点代码为准，并行开发可能导致漂移。

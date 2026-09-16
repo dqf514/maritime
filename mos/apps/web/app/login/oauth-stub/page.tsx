@@ -14,7 +14,7 @@ function OAuthStubPage() {
   const { t } = useI18n();
   const state = sp.get("state") || "";
   const provider = sp.get("provider") || "microsoft";
-  const [email, setEmail] = useState("admin@demo.voyageos");
+  const [email, setEmail] = useState("admin@demo.marios");
   const [name, setName] = useState("SSO Demo User");
   const [error, setError] = useState("");
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 def test_estimate_desk_put_calculate_ws(client):
     login = client.post(
         "/api/v1/auth/login",
-        json={"email": "charterer@demo.voyageos", "password": "Demo1234!", "tenant_code": "demo"},
+        json={"email": "charterer@demo.marios", "password": "Demo1234!", "tenant_code": "demo"},
     )
     assert login.status_code == 200, login.text
     h = {"Authorization": f"Bearer {login.json()['access_token']}"}
@@ -62,7 +62,7 @@ def test_estimate_desk_put_calculate_ws(client):
 def test_dynamic_voyage_pnl_shape(client):
     login = client.post(
         "/api/v1/auth/login",
-        json={"email": "finance@demo.voyageos", "password": "Demo1234!", "tenant_code": "demo"},
+        json={"email": "finance@demo.marios", "password": "Demo1234!", "tenant_code": "demo"},
     )
     assert login.status_code == 200, login.text
     h = {"Authorization": f"Bearer {login.json()['access_token']}"}

@@ -1,4 +1,4 @@
-"""Alembic environment for VoyageOS.
+"""Alembic environment for MariOS.
 
 - target_metadata comes from app.db.Base after importing every model module
   (same registration list as app/main.py).

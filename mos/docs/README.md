@@ -18,6 +18,6 @@
 
 | 资源 | 说明 |
 |------|------|
-| [DDS V2.1](../VoyageOS%20完整开发规格说明书（DDS）V2.1.md) | 开发规格 SSOT |
+| [DDS V2.1](../MariOS%20完整开发规格说明书（DDS）V2.1.md) | 开发规格 SSOT |
 | [DEVELOPMENT.md](../DEVELOPMENT.md) | 本地开发与测试 |
 | [internal/](./internal/) | 内部规划与差距跟踪、QA 摘要（不对客户展示） |

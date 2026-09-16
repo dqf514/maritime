@@ -12,7 +12,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import get_settings
 
-log = logging.getLogger("voyageos.ops_crypto")
+log = logging.getLogger("marios.ops_crypto")
 
 _warned_fallback = False
 

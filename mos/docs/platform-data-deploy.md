@@ -7,13 +7,13 @@
 | 场景 | 数据库 | 配置 |
 |------|--------|------|
 | 本地开发（默认） | **SQLite** | `DATABASE_URL=sqlite+pysqlite:///./voyageos_wave0.db`（见 `apps/api/app/config.py`） |
-| Compose / 生产推荐 | **PostgreSQL 16** | `postgresql+psycopg://…@postgres:5432/voyageos`（见 `deploy/compose`） |
+| Compose / 生产推荐 | **PostgreSQL 16** | `postgresql+psycopg://…@postgres:5432/marios`（见 `deploy/compose`） |
 
 多租户以**共享主库 + `tenant_id` 行级隔离**运行。平台运维台支持按租户登记独立数据源（本地 / 数据库服务器 / 主流云托管库），连接串加密存储；**业务会话当前仍使用主库**，独立引擎路由已预留。
 
 ## 后台能力入口
 
-1. 使用平台运营账号登录（演示：`ops@voyageos.platform` / 租户码 `sys`）。
+1. 使用平台运营账号登录（演示：`ops@marios.platform` / 租户码 `sys`）。
 2. 打开 **平台运维 → 数据面与部署**，路径：`/platform/ops`。
 3. 或知识中心检索「数据面」「部署」「数据库」。
 

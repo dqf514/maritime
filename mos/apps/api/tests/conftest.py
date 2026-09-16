@@ -79,7 +79,7 @@ def client(db_engine) -> Generator[TestClient, None, None]:
 def auth_headers(client: TestClient) -> dict[str, str]:
     r = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@demo.voyageos", "password": "Demo1234!", "tenant_code": "demo"},
+        json={"email": "admin@demo.marios", "password": "Demo1234!", "tenant_code": "demo"},
     )
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}

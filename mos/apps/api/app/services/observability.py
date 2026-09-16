@@ -23,7 +23,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REQUEST_ID_HEADER = "X-Request-ID"
 
-_request_id: ContextVar[str] = ContextVar("voyageos_request_id", default="-")
+_request_id: ContextVar[str] = ContextVar("marios_request_id", default="-")
 
 _CONFIGURED = False
 
@@ -74,7 +74,7 @@ def configure_logging(level: int | str = logging.INFO) -> None:
 class RequestObservabilityMiddleware:
     """ASGI middleware: request-id propagation + one access log per request."""
 
-    def __init__(self, app: ASGIApp, logger_name: str = "voyageos.access") -> None:
+    def __init__(self, app: ASGIApp, logger_name: str = "marios.access") -> None:
         self.app = app
         self.log = logging.getLogger(logger_name)
 

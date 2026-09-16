@@ -123,7 +123,7 @@ def put_platform_branding(
 def reset_platform_branding(auth: AuthContext = Depends(require_roles("platform_admin")), db: Session = Depends(get_db)):
     _ = auth
     row = _ensure_branding(db)
-    row.product_name = "VoyageOS"
+    row.product_name = "MariOS"
     row.tagline = "Maritime commercial operating system"
     row.logo_url = "/branding/logo.svg"
     row.icon_url = "/branding/mark.svg"

@@ -43,7 +43,7 @@ class OfficeTenantLink(Base):
 
 
 class OfficeResourceLink(Base):
-    """Maps a VoyageOS entity to an Office resource (file, folder, chat, channel, list item)."""
+    """Maps a MariOS entity to an Office resource (file, folder, chat, channel, list item)."""
 
     __tablename__ = "office_resource_links"
 
@@ -61,7 +61,7 @@ class OfficeResourceLink(Base):
 
 
 class OfficeSyncJob(Base):
-    """Inbound/outbound sync job between VoyageOS and M365."""
+    """Inbound/outbound sync job between MariOS and M365."""
 
     __tablename__ = "office_sync_jobs"
 

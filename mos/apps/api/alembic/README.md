@@ -1,6 +1,6 @@
 # Alembic 数据库迁移（P3 起）
 
-VoyageOS 从 P3 开始使用 Alembic 管理 schema 变更。本目录为标准 Alembic 布局：
+MariOS 从 P3 开始使用 Alembic 管理 schema 变更。本目录为标准 Alembic 布局：
 
 - `env.py` — 从 `app.config.get_settings().database_url`（即 `DATABASE_URL` 环境变量）读取连接，
   `target_metadata` 为 `app.db.Base.metadata`（导入全部模型模块后）。

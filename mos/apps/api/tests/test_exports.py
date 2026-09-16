@@ -34,7 +34,7 @@ def db_session(db_engine):
         yield db
 
 
-def _login(client, email="admin@demo.voyageos", tenant="demo", password="Demo1234!"):
+def _login(client, email="admin@demo.marios", tenant="demo", password="Demo1234!"):
     r = client.post("/api/v1/auth/login", json={"email": email, "password": password, "tenant_code": tenant})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -101,7 +101,7 @@ def test_export_tasks_my_scope(client):
     uniq_title = f"Export task {id(admin)}"
     r = client.post("/api/v1/tasks", headers=admin, json={"title": uniq_title})
     assert r.status_code == 200, r.text
-    other = _login(client, email="charterer@demo.voyageos")
+    other = _login(client, email="charterer@demo.marios")
     r = client.post("/api/v1/tasks", headers=other, json={"title": "Charterer private task"})
     assert r.status_code == 200, r.text
 

@@ -13,7 +13,7 @@ from app.seed_i18n_parity import UI_MESSAGES_PARITY
 
 # (key, namespace, en, zh-CN)
 UI_MESSAGES: list[tuple[str, str, str, str]] = [
-    ("app.name", "app", "VoyageOS", "VoyageOS"),
+    ("app.name", "app", "MariOS", "MariOS"),
     ("app.tagline", "app", "Maritime commercial operating system", "航运商业操作系统"),
     ("shell.workbench", "nav", "Workbench", "工作台"),
     ("shell.sign_out", "nav", "Sign out", "退出登录"),

@@ -1,6 +1,6 @@
-# Microsoft 365 与 VoyageOS
+# Microsoft 365 与 MariOS
 
-VoyageOS 与 Microsoft 365 打通后，租约、航次、发票等业务记录可与邮件、Teams、SharePoint / OneDrive 协同使用，形成统一的航运企业协作生态。
+MariOS 与 Microsoft 365 打通后，租约、航次、发票等业务记录可与邮件、Teams、SharePoint / OneDrive 协同使用，形成统一的航运企业协作生态。
 
 ## 管理员如何连接
 

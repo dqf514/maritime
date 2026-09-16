@@ -89,7 +89,7 @@ export default function PortalPage() {
       .then(setBrand)
       .catch(() =>
         setBrand({
-          product_name: "VoyageOS",
+          product_name: "MariOS",
           tagline: "Maritime commercial operating system",
           logo_url: "/branding/logo.svg",
           icon_url: "/branding/mark.svg",
@@ -101,7 +101,7 @@ export default function PortalPage() {
       );
   }, []);
 
-  const name = brand?.product_name || "VoyageOS";
+  const name = brand?.product_name || "MariOS";
   const accent = brand?.primary_color || "#1A9B96";
 
   return (

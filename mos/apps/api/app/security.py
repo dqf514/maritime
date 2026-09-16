@@ -25,7 +25,10 @@ settings = get_settings()
 # cross-site request forgery surface is considered acceptable and no separate
 # CSRF token is required. Non-cookie callers (API keys, Bearer headers) are
 # unaffected by browser CSRF by construction.
-SESSION_COOKIE_NAME = "voyageos_token"
+SESSION_COOKIE_NAME = "marios_token"
+# Pre-rebrand cookie name; still accepted so existing browser sessions stay
+# valid until their natural expiry.
+LEGACY_SESSION_COOKIE_NAME = "voyageos_token"
 
 
 def session_cookie_max_age() -> int:
@@ -167,6 +170,7 @@ def get_current_auth(
     db: Session = Depends(get_db),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    legacy_session_cookie: str | None = Cookie(default=None, alias=LEGACY_SESSION_COOKIE_NAME),
 ) -> AuthContext:
     # Resolution order: X-API-Key, then Authorization Bearer, then session cookie.
     # A present-but-invalid header/API key fails immediately (no cookie fallback),
@@ -177,8 +181,9 @@ def get_current_auth(
         return ctx
     if creds is not None:
         return _auth_from_jwt(db, creds.credentials)
-    if session_cookie:
-        return _auth_from_jwt(db, session_cookie)
+    token = session_cookie or legacy_session_cookie
+    if token:
+        return _auth_from_jwt(db, token)
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
 
@@ -190,11 +195,18 @@ def get_current_auth_optional(
     db: Session = Depends(get_db),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    legacy_session_cookie: str | None = Cookie(default=None, alias=LEGACY_SESSION_COOKIE_NAME),
 ) -> AuthContext | None:
-    if creds is None and not x_api_key and not session_cookie:
+    if creds is None and not x_api_key and not session_cookie and not legacy_session_cookie:
         return None
     try:
-        return get_current_auth(creds=creds, db=db, x_api_key=x_api_key, session_cookie=session_cookie)
+        return get_current_auth(
+            creds=creds,
+            db=db,
+            x_api_key=x_api_key,
+            session_cookie=session_cookie,
+            legacy_session_cookie=legacy_session_cookie,
+        )
     except HTTPException:
         return None
 

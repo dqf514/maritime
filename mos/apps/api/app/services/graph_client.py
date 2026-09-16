@@ -131,7 +131,7 @@ class GraphClient:
         if self.mode == "stub":
             return {
                 "id": "stub-user-001",
-                "displayName": "VoyageOS Demo User",
+                "displayName": "MariOS Demo User",
                 "mail": "demo@contoso.onmicrosoft.com",
                 "userPrincipalName": "demo@contoso.onmicrosoft.com",
             }

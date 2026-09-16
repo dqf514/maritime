@@ -33,12 +33,12 @@ class PlatformIdentitySettings(Base):
     email_password_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     magic_link_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # Redirect / branding for IdP consents
-    oauth_redirect_base: Mapped[str | None] = mapped_column(Text)  # e.g. https://api.voyageos.com
-    web_app_base: Mapped[str | None] = mapped_column(Text)  # e.g. https://app.voyageos.com
+    oauth_redirect_base: Mapped[str | None] = mapped_column(Text)  # e.g. https://api.marios.com
+    web_app_base: Mapped[str | None] = mapped_column(Text)  # e.g. https://app.marios.com
     # Email channel
     email_channel: Mapped[str] = mapped_column(Text, default="console")  # console|smtp|sendgrid|graph
-    email_from: Mapped[str] = mapped_column(Text, default="noreply@voyageos.local")
-    email_from_name: Mapped[str] = mapped_column(Text, default="VoyageOS")
+    email_from: Mapped[str] = mapped_column(Text, default="noreply@marios.local")
+    email_from_name: Mapped[str] = mapped_column(Text, default="MariOS")
     # Default policy template applied to new tenants
     default_require_email_verify: Mapped[bool] = mapped_column(Boolean, default=True)
     default_invite_only: Mapped[bool] = mapped_column(Boolean, default=False)

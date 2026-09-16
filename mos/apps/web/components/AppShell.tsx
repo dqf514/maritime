@@ -7,7 +7,7 @@ import { OmniSearch } from "@/components/OmniSearch";
 import { NavIcon, sectionIconId } from "@/components/NavIcon";
 import { NotificationBell } from "@/components/NotificationBell";
 import { clearLookupCache } from "@/components/LookupSelect";
-import { apiGet, apiLogout, apiMe, type Me } from "@/lib/api";
+import { apiGet, apiLogout, apiMe, readStorage, removeStorage, TOKEN_STORAGE_KEY, type Me } from "@/lib/api";
 import { LanguageSwitcher, useI18n } from "@/lib/i18n";
 
 export type NavSection = {
@@ -35,8 +35,8 @@ export type ShellBootstrap = {
   allowed_paths?: string[];
 };
 
-const NAV_COLLAPSE_KEY = "voyageos_nav_collapsed";
-const SEC_COLLAPSE_KEY = "voyageos_nav_sections";
+const NAV_COLLAPSE_KEY = "marios_nav_collapsed";
+const SEC_COLLAPSE_KEY = "marios_nav_sections";
 
 function pathAllowed(path: string, prefixes: string[] | undefined): boolean {
   if (!prefixes?.length) return true;
@@ -69,7 +69,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [shell, setShell] = useState<ShellBootstrap | null>(null);
   const [iconUrl, setIconUrl] = useState("/branding/mark.svg");
-  const [productName, setProductName] = useState("VoyageOS");
+  const [productName, setProductName] = useState("MariOS");
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [secOpen, setSecOpen] = useState<Record<string, boolean>>({});
   const [navHint, setNavHint] = useState<{ text: string; x: number; y: number } | null>(null);
@@ -111,7 +111,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
     await reload();
 
-    const storedSecs = localStorage.getItem(SEC_COLLAPSE_KEY);
+    const storedSecs = readStorage(SEC_COLLAPSE_KEY);
     const parsed: Record<string, boolean> = storedSecs ? JSON.parse(storedSecs) : {};
     const next: Record<string, boolean> = {};
     for (const sec of s.navigation as NavSection[]) {
@@ -122,12 +122,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [router, reload]);
 
   useEffect(() => {
-    setNavCollapsed(localStorage.getItem(NAV_COLLAPSE_KEY) === "1");
+    setNavCollapsed(readStorage(NAV_COLLAPSE_KEY) === "1");
   }, []);
 
   useEffect(() => {
     load().catch(() => {
-      localStorage.removeItem("voyageos_token");
+      removeStorage(TOKEN_STORAGE_KEY);
       router.replace("/login");
     });
   }, [load, router]);
@@ -189,7 +189,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   async function signOut() {
     // Clear the server-side HttpOnly cookie first, then local state.
     await apiLogout();
-    localStorage.removeItem("voyageos_token"); // legacy token cleanup
+    removeStorage(TOKEN_STORAGE_KEY); // legacy token cleanup
     clearLookupCache();
     router.replace("/login");
   }

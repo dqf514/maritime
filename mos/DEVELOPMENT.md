@@ -1,4 +1,4 @@
-# VoyageOS development
+# MariOS development
 
 GitHub: https://github.com/dqf514/maritime/tree/main/mos
 
@@ -15,7 +15,7 @@ $env:LICENSE_DEV_UNLOCK="all"
 uvicorn app.main:app --reload --port 8000
 ```
 
-Demo: `admin@demo.voyageos` / `Demo1234!` / tenant `demo`
+Demo: `admin@demo.marios` / `Demo1234!` / tenant `demo`
 
 ### Web
 

@@ -113,7 +113,7 @@ def test_invoice_numbers_sequential_per_tenant(client, auth_headers):
 
 
 def _create_second_tenant_counterparty(client):
-    hp = _login(client, "ops@voyageos.platform", tenant_code="sys", password="Ops1234!")
+    hp = _login(client, "ops@marios.platform", tenant_code="sys", password="Ops1234!")
     created = client.post(
         "/api/v1/platform/tenants",
         headers=hp,
@@ -172,7 +172,7 @@ def _submit_invoice_workflow(client, h_fin, h_admin):
 
 def test_workflow_invalid_decision_422(client, auth_headers, db_engine):
     h_admin = auth_headers
-    h_fin = _login(client, "finance@demo.voyageos")
+    h_fin = _login(client, "finance@demo.marios")
     _, instance_id = _submit_invoice_workflow(client, h_fin, h_admin)
 
     from app.models_saas import WorkflowInstance
@@ -197,7 +197,7 @@ def test_workflow_invalid_decision_422(client, auth_headers, db_engine):
 
 def test_workflow_self_approval_blocked(client, auth_headers):
     h_admin = auth_headers
-    h_fin = _login(client, "finance@demo.voyageos")
+    h_fin = _login(client, "finance@demo.marios")
     _, instance_id = _submit_invoice_workflow(client, h_fin, h_admin)
     # finance may hold the workflow.approve feature, but still cannot approve own submission
     client.put(
@@ -218,7 +218,7 @@ def test_workflow_self_approval_blocked(client, auth_headers):
 
 def test_feature_matrix_fail_closed(client, auth_headers, db_engine):
     h_admin = auth_headers
-    h_fin = _login(client, "finance@demo.voyageos")
+    h_fin = _login(client, "finance@demo.marios")
     # no matrix row for finance/invoice.collect → denied (fail-closed)
     iid = _create_invoice(client, h_admin, amount=100)["id"]
     _issue_invoice(client, h_admin, iid)

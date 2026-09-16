@@ -192,7 +192,7 @@ CATALOG: list[dict[str, Any]] = [
     },
     {
         "connector_type": "pms.mock",
-        "name": "VoyageOS Mock PMS",
+        "name": "MariOS Mock PMS",
         "category": "ship_mgmt",
         "config_schema": [],
     },

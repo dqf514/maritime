@@ -32,7 +32,7 @@ const cache = new Map<string, { at: number; rows: LookupItem[] }>();
 
 function tenantScope(): string {
   if (typeof window === "undefined") return "ssr";
-  const token = localStorage.getItem("voyageos_token") || "";
+  const token = localStorage.getItem("marios_token") || "";
   let h = 0;
   for (let i = 0; i < token.length; i++) h = (h * 31 + token.charCodeAt(i)) >>> 0;
   return h.toString(36);

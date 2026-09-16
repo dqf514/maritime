@@ -11,7 +11,7 @@ from uuid import uuid4
 
 API = "/api/v1"
 
-PLATFORM_EMAIL = "ops@voyageos.platform"
+PLATFORM_EMAIL = "ops@marios.platform"
 PLATFORM_TENANT = "sys"
 PLATFORM_PASSWORD = "Ops1234!"
 

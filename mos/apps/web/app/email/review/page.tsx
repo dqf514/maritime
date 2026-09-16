@@ -42,7 +42,7 @@ export default function EmailReviewPage() {
     if (accounts.length) return accounts[0];
     return apiPost("/api/v1/email/accounts", {
       provider: "demo",
-      email: "ops@demo.voyageos",
+      email: "ops@demo.marios",
       display_name: "Ops Inbox",
       config: {},
     });

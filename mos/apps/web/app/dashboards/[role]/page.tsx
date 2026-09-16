@@ -214,7 +214,7 @@ export default function RoleDashboardPage() {
     <div ref={rootRef} className={`dash-wall ${fullscreen ? "is-fs" : ""}`} style={{ ["--dash-accent" as string]: accent }}>
       <header className="dash-top">
         <div>
-          <p className="dash-eyebrow">VoyageOS · {role}</p>
+          <p className="dash-eyebrow">MariOS · {role}</p>
           <div className="dash-title-row" ref={switcherRef}>
             <h1>{snap?.title || t("page.dash.loading", "Loading wall…")}</h1>
             {screens.length > 1 ? (

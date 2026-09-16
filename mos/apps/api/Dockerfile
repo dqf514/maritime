@@ -1,6 +1,6 @@
 # Build context must be the `mos/` directory (fixtures live at mos/fixtures and
 # checks/registry.py resolves them via parents[3]):
-#   docker build -f apps/api/Dockerfile -t voyageos-api mos/
+#   docker build -f apps/api/Dockerfile -t marios-api mos/
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* \

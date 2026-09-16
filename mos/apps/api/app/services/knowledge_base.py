@@ -1,4 +1,4 @@
-"""VoyageOS customer knowledge base — articles, search, and guided Q&A.
+"""MariOS customer knowledge base — articles, search, and guided Q&A.
 
 Content is product-facing. Do not put internal roadmaps, competitor gap lists,
 or engineering instructions here.
@@ -27,16 +27,16 @@ ARTICLES: list[dict[str, Any]] = [
         "slug": "welcome",
         "category": "start",
         "tags": ["overview", "product", "简介", "产品"],
-        "title_en": "What is VoyageOS?",
-        "title_zh": "VoyageOS 是什么？",
+        "title_en": "What is MariOS?",
+        "title_zh": "MariOS 是什么？",
         "summary_en": "A maritime commercial operating system for owners, charterers, operators and ship managers.",
         "summary_zh": "面向船东、租家、Operator 与船舶管理公司的航运商业操作系统。",
-        "body_en": """VoyageOS brings the commercial voyage chain into one workspace: estimate → fixture → voyage execution → laytime / claims → bunkers → settlement.
+        "body_en": """MariOS brings the commercial voyage chain into one workspace: estimate → fixture → voyage execution → laytime / claims → bunkers → settlement.
 
 Teams work from role-based home screens and a global search (Ctrl+K). Master data, documents and Microsoft 365 resources stay linked to the same voyage or charter record.
 
 Use this Knowledge Centre to learn workflows, configure Office connectivity, and find answers quickly.""",
-        "body_zh": """VoyageOS 把航运商业主链路收进同一工作台：估算 → 租约 → 航次执行 → 装卸时间 / 索赔 → 燃油 → 结算。
+        "body_zh": """MariOS 把航运商业主链路收进同一工作台：估算 → 租约 → 航次执行 → 装卸时间 / 索赔 → 燃油 → 结算。
 
 各角色拥有专属首页，并通过全局搜索（Ctrl+K）快速到达任务。主数据、文档与 Microsoft 365 资源可挂接到同一航次或租约。
 
@@ -127,7 +127,7 @@ Always confirm counterparty KYC / compliance status before activation if your po
 - Watch schedule blocks for conflicts; hard conflicts should be resolved before sailing.
 - Fleet Twin shows positions and alerts for situational awareness.
 
-Use consistent local times for port events — VoyageOS stores and displays local time, not UTC-only.""",
+Use consistent local times for port events — MariOS stores and displays local time, not UTC-only.""",
         "body_zh": """在「运营」中打开「航次」。
 
 - 基于已激活租约创建或打开航次。
@@ -171,7 +171,7 @@ Demurrage users typically work from the demurrage workspace and claim inbox.""",
         "title_zh": "Microsoft 365 生态",
         "summary_en": "Connect Mail, Teams, SharePoint and OneDrive; install Outlook / Teams / Excel add-ins.",
         "summary_zh": "连接邮件、Teams、SharePoint 与 OneDrive；安装 Outlook / Teams / Excel 插件。",
-        "body_en": """VoyageOS integrates with Microsoft 365 so commercial records and collaboration stay in one ecosystem.
+        "body_en": """MariOS integrates with Microsoft 365 so commercial records and collaboration stay in one ecosystem.
 
 **Connect (tenant admin)**
 1. Open Control plane → Office ecosystem.
@@ -180,7 +180,7 @@ Demurrage users typically work from the demurrage workspace and claim inbox.""",
 
 **What you can do**
 - Browse sample inbox context and send mail via Graph when enabled.
-- List drives and provision voyage / charter folders linked back into VoyageOS.
+- List drives and provision voyage / charter folders linked back into MariOS.
 - Post channel messages for approvals and ETA alerts.
 - Register outbound webhooks for Power Automate or partner systems.
 - Sideload add-in manifests for Outlook, Teams and Excel from the add-ins table.
@@ -189,7 +189,7 @@ Demurrage users typically work from the demurrage workspace and claim inbox.""",
 Create keys under Control plane → API keys. Office add-ins and partners may call the API with header `X-API-Key`.
 
 Linked files and folders appear as Office resource links on the related business entity.""",
-        "body_zh": """VoyageOS 与 Microsoft 365 深度整合，使商务单据与日常协作处于同一生态。
+        "body_zh": """MariOS 与 Microsoft 365 深度整合，使商务单据与日常协作处于同一生态。
 
 **连接（租户管理员）**
 1. 打开「控制平面 → Office 生态」。
@@ -273,7 +273,7 @@ Platform operators (sys tenant) manage multi-tenant estate, plans and product br
 
 **Multi-tenant model**
 
-VoyageOS uses a shared primary database with tenant isolation by `tenant_id`. Platform operators may register per-tenant datastore bindings (local file, database server, or managed cloud RDS). Connection strings are stored encrypted; the console shows masked previews and connectivity tests. Dedicated per-tenant engines are reserved in the architecture; business sessions currently continue on the primary database.
+MariOS uses a shared primary database with tenant isolation by `tenant_id`. Platform operators may register per-tenant datastore bindings (local file, database server, or managed cloud RDS). Connection strings are stored encrypted; the console shows masked previews and connectivity tests. Dedicated per-tenant engines are reserved in the architecture; business sessions currently continue on the primary database.
 
 **Where to configure**
 
@@ -293,7 +293,7 @@ Also see product docs under `docs/platform-data-deploy.md`.""",
 
 **多租户模型**
 
-VoyageOS 以共享主库 + `tenant_id` 隔离为主。平台运营方可按租户登记独立数据源绑定（本地文件、数据库服务器或主流云托管库）。连接串加密存储，控制台仅展示脱敏预览并支持连通性测试。架构上已预留按租户独立引擎路由；当前业务会话仍走平台主库，保证稳定。
+MariOS 以共享主库 + `tenant_id` 隔离为主。平台运营方可按租户登记独立数据源绑定（本地文件、数据库服务器或主流云托管库）。连接串加密存储，控制台仅展示脱敏预览并支持连通性测试。架构上已预留按租户独立引擎路由；当前业务会话仍走平台主库，保证稳定。
 
 **在哪里配置**
 
@@ -315,7 +315,7 @@ VoyageOS 以共享主库 + `tenant_id` 隔离为主。平台运营方可按租�
         "title_zh": "API、连接器与 Webhook",
         "summary_en": "Open API, Integration Hub connectors, and event webhooks.",
         "summary_zh": "开放 API、集成中枢连接器与事件 Webhook。",
-        "body_en": """VoyageOS exposes a versioned REST API (`/api/v1`, OpenAPI at `/docs` on the API host).
+        "body_en": """MariOS exposes a versioned REST API (`/api/v1`, OpenAPI at `/docs` on the API host).
 
 - API keys: Control plane → API keys; send `Authorization: Bearer` (user JWT) or `X-API-Key`.
 - Integration Hub: FX, sanctions lists, AIS, bunker index, PMS, email and Microsoft 365 connectors with health tests.
@@ -323,7 +323,7 @@ VoyageOS 以共享主库 + `tenant_id` 隔离为主。平台运营方可按租�
 - DataOps: AI-assisted migration from mailbox / PST / Excel and one-click tenant backup.
 
 Treat secrets as confidential; rotate keys if a device or partner is retired.""",
-        "body_zh": """VoyageOS 提供版本化 REST API（`/api/v1`，API 主机上的 `/docs` 为 OpenAPI）。
+        "body_zh": """MariOS 提供版本化 REST API（`/api/v1`，API 主机上的 `/docs` 为 OpenAPI）。
 
 - API 密钥：控制平面 → API 密钥；使用 `Authorization: Bearer`（用户 JWT）或 `X-API-Key`。
 - 集成中枢：汇率、制裁名单、AIS、燃油指数、PMS、邮件与 Microsoft 365 等连接器，支持健康检测。

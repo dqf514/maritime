@@ -10,7 +10,7 @@ def test_auth_methods_public(client):
 def test_platform_identity_settings(client):
     login = client.post(
         "/api/v1/auth/login",
-        json={"email": "ops@voyageos.platform", "password": "Ops1234!", "tenant_code": "sys"},
+        json={"email": "ops@marios.platform", "password": "Ops1234!", "tenant_code": "sys"},
     )
     assert login.status_code == 200
     h = {"Authorization": f"Bearer {login.json()['access_token']}"}
@@ -36,7 +36,7 @@ def test_tenant_policy_invite_and_accept(client, auth_headers, mail_capture):
             "microsoft_enabled": True,
             "google_enabled": True,
             "magic_link_enabled": True,
-            "allowed_domains": ["demo.voyageos", "example.com"],
+            "allowed_domains": ["demo.marios", "example.com"],
         },
     )
     assert pol.status_code == 200, pol.text
@@ -130,7 +130,7 @@ def test_magic_link(client, auth_headers, mail_capture):
     )
     req = client.post(
         "/api/v1/auth/magic-link/request",
-        json={"email": "admin@demo.voyageos", "tenant_code": "demo"},
+        json={"email": "admin@demo.marios", "tenant_code": "demo"},
     )
     assert req.status_code == 200, req.text
     assert "demo_token" not in req.json()

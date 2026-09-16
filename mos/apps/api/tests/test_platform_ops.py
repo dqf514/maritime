@@ -6,7 +6,7 @@ from uuid import UUID
 def _platform_headers(client):
     r = client.post(
         "/api/v1/auth/login",
-        json={"email": "ops@voyageos.platform", "password": "Ops1234!", "tenant_code": "sys"},
+        json={"email": "ops@marios.platform", "password": "Ops1234!", "tenant_code": "sys"},
     )
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}

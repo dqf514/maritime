@@ -22,7 +22,7 @@ export function HelpShell({ children }: { children: ReactNode }) {
         <Link href="/help" className="help-brand">
           <img src="/branding/mark.svg" alt="" width={28} height={28} />
           <span>
-            VoyageOS
+            MariOS
             <em>{t("help.centre", "Knowledge Centre")}</em>
           </span>
         </Link>
@@ -39,7 +39,7 @@ export function HelpShell({ children }: { children: ReactNode }) {
       </header>
       <main className="help-main">{children}</main>
       <footer className="help-foot">
-        <span>© {new Date().getFullYear()} VoyageOS</span>
+        <span>© {new Date().getFullYear()} MariOS</span>
         <span>{t("help.foot", "Product documentation — search and ask anytime.")}</span>
       </footer>
     </div>

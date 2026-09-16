@@ -48,7 +48,7 @@ export default function OfficeEcosystemPage() {
   const [msg, setMsg] = useState("");
   const [hookName, setHookName] = useState("Power Automate");
   const [hookUrl, setHookUrl] = useState("stub://power-automate");
-  const [notifyText, setNotifyText] = useState("VoyageOS alert: voyage DEMO-001 ETA updated.");
+  const [notifyText, setNotifyText] = useState("MariOS alert: voyage DEMO-001 ETA updated.");
 
   async function load() {
     const [st, j, wh] = await Promise.all([
@@ -142,7 +142,7 @@ export default function OfficeEcosystemPage() {
           <p className="page-sub">
             {t(
               "page.office.sub",
-              "Microsoft 365 — Teams, SharePoint, OneDrive, Outlook — shared with VoyageOS resources."
+              "Microsoft 365 — Teams, SharePoint, OneDrive, Outlook — shared with MariOS resources."
             )}
           </p>
         </div>

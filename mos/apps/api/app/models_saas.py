@@ -246,7 +246,7 @@ class PlatformBranding(Base):
     __tablename__ = "platform_branding"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    product_name: Mapped[str] = mapped_column(Text, default="VoyageOS")
+    product_name: Mapped[str] = mapped_column(Text, default="MariOS")
     tagline: Mapped[str] = mapped_column(Text, default="Maritime commercial operating system")
     logo_url: Mapped[str] = mapped_column(Text, default="/branding/logo.svg")
     icon_url: Mapped[str] = mapped_column(Text, default="/branding/mark.svg")

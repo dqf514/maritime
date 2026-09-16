@@ -1,4 +1,4 @@
--- VoyageOS Wave 0 DDL (docs/ddl.sql — single source)
+-- MariOS Wave 0 DDL (docs/ddl.sql — single source)
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS citext;
 

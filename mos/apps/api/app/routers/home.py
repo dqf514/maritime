@@ -22,7 +22,7 @@ from app.routers.tasks import task_out
 from app.security import AuthContext, get_current_auth
 from app.services.notifications import notify_once, role_recipients
 
-log = logging.getLogger("voyageos.home")
+log = logging.getLogger("marios.home")
 
 router = APIRouter(tags=["Home"])
 

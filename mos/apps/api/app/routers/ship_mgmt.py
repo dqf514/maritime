@@ -826,7 +826,7 @@ def list_pms_adapters(auth: AuthContext = Depends(require_module("ship_mgmt"))):
         },
         {
             "code": "pms.mock",
-            "name": "VoyageOS Mock PMS",
+            "name": "MariOS Mock PMS",
             "capabilities": ["demo_pull", "demo_push"],
             "status": "ready",
         },
@@ -839,7 +839,7 @@ def inbound_pms_sync(
     auth: AuthContext = Depends(require_module("ship_mgmt")),
     db: Session = Depends(get_db),
 ):
-    """Inbound webhook contract — maps external PMS entities into VoyageOS ship tables."""
+    """Inbound webhook contract — maps external PMS entities into MariOS ship tables."""
     vessel = None
     if body.vessel_imo:
         vessel = db.scalar(

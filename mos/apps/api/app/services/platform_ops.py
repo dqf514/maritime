@@ -41,7 +41,7 @@ def runtime_datasource_info() -> dict[str, Any]:
         "is_sqlite": dialect == "sqlite",
         "is_postgres": dialect in {"postgresql", "postgres"},
         "default_for_dev": "sqlite+pysqlite:///./voyageos_wave0.db",
-        "compose_default": "postgresql+psycopg://…@postgres:5432/voyageos",
+        "compose_default": "postgresql+psycopg://…@postgres:5432/marios",
         "multi_tenant_mode": "shared_schema",
         "tenant_engine_routing": "reserved",  # bindings exist; runtime uses primary
         "checked_at": _now().isoformat(),

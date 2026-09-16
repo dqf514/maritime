@@ -1,4 +1,4 @@
-# VoyageOS（MOS）
+# MariOS（MOS）
 
 面向船东、租家、Operator 与船舶管理公司的**航运商业操作系统**（Commercial Voyage Management）。
 
@@ -29,7 +29,7 @@
 
 | 资源 | 说明 |
 | --- | --- |
-| [VoyageOS 完整开发规格说明书（DDS）V2.1.md](./VoyageOS%20完整开发规格说明书（DDS）V2.1.md) | 开发 SSOT |
+| [MariOS 完整开发规格说明书（DDS）V2.1.md](./MariOS%20完整开发规格说明书（DDS）V2.1.md) | 开发 SSOT |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 本地开发与测试 |
 | [docs/internal/](./docs/internal/) | 内部规划（不对客户展示） |
 
@@ -41,7 +41,7 @@
 
 见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
 
-Demo 登录：`admin@demo.voyageos` / `Demo1234!` / tenant `demo`
+Demo 登录：`admin@demo.marios` / `Demo1234!` / tenant `demo`
 
 ## 技术要点（摘要）
 

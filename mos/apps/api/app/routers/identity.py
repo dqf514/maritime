@@ -348,7 +348,7 @@ def create_invite(
     send_mail(
         db,
         to_email=email,
-        subject="You're invited to VoyageOS",
+        subject="You're invited to MariOS",
         body=f"Accept your invite:\n{link}",
         purpose="invite",
         tenant_id=auth.tenant_id,
@@ -521,7 +521,7 @@ def request_email_verify(
     send_mail(
         db,
         to_email=email,
-        subject="Verify your VoyageOS email",
+        subject="Verify your MariOS email",
         body=f"Verify email:\n{link}",
         purpose="email_verify",
         tenant_id=tenant_id,
@@ -571,7 +571,7 @@ def magic_link_request(
     send_mail(
         db,
         to_email=email,
-        subject="Your VoyageOS sign-in link",
+        subject="Your MariOS sign-in link",
         body=f"Sign in:\n{link}",
         purpose="magic_link",
         tenant_id=tenant.id,

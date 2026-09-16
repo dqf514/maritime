@@ -1,4 +1,4 @@
-**`Voyage OS要做的事情设定`**
+**`Mari OS要做的事情设定`**
   **IMOS 是 Veson Nautical 的 Integrated Maritime Operating System**，我认为它的核心竞争力其实不是“ERP功能多”，而是它把**航运最核心的商业闭环——合同、船舶、航次、运费、成本、风险、结算和利润**连接起来了。
 
 现在进入 AI 时代以后，IMOS 最值得做的也不是简单加一个 ChatGPT，而是把它从“**记录和管理业务的系统**”升级成“**理解业务、预测结果、主动决策、执行动作的航运 Operating System**”。

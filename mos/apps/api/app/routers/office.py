@@ -527,6 +527,6 @@ def partner_ping(
         "ok": True,
         "tenant_id": str(auth.tenant_id),
         "user_id": str(auth.user_id),
-        "product": "VoyageOS",
+        "product": "MariOS",
         "ecosystem": "office",
     }

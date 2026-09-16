@@ -132,13 +132,13 @@ TENANT_ROLE_DEFS = [
 ]
 
 DEMO_USERS = [
-    ("admin@demo.voyageos", "Demo Admin", ["tenant_admin"]),
-    ("charterer@demo.voyageos", "Alex Charterer", ["chartering"]),
-    ("ops@demo.voyageos", "Olivia Ops", ["operations"]),
-    ("finance@demo.voyageos", "Finn Finance", ["finance"]),
-    ("demurrage@demo.voyageos", "Dana Demurrage", ["demurrage"]),
-    ("mgmt@demo.voyageos", "Morgan Mgmt", ["management"]),
-    ("tech@demo.voyageos", "Taylor Tech", ["technical"]),
+    ("admin@demo.marios", "Demo Admin", ["tenant_admin"]),
+    ("charterer@demo.marios", "Alex Charterer", ["chartering"]),
+    ("ops@demo.marios", "Olivia Ops", ["operations"]),
+    ("finance@demo.marios", "Finn Finance", ["finance"]),
+    ("demurrage@demo.marios", "Dana Demurrage", ["demurrage"]),
+    ("mgmt@demo.marios", "Morgan Mgmt", ["management"]),
+    ("tech@demo.marios", "Taylor Tech", ["technical"]),
 ]
 
 
@@ -187,7 +187,7 @@ def _ensure_platform_tenant(db: Session) -> None:
     sys_tenant = db.scalar(select(Tenant).where(Tenant.code == "sys"))
     if not sys_tenant:
         sys_tenant = Tenant(
-            name="VoyageOS Platform",
+            name="MariOS Platform",
             code="sys",
             status="active",
             default_locale="en",
@@ -200,7 +200,7 @@ def _ensure_platform_tenant(db: Session) -> None:
     _ensure_user_with_roles(
         db,
         sys_tenant.id,
-        "ops@voyageos.platform",
+        "ops@marios.platform",
         "Platform Operator",
         ["platform_admin"],
         password="Ops1234!",
@@ -444,10 +444,10 @@ def seed_saas_catalog(db: Session) -> None:
         db.add(
             PlatformAiEndpoint(
                 code="voyageos-gateway",
-                name="VoyageOS AI Gateway",
+                name="MariOS AI Gateway",
                 provider_type="openai_compatible",
-                base_url="https://ai.voyageos.local/v1",
-                model_default="voyageos-maritime-mini",
+                base_url="https://ai.marios.local/v1",
+                model_default="marios-maritime-mini",
                 meter_code="ai.tokens",
                 tokens_per_call_est=1200,
                 status="active",
@@ -463,7 +463,7 @@ def seed_saas_catalog(db: Session) -> None:
                     legal_name="Demo Shipping Pte Ltd",
                     display_name="Demo Shipping",
                     logo_url="/branding/demo-logo.svg",
-                    website="https://demo.voyageos.local",
+                    website="https://demo.marios.local",
                     tax_no="SG-DEMO-001",
                     address="1 Harbourfront Ave, Singapore",
                     brand_primary="#1a8a8a",
@@ -482,11 +482,11 @@ def seed_saas_catalog(db: Session) -> None:
         from app.models_saas import UserOrgMembership
 
         dept_map = {
-            "charterer@demo.voyageos": "CHARTER",
-            "ops@demo.voyageos": "OPS",
-            "finance@demo.voyageos": "FIN",
-            "mgmt@demo.voyageos": "HQ",
-            "admin@demo.voyageos": "HQ",
+            "charterer@demo.marios": "CHARTER",
+            "ops@demo.marios": "OPS",
+            "finance@demo.marios": "FIN",
+            "mgmt@demo.marios": "HQ",
+            "admin@demo.marios": "HQ",
         }
         for email, code in dept_map.items():
             user = db.scalar(select(User).where(User.tenant_id == demo.id, User.email == email))
@@ -505,7 +505,7 @@ def seed_saas_catalog(db: Session) -> None:
             ).all():
                 m.is_primary = False
             db.add(UserOrgMembership(user_id=user.id, org_unit_id=unit.id, is_primary=True))
-            if code == "HQ" and email == "admin@demo.voyageos" and not unit.manager_user_id:
+            if code == "HQ" and email == "admin@demo.marios" and not unit.manager_user_id:
                 unit.manager_user_id = user.id
             if code != "HQ" and not unit.manager_user_id:
                 unit.manager_user_id = user.id

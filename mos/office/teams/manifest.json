@@ -3,20 +3,20 @@
   "manifestVersion": "1.16",
   "version": "1.0.0",
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "packageName": "com.voyageos.teams",
+  "packageName": "com.marios.teams",
   "developer": {
-    "name": "VoyageOS",
-    "websiteUrl": "https://voyageos.local",
-    "privacyUrl": "https://voyageos.local/privacy",
-    "termsOfUseUrl": "https://voyageos.local/terms"
+    "name": "MariOS",
+    "websiteUrl": "https://marios.local",
+    "privacyUrl": "https://marios.local/privacy",
+    "termsOfUseUrl": "https://marios.local/terms"
   },
   "name": {
-    "short": "VoyageOS",
-    "full": "VoyageOS Maritime Operating System"
+    "short": "MariOS",
+    "full": "MariOS Maritime Operating System"
   },
   "description": {
     "short": "Voyage alerts, approvals & deep links",
-    "full": "Bring VoyageOS voyage alerts, charter approvals, and OmniSearch-style deep links into Microsoft Teams channels."
+    "full": "Bring MariOS voyage alerts, charter approvals, and OmniSearch-style deep links into Microsoft Teams channels."
   },
   "icons": {
     "color": "color.png",
@@ -25,7 +25,7 @@
   "accentColor": "#0B1F2A",
   "staticTabs": [
     {
-      "entityId": "voyageos.home",
+      "entityId": "marios.home",
       "name": "Workbench",
       "contentUrl": "https://localhost:3000/home?embed=teams",
       "websiteUrl": "https://localhost:3000/home",
@@ -42,9 +42,9 @@
   "bots": [],
   "composeExtensions": [],
   "permissions": ["identity", "messageTeamMembers"],
-  "validDomains": ["localhost", "voyageos.local"],
+  "validDomains": ["localhost", "marios.local"],
   "webApplicationInfo": {
     "id": "00000000-0000-0000-0000-000000000000",
-    "resource": "api://localhost/voyageos"
+    "resource": "api://localhost/marios"
   }
 }

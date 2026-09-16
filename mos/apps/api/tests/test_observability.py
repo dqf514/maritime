@@ -47,14 +47,14 @@ def test_request_id_propagated(client):
 def test_audit_login_success(client, db_engine):
     r = client.post(
         f"{API}/auth/login",
-        json={"email": "admin@demo.voyageos", "password": "Demo1234!", "tenant_code": "demo"},
+        json={"email": "admin@demo.marios", "password": "Demo1234!", "tenant_code": "demo"},
     )
     assert r.status_code == 200, r.text
     rows = _audit_rows(db_engine, "auth.login_success")
     assert len(rows) == 1
     row = rows[0]
     assert row.entity_type == "user"
-    assert (row.detail or {}).get("email") == "admin@demo.voyageos"
+    assert (row.detail or {}).get("email") == "admin@demo.marios"
     assert row.tenant_id is not None
     assert row.actor_user_id is not None
     assert row.ip  # TestClient supplies a client host
@@ -63,7 +63,7 @@ def test_audit_login_success(client, db_engine):
 def test_audit_login_failure(client, db_engine):
     r = client.post(
         f"{API}/auth/login",
-        json={"email": "admin@demo.voyageos", "password": "wrong-password", "tenant_code": "demo"},
+        json={"email": "admin@demo.marios", "password": "wrong-password", "tenant_code": "demo"},
     )
     assert r.status_code == 401
     rows = _audit_rows(db_engine, "auth.login_failed")
@@ -113,7 +113,7 @@ def test_audit_logs_endpoint_pagination(client, auth_headers):
 
 
 def test_audit_logs_endpoint_forbidden_for_non_admin(client):
-    headers = login(client, "charterer@demo.voyageos")
+    headers = login(client, "charterer@demo.marios")
     r = client.get(f"{API}/admin/security/audit-logs", headers=headers)
     assert r.status_code == 403
 
@@ -141,7 +141,7 @@ def test_audit_logs_tenant_isolation(client, auth_headers):
 # —— Alembic env import smoke test (does NOT run migrations) ——
 def test_alembic_env_importable():
     api_root = Path(__file__).resolve().parent.parent
-    spec = importlib.util.spec_from_file_location("voyageos_alembic_env", api_root / "alembic" / "env.py")
+    spec = importlib.util.spec_from_file_location("marios_alembic_env", api_root / "alembic" / "env.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # must not connect to a database or raise
     assert mod.target_metadata is not None

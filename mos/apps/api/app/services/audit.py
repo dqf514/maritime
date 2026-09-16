@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models_audit import AuditLog
 
-log = logging.getLogger("voyageos.audit")
+log = logging.getLogger("marios.audit")
 
 
 def audit(

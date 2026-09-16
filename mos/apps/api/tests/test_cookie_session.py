@@ -4,7 +4,7 @@ Existing tests all authenticate via the Authorization header and must keep
 passing unchanged; these cover the HttpOnly cookie track added on top.
 """
 
-LOGIN_BODY = {"email": "admin@demo.voyageos", "password": "Demo1234!", "tenant_code": "demo"}
+LOGIN_BODY = {"email": "admin@demo.marios", "password": "Demo1234!", "tenant_code": "demo"}
 
 
 def _login(client):
@@ -18,7 +18,7 @@ def test_login_sets_httponly_session_cookie(client):
     # JSON token kept for backward compatibility
     assert r.json()["access_token"]
     set_cookie = r.headers.get("set-cookie", "")
-    assert "voyageos_token=" in set_cookie
+    assert "marios_token=" in set_cookie
     assert "httponly" in set_cookie.lower()
     assert "samesite=lax" in set_cookie.lower()
     assert "path=/" in set_cookie.lower()
@@ -29,12 +29,12 @@ def test_cookie_only_request_authenticates(client):
     _login(client)  # TestClient jar now holds the session cookie
     r = client.get("/api/v1/me")  # no Authorization header
     assert r.status_code == 200
-    assert r.json()["user"]["email"] == "admin@demo.voyageos"
+    assert r.json()["user"]["email"] == "admin@demo.marios"
 
 
 def test_tampered_cookie_rejected(client):
     _login(client)
-    client.cookies.set("voyageos_token", "tampered.token.value")
+    client.cookies.set("marios_token", "tampered.token.value")
     assert client.get("/api/v1/me").status_code == 401
 
 
@@ -48,7 +48,7 @@ def test_logout_clears_cookie(client):
     r = client.post("/api/v1/auth/logout")
     assert r.status_code == 200
     set_cookie = r.headers.get("set-cookie", "").lower()
-    assert "voyageos_token=" in set_cookie
+    assert "marios_token=" in set_cookie
     assert "max-age=0" in set_cookie
     # Cookie jar must be empty now — cookie-only access fails
     assert client.get("/api/v1/me").status_code == 401
@@ -70,7 +70,7 @@ def test_invalid_header_wins_over_valid_cookie(client, auth_headers):
 def test_cookie_revoked_after_password_change(client):
     # pwv revocation applies to the cookie track exactly like the header track
     _login(client)
-    h = {"Authorization": f"Bearer {client.cookies.get('voyageos_token')}"}
+    h = {"Authorization": f"Bearer {client.cookies.get('marios_token')}"}
     chg = client.post(
         "/api/v1/me/security/password",
         headers=h,
@@ -83,7 +83,7 @@ def test_cookie_revoked_after_password_change(client):
         # restore demo password for other tests sharing the seeded db
         r = client.post(
             "/api/v1/auth/login",
-            json={"email": "admin@demo.voyageos", "password": "NewPass123!", "tenant_code": "demo"},
+            json={"email": "admin@demo.marios", "password": "NewPass123!", "tenant_code": "demo"},
         )
         assert r.status_code == 200, r.text
         h2 = {"Authorization": f"Bearer {r.json()['access_token']}"}

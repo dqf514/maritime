@@ -17,7 +17,7 @@ def test_subscribe_topup_and_ai_meter(client, auth_headers):
     # Platform admin assigns pack credit
     plat = client.post(
         "/api/v1/auth/login",
-        json={"email": "ops@voyageos.platform", "password": "Ops1234!", "tenant_code": "sys"},
+        json={"email": "ops@marios.platform", "password": "Ops1234!", "tenant_code": "sys"},
     )
     assert plat.status_code == 200, plat.text
     hp = {"Authorization": f"Bearer {plat.json()['access_token']}"}
@@ -46,7 +46,7 @@ def test_platform_assign_plan(client, auth_headers):
     h = auth_headers
     plat = client.post(
         "/api/v1/auth/login",
-        json={"email": "ops@voyageos.platform", "password": "Ops1234!", "tenant_code": "sys"},
+        json={"email": "ops@marios.platform", "password": "Ops1234!", "tenant_code": "sys"},
     )
     hp = {"Authorization": f"Bearer {plat.json()['access_token']}"}
     tenants = client.get("/api/v1/platform/tenants", headers=hp).json()
@@ -101,9 +101,9 @@ def test_charter_workflow_approval(client):
         assert r.status_code == 200
         return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
-    h_ch = login("charterer@demo.voyageos")
-    h_mgmt = login("mgmt@demo.voyageos")
-    h_admin = login("admin@demo.voyageos")
+    h_ch = login("charterer@demo.marios")
+    h_mgmt = login("mgmt@demo.marios")
+    h_admin = login("admin@demo.marios")
 
     # feature matrix is fail-closed: grant management the workflow.approve feature explicitly
     grant = client.put(
@@ -168,7 +168,7 @@ def test_public_branding_and_platform_update(client):
     assert pub.json()["logo_url"]
     r = client.post(
         "/api/v1/auth/login",
-        json={"email": "ops@voyageos.platform", "password": "Ops1234!", "tenant_code": "sys"},
+        json={"email": "ops@marios.platform", "password": "Ops1234!", "tenant_code": "sys"},
     )
     h = {"Authorization": f"Bearer {r.json()['access_token']}"}
     upd = client.put(
@@ -190,7 +190,7 @@ def test_user_org_membership_and_members(client, auth_headers):
     assert users and units
     charter = next(u for u in units if u["code"] == "CHARTER")
     # seeded demo users should already be linked; also re-assign one
-    target = next(u for u in users if u["email"] == "charterer@demo.voyageos")
+    target = next(u for u in users if u["email"] == "charterer@demo.marios")
     put = client.put(f"/api/v1/admin/users/{target['id']}/org", headers=h, json={"org_unit_id": charter["id"]})
     assert put.status_code == 200, put.text
     users2 = client.get("/api/v1/admin/users", headers=h).json()
@@ -209,8 +209,8 @@ def test_feature_permission_enforced(client):
         assert r.status_code == 200
         return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
-    h_admin = login("admin@demo.voyageos")
-    h_fin = login("finance@demo.voyageos")
+    h_admin = login("admin@demo.marios")
+    h_fin = login("finance@demo.marios")
     deny = client.put(
         "/api/v1/admin/features",
         headers=h_admin,
@@ -254,8 +254,8 @@ def test_invoice_workflow_approval(client):
         assert r.status_code == 200
         return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
-    h_fin = login("finance@demo.voyageos")
-    h_admin = login("admin@demo.voyageos")
+    h_fin = login("finance@demo.marios")
+    h_admin = login("admin@demo.marios")
     parties = client.get("/api/v1/masterdata/counterparties", headers=h_admin).json()
     inv = client.post(
         "/api/v1/invoices",

@@ -59,7 +59,7 @@ def sync_account(
         tenant_id=auth.tenant_id,
         account_id=account.id,
         thread_id=thread.id,
-        message_id=f"<{uuid4()}@demo.voyageos>",
+        message_id=f"<{uuid4()}@demo.marios>",
         direction="inbound",
         from_email="broker@example.com",
         subject="RECAP: MV OCEAN STAR / SGSIN-NLRTM Coal",

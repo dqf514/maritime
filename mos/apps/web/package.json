@@ -1,5 +1,5 @@
 {
-  "name": "voyageos-web",
+  "name": "marios-web",
   "private": true,
   "scripts": {
     "dev": "next dev",

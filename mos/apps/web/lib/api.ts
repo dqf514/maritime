@@ -1,5 +1,31 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
+// Rebrand (VoyageOS -> MariOS): localStorage keys moved from voyageos_* to
+// marios_*. Reads fall back to the legacy key and migrate it in place so
+// existing browser sessions survive the rename.
+export function readStorage(key: string): string | null {
+  if (typeof window === "undefined") return null;
+  const value = localStorage.getItem(key);
+  if (value !== null) return value;
+  const legacyKey = key.replace(/^marios_/, "voyageos_");
+  if (legacyKey === key) return null;
+  const legacy = localStorage.getItem(legacyKey);
+  if (legacy !== null) {
+    localStorage.setItem(key, legacy);
+    localStorage.removeItem(legacyKey);
+  }
+  return legacy;
+}
+
+export function removeStorage(key: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(key);
+  const legacyKey = key.replace(/^marios_/, "voyageos_");
+  if (legacyKey !== key) localStorage.removeItem(legacyKey);
+}
+
+export const TOKEN_STORAGE_KEY = "marios_token";
+
 export type Me = {
   user: { id: string; email: string; full_name: string | null; locale: string | null; roles: string[] };
   tenant: {
@@ -28,13 +54,13 @@ function authHeaders(): HeadersInit {
   // LEGACY fallback: the session now lives in an HttpOnly cookie sent via
   // credentials:"include". This localStorage Bearer path only serves sessions
   // created before the cookie migration — safe to remove once those expire.
-  const token = localStorage.getItem("voyageos_token");
+  const token = readStorage(TOKEN_STORAGE_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function handleUnauthorized(res: Response) {
   if (res.status !== 401 || typeof window === "undefined") return;
-  localStorage.removeItem("voyageos_token");
+  removeStorage(TOKEN_STORAGE_KEY);
   if (!window.location.pathname.startsWith("/login")) {
     window.location.href = "/login";
   }

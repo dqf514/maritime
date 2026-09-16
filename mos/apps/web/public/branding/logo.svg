@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 64" role="img" aria-label="VoyageOS" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 64" role="img" aria-label="MariOS" fill="none">
   <rect x="0" y="0" width="64" height="64" rx="14" fill="#0B1F2A"/>
   <path d="M14 36.5c6.5-5 12.5-5 18 0s11.5 5 18 0" stroke="#1A9B96" stroke-width="2.75" stroke-linecap="round"/>
   <path d="M22 28 L42 28" stroke="#1A9B96" stroke-width="2.75" stroke-linecap="round"/>
   <path d="M36.5 22.5 L44 28 L36.5 33.5" stroke="#1A9B96" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="84" y="43" font-family="Ubuntu, 'Segoe UI', system-ui, sans-serif" font-size="30" font-weight="600" letter-spacing="0.5" fill="#0B1F2A">VoyageOS</text>
+  <text x="84" y="43" font-family="Ubuntu, 'Segoe UI', system-ui, sans-serif" font-size="30" font-weight="600" letter-spacing="0.5" fill="#0B1F2A">MariOS</text>
 </svg>

@@ -9,14 +9,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
-def _login(client, email="admin@demo.voyageos", tenant="demo", password="Demo1234!"):
+def _login(client, email="admin@demo.marios", tenant="demo", password="Demo1234!"):
     r = client.post("/api/v1/auth/login", json={"email": email, "password": password, "tenant_code": tenant})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
 def _platform_admin(client):
-    return _login(client, email="ops@voyageos.platform", tenant="sys", password="Ops1234!")
+    return _login(client, email="ops@marios.platform", tenant="sys", password="Ops1234!")
 
 
 def _db_session(db_engine):
@@ -73,7 +73,7 @@ def test_magic_link_response_has_no_demo_token(client, auth_headers, mail_captur
     )
     req = client.post(
         "/api/v1/auth/magic-link/request",
-        json={"email": "admin@demo.voyageos", "tenant_code": "demo"},
+        json={"email": "admin@demo.marios", "tenant_code": "demo"},
     )
     assert req.status_code == 200, req.text
     assert "demo_token" not in req.json()
@@ -129,7 +129,7 @@ def test_branding_upload_validates_magic_bytes(client):
 
 # —— 4. recycle bin: admin-only + sanitized payload ——
 def test_recycle_list_requires_admin(client):
-    viewer = _login(client, email="charterer@demo.voyageos")
+    viewer = _login(client, email="charterer@demo.marios")
     res = client.get("/api/v1/recycle-bin", headers=viewer)
     assert res.status_code == 403
 
@@ -197,12 +197,12 @@ def test_login_rate_limited(client, monkeypatch):
     for i in range(5):
         r = client.post(
             "/api/v1/auth/login",
-            json={"email": "admin@demo.voyageos", "password": "wrong", "tenant_code": "demo"},
+            json={"email": "admin@demo.marios", "password": "wrong", "tenant_code": "demo"},
         )
         assert r.status_code == 401, f"attempt {i} unexpectedly {r.status_code}"
     blocked = client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@demo.voyageos", "password": "wrong", "tenant_code": "demo"},
+        json={"email": "admin@demo.marios", "password": "wrong", "tenant_code": "demo"},
     )
     assert blocked.status_code == 429
     _limiters.pop("auth.login", None)
@@ -226,7 +226,7 @@ def test_suspended_tenant_rejected(client, db_engine):
         # fresh login is also refused
         login = client.post(
             "/api/v1/auth/login",
-            json={"email": "admin@demo.voyageos", "password": "Demo1234!", "tenant_code": "demo"},
+            json={"email": "admin@demo.marios", "password": "Demo1234!", "tenant_code": "demo"},
         )
         assert login.status_code == 403
     finally:
@@ -273,7 +273,7 @@ def test_api_key_bound_to_creator_and_scoped(client, db_engine):
     with _db_session(db_engine) as db:
         row = db.scalar(select(ApiKey).where(ApiKey.key_prefix == created.json()["key_prefix"]))
         assert row.user_id is not None
-        creator = db.scalar(select(User).where(User.email == "admin@demo.voyageos"))
+        creator = db.scalar(select(User).where(User.email == "admin@demo.marios"))
         assert row.user_id == creator.id
 
     ping = client.get("/api/v1/office/partner/ping", headers={"X-API-Key": raw})

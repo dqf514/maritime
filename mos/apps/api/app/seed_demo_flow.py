@@ -635,9 +635,9 @@ def seed_full_demo_flow(db: Session) -> None:
             ConnectorInstance(
                 tenant_id=tenant.id,
                 connector_type="pms.mock",
-                instance_name="VoyageOS Mock PMS",
+                instance_name="MariOS Mock PMS",
                 status="active",
-                endpoint="https://pms.mock.voyageos.local",
+                endpoint="https://pms.mock.marios.local",
                 config={"mode": "demo_pull"},
                 last_health={"ok": True, "message": "seeded"},
             )

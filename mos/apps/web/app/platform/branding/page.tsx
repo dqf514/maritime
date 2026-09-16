@@ -48,7 +48,7 @@ export default function PlatformBrandingPage() {
   async function reset() {
     try {
       setForm(await apiPost("/api/v1/platform/branding/reset"));
-      setMsg(t("page.branding.reset_done", "已恢复 VoyageOS 默认品牌。"));
+      setMsg(t("page.branding.reset_done", "已恢复 MariOS 默认品牌。"));
     } catch {
       setMsg(t("page.branding.reset_fail", "重置失败"));
     }

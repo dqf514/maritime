@@ -98,7 +98,7 @@ function HelpHomePage() {
       {err ? <p className="flash-err">{err}</p> : null}
 
       <section className={`help-ask-panel ${focusAsk ? "focus" : ""}`} id="ask">
-        <h2>{t("help.ask_title", "Ask VoyageOS")}</h2>
+        <h2>{t("help.ask_title", "Ask MariOS")}</h2>
         <p className="muted">{t("help.ask_sub", "Examples: How do I connect Teams? Where is voyage P&L?")}</p>
         <form onSubmit={onAsk} className="help-ask-form">
           <input

@@ -11,7 +11,7 @@ def _stub_oauth(oauth_stub):
     yield
 
 
-def _login(client, email="admin@demo.voyageos"):
+def _login(client, email="admin@demo.marios"):
     login = client.post(
         "/api/v1/auth/login",
         json={"email": email, "password": "Demo1234!", "tenant_code": "demo"},
@@ -64,7 +64,7 @@ def test_office_sync_mail_files_teams(client):
     notify = client.post(
         "/api/v1/office/teams/notify",
         headers=h,
-        json={"text": "<b>VoyageOS</b> test alert"},
+        json={"text": "<b>MariOS</b> test alert"},
     )
     assert notify.status_code == 200, notify.text
     assert notify.json().get("id")

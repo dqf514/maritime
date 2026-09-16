@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-def _login(client, email="admin@demo.voyageos", tenant="demo", password="Demo1234!"):
+def _login(client, email="admin@demo.marios", tenant="demo", password="Demo1234!"):
     r = client.post("/api/v1/auth/login", json={"email": email, "password": password, "tenant_code": tenant})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -56,7 +56,7 @@ def test_smoke_office_connect_stub(client, oauth_stub):
 
 
 def test_smoke_platform_ops(client):
-    h = _login(client, email="ops@voyageos.platform", tenant="sys", password="Ops1234!")
+    h = _login(client, email="ops@marios.platform", tenant="sys", password="Ops1234!")
     for path in (
         "/api/v1/platform/ops/overview",
         "/api/v1/platform/ops/datasource",

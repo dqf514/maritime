@@ -33,12 +33,12 @@ def test_onboarding_structure(client, auth_headers):
 
 def test_onboarding_role_specific_items(client):
     cases = {
-        "admin@demo.voyageos": {"company_profile_done", "has_users", "has_vessels", "has_counterparties", "dq_scan_run"},
-        "ops@demo.voyageos": {"has_voyage", "has_port_call", "has_noon_report", "has_laytime"},
-        "charterer@demo.voyageos": {"has_estimate", "has_charter"},
-        "finance@demo.voyageos": {"has_invoice", "has_payment"},
-        "demurrage@demo.voyageos": {"has_laytime", "has_claim"},
-        "tech@demo.voyageos": {"has_ship_profile", "has_cert", "has_cert_file"},
+        "admin@demo.marios": {"company_profile_done", "has_users", "has_vessels", "has_counterparties", "dq_scan_run"},
+        "ops@demo.marios": {"has_voyage", "has_port_call", "has_noon_report", "has_laytime"},
+        "charterer@demo.marios": {"has_estimate", "has_charter"},
+        "finance@demo.marios": {"has_invoice", "has_payment"},
+        "demurrage@demo.marios": {"has_laytime", "has_claim"},
+        "tech@demo.marios": {"has_ship_profile", "has_cert", "has_cert_file"},
     }
     for email, expected in cases.items():
         body = client.get("/api/v1/onboarding", headers=_login(client, email)).json()
@@ -47,7 +47,7 @@ def test_onboarding_role_specific_items(client):
 
 
 def test_onboarding_demo_data_detection(client):
-    admin = client.get("/api/v1/onboarding", headers=_login(client, "admin@demo.voyageos")).json()
+    admin = client.get("/api/v1/onboarding", headers=_login(client, "admin@demo.marios")).json()
     by_key = {i["key"]: i["done"] for i in admin["items"]}
     # First item is an always-done encouragement
     assert by_key["view_home"] is True
@@ -60,13 +60,13 @@ def test_onboarding_demo_data_detection(client):
     assert by_key["dq_scan_run"] is False
     assert 0 < admin["progress"]["done"] < admin["progress"]["total"]
 
-    ops = client.get("/api/v1/onboarding", headers=_login(client, "ops@demo.voyageos")).json()
+    ops = client.get("/api/v1/onboarding", headers=_login(client, "ops@demo.marios")).json()
     ops_done = {i["key"]: i["done"] for i in ops["items"]}
     assert ops_done["has_voyage"] is True
     assert ops_done["has_noon_report"] is True
     assert ops_done["has_laytime"] is True
 
-    tech = client.get("/api/v1/onboarding", headers=_login(client, "tech@demo.voyageos")).json()
+    tech = client.get("/api/v1/onboarding", headers=_login(client, "tech@demo.marios")).json()
     tech_done = {i["key"]: i["done"] for i in tech["items"]}
     assert tech_done["has_ship_profile"] is True
     assert tech_done["has_cert"] is True

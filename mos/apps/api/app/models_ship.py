@@ -89,7 +89,7 @@ class ShipWorkOrder(Base):
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     assignee: Mapped[str | None] = mapped_column(Text)
     external_ref: Mapped[str | None] = mapped_column(Text)
-    source: Mapped[str] = mapped_column(Text, default="voyageos")  # voyageos|external_pms
+    source: Mapped[str] = mapped_column(Text, default="voyageos")  # voyageos|external_pms (stored enum value kept for DB compatibility)
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

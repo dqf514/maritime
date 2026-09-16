@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-log = logging.getLogger("voyageos.config")
+log = logging.getLogger("marios.config")
 
 
 class Settings(BaseSettings):
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     s3_access_key: str = ""
     s3_secret_key: str = ""
     s3_bucket: str = "voyageos"
-    app_name: str = "VoyageOS API"
+    app_name: str = "MariOS API"
     app_version: str = "0.1.0-wave0"
     # Runtime environment: ENV=production disables /docs & /openapi.json
     env: str = "dev"
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     # Email
     email_channel: str = "console"  # console|smtp|sendgrid
-    email_from: str = "noreply@voyageos.local"
+    email_from: str = "noreply@marios.local"
     # Dev: allow stub OAuth without real IdP credentials
     oauth_allow_stub: bool = False
     # Seed demo tenants/users on startup (catalog seeds always run)

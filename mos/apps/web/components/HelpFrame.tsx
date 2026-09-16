@@ -30,7 +30,7 @@ export function HelpFrame({ children }: { children: ReactNode }) {
   if (!ready) {
     return (
       <div className="login-page">
-        <p>{t("common.loading", "Loading VoyageOS…")}</p>
+        <p>{t("common.loading", "Loading MariOS…")}</p>
       </div>
     );
   }
