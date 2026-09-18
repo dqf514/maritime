@@ -17,6 +17,12 @@ class Tenant(Base):
     default_locale: Mapped[str] = mapped_column(Text, default="en")
     default_timezone: Mapped[str] = mapped_column(Text, default="UTC")
     profile_tier: Mapped[str] = mapped_column(Text, default="M")
+    # Per-tenant Microsoft 365 app credentials (platform-admin managed).
+    # ms_client_secret stores a Fernet cipher via ops_crypto.encrypt_secret.
+    ms_client_id: Mapped[str | None] = mapped_column(Text)
+    ms_client_secret: Mapped[str | None] = mapped_column(Text)
+    ms_tenant: Mapped[str | None] = mapped_column(Text)  # empty/None = "common"
+    ms_override_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

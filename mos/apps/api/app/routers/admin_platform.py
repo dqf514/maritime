@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db import get_db
 from app.models import Module, Role, Tenant, TenantModuleLicense, User, UserRole
 from app.security import AuthContext, get_current_auth, hash_password, require_module
 from app.services.audit import audit
+from app.services.graph_client import request_client_credentials_token
+from app.services.ms_config import effective_mode, mask_ms_secret, resolve_ms_config
+from app.services.ops_crypto import encrypt_secret
 from app.services.search_acl import allowed_path_prefixes
 from app.services.shell_nav import (
     build_home_widgets,
@@ -709,3 +715,137 @@ def platform_health(auth: AuthContext = Depends(require_roles("platform_admin"))
         "api_version": "1.4.2-platform",
         "checked_at": datetime.now(timezone.utc).astimezone().isoformat(),
     }
+
+
+# —— Platform: per-tenant Microsoft 365 app credentials ——
+class TenantOfficeConfigIn(BaseModel):
+    override_enabled: bool | None = None
+    client_id: str | None = None
+    # secret semantics: omitted / "" = keep current, null = clear, value = replace
+    client_secret: str | None = None
+    ms_tenant: str | None = None
+
+
+def _office_config_out(db: Session, tenant: Tenant) -> dict:
+    settings = get_settings()
+    cfg = resolve_ms_config(db, tenant.id)
+    return {
+        "override_enabled": bool(tenant.ms_override_enabled),
+        "client_id": tenant.ms_client_id,
+        "client_secret_masked": mask_ms_secret(tenant.ms_client_secret),
+        "ms_tenant": tenant.ms_tenant or "",
+        "effective_mode": effective_mode(cfg),
+        "redirect_uri": f"{settings.api_public_base.rstrip('/')}/api/v1/office/oauth/callback",
+        "has_secret": bool(tenant.ms_client_secret),
+    }
+
+
+def _get_platform_tenant(db: Session, tenant_id: UUID) -> Tenant:
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant or tenant.code == "sys":
+        raise HTTPException(404, "Tenant not found")
+    return tenant
+
+
+@router.get("/platform/tenants/{tenant_id}/office-config")
+def platform_get_office_config(
+    tenant_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    tenant = _get_platform_tenant(db, tenant_id)
+    return _office_config_out(db, tenant)
+
+
+@router.put("/platform/tenants/{tenant_id}/office-config")
+def platform_put_office_config(
+    tenant_id: UUID,
+    body: TenantOfficeConfigIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    tenant = _get_platform_tenant(db, tenant_id)
+    changed: list[str] = []
+    if body.override_enabled is not None:
+        tenant.ms_override_enabled = body.override_enabled
+        changed.append(f"override_enabled={body.override_enabled}")
+    if body.client_id is not None:
+        tenant.ms_client_id = body.client_id.strip() or None
+        changed.append("client_id")
+    if "client_secret" in body.model_fields_set:
+        if body.client_secret is None:
+            tenant.ms_client_secret = None
+            changed.append("client_secret_cleared")
+        elif body.client_secret.strip():
+            tenant.ms_client_secret = encrypt_secret(body.client_secret.strip())
+            changed.append("client_secret_updated")
+    if body.ms_tenant is not None:
+        tenant.ms_tenant = body.ms_tenant.strip() or None
+        changed.append("ms_tenant")
+    tenant.updated_at = datetime.now(timezone.utc)
+    # Audit trail must never contain the secret value itself
+    audit(
+        db,
+        tenant_id=tenant.id,
+        actor_user_id=auth.user_id,
+        action="platform.tenant_office_config_updated",
+        entity_type="tenant",
+        entity_id=tenant.id,
+        detail={"changed": changed},
+    )
+    db.commit()
+    return _office_config_out(db, tenant)
+
+
+_ENTRA_ERROR_HINTS = {
+    "invalid_client": "Client authentication failed — check client_id / client_secret",
+    "unauthorized_client": "App is not authorized for the client_credentials grant",
+    "invalid_request": "Invalid request — check the tenant (authority) value",
+    "invalid_grant": "Grant rejected by Entra",
+    "temporarily_unavailable": "Entra temporarily unavailable — retry later",
+}
+
+
+@router.post("/platform/tenants/{tenant_id}/office-config/test")
+def platform_test_office_config(
+    tenant_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """Validate the tenant's effective credentials via client_credentials grant."""
+    _ = auth
+    tenant = _get_platform_tenant(db, tenant_id)
+    cfg = resolve_ms_config(db, tenant.id)
+    if not cfg.client_id or not cfg.client_secret:
+        return {"ok": False, "message": "no credentials configured (client_id / client_secret missing)", "latency_ms": 0}
+    started = time.perf_counter()
+    try:
+        res = request_client_credentials_token(cfg, timeout=10.0)
+    except httpx.TimeoutException:
+        return {
+            "ok": False,
+            "message": "timeout: token endpoint did not respond within 10s",
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "message": f"network error: {exc}",
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+        }
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    if res.status_code < 400:
+        return {"ok": True, "message": f"credentials accepted (source={cfg.source})", "latency_ms": latency_ms}
+    try:
+        payload = res.json()
+    except ValueError:
+        payload = {}
+    code = payload.get("error") or f"http_{res.status_code}"
+    hint = _ENTRA_ERROR_HINTS.get(code)
+    if hint:
+        message = f"{hint} [{code}]"
+    else:
+        desc = str(payload.get("error_description") or res.text or "")[:160]
+        message = f"{code}: {desc}" if desc else code
+    return {"ok": False, "message": message, "latency_ms": latency_ms}

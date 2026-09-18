@@ -21,6 +21,16 @@ type Tenant = {
 
 type LicRow = { module_code: string; name: string; is_core: boolean; status: string };
 
+type OfficeCfg = {
+  override_enabled: boolean;
+  client_id: string | null;
+  client_secret_masked: string | null;
+  ms_tenant: string;
+  effective_mode: string;
+  redirect_uri: string;
+  has_secret: boolean;
+};
+
 export default function PlatformTenantsPage() {
   const { t } = useI18n();
   const [rows, setRows] = useState<Tenant[]>([]);
@@ -34,6 +44,11 @@ export default function PlatformTenantsPage() {
   const [busy, setBusy] = useState(false);
   const [initialPw, setInitialPw] = useState("");
   const [confirm, setConfirm] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
+  const [ocfg, setOcfg] = useState<OfficeCfg | null>(null);
+  const [oform, setOform] = useState({ override_enabled: false, client_id: "", client_secret: "", ms_tenant: "" });
+  const [oclear, setOclear] = useState(false);
+  const [otest, setOtest] = useState<{ ok: boolean; text: string } | null>(null);
+  const [otestBusy, setOtestBusy] = useState(false);
 
   async function load() {
     setRows(await apiGet("/api/v1/platform/tenants"));
@@ -56,6 +71,16 @@ export default function PlatformTenantsPage() {
         default_timezone: detail.default_timezone || "Asia/Shanghai",
       });
       setLicenses(await apiGet(`/api/v1/platform/tenants/${row.id}/licenses`));
+      const oc: OfficeCfg = await apiGet(`/api/v1/platform/tenants/${row.id}/office-config`);
+      setOcfg(oc);
+      setOform({
+        override_enabled: oc.override_enabled,
+        client_id: oc.client_id || "",
+        client_secret: "",
+        ms_tenant: oc.ms_tenant || "",
+      });
+      setOclear(false);
+      setOtest(null);
     } catch {
       setMsg(t("common.failed", "加载失败"));
     } finally {
@@ -149,6 +174,61 @@ export default function PlatformTenantsPage() {
     });
     setLicenses(await apiGet(`/api/v1/platform/tenants/${selected.id}/licenses`));
     await load();
+  }
+
+  function officeModeBadge(mode?: string) {
+    const map: Record<string, [string, string]> = {
+      tenant: ["badge badge-pass", t("platform.officecfg.mode_tenant", "租户专属")],
+      global: ["badge badge-info", t("platform.officecfg.mode_global", "平台全局")],
+      stub: ["badge badge-warn", t("platform.officecfg.mode_stub", "演示模式")],
+      disabled: ["badge", t("platform.officecfg.mode_disabled", "未启用")],
+    };
+    const [cls, label] = map[mode || ""] || ["badge", mode || "—"];
+    return <span className={cls}>{label}</span>;
+  }
+
+  async function copyRedirectUri() {
+    if (!ocfg) return;
+    try {
+      await navigator.clipboard.writeText(ocfg.redirect_uri);
+      setMsg(t("platform.officecfg.copied", "已复制"));
+    } catch {
+      window.prompt(t("platform.officecfg.redirect_uri", "回调地址（需登记到 Entra 应用）"), ocfg.redirect_uri);
+    }
+  }
+
+  async function saveOffice() {
+    if (!selected) return;
+    const body: Record<string, unknown> = {
+      override_enabled: oform.override_enabled,
+      client_id: oform.client_id,
+      ms_tenant: oform.ms_tenant,
+    };
+    if (oclear) body.client_secret = null;
+    else if (oform.client_secret) body.client_secret = oform.client_secret;
+    const oc: OfficeCfg = await apiPut(`/api/v1/platform/tenants/${selected.id}/office-config`, body);
+    setOcfg(oc);
+    setOform({ ...oform, client_secret: "" });
+    setOclear(false);
+    setMsg(t("platform.officecfg.saved", "Microsoft 365 配置已保存"));
+  }
+
+  async function testOffice() {
+    if (!selected) return;
+    setOtestBusy(true);
+    setOtest(null);
+    try {
+      const res = await apiPost(`/api/v1/platform/tenants/${selected.id}/office-config/test`);
+      setOtest(
+        res.ok
+          ? { ok: true, text: t("platform.officecfg.test_ok", "连接成功（{ms} ms）", { ms: res.latency_ms }) }
+          : { ok: false, text: t("platform.officecfg.test_fail", "测试失败：{msg}", { msg: res.message }) },
+      );
+    } catch (e) {
+      setOtest({ ok: false, text: String((e as Error)?.message || e) });
+    } finally {
+      setOtestBusy(false);
+    }
   }
 
   return (
@@ -316,6 +396,100 @@ export default function PlatformTenantsPage() {
               ))}
             </tbody>
           </table>
+
+          <h3 style={{ marginTop: "1.5rem" }}>{t("platform.officecfg.title", "Microsoft 365 集成")}</h3>
+          <p className="muted">
+            {t("platform.officecfg.sub", "为租户单独配置 Entra 应用凭据；关闭覆盖时回落到平台全局环境变量配置。")}
+          </p>
+          {ocfg ? (
+            <div>
+              <p style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                {t("platform.officecfg.mode", "当前生效模式")}: {officeModeBadge(ocfg.effective_mode)}
+              </p>
+              <p style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                {t("platform.officecfg.redirect_uri", "回调地址（需登记到 Entra 应用）")}:{" "}
+                <code>{ocfg.redirect_uri}</code>
+                <button className="btn btn-ghost" type="button" onClick={() => copyRedirectUri().catch(() => undefined)}>
+                  {t("platform.officecfg.copy", "复制")}
+                </button>
+              </p>
+              <div
+                className="form-grid"
+                style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: "0.75rem" }}
+              >
+                <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={oform.override_enabled}
+                    onChange={(e) => setOform({ ...oform, override_enabled: e.target.checked })}
+                  />
+                  {t("platform.officecfg.override", "启用租户专属凭据")}
+                </label>
+                <label>
+                  {t("platform.officecfg.client_id", "客户端 ID（Client ID）")}
+                  <input
+                    value={oform.client_id}
+                    onChange={(e) => setOform({ ...oform, client_id: e.target.value })}
+                    placeholder="00000000-0000-0000-0000-000000000000"
+                  />
+                </label>
+                <label>
+                  {t("platform.officecfg.client_secret", "客户端密钥（Client Secret）")}
+                  <input
+                    type="password"
+                    value={oform.client_secret}
+                    onChange={(e) => {
+                      setOform({ ...oform, client_secret: e.target.value });
+                      if (e.target.value) setOclear(false);
+                    }}
+                    placeholder={
+                      ocfg.has_secret
+                        ? `${ocfg.client_secret_masked || "••••"} · ${t("platform.officecfg.secret_keep", "留空表示不修改当前密钥")}`
+                        : t("platform.officecfg.secret_state_unset", "未配置密钥")
+                    }
+                  />
+                </label>
+                <label>
+                  {t("platform.officecfg.tenant", "租户（authority，默认 common）")}
+                  <input
+                    value={oform.ms_tenant}
+                    onChange={(e) => setOform({ ...oform, ms_tenant: e.target.value })}
+                    placeholder="common"
+                  />
+                </label>
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.85rem", alignItems: "center" }}>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  onClick={() => saveOffice().catch(() => setMsg(t("common.failed", "保存失败")))}
+                >
+                  {t("platform.officecfg.save", "保存 Microsoft 365 配置")}
+                </button>
+                <button className="btn" type="button" disabled={otestBusy} onClick={() => testOffice()}>
+                  {otestBusy ? t("platform.officecfg.testing", "测试中…") : t("platform.officecfg.test", "测试连接")}
+                </button>
+                {ocfg.has_secret ? (
+                  <button
+                    className="btn btn-ghost"
+                    type="button"
+                    onClick={() => {
+                      setOclear(true);
+                      setOform({ ...oform, client_secret: "" });
+                    }}
+                  >
+                    {t("platform.officecfg.clear_secret", "清除密钥")}
+                  </button>
+                ) : null}
+                {oclear ? <span className="badge badge-warn">{t("platform.officecfg.clear_secret", "清除密钥")}…</span> : null}
+              </div>
+              {otest ? (
+                <p className="flash" style={{ color: otest.ok ? "var(--ok)" : "var(--danger)" }}>
+                  {otest.text}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : (
         <p className="muted">{t("page.tenants.pick", "请选择上方租户行，以编辑资料与许可证。")}</p>

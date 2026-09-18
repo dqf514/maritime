@@ -858,6 +858,7 @@ button, input { font: inherit; }
 .badge-pass { background: #e5f6ec; color: var(--ok); }
 .badge-fail { background: #fde8e6; color: var(--danger); }
 .badge-warn { background: #fff4d9; color: var(--warn); }
+.badge-info { background: #e3effc; color: #1d4ed8; }
 
 .login-page {
   min-height: 100vh;

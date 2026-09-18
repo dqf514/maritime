@@ -100,6 +100,16 @@ def _ensure_sqlite_user_identity_columns() -> None:
             tcols = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
             if tcols and col not in tcols:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} DATETIME"))
+        tenant_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(tenants)")).fetchall()}
+        if tenant_cols:
+            for col, decl in (
+                ("ms_client_id", "TEXT"),
+                ("ms_client_secret", "TEXT"),
+                ("ms_tenant", "TEXT"),
+                ("ms_override_enabled", "BOOLEAN DEFAULT 0"),
+            ):
+                if col not in tenant_cols:
+                    conn.execute(text(f"ALTER TABLE tenants ADD COLUMN {col} {decl}"))
         policy_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(tenant_auth_policies)")).fetchall()}
         if policy_cols:
             for col, decl in (

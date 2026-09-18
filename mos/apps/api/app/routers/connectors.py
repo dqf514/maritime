@@ -11,7 +11,8 @@ from app.models_wave1 import ConnectorInstance
 from app.schemas_wave1 import ConnectorIn, ConnectorOut
 from app.security import AuthContext, require_module
 from app.services import office_hub as office_hub
-from app.services.graph_client import graph_mode
+from app.services.graph_client import graph_mode_resolved
+from app.services.ms_config import resolve_ms_config
 from app.services.integration_adapters import (
     OFFICE_TYPES,
     catalog_public,
@@ -127,7 +128,7 @@ def test_connector(
         raise HTTPException(404, "Connector not found")
     office_health = None
     if row.connector_type in OFFICE_TYPES:
-        mode = graph_mode()
+        mode = graph_mode_resolved(resolve_ms_config(db, auth.tenant_id))
         try:
             client = office_hub.get_graph_client(db, auth.tenant_id)
             office_health = {**client.health(), "graph_mode": mode}

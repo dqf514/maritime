@@ -7,6 +7,7 @@ import { useI18n } from "@/lib/i18n";
 
 type OfficeStatus = {
   graph_mode: string;
+  config_source?: string;
   status: string;
   connected: boolean;
   mail_enabled: boolean;
@@ -134,6 +135,17 @@ export default function OfficeEcosystemPage() {
     await load();
   }
 
+  function configSourceBadge(src?: string) {
+    const map: Record<string, [string, string]> = {
+      tenant: ["badge badge-pass", t("settings.office.src_tenant", "本租户专属应用")],
+      global: ["badge badge-info", t("settings.office.src_global", "平台全局应用")],
+      stub: ["badge badge-warn", t("settings.office.src_stub", "演示模式")],
+      disabled: ["badge", t("settings.office.src_disabled", "未配置")],
+    };
+    const [cls, label] = map[src || ""] || ["badge", src || "—"];
+    return <span className={cls}>{label}</span>;
+  }
+
   return (
     <AppShell>
       <div className="page-header">
@@ -168,6 +180,14 @@ export default function OfficeEcosystemPage() {
           {t("page.office.mode", "Mode")}: <code>{status?.graph_mode || "—"}</code> ·{" "}
           {status?.connected ? t("page.office.is_connected", "Connected") : t("page.office.not_connected", "Not connected")}
         </p>
+        <p>
+          {t("settings.office.config_source", "配置来源")}: {configSourceBadge(status?.config_source)}
+        </p>
+        {status?.config_source === "stub" ? (
+          <p className="muted">
+            {t("settings.office.demo_hint", "当前为演示数据，请联系平台管理员配置 Microsoft 365 应用。")}
+          </p>
+        ) : null}
         <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
           <code>{JSON.stringify(status?.last_health || {})}</code>
         </p>

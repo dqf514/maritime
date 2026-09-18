@@ -28,11 +28,12 @@ from app.services.graph_client import (
     GraphError,
     admin_consent_url,
     exchange_code_for_tokens,
-    graph_mode,
+    graph_mode_resolved,
     refresh_access_token,
     token_expiry,
 )
 from app.services.identity import soft_sign_state
+from app.services.ms_config import effective_mode, resolve_ms_config
 from app.services.ops_crypto import decrypt_token, encrypt_token
 
 ADDON_CATALOG = [
@@ -95,10 +96,12 @@ def ensure_office_link(db: Session, tenant_id: UUID) -> OfficeTenantLink:
 
 def office_status(db: Session, tenant_id: UUID) -> dict[str, Any]:
     link = ensure_office_link(db, tenant_id)
-    mode = graph_mode()
+    cfg = resolve_ms_config(db, tenant_id)
+    mode = graph_mode_resolved(cfg)
     addons = db.scalars(select(OfficeAddonInstall).where(OfficeAddonInstall.tenant_id == tenant_id)).all()
     return {
         "graph_mode": mode,
+        "config_source": effective_mode(cfg),
         "status": link.status,
         "mail_enabled": link.mail_enabled,
         "files_enabled": link.files_enabled,
@@ -107,7 +110,9 @@ def office_status(db: Session, tenant_id: UUID) -> dict[str, Any]:
         "calendar_enabled": link.calendar_enabled,
         "defaults": link.defaults or {},
         "last_health": link.last_health or {},
-        "consent_url": admin_consent_url(state=soft_sign_state(get_settings().jwt_secret, str(tenant_id))),
+        "consent_url": admin_consent_url(
+            state=soft_sign_state(get_settings().jwt_secret, str(tenant_id)), ms_config=cfg
+        ),
         "connected": link.status == "connected" and bool(decrypt_token(link.access_token)),
         "addons": [
             {
@@ -139,7 +144,7 @@ def apply_oauth_tokens(
     link.status = "connected"
     link.connected_by = user_id
     link.scopes = (tokens.get("scope") or "").split() if isinstance(tokens.get("scope"), str) else (link.scopes or [])
-    client = GraphClient(access_token or "", mode=tokens.get("mode") or graph_mode())
+    client = GraphClient(access_token or "", mode=tokens.get("mode") or graph_mode_resolved(resolve_ms_config(db, tenant_id)))
     try:
         link.last_health = client.health()
     except GraphError as exc:
@@ -160,12 +165,13 @@ def _as_aware(dt: datetime | None) -> datetime | None:
 
 def get_graph_client(db: Session, tenant_id: UUID) -> GraphClient:
     link = ensure_office_link(db, tenant_id)
-    mode = graph_mode()
+    cfg = resolve_ms_config(db, tenant_id)
+    mode = graph_mode_resolved(cfg)
     access_token = decrypt_token(link.access_token)
     if link.status != "connected" or not access_token:
         if mode == "stub":
             # Auto-connect stub so desks work without Entra secrets
-            tokens = exchange_code_for_tokens("stub-auto-connect")
+            tokens = exchange_code_for_tokens("stub-auto-connect", ms_config=cfg)
             apply_oauth_tokens(db, tenant_id, tokens)
             db.commit()
             link = ensure_office_link(db, tenant_id)
@@ -176,7 +182,7 @@ def get_graph_client(db: Session, tenant_id: UUID) -> GraphClient:
     expires = _as_aware(link.token_expires_at)
     refresh_token = decrypt_token(link.refresh_token)
     if expires and expires < datetime.now().astimezone() and refresh_token:
-        tokens = refresh_access_token(refresh_token)
+        tokens = refresh_access_token(refresh_token, ms_config=cfg)
         apply_oauth_tokens(db, tenant_id, tokens)
         db.commit()
         link = ensure_office_link(db, tenant_id)

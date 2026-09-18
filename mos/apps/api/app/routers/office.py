@@ -16,8 +16,9 @@ from app.config import get_settings
 from app.db import get_db
 from app.models_office import OfficeAddonInstall, OfficeResourceLink, OfficeSyncJob, WebhookEndpoint
 from app.security import AuthContext, get_current_auth, require_api_scope, require_module
-from app.services.graph_client import GraphError, admin_consent_url, exchange_code_for_tokens, graph_mode
+from app.services.graph_client import GraphError, admin_consent_url, exchange_code_for_tokens, graph_mode_resolved
 from app.services.identity import soft_sign_state, verify_signed_state
+from app.services.ms_config import resolve_ms_config
 from app.services import office_hub as hub
 
 router = APIRouter(prefix="/office", tags=["Office Ecosystem"])
@@ -101,15 +102,16 @@ def office_connect(
     db: Session = Depends(get_db),
 ):
     """Return consent URL (live) or auto-connect stub."""
-    mode = graph_mode()
+    cfg = resolve_ms_config(db, auth.tenant_id)
+    mode = graph_mode_resolved(cfg)
     if mode == "disabled":
         raise HTTPException(400, detail={"code": "OFFICE_DISABLED", "message": "Set MICROSOFT_CLIENT_ID/SECRET or OAUTH_ALLOW_STUB=true"})
     if mode == "stub":
-        tokens = exchange_code_for_tokens("stub-connect")
+        tokens = exchange_code_for_tokens("stub-connect", ms_config=cfg)
         hub.apply_oauth_tokens(db, auth.tenant_id, tokens, user_id=auth.user_id)
         db.commit()
         return {"mode": "stub", "connected": True, "status": hub.office_status(db, auth.tenant_id)}
-    url = admin_consent_url(state=soft_sign_state(get_settings().jwt_secret, str(auth.tenant_id)))
+    url = admin_consent_url(state=soft_sign_state(get_settings().jwt_secret, str(auth.tenant_id)), ms_config=cfg)
     return {"mode": "live", "authorize_url": url, "connected": False}
 
 
@@ -119,9 +121,10 @@ def office_connect_stub(
     auth: AuthContext = Depends(require_module("integration")),
     db: Session = Depends(get_db),
 ):
-    if graph_mode() == "disabled":
+    cfg = resolve_ms_config(db, auth.tenant_id)
+    if graph_mode_resolved(cfg) == "disabled":
         raise HTTPException(400, "stub oauth disabled")
-    tokens = exchange_code_for_tokens(f"stub-{body.label}")
+    tokens = exchange_code_for_tokens(f"stub-{body.label}", ms_config=cfg)
     hub.apply_oauth_tokens(db, auth.tenant_id, tokens, user_id=auth.user_id)
     db.commit()
     return hub.office_status(db, auth.tenant_id)
@@ -151,7 +154,9 @@ def office_oauth_callback(
     if tenant_id != auth.tenant_id:
         raise HTTPException(403, "state tenant mismatch")
     try:
-        tokens = exchange_code_for_tokens(code)
+        # Token exchange must use the tenant's own app credentials when a
+        # per-tenant override is configured (state carries the tenant id).
+        tokens = exchange_code_for_tokens(code, ms_config=resolve_ms_config(db, tenant_id))
         hub.apply_oauth_tokens(db, tenant_id, tokens, user_id=auth.user_id)
         db.commit()
     except GraphError as exc:
