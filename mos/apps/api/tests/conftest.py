@@ -27,6 +27,13 @@ import app.models_office  # noqa: E402, F401
 import app.models_ops  # noqa: E402, F401
 import app.models_recycle  # noqa: E402, F401
 import app.models_reference  # noqa: E402, F401
+import app.models_finance_ext  # noqa: E402, F401
+import app.models_gl  # noqa: E402, F401
+import app.models_time_charter  # noqa: E402, F401
+import app.models_config  # noqa: E402, F401
+import app.models_shipshore  # noqa: E402, F401
+import app.models_ai  # noqa: E402, F401
+import app.models_report  # noqa: E402, F401
 from app.main import app as fastapi_app  # noqa: E402
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo  # noqa: E402
 from app.seed_demo_flow import seed_full_demo_flow  # noqa: E402

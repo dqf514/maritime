@@ -43,6 +43,7 @@ from app.services import cii as cii_service
 from app.services.doc_numbering import next_doc_number
 from app.services.laytime_engine import compute_laytime, compute_laytime_statement
 from app.services.pnl import PNL_LINE_KEYS, voyage_pnl_rows
+from app.services import pnl_engine
 from app.services.recycle import soft_delete
 from app.services.sanctions import assert_not_sanctioned
 from app.services.tenant_guard import scoped_get
@@ -64,7 +65,11 @@ def _alive(status: str | None) -> bool:
 
 
 # New invoice input is restricted to these types; legacy free-text rows stay readable.
-INVOICE_TYPES = {"freight", "hire", "demurrage", "bunker", "port_disbursement", "credit_note", "other"}
+INVOICE_TYPES = {
+    "freight", "hire", "demurrage", "despatch", "bunker",
+    "port_disbursement", "port_da", "tc_hire", "broker_commission",
+    "carbon_allowance", "eu_ets", "credit_note", "other",
+}
 
 DEFAULT_VAR_LIMIT = 100000.0
 
@@ -1001,7 +1006,9 @@ class InvoiceIn(BaseModel):
     tax_amount: float = 0
     currency: str = "USD"
     due_date: date | None = None
-    fx_rate: float | None = None  # counterparty currency → tenant base currency
+    fx_rate: float | None = None
+    bill_by: str | None = None
+    commission_basis: str | None = None
 
 
 @router.post("/invoices")
@@ -1044,6 +1051,8 @@ def create_invoice(body: InvoiceIn, auth: AuthContext = Depends(require_module("
         tax_amount=tax_amount,
         currency=body.currency,
         due_date=body.due_date,
+        bill_by=body.bill_by,
+        commission_basis=body.commission_basis,
     )
     if fx_rate is not None:
         row.fx_rate = fx_rate
@@ -1124,6 +1133,8 @@ class InvoiceUpdate(BaseModel):
     tax_amount: float | None = None
     due_date: date | None = None
     invoice_type: str | None = None
+    bill_by: str | None = None
+    commission_basis: str | None = None
 
 
 @router.patch("/invoices/{invoice_id}")
@@ -1184,6 +1195,10 @@ def update_invoice(
         row.due_date = body.due_date
     if body.invoice_type is not None:
         row.invoice_type = body.invoice_type
+    if body.bill_by is not None:
+        row.bill_by = body.bill_by
+    if body.commission_basis is not None:
+        row.commission_basis = body.commission_basis
     db.commit()
     return {
         "id": str(row.id),
@@ -1527,6 +1542,9 @@ def list_invoices(
             "currency": r.currency,
             "due_date": r.due_date.isoformat() if r.due_date else None,
             "gl_posted": bool(r.gl_posted),
+            "mirror_of_id": str(r.mirror_of_id) if r.mirror_of_id else None,
+            "bill_by": r.bill_by,
+            "commission_basis": r.commission_basis,
         }
         for r in rows
     ]
@@ -1865,6 +1883,26 @@ def report_pnl(
     Legacy aggregate keys (actual_revenue/actual_cost/...) are unchanged.
     """
     return voyage_pnl_rows(db, auth.tenant_id, basis)
+
+
+@router.get("/analytics/reports/pnl-4col")
+def report_pnl_4col(
+    voyage_id: str | None = Query(None),
+    auth: AuthContext = Depends(require_module("analytics")),
+    db: Session = Depends(get_db),
+):
+    """4-column P&L: estimate | actual | posted | variance per voyage."""
+    vid = UUID(voyage_id) if voyage_id else None
+    return pnl_engine.voyage_pnl_4col(db, auth.tenant_id, vid)
+
+
+@router.get("/analytics/reports/pnl-fleet")
+def report_pnl_fleet(
+    auth: AuthContext = Depends(require_module("analytics")),
+    db: Session = Depends(get_db),
+):
+    """Fleet-wide 4-column P&L summary."""
+    return pnl_engine.fleet_pnl_summary(db, auth.tenant_id)
 
 
 # —— Pooling / Risk / Berth / Portal / Docs ——

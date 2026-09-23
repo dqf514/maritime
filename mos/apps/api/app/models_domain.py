@@ -96,7 +96,9 @@ class OffHireEvent(Base):
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reason: Mapped[str | None] = mapped_column(Text)
+    event_type: Mapped[str | None] = mapped_column(String(32))  # breakdown|dry_dock|detention|strike|deficiency|other
     deduct_hire: Mapped[bool] = mapped_column(Boolean, default=True)
+    hire_deduction: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))  # explicit deduction amount
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -158,6 +160,8 @@ class Voyage(Base):
     charter_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("charters.id"))
     cargo: Mapped[str | None] = mapped_column(Text)
     cp_date: Mapped[date | None] = mapped_column(Date)
+    tc_contract_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("time_charter_contracts.id"))
+    tc_seq: Mapped[int | None] = mapped_column()  # consecutive voyage sequence under TC contract
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -310,6 +314,9 @@ class Invoice(Base):
     issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     due_date: Mapped[date | None] = mapped_column(Date)
     gl_posted: Mapped[bool] = mapped_column(Boolean, default=False)
+    mirror_of_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("invoices.id"))
+    bill_by: Mapped[str | None] = mapped_column(String(16))  # cp_qty | bl_qty
+    commission_basis: Mapped[str | None] = mapped_column(String(16))  # net | gross
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
@@ -319,10 +326,29 @@ class Payment(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     invoice_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("invoices.id"), nullable=False)
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("payment_batches.id"))
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     reference: Mapped[str | None] = mapped_column(Text)
+
+
+class PaymentBatch(Base):
+    __tablename__ = "payment_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    batch_number: Mapped[str] = mapped_column(Text, nullable=False)
+    batch_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(Text, default="draft")  # draft|processing|completed|reversed
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    payment_count: Mapped[int] = mapped_column(default=0)
+    bank_charge_mode: Mapped[str | None] = mapped_column(String(16))  # shared|sender|receiver
+    approval_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class EmissionRecord(Base):

@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal, Optional
 from sqlalchemy import and_, func, or_, select
@@ -35,6 +35,11 @@ from app.services.state_machine import (
     OFFHIRE_TRANSITIONS,
     transition,
 )
+from app.models_time_charter import HireStatement, TimeCharterContract
+from app.services import hire_engine
+from app.services.pricing_engine import AdvancedPricingEngine, WorldscaleCalculator
+from app.services.distance_service import get_distance, get_route
+from app.models_reference import PortDistance, WorldscaleRate
 
 router = APIRouter(tags=["Commercial"])
 
@@ -1182,3 +1187,426 @@ def schedule_conflicts(auth: AuthContext = Depends(require_module("operations"))
         select(ScheduleBlock).where(ScheduleBlock.tenant_id == auth.tenant_id, ScheduleBlock.hard_conflict.is_(True))
     ).all()
     return [{"id": str(r.id), "title": r.title, "vessel_id": str(r.vessel_id)} for r in rows]
+
+
+# ── Time Charter Contracts ──
+
+
+class TCContractIn(BaseModel):
+    charter_id: UUID
+    contract_type: Literal["tci", "tco"]
+    vessel_id: UUID
+    counterparty_id: UUID
+    delivery_port: str | None = None
+    delivery_date: date | None = None
+    redelivery_port: str | None = None
+    redelivery_date: date | None = None
+    hire_rate: Decimal
+    hire_currency: str = "USD"
+    payment_frequency: Literal["monthly", "semi_monthly"] = "monthly"
+    cancel_date: date | None = None
+
+
+class TCContractOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    charter_id: str
+    contract_type: str
+    vessel_id: str
+    counterparty_id: str
+    delivery_port: str | None
+    delivery_date: date | None
+    redelivery_port: str | None
+    redelivery_date: date | None
+    hire_rate: float
+    hire_currency: str
+    payment_frequency: str
+    cancel_date: date | None
+    status: str
+
+
+@router.get("/tc-contracts", response_model=list[TCContractOut])
+def list_tc_contracts(
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    rows = db.scalars(
+        select(TimeCharterContract).where(TimeCharterContract.tenant_id == auth.tenant_id)
+    ).all()
+    return rows
+
+
+@router.post("/tc-contracts", response_model=TCContractOut, status_code=201)
+def create_tc_contract(
+    body: TCContractIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    charter = scoped_get(db, Charter, body.charter_id, auth.tenant_id)
+    if not charter:
+        raise HTTPException(404, "Charter not found")
+    contract = TimeCharterContract(
+        tenant_id=auth.tenant_id,
+        charter_id=body.charter_id,
+        contract_type=body.contract_type,
+        vessel_id=body.vessel_id,
+        counterparty_id=body.counterparty_id,
+        delivery_port=body.delivery_port,
+        delivery_date=body.delivery_date,
+        redelivery_port=body.redelivery_port,
+        redelivery_date=body.redelivery_date,
+        hire_rate=body.hire_rate,
+        hire_currency=body.hire_currency,
+        payment_frequency=body.payment_frequency,
+        cancel_date=body.cancel_date,
+    )
+    db.add(contract)
+    db.commit()
+    db.refresh(contract)
+    return contract
+
+
+@router.get("/tc-contracts/{contract_id}", response_model=TCContractOut)
+def get_tc_contract(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    return c
+
+
+@router.get("/tc-contracts/{contract_id}/summary")
+def tc_contract_summary(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    return hire_engine.contract_summary(db, c)
+
+
+# ── Hire Statements ──
+
+
+class HireStatementIn(BaseModel):
+    contract_id: UUID
+    period_start: date
+    period_end: date
+
+
+class HireStatementOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    contract_id: str
+    statement_number: str
+    period_start: date
+    period_end: date
+    hire_days: float
+    off_hire_days: float
+    gross_hire: float
+    off_hire_deduction: float
+    bunker_adjustment: float
+    other_adjustments: float
+    net_hire: float
+    currency: str
+    status: str
+    breakdown: dict
+
+
+@router.get("/tc-contracts/{contract_id}/statements", response_model=list[HireStatementOut])
+def list_hire_statements(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    rows = db.scalars(
+        select(HireStatement).where(
+            HireStatement.tenant_id == auth.tenant_id,
+            HireStatement.contract_id == contract_id,
+        ).order_by(HireStatement.period_start)
+    ).all()
+    return rows
+
+
+@router.post("/hire-statements", response_model=HireStatementOut, status_code=201)
+def create_hire_statement(
+    body: HireStatementIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    c = scoped_get(db, TimeCharterContract, body.contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    if body.period_end <= body.period_start:
+        raise HTTPException(422, "period_end must be after period_start")
+    stmt = hire_engine.create_hire_statement(db, c, body.period_start, body.period_end)
+    db.commit()
+    db.refresh(stmt)
+    return stmt
+
+
+@router.post("/tc-contracts/{contract_id}/generate-statements", response_model=list[HireStatementOut])
+def auto_generate_statements(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    stmts = hire_engine.generate_all_statements(db, c)
+    db.commit()
+    for s in stmts:
+        db.refresh(s)
+    return stmts
+
+
+@router.post("/hire-statements/{statement_id}/transition")
+def hire_statement_transition(
+    statement_id: UUID,
+    target: str = Query(..., pattern="^(sent|approved|paid|void)$"),
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    stmt = scoped_get(db, HireStatement, statement_id, auth.tenant_id)
+    if not stmt:
+        raise HTTPException(404, "Statement not found")
+    allowed = {
+        "draft": {"sent", "void"},
+        "sent": {"approved", "void"},
+        "approved": {"paid", "void"},
+        "paid": set(),
+        "void": set(),
+    }
+    current = stmt.status
+    if target not in allowed.get(current, set()):
+        raise HTTPException(409, f"Cannot transition {current} → {target}")
+    stmt.status = target
+    db.commit()
+    return {"id": str(stmt.id), "status": stmt.status}
+
+
+# ── Pricing Engine ──
+
+
+class PricingIn(BaseModel):
+    freight_basis: str  # per_mt | lumpsum | worldscale
+    cargo_qty_mt: Decimal
+    freight_rate: Decimal | None = None
+    ws_pct: Decimal | None = None
+    from_port: str | None = None
+    to_port: str | None = None
+    year: int | None = None
+
+
+@router.post("/pricing/calculate")
+def calculate_price(
+    body: PricingIn,
+    auth: AuthContext = Depends(require_module("commercial")),
+    db: Session = Depends(get_db),
+):
+    return AdvancedPricingEngine.price_voyage(
+        db,
+        freight_basis=body.freight_basis,
+        cargo_qty_mt=body.cargo_qty_mt,
+        freight_rate=body.freight_rate,
+        ws_pct=body.ws_pct,
+        from_port=body.from_port,
+        to_port=body.to_port,
+        year=body.year,
+    )
+
+
+@router.get("/pricing/worldscale")
+def lookup_worldscale(
+    from_port: str = Query(...),
+    to_port: str = Query(...),
+    year: int = Query(2026),
+    auth: AuthContext = Depends(require_module("commercial")),
+    db: Session = Depends(get_db),
+):
+    ws = WorldscaleCalculator.lookup(db, from_port.upper(), to_port.upper(), year)
+    if not ws:
+        raise HTTPException(404, "No worldscale rate found")
+    return {
+        "from_port": ws.from_port_unlocode,
+        "to_port": ws.to_port_unlocode,
+        "year": ws.year,
+        "flat_rate": float(ws.flat_rate),
+        "cargo_type": ws.cargo_type,
+    }
+
+
+# ── Port Distance ──
+
+
+@router.get("/distances")
+def query_distance(
+    from_port: str = Query(...),
+    to_port: str = Query(...),
+    route: str = Query("shortest", pattern="^(shortest|canal|cape)$"),
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    result = get_distance(db, from_port, to_port, route)
+    if not result:
+        raise HTTPException(404, "No distance found for this port pair")
+    return result
+
+
+@router.post("/distances/route")
+def query_route(
+    ports: list[str] = Body(..., description="Ordered port UN/LOCODEs"),
+    route: str = Query("shortest", pattern="^(shortest|canal|cape)$"),
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    if len(ports) < 2:
+        raise HTTPException(422, "At least 2 ports required")
+    return get_route(db, ports, route)
+
+
+class PortDistanceIn(BaseModel):
+    from_port_unlocode: str
+    to_port_unlocode: str
+    distance_nm: Decimal
+    route_type: str = "standard"
+    canal_transit: str | None = None
+    canal_toll: Decimal | None = None
+    transit_days: Decimal | None = None
+    notes: str | None = None
+
+
+@router.post("/distances", status_code=201)
+def upsert_distance(
+    body: PortDistanceIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    existing = db.scalars(
+        select(PortDistance).where(
+            PortDistance.from_port_unlocode == body.from_port_unlocode.upper(),
+            PortDistance.to_port_unlocode == body.to_port_unlocode.upper(),
+            PortDistance.route_type == body.route_type,
+        )
+    ).first()
+    if existing:
+        existing.distance_nm = body.distance_nm
+        existing.canal_transit = body.canal_transit
+        existing.canal_toll = body.canal_toll
+        existing.transit_days = body.transit_days
+        existing.notes = body.notes
+        db.commit()
+        db.refresh(existing)
+        return {"id": str(existing.id), "action": "updated"}
+    row = PortDistance(
+        from_port_unlocode=body.from_port_unlocode.upper(),
+        to_port_unlocode=body.to_port_unlocode.upper(),
+        distance_nm=body.distance_nm,
+        route_type=body.route_type,
+        canal_transit=body.canal_transit,
+        canal_toll=body.canal_toll,
+        transit_days=body.transit_days,
+        notes=body.notes,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": str(row.id), "action": "created"}
+
+
+# ── Sensitivity Analysis + BEP ──
+
+
+@router.get("/estimates/{estimate_id}/sensitivity")
+def estimate_sensitivity(
+    estimate_id: UUID,
+    pct: float = Query(10.0, gt=0, le=50, description="Perturbation percentage"),
+    auth: AuthContext = Depends(require_module("commercial")),
+    db: Session = Depends(get_db),
+):
+    from app.services.sensitivity import sensitivity_analysis
+    try:
+        return sensitivity_analysis(db, auth.tenant_id, estimate_id, pct)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.get("/estimates/{estimate_id}/bep")
+def estimate_bep(
+    estimate_id: UUID,
+    auth: AuthContext = Depends(require_module("commercial")),
+    db: Session = Depends(get_db),
+):
+    from app.services.sensitivity import calculate_bep
+    try:
+        return calculate_bep(db, auth.tenant_id, estimate_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+# ── Consecutive Voyages (TC Contract) ──
+
+
+@router.get("/tc-contracts/{contract_id}/voyages")
+def list_contract_voyages(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    from app.services.consecutive_voyages import contract_voyages_summary
+    c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    return contract_voyages_summary(db, contract_id)
+
+
+@router.post("/tc-contracts/{contract_id}/voyages", status_code=201)
+def create_consecutive_voyage(
+    contract_id: UUID,
+    vessel_id: UUID,
+    title: str | None = None,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    from app.services.consecutive_voyages import create_consecutive_voyage as create_cv
+    c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    try:
+        voyage = create_cv(db, auth.tenant_id, contract_id, vessel_id, title)
+        return {
+            "id": str(voyage.id),
+            "voyage_no": voyage.voyage_no,
+            "tc_seq": voyage.tc_seq,
+            "status": voyage.status,
+        }
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/tc-contracts/{contract_id}/allocate-tco")
+def allocate_tco(
+    contract_id: UUID,
+    total_cost: Decimal = Query(..., gt=0),
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    from app.services.consecutive_voyages import allocate_tco_costs
+    c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    allocations = allocate_tco_costs(db, contract_id, total_cost)
+    return {
+        "contract_id": str(contract_id),
+        "total_cost": float(total_cost),
+        "allocations": allocations,
+    }

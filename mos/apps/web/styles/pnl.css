@@ -1,0 +1,220 @@
+/* ── P&L 4-Column Comparison ── */
+
+.pnl-fleet-summary {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.pnl-summary-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  min-width: 160px;
+  flex: 1;
+}
+
+.pnl-summary-label {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.pnl-summary-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pnl-summary-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+/* Variance highlighting */
+.pnl-fav {
+  color: var(--ok);
+  font-weight: 500;
+}
+
+.pnl-adv {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+/* P&L table column tints */
+.pnl-col-estimate {
+  background: rgba(43, 181, 176, 0.04);
+}
+
+.pnl-col-actual {
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.pnl-col-posted {
+  background: rgba(168, 85, 247, 0.04);
+}
+
+.pnl-col-variance {
+  background: rgba(245, 158, 11, 0.04);
+}
+
+.pnl-col-header {
+  text-align: center;
+  font-weight: 600;
+  border-bottom: 2px solid var(--border);
+}
+
+.pnl-col-header.pnl-col-estimate { border-bottom-color: var(--accent); }
+.pnl-col-header.pnl-col-actual { border-bottom-color: #3b82f6; }
+.pnl-col-header.pnl-col-posted { border-bottom-color: #a855f7; }
+.pnl-col-header.pnl-col-variance { border-bottom-color: #f59e0b; }
+
+/* P&L table shared */
+.pnl-table th,
+.pnl-detail-table th {
+  white-space: nowrap;
+  user-select: none;
+}
+
+.pnl-table th[onclick],
+.pnl-detail-table th[onclick] {
+  cursor: pointer;
+}
+
+.pnl-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pnl-sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--foam);
+  min-width: 120px;
+}
+
+.pnl-total-row td {
+  border-top: 2px solid var(--border);
+  background: var(--surface);
+}
+
+/* P&L detail page */
+.pnl-kpi-row {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.pnl-kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  min-width: 140px;
+  flex: 1;
+  text-align: center;
+}
+
+.pnl-kpi-label {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.pnl-kpi-value {
+  display: block;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.pnl-kpi-sub {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+/* Detail table */
+.pnl-detail-table .pnl-line-row:hover {
+  background: rgba(43, 181, 176, 0.06);
+}
+
+.pnl-expand {
+  display: inline-block;
+  width: 1.2em;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+.pnl-subtotal-row td {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+/* Button group for gross/net toggle */
+.btn-group {
+  display: inline-flex;
+  gap: 0;
+}
+
+.btn-group .btn {
+  border-radius: 0;
+}
+
+.btn-group .btn:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.btn-group .btn:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.btn-group .btn + .btn {
+  margin-left: -1px;
+}
+
+/* Skeleton table placeholder */
+.skeleton-table {
+  height: 300px;
+  background: repeating-linear-gradient(
+    180deg,
+    var(--skeleton) 0px,
+    var(--skeleton) 28px,
+    transparent 28px,
+    transparent 36px
+  );
+  border-radius: var(--radius-sm);
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@media (max-width: 900px) {
+  .pnl-fleet-summary,
+  .pnl-kpi-row {
+    flex-direction: column;
+  }
+  .pnl-sticky-col {
+    position: static;
+  }
+}

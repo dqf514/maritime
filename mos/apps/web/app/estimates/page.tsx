@@ -415,18 +415,9 @@ export default function EstimatesPage() {
     }
   }
 
-  async function runSensitivity() {
+  function runSensitivity() {
     if (!selectedId) return;
-    setBusy(true);
-    try {
-      const rowsSens = await apiPost(`/api/v1/estimates/${selectedId}/sensitivity?field=freight_rate`);
-      setSensitivity(rowsSens);
-      setMsg(t("page.estimates.sensitivity_ok", "Sensitivity ready"));
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(false);
-    }
+    window.location.href = `/estimates/${selectedId}/sensitivity`;
   }
 
   async function compare() {

@@ -19,6 +19,7 @@ NAV_DESK: list[dict[str, Any]] = [
     {"id": "charters", "label": "Charters", "href": "/charters", "roles": ["chartering", "management"]},
     {"id": "email", "label": "Email Review", "href": "/email/review", "roles": ["chartering", "operations"]},
     {"id": "ops", "label": "Voyages", "href": "/operations/voyages", "roles": ["operations", "management", "technical"]},
+    {"id": "marilink", "label": "MariLink", "href": "/operations/marilink", "roles": ["operations", "management", "technical"]},
     {"id": "bunker", "label": "Bunker desk", "href": "/bunker", "roles": ["bunker", "operations", "technical", "management", "chartering"]},
     {"id": "ship", "label": "Ship management", "href": "/ship", "roles": ["technical", "operations", "management"]},
     {"id": "finance", "label": "Finance desk", "href": "/finance", "roles": ["finance", "demurrage", "management"]},
@@ -28,6 +29,10 @@ NAV_DESK: list[dict[str, Any]] = [
     {"id": "twin", "label": "Fleet Twin", "href": "/twin", "roles": ["operations", "management", "technical", "risk"]},
     {"id": "exceptions", "label": "Exceptions", "href": "/exceptions", "roles": ["*"]},
     {"id": "analytics", "label": "Analytics", "href": "/analytics", "roles": ["management", "finance", "pool_manager"]},
+    {"id": "ai_chat", "label": "MariAI", "href": "/ai/chat", "roles": ["chartering", "operations", "management", "bunker"]},
+    {"id": "market", "label": "Market data", "href": "/analytics/market", "roles": ["chartering", "operations", "management", "bunker"]},
+    {"id": "reports", "label": "Reports", "href": "/analytics/reports", "roles": ["management", "finance", "chartering", "operations"]},
+    {"id": "compliance", "label": "Carbon compliance", "href": "/emissions/compliance", "roles": ["operations", "management", "technical", "finance"]},
 ]
 
 # Tenant admins get a compact “overview” desk so they can still spot-check the OS.
@@ -48,6 +53,8 @@ NAV_ADMIN_DESK: list[dict[str, Any]] = [
 NAV_MASTER: list[dict[str, Any]] = [
     {"id": "vessels", "label": "Vessels", "href": "/masterdata/vessels", "roles": ["chartering", "operations", "tenant_admin", "technical", "bunker"]},
     {"id": "ports", "label": "Ports", "href": "/masterdata/ports", "roles": ["operations", "chartering", "tenant_admin"]},
+    {"id": "port_reference", "label": "Port reference", "href": "/masterdata/port-reference", "roles": ["operations", "chartering", "tenant_admin"]},
+    {"id": "fuel_zones", "label": "Fuel zones", "href": "/masterdata/fuel-zones", "roles": ["operations", "bunker", "tenant_admin", "compliance"]},
     {"id": "parties", "label": "Counterparties", "href": "/masterdata/counterparties", "roles": ["chartering", "finance", "tenant_admin", "compliance"]},
 ]
 

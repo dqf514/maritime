@@ -1,0 +1,214 @@
+.table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.table th, .table td { text-align: left; padding: 0.65rem 0.5rem; border-bottom: 1px solid var(--border); }
+.table tbody tr.row-openable { cursor: pointer; }
+.table tbody tr.row-openable:hover { background: rgba(26, 155, 150, 0.06); }
+
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.data-table th, .data-table td { text-align: left; padding: 0.55rem 0.4rem; border-bottom: 1px solid var(--border); }
+.data-table tr { cursor: pointer; }
+.data-table tr:hover, .data-table tr.active { background: #eef7f7; }
+
+.role-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.4rem 0.75rem;
+}
+.role-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  margin: 0;
+}
+.role-check input { margin: 0; }
+.role-check code {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: transparent;
+}
+
+/* DataTable component */
+.dt-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.dt-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.dt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.dt-table th,
+.dt-table td {
+  text-align: left;
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dt-table thead th {
+  background: var(--foam);
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  position: relative;
+  user-select: none;
+}
+.dt-sticky thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--foam);
+}
+.dt-sort-th {
+  cursor: pointer;
+}
+.dt-sort-th:hover {
+  color: var(--ink);
+  background: rgba(26, 155, 150, 0.06);
+}
+.dt-th-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.dt-sort-icon {
+  font-size: 0.65rem;
+  opacity: 0.5;
+}
+.dt-sort-th:hover .dt-sort-icon {
+  opacity: 0.8;
+}
+.dt-th-check,
+.dt-td-check {
+  width: 40px;
+  text-align: center;
+  padding-left: 0.35rem;
+  padding-right: 0.35rem;
+}
+.dt-align-right {
+  text-align: right;
+}
+.dt-align-center {
+  text-align: center;
+}
+.dt-table tbody tr {
+  transition: background 0.1s;
+}
+.dt-table tbody tr:hover {
+  background: rgba(26, 155, 150, 0.04);
+}
+.dt-row-clickable {
+  cursor: pointer;
+}
+.dt-row-selected {
+  background: rgba(26, 155, 150, 0.08) !important;
+}
+.dt-row-focused {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.dt-empty {
+  text-align: center;
+  padding: 2rem 1rem !important;
+  color: var(--muted);
+  font-style: italic;
+}
+.dt-sticky-col {
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+.dt-table thead .dt-sticky-col {
+  z-index: 3;
+  background: var(--foam);
+}
+.dt-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  user-select: none;
+}
+.dt-resize-handle:hover {
+  background: var(--accent);
+  opacity: 0.3;
+}
+.dt-pagination {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.65rem 0.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.dt-page-size {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.dt-page-size select {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  background: var(--surface);
+  color: var(--ink);
+}
+.dt-page-info {
+  flex: 1;
+  text-align: right;
+}
+.dt-page-btns {
+  display: flex;
+  gap: 0.25rem;
+}
+.dt-page-btns button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 1rem;
+}
+.dt-page-btns button:hover:not(:disabled) {
+  background: var(--foam);
+}
+.dt-page-btns button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@media (max-width: 900px) {
+  .table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .dt-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}

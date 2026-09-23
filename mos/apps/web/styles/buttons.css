@@ -1,0 +1,21 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { filter: brightness(1.05); }
+.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--ink); }
+.btn-danger {
+  background: #fde8e6;
+  color: var(--danger);
+  border: 1px solid #f5c4be;
+}
+.btn-danger:hover { filter: brightness(0.97); }
+.btn.btn-sm { min-height: 32px; padding: 0.3rem 0.65rem; font-size: 0.82rem; }

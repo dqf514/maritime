@@ -1,0 +1,76 @@
+.panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.panel input,
+.panel select {
+  min-width: 12rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.locale-date-field {
+  position: relative;
+  display: block;
+  min-width: 12rem;
+}
+.locale-date-field > input[type="text"] {
+  width: 100%;
+  min-width: 12rem;
+  padding: 0.45rem 2.2rem 0.45rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  box-sizing: border-box;
+}
+.locale-date-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  left: 0;
+  bottom: 0;
+}
+.locale-date-trigger {
+  position: absolute;
+  right: 0.25rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+.locale-date-trigger:hover:not(:disabled) {
+  background: rgba(26, 155, 150, 0.1);
+  color: var(--ink);
+}
+.locale-date-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.record-modal-body .locale-date-field > input[type="text"],
+.record-modal-body .locale-date-field {
+  min-width: 0;
+  width: 100%;
+}
+
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; }
+.check-grid { display: grid; gap: 0.45rem; margin: 0.75rem 0 1rem; }
+.check-row { display: flex; gap: 0.5rem; align-items: center; font-size: 0.92rem; }

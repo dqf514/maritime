@@ -25,9 +25,23 @@ import app.models_recycle  # noqa: F401
 import app.models_reference  # noqa: F401
 import app.models_task  # noqa: F401
 import app.models_onboarding  # noqa: F401
+import app.models_finance_ext  # noqa: F401
+import app.models_gl  # noqa: F401
+import app.models_time_charter  # noqa: F401
+import app.models_config  # noqa: F401
+import app.models_shipshore  # noqa: F401
+import app.models_ai  # noqa: F401
+import app.models_report  # noqa: F401
 from app.routers.admin_platform import router as admin_router
+from app.routers.ai_chat import router as ai_chat_router
 from app.routers.ai_hub import router as ai_router
+from app.routers.webhooks import router as webhooks_router
+from app.routers.market_data import router as market_data_router
+from app.routers.email_intelligence import router as email_intel_router
+from app.routers.report import router as report_router
+from app.routers.compliance import router as compliance_router
 from app.routers.commercial import router as commercial_router
+from app.routers.config import router as config_router
 from app.routers.connectors import router as connectors_router
 from app.routers.dashboards import router as dashboards_router
 from app.routers.email_notify import router as email_router
@@ -40,6 +54,7 @@ from app.routers.help import router as help_router
 from app.routers.home import router as home_router
 from app.routers.i18n import router as i18n_router
 from app.routers.identity import router as identity_router
+from app.routers.marilink import router as marilink_router
 from app.routers.masterdata import router as masterdata_router
 from app.routers.office import router as office_router
 from app.routers.onboarding import router as onboarding_router
@@ -270,9 +285,17 @@ app.include_router(saas_router, prefix="/api/v1")
 app.include_router(masterdata_router, prefix="/api/v1")
 app.include_router(reference_router, prefix="/api/v1")
 app.include_router(ai_router, prefix="/api/v1")
+app.include_router(ai_chat_router, prefix="/api/v1")
+app.include_router(webhooks_router, prefix="/api/v1")
+app.include_router(market_data_router, prefix="/api/v1")
+app.include_router(email_intel_router, prefix="/api/v1")
+app.include_router(report_router, prefix="/api/v1")
+app.include_router(compliance_router, prefix="/api/v1")
 app.include_router(connectors_router, prefix="/api/v1")
 app.include_router(email_router, prefix="/api/v1")
 app.include_router(commercial_router, prefix="/api/v1")
+app.include_router(config_router, prefix="/api/v1")
+app.include_router(marilink_router, prefix="/api/v1")
 app.include_router(operations_router, prefix="/api/v1")
 app.include_router(finance_router, prefix="/api/v1")
 app.include_router(ship_router, prefix="/api/v1")

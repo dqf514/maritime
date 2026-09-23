@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MariOS 操作手册 — 海事运营管理系统完整指南</title>
+<style>
+:root {
+  --navy: #0a1628;
+  --blue: #2563eb;
+  --blue-light: #3b82f6;
+  --teal: #0d9488;
+  --orange: #ea580c;
+  --gray-50: #f8fafc;
+  --gray-100: #f1f5f9;
+  --gray-200: #e2e8f0;
+  --gray-300: #cbd5e1;
+  --gray-400: #94a3b8;
+  --gray-500: #64748b;
+  --gray-600: #475569;
+  --gray-700: #334155;
+  --gray-800: #1e293b;
+  --gray-900: #0f172a;
+  --sidebar-w: 280px;
+  --header-h: 56px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', sans-serif; color: var(--gray-800); background: var(--gray-50); line-height: 1.6; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-h); background: var(--navy); color: #fff; display: flex; align-items: center; padding: 0 24px; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+.header-logo { font-size: 20px; font-weight: 700; }
+.header-logo span { color: var(--blue-light); }
+.header-version { font-size: 12px; background: var(--blue); padding: 2px 8px; border-radius: 10px; margin-left: 12px; }
+.header-right { margin-left: auto; display: flex; align-items: center; gap: 16px; font-size: 13px; color: var(--gray-300); }
+#search-input { background: var(--navy-light, #132038); border: 1px solid var(--gray-700); color: #fff; padding: 6px 12px; border-radius: 6px; width: 220px; font-size: 13px; outline: none; }
+#search-input:focus { border-color: var(--blue); }
+
+.sidebar { position: fixed; top: var(--header-h); left: 0; bottom: 0; width: var(--sidebar-w); background: #fff; border-right: 1px solid var(--gray-200); overflow-y: auto; padding: 16px 0; z-index: 50; }
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 2px; }
+.nav-section { padding: 0 16px; margin-bottom: 4px; }
+.nav-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--gray-400); padding: 8px 0 4px; }
+.nav-link { display: block; padding: 5px 12px; font-size: 13px; color: var(--gray-600); border-radius: 6px; transition: all .15s; cursor: pointer; }
+.nav-link:hover { background: var(--gray-100); color: var(--gray-900); text-decoration: none; }
+.nav-link.active { background: #eff6ff; color: var(--blue); font-weight: 500; }
+.badge { float: right; font-size: 10px; background: var(--gray-200); color: var(--gray-600); padding: 1px 6px; border-radius: 8px; }
+.badge.new { background: #dcfce7; color: #16a34a; }
+
+.main { margin-left: var(--sidebar-w); margin-top: var(--header-h); padding: 32px 48px 80px; max-width: 960px; }
+.section { margin-bottom: 48px; scroll-margin-top: calc(var(--header-h) + 16px); }
+.section h1 { font-size: 28px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px; padding-bottom: 12px; border-bottom: 2px solid var(--blue); }
+.section h2 { font-size: 20px; font-weight: 600; color: var(--gray-800); margin: 24px 0 8px; }
+.section h3 { font-size: 16px; font-weight: 600; color: var(--gray-700); margin: 16px 0 6px; }
+.section p { margin-bottom: 12px; color: var(--gray-600); }
+.section ul, .section ol { margin: 0 0 12px 20px; color: var(--gray-600); }
+.section li { margin-bottom: 4px; }
+
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin: 16px 0; }
+.card { background: #fff; border: 1px solid var(--gray-200); border-radius: 8px; padding: 16px; }
+.card-title { font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 4px; }
+.card-desc { font-size: 13px; color: var(--gray-500); }
+.card-icon { font-size: 24px; margin-bottom: 8px; }
+
+table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+th { background: var(--gray-100); text-align: left; padding: 8px 12px; font-weight: 600; color: var(--gray-700); border-bottom: 2px solid var(--gray-200); }
+td { padding: 6px 12px; border-bottom: 1px solid var(--gray-100); color: var(--gray-600); }
+
+code { background: var(--gray-100); padding: 2px 6px; border-radius: 4px; font-size: 12px; font-family: 'JetBrains Mono', monospace; }
+pre { background: var(--gray-900); color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; margin: 12px 0; font-size: 13px; }
+pre code { background: none; padding: 0; color: inherit; }
+
+.method { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 3px; font-family: monospace; min-width: 48px; text-align: center; }
+.method-get { background: #dcfce7; color: #166534; }
+.method-post { background: #dbeafe; color: #1e40af; }
+.method-put { background: #fef3c7; color: #92400e; }
+.method-patch { background: #fef3c7; color: #92400e; }
+.method-delete { background: #fee2e2; color: #991b1b; }
+
+.info-box { padding: 12px 16px; border-radius: 8px; margin: 12px 0; font-size: 13px; }
+.info-box.blue { background: #eff6ff; border-left: 4px solid var(--blue); }
+.info-box.green { background: #f0fdf4; border-left: 4px solid #16a34a; }
+.info-box.teal { background: #f0fdfa; border-left: 4px solid var(--teal); }
+
+.stat-row { display: flex; gap: 16px; margin: 16px 0; flex-wrap: wrap; }
+.stat { background: #fff; border: 1px solid var(--gray-200); border-radius: 8px; padding: 16px 20px; text-align: center; min-width: 120px; flex: 1; }
+.stat-value { font-size: 28px; font-weight: 700; color: var(--blue); }
+.stat-label { font-size: 12px; color: var(--gray-500); margin-top: 2px; }
+
+.endpoint { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; font-family: monospace; }
+.endpoint-path { color: var(--gray-700); }
+
+details { margin: 8px 0; }
+summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--gray-700); padding: 8px 0; }
+
+@media print {
+  .sidebar, .header { display: none; }
+  .main { margin: 0; padding: 20px; }
+  .section { page-break-inside: avoid; }
+}
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; padding: 16px; }
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-logo">Mari<span>OS</span></div>
+  <span class="header-version">v2.0</span>
+  <div class="header-right">
+    <input type="text" id="search-input" placeholder="Search..." oninput="filterNav(this.value)">
+    <span>2026-09-23</span>
+  </div>
+</header>
+
+<nav class="sidebar" id="sidebar">
+  <div class="nav-section">
+    <div class="nav-section-title">概览</div>
+    <a class="nav-link" href="#overview">系统概述</a>
+    <a class="nav-link" href="#architecture">系统架构</a>
+    <a class="nav-link" href="#stats">系统统计</a>
+    <a class="nav-link" href="#getting-started">快速入门</a>
+    <a class="nav-link" href="#navigation">导航指南</a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-section-title">核心运营</div>
+    <a class="nav-link" href="#workbench">工作台</a>
+    <a class="nav-link" href="#dashboards">实时仪表盘</a>
+    <a class="nav-link" href="#tasks">任务管理</a>
+    <a class="nav-link" href="#estimates">航次估价</a>
+    <a class="nav-link" href="#charters">租约管理</a>
+    <a class="nav-link" href="#voyages">航次运营</a>
+    <a class="nav-link" href="#laytime">装卸时间</a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-section-title">财务商务</div>
+    <a class="nav-link" href="#finance">财务工作台</a>
+    <a class="nav-link" href="#pnl">P&L 四列报表</a>
+    <a class="nav-link" href="#bunker">燃油管理</a>
+    <a class="nav-link" href="#time-charter">期租管理</a>
+    <a class="nav-link" href="#claims">索赔管理</a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-section-title">船舶技术</div>
+    <a class="nav-link" href="#ship">船舶管理</a>
+    <a class="nav-link" href="#marilink">MariLink通信</a>
+    <a class="nav-link" href="#emissions">排放管理</a>
+    <a class="nav-link" href="#compliance">碳合规 <span class="badge new">NEW</span></a>
+    <a class="nav-link" href="#twin">数字孪生</a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-section-title">分析AI</div>
+    <a class="nav-link" href="#analytics">分析中心</a>
+    <a class="nav-link" href="#reports">报表引擎 <span class="badge new">NEW</span></a>
+    <a class="nav-link" href="#market">市场数据</a>
+    <a class="nav-link" href="#ai-chat">MariAI</a>
+    <a class="nav-link" href="#email-review">邮件审核</a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-section-title">商务</div>
+    <a class="nav-link" href="#pool">联营池</a>
+    <a class="nav-link" href="#trading">交易风控</a>
+    <a class="nav-link" href="#exceptions">异常监控</a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-section-title">主数据</div>
+    <a class="nav-link" href="#ports">港口数据</a>
+    <a class="nav-link" href="#vessels">船舶主数据</a>
+    <a class="nav-link" href="#counterparties">交易对手</a>
+    <a class="nav-link" href="#fuel-zones">燃油区域</a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-section-title">管理</div>
+    <a class="nav-link" href="#admin-users">用户角色</a>
+    <a class="nav-link" href="#admin-security">安全审计</a>
+    <a class="nav-link" href="#admin-settings">系统设置</a>
+    <a class="nav-link" href="#webhooks">Webhooks</a>
+    <a class="nav-link" href="#platform">平台管理</a>
+  </div>
+  <div class="nav-section">
+    <div class="nav-section-title">参考</div>
+    <a class="nav-link" href="#api-reference">API参考 <span class="badge">486</span></a>
+    <a class="nav-link" href="#roles">角色权限</a>
+    <a class="nav-link" href="#phases">升级历程</a>
+  </div>
+</nav>
+
+<main class="main">
+
+<div class="section" id="overview">
+<h1>MariOS 操作手册</h1>
+<p>MariOS (Maritime Operating System) 是面向航运企业的全方位数字化运营平台，覆盖租船估价、航次运营、燃油管理、财务结算、碳排放合规的完整业务链条。</p>
+
+<div class="info-box blue">
+  <strong>版本:</strong> MariOS v2.0 | <strong>发布:</strong> 2026-09-23 | <strong>API:</strong> 486路由 | <strong>页面:</strong> 71个
+</div>
+
+<h2>核心能力</h2>
+<div class="card-grid">
+  <div class="card"><div class="card-icon">🚢</div><div class="card-title">航次全生命周期</div><div class="card-desc">估价→租约→航次执行→港口调用→装卸→结算</div></div>
+  <div class="card"><div class="card-icon">💰</div><div class="card-title">财务引擎</div><div class="card-desc">4列P&L、发票、GL过账、账龄分析、付款批次</div></div>
+  <div class="card"><div class="card-icon">⛽</div><div class="card-title">燃油管理</div><div class="card-desc">订单、询价比价、燃油区域、EU ETS合规</div></div>
+  <div class="card"><div class="card-icon">🤖</div><div class="card-title">AI Native</div><div class="card-desc">MariAI多Agent、邮件解析、市场数据、Webhook</div></div>
+  <div class="card"><div class="card-icon">🌍</div><div class="card-title">碳排放合规</div><div class="card-desc">EU ETS、FuelEU Maritime、CII评级</div></div>
+  <div class="card"><div class="card-icon">📊</div><div class="card-title">报表分析</div><div class="card-desc">9种预设报表、自定义SQL、CSV导出、定时调度</div></div>
+</div>
+</div>
+
+<div class="section" id="architecture">
+<h1>系统架构</h1>
+<h2>技术栈</h2>
+<table>
+  <tr><th>层级</th><th>技术</th><th>说明</th></tr>
+  <tr><td>前端</td><td>Next.js 14 + React 18 + TypeScript</td><td>App Router, Tailwind CSS</td></tr>
+  <tr><td>后端</td><td>FastAPI (Python 3.11+)</td><td>异步, OpenAPI文档</td></tr>
+  <tr><td>ORM</td><td>SQLAlchemy 2.0</td><td>Mapped[]类型注解</td></tr>
+  <tr><td>数据库</td><td>PostgreSQL / SQLite</td><td>多租户数据隔离</td></tr>
+  <tr><td>认证</td><td>JWT + OAuth 2.0</td><td>Magic Link, 邮箱验证</td></tr>
+  <tr><td>集成</td><td>Microsoft Graph API</td><td>Teams/Outlook/OneDrive</td></tr>
+</table>
+
+<h2>多租户架构</h2>
+<ul>
+  <li><strong>数据隔离:</strong> 所有业务表含 <code>tenant_id</code>，TenantGuard中间件自动过滤</li>
+  <li><strong>功能开关:</strong> ConfigFlag系统按租户启用/禁用功能</li>
+  <li><strong>品牌定制:</strong> 每租户独立Logo、主色调、域名</li>
+  <li><strong>订阅计费:</strong> 套餐Plans + 计量Meters + 钱包Wallet + 信用包</li>
+</ul>
+</div>
+
+<div class="section" id="stats">
+<h1>系统统计</h1>
+<div class="stat-row">
+  <div class="stat"><div class="stat-value">486</div><div class="stat-label">API Routes</div></div>
+  <div class="stat"><div class="stat-value">71</div><div class="stat-label">Frontend Pages</div></div>
+  <div class="stat"><div class="stat-value">21</div><div class="stat-label">Model Files</div></div>
+  <div class="stat"><div class="stat-value">52</div><div class="stat-label">Services</div></div>
+  <div class="stat"><div class="stat-value">296</div><div class="stat-label">Tests</div></div>
+</div>
+<div class="stat-row">
+  <div class="stat"><div class="stat-value">2,973</div><div class="stat-label">Model Lines</div></div>
+  <div class="stat"><div class="stat-value">12,740</div><div class="stat-label">Service Lines</div></div>
+  <div class="stat"><div class="stat-value">16,173</div><div class="stat-label">Router Lines</div></div>
+  <div class="stat"><div class="stat-value">~68K</div><div class="stat-label">Total Lines</div></div>
+</div>
+</div>
+
+<div class="section" id="getting-started">
+<h1>快速入门</h1>
+<h2>登录方式</h2>
+<ol>
+  <li><strong>邮箱+密码:</strong> 标准登录</li>
+  <li><strong>Magic Link:</strong> 邮箱接收一次性链接</li>
+  <li><strong>OAuth SSO:</strong> Microsoft Entra ID等</li>
+  <li><strong>邀请注册:</strong> 管理员邀请链接</li>
+</ol>
+
+<h2>界面布局</h2>
+<ul>
+  <li><strong>顶部栏:</strong> 全局搜索、通知、用户菜单</li>
+  <li><strong>左侧导航:</strong> 基于角色的动态菜单</li>
+  <li><strong>主内容区:</strong> 当前功能页面，支持面包屑</li>
+</ul>
+</div>
+
+<div class="section" id="navigation">
+<h1>导航指南</h1>
+<table>
+  <tr><th>菜单</th><th>路径</th><th>角色</th></tr>
+  <tr><td>Workbench</td><td>/home</td><td>所有</td></tr>
+  <tr><td>Dashboards</td><td>/dashboards</td><td>所有</td></tr>
+  <tr><td>Tasks</td><td>/tasks</td><td>所有</td></tr>
+  <tr><td>Estimates</td><td>/estimates</td><td>chartering, management</td></tr>
+  <tr><td>Charters</td><td>/charters</td><td>chartering, management</td></tr>
+  <tr><td>Voyages</td><td>/operations/voyages</td><td>operations, management</td></tr>
+  <tr><td>MariLink</td><td>/operations/marilink</td><td>operations, technical</td></tr>
+  <tr><td>Bunker</td><td>/bunker</td><td>bunker, operations</td></tr>
+  <tr><td>Ship</td><td>/ship</td><td>technical, operations</td></tr>
+  <tr><td>Finance</td><td>/finance</td><td>finance, management</td></tr>
+  <tr><td>Emissions</td><td>/emissions</td><td>operations, technical</td></tr>
+  <tr><td>Compliance</td><td>/emissions/compliance</td><td>operations, management</td></tr>
+  <tr><td>Pool</td><td>/pool</td><td>pool_manager, management</td></tr>
+  <tr><td>Trading</td><td>/trading</td><td>risk, management</td></tr>
+  <tr><td>Twin</td><td>/twin</td><td>operations, technical</td></tr>
+  <tr><td>Analytics</td><td>/analytics</td><td>management, finance</td></tr>
+  <tr><td>Reports</td><td>/analytics/reports</td><td>management, finance</td></tr>
+  <tr><td>MariAI</td><td>/ai/chat</td><td>chartering, operations</td></tr>
+  <tr><td>Market</td><td>/analytics/market</td><td>chartering, operations</td></tr>
+</table>
+</div>
+
+<div class="section" id="workbench">
+<h1>工作台 (Workbench)</h1>
+<p>登录后的首页，提供个性化工作概览。</p>
+<ul>
+  <li><strong>工作摘要:</strong> 待办任务、活跃航次、待审发票、到期证书</li>
+  <li><strong>快捷操作:</strong> 创建估价、新建航次、燃油询价</li>
+  <li><strong>待办事项:</strong> 分配给当前用户的任务</li>
+  <li><strong>通知中心:</strong> 系统通知、审批请求、异常告警</li>
+</ul>
+<h3>API</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/home/summary</span></div>
+</div>
+
+<div class="section" id="dashboards">
+<h1>实时仪表盘</h1>
+<p>基于角色的实时数据视图。</p>
+<div class="card-grid">
+  <div class="card"><div class="card-title">Management</div><div class="card-desc">船队概览、收入趋势、P&L汇总、KPI</div></div>
+  <div class="card"><div class="card-title">Operations</div><div class="card-desc">在航船舶、港口ETA、异常事件</div></div>
+  <div class="card"><div class="card-title">Chartering</div><div class="card-desc">待报价、活跃租约、market指标</div></div>
+  <div class="card"><div class="card-title">Finance</div><div class="card-desc">应收应付、账龄、待过账发票</div></div>
+  <div class="card"><div class="card-title">Technical</div><div class="card-desc">证书到期、PSC检查、维修工单</div></div>
+  <div class="card"><div class="card-title">Bunker</div><div class="card-desc">燃油库存、在途订单、价格趋势</div></div>
+</div>
+<h3>API</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/dashboards/catalog</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/dashboards/{role}/snapshot</span></div>
+</div>
+
+<div class="section" id="tasks">
+<h1>任务管理</h1>
+<ul>
+  <li><strong>任务列表:</strong> 按状态、优先级、分配人筛选</li>
+  <li><strong>我的任务:</strong> 当前用户的任务</li>
+  <li><strong>创建任务:</strong> 标题、描述、优先级、截止日期、分配人</li>
+  <li><strong>TaskRule:</strong> 业务规则自动创建任务</li>
+</ul>
+<h3>API</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/tasks</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/tasks</span></div>
+<div class="endpoint"><span class="method method-patch">PATCH</span> <span class="endpoint-path">/api/v1/tasks/{task_id}</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/tasks/{task_id}/complete</span></div>
+</div>
+
+<div class="section" id="estimates">
+<h1>航次估价</h1>
+<p>航次估价是租船业务核心起点。</p>
+<h2>功能</h2>
+<ul>
+  <li><strong>创建估价:</strong> 选船舶、航次类型、装卸港、货物</li>
+  <li><strong>收入计算:</strong> 运费、装卸费、附加费</li>
+  <li><strong>成本计算:</strong> 港口费、燃油、运河、佣金</li>
+  <li><strong>敏感性分析:</strong> 变量变化对利润影响</li>
+  <li><strong>盈亏平衡(BEP):</strong> 最低运费/货量</li>
+  <li><strong>克隆/比较:</strong> 快速创建和方案对比</li>
+  <li><strong>转为租约:</strong> 批准后一键转Charter</li>
+</ul>
+<h3>操作指南</h3>
+<ol>
+  <li>进入Estimates，点击"New Estimate"</li>
+  <li>选择船舶和航次类型</li>
+  <li>填写装卸港和货物信息</li>
+  <li>系统自动计算距离和燃油</li>
+  <li>调整运费率，查看P&L</li>
+  <li>进入Sensitivity分析</li>
+  <li>Submit提交审批</li>
+  <li>批准后To Charter转租约</li>
+</ol>
+<h3>API (12 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/estimates</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/estimates</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/estimates/{id}/calculate</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/estimates/{id}/sensitivity</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/estimates/{id}/bep</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/estimates/{id}/to-charter</span></div>
+</div>
+
+<div class="section" id="charters">
+<h1>租约管理</h1>
+<ul>
+  <li><strong>租约列表:</strong> 按状态筛选(谈判/生效/完成/取消)</li>
+  <li><strong>合同条款:</strong> 装卸港、Laytime、运费率、佣金</li>
+  <li><strong>修订(Amendments):</strong> 合同变更需审批</li>
+  <li><strong>装卸记录(Liftings):</strong> 实际装卸情况</li>
+  <li><strong>Hire Summary:</strong> 期租租金汇总</li>
+</ul>
+<h3>API (10 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/charters</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/charters</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/charters/{id}/transition</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/charters/{id}/amendments</span></div>
+</div>
+
+<div class="section" id="voyages">
+<h1>航次运营</h1>
+<ul>
+  <li><strong>航次列表:</strong> 按计划/执行/完成筛选</li>
+  <li><strong>航次概览:</strong> 时间线、港口调用、成本汇总</li>
+  <li><strong>港口调用:</strong> 到达/靠泊/完工时间</li>
+  <li><strong>SOF事件:</strong> Statement of Facts记录</li>
+  <li><strong>还船(Off-hire):</strong> 还船事件和原因</li>
+  <li><strong>燃油分配:</strong> 补给计划</li>
+  <li><strong>港口费用(PDA):</strong> 预估和管理</li>
+</ul>
+<h3>API (15 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/voyages</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/voyages</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/voyages/{id}/overview</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/port-calls</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/sof-events</span></div>
+</div>
+
+<div class="section" id="laytime">
+<h1>装卸时间 (Laytime)</h1>
+<ul>
+  <li><strong>从SOF创建:</strong> 基于事件自动生成计算</li>
+  <li><strong>计算引擎:</strong> 自动根据条款计算使用时间</li>
+  <li><strong>Finalize:</strong> 确认结果生成正式Statement</li>
+  <li><strong>导出:</strong> 标准格式Laytime计算书</li>
+  <li><strong>转索赔:</strong> 滞期费转Claims处理</li>
+</ul>
+<h3>API (8 endpoints)</h3>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/laytimes/from-sof</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/laytimes/{id}/calculate</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/laytimes/{id}/finalize</span></div>
+</div>
+
+<div class="section" id="finance">
+<h1>财务工作台</h1>
+<ul>
+  <li><strong>发票管理:</strong> 创建、审批、过账</li>
+  <li><strong>发票类型:</strong> 运费、滞期费、佣金、杂费</li>
+  <li><strong>Mirror Invoice:</strong> 应付↔应收镜像</li>
+  <li><strong>Credit Note:</strong> 红冲/贷项通知单</li>
+  <li><strong>付款批次:</strong> 批量处理付款</li>
+  <li><strong>GL过账:</strong> 过账到总账</li>
+  <li><strong>应计费用:</strong> 预提费用管理</li>
+  <li><strong>账龄分析:</strong> 应收应付账龄</li>
+  <li><strong>回收站:</strong> 已删除单据恢复</li>
+</ul>
+<h3>API (18 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/invoices</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/invoices</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/invoices/{id}/gl-post</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/finance/aging</span></div>
+</div>
+
+<div class="section" id="pnl">
+<h1>P&L 四列报表</h1>
+<p>专业航次损益分析，4列对比视图：</p>
+<ul>
+  <li><strong>Estimate:</strong> 估价阶段预期P&L</li>
+  <li><strong>Latest:</strong> 最新修订预期(基于实际数据)</li>
+  <li><strong>Provisional:</strong> 临时结算P&L</li>
+  <li><strong>Final:</strong> 最终结算P&L</li>
+</ul>
+<h3>报表类型</h3>
+<div class="card-grid">
+  <div class="card"><div class="card-title">Voyage P&L</div><div class="card-desc">单航次收入成本明细</div></div>
+  <div class="card"><div class="card-title">Fleet P&L</div><div class="card-desc">船队级P&L汇总</div></div>
+  <div class="card"><div class="card-title">TCE Report</div><div class="card-desc">Time Charter Equivalent</div></div>
+  <div class="card"><div class="card-title">4-Column</div><div class="card-desc">Est vs Latest vs Prov vs Final</div></div>
+</div>
+<h3>API</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/analytics/reports/voyage-pnl</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/analytics/reports/pnl-4col</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/analytics/reports/pnl-fleet</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/analytics/reports/tce</span></div>
+</div>
+
+<div class="section" id="bunker">
+<h1>燃油管理</h1>
+<ul>
+  <li><strong>燃油订单:</strong> 创建补给订单(港口、油种、数量)</li>
+  <li><strong>询价流程:</strong> 向多供应商询价</li>
+  <li><strong>比价选择:</strong> 对比报价选最优</li>
+  <li><strong>状态流转:</strong> 询价→报价→确认→交付→结算</li>
+  <li><strong>燃油区域:</strong> 全球区域管理，含合规标记</li>
+  <li><strong>Noon Report:</strong> 每日正午报告</li>
+</ul>
+<h3>操作指南</h3>
+<ol>
+  <li>进入Bunker Desk，点击"New Bunker Order"</li>
+  <li>选择港口、油种(HFO/MGO/VLSFO/LNG)、数量</li>
+  <li>点击"Send Inquiries"询价</li>
+  <li>收到报价后比较价格</li>
+  <li>选择供应商并"Accept"</li>
+  <li>跟踪直到"Delivered"</li>
+</ol>
+<h3>API (8 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/bunker-orders</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/bunker-orders</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/bunker-orders/{id}/inquiries</span></div>
+</div>
+
+<div class="section" id="time-charter">
+<h1>期租管理</h1>
+<ul>
+  <li><strong>TC合同:</strong> 租期、日租金率、交还船条款</li>
+  <li><strong>Hire Statement:</strong> 自动生成租金账单</li>
+  <li><strong>TCO分配:</strong> 费用分配到航次</li>
+  <li><strong>关联航次:</strong> 合同下所有航次</li>
+</ul>
+<h3>API (11 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/tc-contracts</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/tc-contracts/{id}/generate-statements</span></div>
+</div>
+
+<div class="section" id="claims">
+<h1>索赔管理</h1>
+<ul>
+  <li><strong>索赔列表:</strong> 按状态筛选</li>
+  <li><strong>创建索赔:</strong> 类型、金额、关联航次</li>
+  <li><strong>状态流转:</strong> 草稿→提交→谈判→解决</li>
+  <li><strong>转发票:</strong> 已解决索赔生成发票</li>
+</ul>
+<h3>API (6 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/claims</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/claims/{id}/to-invoice</span></div>
+</div>
+
+<div class="section" id="ship">
+<h1>船舶管理</h1>
+<ul>
+  <li><strong>船队概览:</strong> 船舶状态(在航/在港/修船)</li>
+  <li><strong>船舶档案:</strong> 建造信息、船级社、主尺度</li>
+  <li><strong>证书管理:</strong> 法定/船级证书到期跟踪</li>
+  <li><strong>船员管理:</strong> 在船船员、证书预警</li>
+  <li><strong>维修工单:</strong> 维修保养，含备件</li>
+  <li><strong>缺陷记录:</strong> PSC/内部检查缺陷</li>
+  <li><strong>集成适配器:</strong> 第三方数据源</li>
+</ul>
+<h3>API (22 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/ship/fleet</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/ship/certificates</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/ship/crew/cert-alerts</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/ship/work-orders</span></div>
+</div>
+
+<div class="section" id="marilink">
+<h1>MariLink 船岸通信</h1>
+<ul>
+  <li><strong>终端管理:</strong> 船端终端注册和心跳</li>
+  <li><strong>表单系统:</strong> Noon/Bunker/Incident Report模板</li>
+  <li><strong>报告提交:</strong> 船端提交，岸端审核</li>
+  <li><strong>预设模板:</strong> 一键导入常用表单</li>
+</ul>
+<h3>API (9 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/api/v1/marilink/terminals</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/api/v1/marilink/forms/seed-presets</span></div>
+</div>
+
+<div class="section" id="emissions">
+<h1>排放管理</h1>
+<ul>
+  <li><strong>排放记录:</strong> 按航次记录燃油消耗和CO2</li>
+  <li><strong>排放导出:</strong> 用于监管报告</li>
+  <li><strong>FuelEU计算:</strong> 合规指标计算</li>
+</ul>
+<h3>API (4 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/emissions</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/emissions/fueleu-calc</span></div>
+</div>
+
+<div class="section" id="compliance">
+<h1>碳排放合规</h1>
+<div class="info-box green"><strong>Phase 6 新功能:</strong> 全面碳排放合规计算和监控。</div>
+
+<h2>Fleet Compliance Summary</h2>
+<ul>
+  <li><strong>活跃航次:</strong> 当前执行航次总量</li>
+  <li><strong>总CO2:</strong> 所有航次CO2排放(吨)</li>
+  <li><strong>EU ETS成本:</strong> 合规成本(欧元)</li>
+  <li><strong>FuelEU状态:</strong> 是否满足GHG强度限制</li>
+  <li><strong>燃油消耗:</strong> 总消耗量(吨)</li>
+</ul>
+
+<h2>四大计算器</h2>
+<div class="card-grid">
+  <div class="card"><div class="card-title">CO2 Calculator</div><div class="card-desc">燃油类型+消耗量→CO2吨数</div></div>
+  <div class="card"><div class="card-title">EU ETS Calculator</div><div class="card-desc">Phase-in覆盖(2024:40%, 2025:70%, 2026+:100%)，碳价80 EUR/t</div></div>
+  <div class="card"><div class="card-title">FuelEU Calculator</div><div class="card-desc">2025限值89.9 gCO2e/MJ，逐年递减</div></div>
+  <div class="card"><div class="card-title">CII Calculator</div><div class="card-desc">CII = (CO2×10⁶)/(DWT×distance)，评级A-E</div></div>
+</div>
+
+<h3>燃油排放因子</h3>
+<table>
+  <tr><th>油种</th><th>CO2因子(tCO2/tFuel)</th><th>能量密度(MJ/t)</th></tr>
+  <tr><td>HFO</td><td>3.114</td><td>40,200</td></tr>
+  <tr><td>MGO</td><td>3.206</td><td>42,700</td></tr>
+  <tr><td>VLSFO</td><td>3.151</td><td>41,000</td></tr>
+  <tr><td>LNG</td><td>2.750</td><td>50,000</td></tr>
+  <tr><td>Methanol</td><td>1.375</td><td>19,900</td></tr>
+  <tr><td>Ammonia</td><td>0.000*</td><td>18,600</td></tr>
+</table>
+<p><small>* 绿色氨燃烧无CO2</small></p>
+
+<h3>API (7 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/compliance/summary</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/compliance/calculate/emissions</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/compliance/calculate/eu-ets</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/compliance/calculate/fueleu</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/compliance/calculate/cii</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/compliance/fuel-factors</span></div>
+</div>
+
+<div class="section" id="twin">
+<h1>数字孪生</h1>
+<ul>
+  <li><strong>船队概览:</strong> 数字孪生视角</li>
+  <li><strong>航次模拟:</strong> 单航次分析</li>
+  <li><strong>What-if:</strong> 参数模拟(航速、航线)</li>
+  <li><strong>异常告警:</strong> 模型异常检测</li>
+</ul>
+<h3>API (4 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/twin/fleet</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/twin/what-if</span></div>
+</div>
+
+<div class="section" id="analytics">
+<h1>分析中心</h1>
+<p>数据分析汇总，含Market Data和Reports子页面。</p>
+</div>
+
+<div class="section" id="reports">
+<h1>报表引擎</h1>
+<div class="info-box green"><strong>Phase 6 新功能:</strong> 9种预设报表+自定义SQL。</div>
+
+<h2>系统预设报表 (9种)</h2>
+<table>
+  <tr><th>报表</th><th>数据源</th><th>说明</th></tr>
+  <tr><td>Voyage P&L</td><td>voyages</td><td>航次损益</td></tr>
+  <tr><td>Bunker Cost</td><td>bunker_orders</td><td>燃油成本</td></tr>
+  <tr><td>TCE Analysis</td><td>voyages</td><td>TCE收益</td></tr>
+  <tr><td>Fleet Performance</td><td>voyages</td><td>船队绩效</td></tr>
+  <tr><td>Counterparty</td><td>charters</td><td>交易对手汇总</td></tr>
+  <tr><td>Aging Days</td><td>invoices</td><td>账龄分析</td></tr>
+  <tr><td>Port Call Details</td><td>port_calls</td><td>港口调用明细</td></tr>
+  <tr><td>Emissions</td><td>emission_records</td><td>排放汇总</td></tr>
+  <tr><td>Speed & Consumption</td><td>voyages</td><td>航速油耗</td></tr>
+</table>
+
+<h2>自定义报表</h2>
+<ul>
+  <li><strong>SQL报表:</strong> 自定义SQL(需含<code>:tid</code>参数)</li>
+  <li><strong>列定义:</strong> 列名、标签、格式(currency/number/date)</li>
+  <li><strong>过滤器/排序:</strong> 参数化过滤和多列排序</li>
+</ul>
+
+<h2>报表调度</h2>
+<ul>
+  <li><strong>定时:</strong> daily/weekly/monthly</li>
+  <li><strong>按需:</strong> on_demand手动触发</li>
+  <li><strong>收件人:</strong> 邮件列表</li>
+  <li><strong>导出:</strong> CSV格式</li>
+</ul>
+
+<h3>操作指南</h3>
+<ol>
+  <li>进入Reports页面</li>
+  <li>首次点击"Seed System Reports"导入预设</li>
+  <li>选择报表，点击"Execute"</li>
+  <li>查看结果，点击"Export CSV"下载</li>
+  <li>切换Schedules标签配置定时</li>
+</ol>
+
+<h3>API (12 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/reports/system/seed</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/reports</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/reports/{id}/execute</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/reports/{id}/export/csv</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/reports/schedules/list</span></div>
+</div>
+
+<div class="section" id="market">
+<h1>市场数据</h1>
+<ul>
+  <li><strong>最新报价:</strong> 各类市场指标</li>
+  <li><strong>历史趋势:</strong> 价格走势图</li>
+  <li><strong>燃油比价:</strong> 港口/油种对比</li>
+  <li><strong>Demo数据:</strong> 导入演示数据</li>
+</ul>
+<h3>数据类别</h3>
+<table>
+  <tr><th>类别</th><th>示例</th></tr>
+  <tr><td>Bunker Prices</td><td>HFO/MGO/VLSFO各港口</td></tr>
+  <tr><td>Freight Indices</td><td>BDI, BCI, BPI, BSI</td></tr>
+  <tr><td>TCE Rates</td><td>各船型TCE收益</td></tr>
+  <tr><td>Oil Prices</td><td>Brent, WTI</td></tr>
+</table>
+<h3>API (4 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/market-data/latest</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/market-data/history/{symbol}</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/market-data/bunker-comparison</span></div>
+</div>
+
+<div class="section" id="ai-chat">
+<h1>MariAI Chat</h1>
+<div class="info-box green"><strong>Phase 5 新功能:</strong> 多Agent AI框架。</div>
+
+<h2>预设Agent</h2>
+<table>
+  <tr><th>Agent</th><th>能力</th></tr>
+  <tr><td>Voyage Analyst</td><td>航次P&L、TCE、对比</td></tr>
+  <tr><td>Compliance Advisor</td><td>碳排放合规、EU ETS</td></tr>
+  <tr><td>Port & Distance</td><td>港口距离、航线</td></tr>
+</table>
+
+<h2>AI工具</h2>
+<ul>
+  <li><strong>TCE Calculator:</strong> 计算TCE</li>
+  <li><strong>P&L Query:</strong> 查询损益</li>
+  <li><strong>Port Distance:</strong> 港口距离</li>
+  <li><strong>Compliance Check:</strong> 合规状态</li>
+  <li><strong>Laytime Calc:</strong> 装卸时间</li>
+</ul>
+
+<h3>示例查询</h3>
+<pre><code>"Voyage #123 的P&L是多少？"
+"对比最近3个航次的TCE"
+"上海到鹿特丹距离？"
+"船队EU ETS成本？"</code></pre>
+
+<h3>API (7 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/ai/agents</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/ai/conversations/{id}/chat</span></div>
+</div>
+
+<div class="section" id="email-review">
+<h1>邮件审核</h1>
+<ul>
+  <li><strong>审核队列:</strong> 待审核已解析邮件</li>
+  <li><strong>Fixture Recap:</strong> 提取租船条款</li>
+  <li><strong>NOR解析:</strong> Notice of Readiness</li>
+  <li><strong>Laytime解析:</strong> Laytime Statement</li>
+  <li><strong>矛盾检测:</strong> 邮件与系统数据不一致</li>
+  <li><strong>邮件账户:</strong> IMAP/Graph同步</li>
+</ul>
+<h3>API (10 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/email/review</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/email-intelligence/parse-fixture-recap</span></div>
+</div>
+
+<div class="section" id="pool">
+<h1>联营池</h1>
+<ul>
+  <li><strong>联营列表:</strong> 管理联营池</li>
+  <li><strong>期间管理:</strong> 结算期间</li>
+  <li><strong>船舶入池:</strong> 加入联营</li>
+  <li><strong>收益分配:</strong> 按条款分配</li>
+  <li><strong>期间结算:</strong> 最终结算</li>
+</ul>
+<h3>API (7 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/pools</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/pools/{id}/periods</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/pools/periods/{id}/settle</span></div>
+</div>
+
+<div class="section" id="trading">
+<h1>交易风控</h1>
+<ul>
+  <li><strong>持仓:</strong> FFA/Bunker套保</li>
+  <li><strong>风险限额:</strong> VaR、Stop Loss</li>
+  <li><strong>Hedge视图:</strong> 套保效果分析</li>
+  <li><strong>Market Quotes:</strong> 市场报价</li>
+</ul>
+<h3>API (5 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/risk/positions</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/risk/hedge-view</span></div>
+</div>
+
+<div class="section" id="exceptions">
+<h1>异常监控</h1>
+<ul>
+  <li><strong>异常扫描:</strong> 航次偏差、证书到期、预算超支</li>
+  <li><strong>分类:</strong> 按严重程度和影响</li>
+  <li><strong>建议:</strong> 处理建议</li>
+</ul>
+<h3>API</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/exceptions/scan</span></div>
+</div>
+
+<div class="section" id="ports">
+<h1>港口数据</h1>
+<ul>
+  <li><strong>港口列表:</strong> 全球港口数据库</li>
+  <li><strong>港口详情:</strong> 基本信息、泊位、时区</li>
+  <li><strong>港口费率:</strong> 使费参考</li>
+  <li><strong>港口限制:</strong> 吃水、船长、货物限制</li>
+  <li><strong>假期日历:</strong> 影响Laytime计算</li>
+  <li><strong>费用预估:</strong> 根据船舶参数预估</li>
+  <li><strong>距离计算:</strong> 港口间航线距离</li>
+</ul>
+<h3>API (16 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/masterdata/ports</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/reference/ports/{unlocode}/estimate-costs</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/distances</span></div>
+</div>
+
+<div class="section" id="vessels">
+<h1>船舶主数据</h1>
+<h3>API (5 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/masterdata/vessels</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/masterdata/vessels</span></div>
+</div>
+
+<div class="section" id="counterparties">
+<h1>交易对手</h1>
+<ul>
+  <li><strong>列表:</strong> 业务伙伴(租家、船东、经纪人、供应商)</li>
+  <li><strong>详情:</strong> 联系信息、信用评级、业务历史</li>
+  <li><strong>公司:</strong> 关联公司实体</li>
+  <li><strong>汇率:</strong> 多币种汇率</li>
+</ul>
+<h3>API (9 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/masterdata/counterparties</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/masterdata/exchange-rates</span></div>
+</div>
+
+<div class="section" id="fuel-zones">
+<h1>燃油区域</h1>
+<ul>
+  <li><strong>区域列表:</strong> 全球燃油供应区域</li>
+  <li><strong>合规标记:</strong> EU ETS、ECA区域</li>
+  <li><strong>位置检查:</strong> GPS坐标判断区域</li>
+  <li><strong>航线过渡:</strong> 穿越不同区域过渡点</li>
+  <li><strong>预设导入:</strong> 全球标准数据</li>
+</ul>
+<h3>API (6 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/reference/fuel-zones</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/reference/fuel-zones/seed-presets</span></div>
+</div>
+
+<div class="section" id="admin-users">
+<h1>用户角色</h1>
+<ul>
+  <li><strong>用户列表:</strong> 搜索筛选</li>
+  <li><strong>创建用户:</strong> 手动或邮件邀请</li>
+  <li><strong>角色管理:</strong> 系统角色列表</li>
+  <li><strong>组织管理:</strong> Org Unit和成员</li>
+  <li><strong>权限矩阵:</strong> 角色-功能权限</li>
+  <li><strong>功能开关:</strong> 按租户启用功能</li>
+</ul>
+
+<h2>系统角色</h2>
+<table>
+  <tr><th>角色</th><th>说明</th></tr>
+  <tr><td>tenant_admin</td><td>租户管理员</td></tr>
+  <tr><td>management</td><td>管理层</td></tr>
+  <tr><td>chartering</td><td>租船部门</td></tr>
+  <tr><td>operations</td><td>操作部门</td></tr>
+  <tr><td>finance</td><td>财务部门</td></tr>
+  <tr><td>demurrage</td><td>滞期费专员</td></tr>
+  <tr><td>technical</td><td>技术部门</td></tr>
+  <tr><td>bunker</td><td>燃油部门</td></tr>
+  <tr><td>pool_manager</td><td>联营经理</td></tr>
+  <tr><td>risk</td><td>风控部门</td></tr>
+</table>
+<h3>API (11 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/admin/users</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/admin/roles</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/admin/features/matrix</span></div>
+</div>
+
+<div class="section" id="admin-security">
+<h1>安全审计</h1>
+<ul>
+  <li><strong>安全策略:</strong> 密码、MFA、会话超时</li>
+  <li><strong>审计日志:</strong> 操作审计追踪</li>
+  <li><strong>邀请管理:</strong> 邀请状态跟踪</li>
+  <li><strong>邮件日志:</strong> 系统邮件记录</li>
+</ul>
+<h3>API (6 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/admin/security/policy</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/admin/security/audit-logs</span></div>
+</div>
+
+<div class="section" id="admin-settings">
+<h1>系统设置</h1>
+<div class="card-grid">
+  <div class="card"><div class="card-title">Settings Hub</div><div class="card-desc">设置中心入口</div></div>
+  <div class="card"><div class="card-title">AI Providers</div><div class="card-desc">AI服务配置</div></div>
+  <div class="card"><div class="card-title">API Keys</div><div class="card-desc">API密钥管理</div></div>
+  <div class="card"><div class="card-title">Connectors</div><div class="card-desc">外部系统连接</div></div>
+  <div class="card"><div class="card-title">Reference Data</div><div class="card-desc">参考数据集</div></div>
+  <div class="card"><div class="card-title">Self Check</div><div class="card-desc">系统自检</div></div>
+  <div class="card"><div class="card-title">Backup</div><div class="card-desc">数据备份</div></div>
+  <div class="card"><div class="card-title">Migrate</div><div class="card-desc">数据迁移</div></div>
+  <div class="card"><div class="card-title">Recycle Bin</div><div class="card-desc">回收站</div></div>
+  <div class="card"><div class="card-title">Office</div><div class="card-desc">M365集成</div></div>
+  <div class="card"><div class="card-title">Licenses</div><div class="card-desc">许可证</div></div>
+</div>
+<h3>API (26 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/settings/ai/providers</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/settings/api-keys</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/settings/connectors</span></div>
+</div>
+
+<div class="section" id="webhooks">
+<h1>Webhooks</h1>
+<div class="info-box green"><strong>Phase 5 新功能:</strong> Webhook订阅系统，HMAC签名。</div>
+<ul>
+  <li><strong>订阅管理:</strong> 事件类型和回调URL</li>
+  <li><strong>HMAC签名:</strong> SHA256签名验证</li>
+  <li><strong>投递记录:</strong> 投递历史和状态</li>
+  <li><strong>密钥轮换:</strong> 安全轮换签名密钥</li>
+</ul>
+<h3>API (8 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/webhooks/subscriptions</span></div>
+<div class="endpoint"><span class="method method-post">POST</span> <span class="endpoint-path">/api/v1/webhooks/subscriptions</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/webhooks/deliveries</span></div>
+</div>
+
+<div class="section" id="platform">
+<h1>平台管理</h1>
+<p>平台级管理，仅限运营人员。</p>
+<div class="card-grid">
+  <div class="card"><div class="card-title">Overview</div><div class="card-desc">平台运营概览</div></div>
+  <div class="card"><div class="card-title">Tenants</div><div class="card-desc">租户管理</div></div>
+  <div class="card"><div class="card-title">SaaS Engine</div><div class="card-desc">套餐、计量、订阅</div></div>
+  <div class="card"><div class="card-title">Health</div><div class="card-desc">系统健康</div></div>
+  <div class="card"><div class="card-title">Branding</div><div class="card-desc">品牌配置</div></div>
+  <div class="card"><div class="card-title">i18n</div><div class="card-desc">多语言管理</div></div>
+  <div class="card"><div class="card-title">Identity</div><div class="card-desc">身份提供商</div></div>
+  <div class="card"><div class="card-title">Ops</div><div class="card-desc">运维管理</div></div>
+</div>
+<h3>API (57 endpoints)</h3>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/platform/tenants</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/platform/saas/overview</span></div>
+<div class="endpoint"><span class="method method-get">GET</span> <span class="endpoint-path">/api/v1/platform/health</span></div>
+</div>
+
+<div class="section" id="api-reference">
+<h1>API 参考</h1>
+<p>完整API文档可通过 <code>/docs</code> (Swagger UI) 或 <code>/redoc</code> (ReDoc) 访问。</p>
+
+<h2>端点统计</h2>
+<table>
+  <tr><th>模块</th><th>端点数</th></tr>
+  <tr><td>Admin</td><td>33</td></tr>
+  <tr><td>Platform</td><td>57</td></tr>
+  <tr><td>Settings</td><td>26</td></tr>
+  <tr><td>Office (M365)</td><td>25</td></tr>
+  <tr><td>Reference</td><td>24</td></tr>
+  <tr><td>Ship</td><td>22</td></tr>
+  <tr><td>Masterdata</td><td>19</td></tr>
+  <tr><td>Config</td><td>28</td></tr>
+  <tr><td>Reports</td><td>12</td></tr>
+  <tr><td>Estimates</td><td>12</td></tr>
+  <tr><td>Invoices</td><td>11</td></tr>
+  <tr><td>Charters</td><td>10</td></tr>
+  <tr><td>TC Contracts</td><td>9</td></tr>
+  <tr><td>Voyages</td><td>9</td></tr>
+  <tr><td>Webhooks</td><td>8</td></tr>
+  <tr><td>Laytimes</td><td>8</td></tr>
+  <tr><td>Compliance</td><td>7</td></tr>
+  <tr><td>AI</td><td>7</td></tr>
+  <tr><td>Pools</td><td>7</td></tr>
+  <tr><td>其他</td><td>159</td></tr>
+</table>
+
+<h2>认证</h2>
+<p>所有API端点(除公开端点)需要Bearer Token认证：</p>
+<pre><code>Authorization: Bearer &lt;jwt_token&gt;</code></pre>
+
+<h2>多租户</h2>
+<p>系统自动从JWT提取<code>tenant_id</code>，所有查询自动过滤租户数据。</p>
+</div>
+
+<div class="section" id="roles">
+<h1>角色权限</h1>
+<table>
+  <tr><th>功能</th><th>tenant_admin</th><th>management</th><th>chartering</th><th>operations</th><th>finance</th><th>technical</th></tr>
+  <tr><td>Estimates</td><td>✓</td><td>✓</td><td>✓</td><td>-</td><td>-</td><td>-</td></tr>
+  <tr><td>Charters</td><td>✓</td><td>✓</td><td>✓</td><td>-</td><td>-</td><td>-</td></tr>
+  <tr><td>Voyages</td><td>✓</td><td>✓</td><td>-</td><td>✓</td><td>-</td><td>✓</td></tr>
+  <tr><td>Bunker</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>-</td><td>✓</td></tr>
+  <tr><td>Finance</td><td>✓</td><td>✓</td><td>-</td><td>-</td><td>✓</td><td>-</td></tr>
+  <tr><td>Ship</td><td>✓</td><td>✓</td><td>-</td><td>✓</td><td>-</td><td>✓</td></tr>
+  <tr><td>Reports</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>-</td></tr>
+  <tr><td>Compliance</td><td>✓</td><td>✓</td><td>-</td><td>✓</td><td>✓</td><td>✓</td></tr>
+  <tr><td>AI Chat</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>-</td><td>-</td></tr>
+</table>
+</div>
+
+<div class="section" id="phases">
+<h1>升级历程</h1>
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">Phase 1: Foundation</div>
+    <div class="card-desc">CSS治理、UI组件(Toast/Skeleton/ErrorBoundary/Breadcrumb/DataTable/暗色模式)、P&L引擎、发票扩展、PaymentBatch、GL集成</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Phase 2: Advanced Commercial</div>
+    <div class="card-desc">TimeCharter引擎、高级定价、港口距离、敏感性分析+BEP、连续航次</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Phase 3: Configurable Intelligence</div>
+    <div class="card-desc">ConfigFlag、BusinessRule增强、AlertRule/TaskRule、UdfDefinition/UdfValue、alert_engine、rule_engine、udf_service</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Phase 4: Compliance & Comms</div>
+    <div class="card-desc">MariLink船岸通信、港口参考增强、燃油区域管理(FuelZone+fuel_zone_service)</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Phase 5: AI Native & Open</div>
+    <div class="card-desc">MariAI多Agent(5工具、3 Agent)、Webhook系统、市场数据、邮件智能解析</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Phase 6: Analytics & Decision</div>
+    <div class="card-desc">报表引擎(9预设+自定义SQL+调度)、碳排放合规(EU ETS/FuelEU/CII)</div>
+  </div>
+</div>
+
+<h2>版本统计</h2>
+<table>
+  <tr><th>指标</th><th>Phase 1前</th><th>Phase 6后</th><th>增长</th></tr>
+  <tr><td>API Routes</td><td>~350</td><td>486</td><td>+136</td></tr>
+  <tr><td>Frontend Pages</td><td>~50</td><td>71</td><td>+21</td></tr>
+  <tr><td>Model Files</td><td>15</td><td>21</td><td>+6</td></tr>
+  <tr><td>Service Files</td><td>38</td><td>52</td><td>+14</td></tr>
+  <tr><td>Router Files</td><td>26</td><td>35</td><td>+9</td></tr>
+</table>
+</div>
+
+</main>
+
+<script>
+function filterNav(query) {
+  const links = document.querySelectorAll('.nav-link');
+  const q = query.toLowerCase();
+  links.forEach(link => {
+    const text = link.textContent.toLowerCase();
+    link.style.display = text.includes(q) ? '' : 'none';
+  });
+}
+
+function nav(el) {
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+  el.classList.add('active');
+}
+
+// Highlight current section on scroll
+const sections = document.querySelectorAll('.section');
+const navLinks = document.querySelectorAll('.nav-link');
+
+window.addEventListener('scroll', () => {
+  let current = '';
+  sections.forEach(section => {
+    const sectionTop = section.offsetTop;
+    if (pageYOffset >= sectionTop - 100) {
+      current = section.getAttribute('id');
+    }
+  });
+  navLinks.forEach(link => {
+    link.classList.remove('active');
+    if (link.getAttribute('href') === '#' + current) {
+      link.classList.add('active');
+    }
+  });
+});
+</script>
+
+</body>
+</html>

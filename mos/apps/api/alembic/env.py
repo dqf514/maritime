@@ -37,6 +37,12 @@ import app.models_reference  # noqa: F401,E402
 import app.models_saas  # noqa: F401,E402
 import app.models_ship  # noqa: F401,E402
 import app.models_wave1  # noqa: F401,E402
+import app.models_gl  # noqa: F401,E402
+import app.models_time_charter  # noqa: F401,E402
+import app.models_config  # noqa: F401,E402
+import app.models_shipshore  # noqa: F401,E402
+import app.models_ai  # noqa: F401,E402
+import app.models_report  # noqa: F401,E402
 
 target_metadata = Base.metadata
 

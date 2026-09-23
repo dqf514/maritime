@@ -1112,6 +1112,7 @@ export default function FinanceHubPage() {
         <div className="panel">
           <div className="desk-toolbar" style={{ marginBottom: "0.75rem" }}>
             <h3 style={{ margin: 0 }}>{t("page.finance.pnl", "Dynamic P&L")}</h3>
+            <Link href="/finance/pnl" className="btn btn-sm btn-ghost">4-Column View</Link>
             <button
               className={`btn btn-sm${pnlBasis === "actual" ? " btn-primary" : ""}`}
               type="button"
@@ -1157,7 +1158,7 @@ export default function FinanceHubPage() {
                   style={{ cursor: "pointer" }}
                   onClick={() => setSelectedPnl(r.voyage_id === selectedPnl ? null : r.voyage_id)}
                 >
-                  <td>{r.voyage_no}</td>
+                  <td><Link href={`/finance/pnl/${r.voyage_id}`}>{r.voyage_no}</Link></td>
                   <td>{r.status}</td>
                   <td>{fmt(r.estimated_revenue)}</td>
                   <td>{fmt(r.estimated_cost)}</td>

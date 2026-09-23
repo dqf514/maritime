@@ -6,6 +6,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { OmniSearch } from "@/components/OmniSearch";
 import { NavIcon, sectionIconId } from "@/components/NavIcon";
 import { NotificationBell } from "@/components/NotificationBell";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { Breadcrumb, type BreadcrumbItem } from "@/components/Breadcrumb";
 import { clearLookupCache } from "@/components/LookupSelect";
 import { apiGet, apiLogout, apiMe, readStorage, removeStorage, TOKEN_STORAGE_KEY, type Me } from "@/lib/api";
 import { LanguageSwitcher, useI18n } from "@/lib/i18n";
@@ -65,7 +67,7 @@ function initials(name: string | null | undefined, email: string): string {
   return src.slice(0, 2).toUpperCase();
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({ children, breadcrumbs }: { children: React.ReactNode; breadcrumbs?: BreadcrumbItem[] }) {
   const [me, setMe] = useState<Me | null>(null);
   const [shell, setShell] = useState<ShellBootstrap | null>(null);
   const [iconUrl, setIconUrl] = useState("/branding/mark.svg");
@@ -239,6 +241,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
         <div className="topbar-right">
           <NotificationBell />
+          <ThemeToggle />
           <LanguageSwitcher />
           <div className="user-menu" ref={userMenuRef}>
             <button
@@ -389,7 +392,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         ) : null}
         <div className="main-col">
-          <main className="content">{children}</main>
+          <main className="content">
+            {breadcrumbs?.length ? <Breadcrumb items={breadcrumbs} /> : null}
+            {children}
+          </main>
           <footer className="statusbar">
             <span>
               {t("shell.tenant_tier", "租户 {code} · 档位 {tier}", {
