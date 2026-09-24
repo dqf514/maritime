@@ -46,6 +46,7 @@ Demo 登录：`admin@demo.marios` / `Demo1234!` / tenant `demo`
 ## 技术要点（摘要）
 
 - 模块化单体，可单机 Docker Compose 部署，可扩展多机/多云  
+- iMOS 风格模块化导航（租船 / 运营 / 财务 / 技术 / 分析与AI — 按角色分区）
 - 默认界面语言 English，完整多语言 + 航运术语库  
 - 模块许可证、多租户隔离、AI Hub、Integration Hub、API 管理、SelfCheck 自检  
 - **DataOps**：从邮件/PST/O365/公共文件夹/Excel **AI 迁入**（勾选确认落库）；一键备份与恢复  

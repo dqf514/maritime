@@ -7,7 +7,7 @@ GitHub: https://github.com/dqf514/maritime/tree/main/mos
 ### API
 
 ```powershell
-cd D:\ai\LMOS\mos\apps\api
+cd D:\AI\Maritime\mos\apps\api
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt
@@ -20,7 +20,7 @@ Demo: `admin@demo.marios` / `Demo1234!` / tenant `demo`
 ### Web
 
 ```powershell
-cd D:\ai\LMOS\mos\apps\web
+cd D:\AI\Maritime\mos\apps\web
 npm install
 $env:NEXT_PUBLIC_API_BASE="http://localhost:8000"
 npm run dev
@@ -29,7 +29,7 @@ npm run dev
 ### Full-chain tests (必跑)
 
 ```powershell
-cd D:\ai\LMOS\mos\apps\api
+cd D:\AI\Maritime\mos\apps\api
 $env:LICENSE_DEV_UNLOCK="all"
 .\.venv\Scripts\python.exe -m pytest -q
 ```
@@ -51,5 +51,8 @@ $env:LICENSE_DEV_UNLOCK="all"
 | 6 | Market / DQ / Emissions / Analytics reports |
 | 7 | Pooling / Risk / Berth / Portal messages |
 | 8 | Twin L4 what-if / SelfCheck gold / domain schema checks |
+| 9 | MariLink 船岸通信 / 燃油区域 / MariAI Agent / Webhook / 报表引擎 / 碳合规 |
+| 10 | UI 组件体系（Toast / Skeleton / ErrorBoundary / DataTable / Dark mode / 面包屑） |
+| 11 | 导航模块化（iMOS 风格分区）/ 对手方增强（自定义类型 + 多联系人）/ Workbench 密度回调 |
 
 API version: `0.9.0-full`
