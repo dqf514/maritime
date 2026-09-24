@@ -177,6 +177,15 @@ def _ensure_sqlite_user_identity_columns() -> None:
             ("noon_reports", "wind_bf", "NUMERIC(4, 1)"),
             ("noon_reports", "sea_state", "VARCHAR(32)"),
             ("noon_reports", "current_kn", "NUMERIC(5, 2)"),
+            # ERP counterparty fields
+            ("counterparties", "address", "TEXT"),
+            ("counterparties", "tax_id", "TEXT"),
+            ("counterparties", "swift_code", "TEXT"),
+            ("counterparties", "registration_no", "TEXT"),
+            ("counterparties", "website", "TEXT"),
+            ("counterparties", "phone", "TEXT"),
+            ("counterparties", "email", "TEXT"),
+            ("counterparties", "notes", "TEXT"),
         ):
             try:
                 tcols = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}

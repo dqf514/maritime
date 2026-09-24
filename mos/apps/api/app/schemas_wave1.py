@@ -64,11 +64,36 @@ class CounterpartyIn(BaseModel):
     country: str | None = None
     credit_rating: str | None = None
     sanctions_status: str = "clear"
+    address: str | None = None
+    tax_id: str | None = None
+    swift_code: str | None = None
+    registration_no: str | None = None
+    website: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    notes: str | None = None
 
 
 class CounterpartyOut(CounterpartyIn):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
+
+
+class CounterpartyContactIn(BaseModel):
+    name: str
+    title: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    mobile: str | None = None
+    department: str | None = None
+    is_primary: bool = False
+    notes: str | None = None
+
+
+class CounterpartyContactOut(CounterpartyContactIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    counterparty_id: UUID
 
 
 class ExchangeRateIn(BaseModel):

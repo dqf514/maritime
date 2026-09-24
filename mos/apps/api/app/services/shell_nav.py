@@ -1,7 +1,11 @@
 """Role-based navigation, workspaces and home widgets (DDS §2–3).
 
-Sidenav is intentionally short: daily desks first, master data second,
-admin/platform as hubs — not every settings page as a top-level link.
+Sidenav is organised into functional modules (iMOS-style):
+  Workbench → Chartering → Operations → Finance → Technical → Analytics
+  → Master data → Administration → Platform
+
+Each module is a collapsible section; only modules with visible items
+(after role filtering) are rendered.
 """
 
 from __future__ import annotations
@@ -9,8 +13,8 @@ from __future__ import annotations
 from typing import Any
 
 
-# Desk items — tenant_admin does NOT auto-see every desk (avoids mega-menus).
-# Admins open Control plane for users/security/i18n/etc.
+# ── Flat item catalogues (kept for back-compat / reference) ──────────
+
 NAV_DESK: list[dict[str, Any]] = [
     {"id": "home", "label": "Workbench", "href": "/home", "roles": ["*"]},
     {"id": "dashboards", "label": "Live dashboards", "href": "/dashboards", "roles": ["*"]},
@@ -35,7 +39,6 @@ NAV_DESK: list[dict[str, Any]] = [
     {"id": "compliance", "label": "Carbon compliance", "href": "/emissions/compliance", "roles": ["operations", "management", "technical", "finance"]},
 ]
 
-# Tenant admins get a compact “overview” desk so they can still spot-check the OS.
 NAV_ADMIN_DESK: list[dict[str, Any]] = [
     {"id": "home", "label": "Workbench", "href": "/home", "roles": ["tenant_admin"]},
     {"id": "dashboards", "label": "Live dashboards", "href": "/dashboards", "roles": ["tenant_admin"]},
@@ -58,7 +61,6 @@ NAV_MASTER: list[dict[str, Any]] = [
     {"id": "parties", "label": "Counterparties", "href": "/masterdata/counterparties", "roles": ["chartering", "finance", "tenant_admin", "compliance"]},
 ]
 
-# Admin hub — settings hub for tenant admins (users, security, i18n, licenses…)
 NAV_ADMIN: list[dict[str, Any]] = [
     {"id": "inbox", "label": "Approval inbox", "href": "/workflows/inbox", "roles": ["tenant_admin", "management", "finance", "chartering"]},
     {"id": "settings_hub", "label": "System settings", "href": "/settings", "roles": ["tenant_admin"]},
@@ -74,21 +76,73 @@ NAV_PLATFORM: list[dict[str, Any]] = [
     {"id": "plat_health", "label": "Estate health", "href": "/platform/health", "roles": ["platform_admin"]},
 ]
 
-# Preferred order inside the desk section by primary business role
-ROLE_DESK_PRIORITY: dict[str, list[str]] = {
-    "chartering": ["home", "estimates", "charters", "email", "trading", "bunker", "dashboards"],
-    "operations": ["home", "ops", "bunker", "emissions", "twin", "ship", "email", "dashboards"],
-    "finance": ["home", "finance", "emissions", "pool", "trading", "analytics", "dashboards"],
-    "demurrage": ["home", "finance", "dashboards"],
-    "technical": ["home", "ship", "bunker", "emissions", "twin", "ops", "dashboards"],
-    "management": ["home", "dashboards", "analytics", "twin", "estimates", "ops", "finance", "pool", "trading", "emissions"],
-    "tenant_admin": ["home", "dashboards", "estimates", "ops", "bunker", "finance", "emissions", "ship"],
-    "platform_admin": ["home", "dashboards"],
-    "pool_manager": ["home", "pool", "analytics", "dashboards"],
-    "risk": ["home", "trading", "twin", "dashboards"],
-    "bunker": ["home", "bunker", "ops", "dashboards"],
-    "viewer": ["home", "dashboards"],
+# ── Module definitions (iMOS-style functional grouping) ──────────────
+
+MODULES: list[dict[str, Any]] = [
+    {
+        "id": "chartering",
+        "label": "Chartering",
+        "item_ids": ["estimates", "charters", "email", "trading"],
+        "roles": ["chartering", "management", "risk"],
+        "collapsed_default": False,
+    },
+    {
+        "id": "operations",
+        "label": "Operations",
+        "item_ids": ["ops", "marilink", "bunker", "emissions", "compliance", "exceptions"],
+        "roles": ["operations", "management", "technical", "bunker"],
+        "collapsed_default": False,
+    },
+    {
+        "id": "finance",
+        "label": "Finance",
+        "item_ids": ["finance", "pool"],
+        "roles": ["finance", "demurrage", "management", "pool_manager"],
+        "collapsed_default": False,
+    },
+    {
+        "id": "technical",
+        "label": "Technical",
+        "item_ids": ["ship", "twin"],
+        "roles": ["technical", "operations", "management", "risk"],
+        "collapsed_default": False,
+    },
+    {
+        "id": "analytics",
+        "label": "Analytics & AI",
+        "item_ids": ["dashboards", "analytics", "market", "reports", "ai_chat"],
+        "roles": ["*"],
+        "collapsed_default": False,
+    },
+    {
+        "id": "platform_mod",
+        "label": "Platform",
+        "item_ids": ["plat_home", "plat_tenants", "plat_ops", "plat_saas", "plat_brand", "plat_identity", "plat_health"],
+        "roles": ["platform_admin"],
+        "collapsed_default": False,
+    },
+]
+
+MODULE_ORDER: list[str] = [m["id"] for m in MODULES]
+
+# Per-role preferred module order (first N modules shown first)
+ROLE_MODULE_PRIORITY: dict[str, list[str]] = {
+    "chartering": ["chartering", "analytics", "operations", "finance", "technical"],
+    "operations": ["operations", "technical", "analytics", "chartering", "finance"],
+    "finance": ["finance", "analytics", "chartering", "operations", "technical"],
+    "demurrage": ["finance", "analytics"],
+    "technical": ["technical", "operations", "analytics", "finance"],
+    "management": ["analytics", "chartering", "operations", "finance", "technical"],
+    "tenant_admin": ["analytics", "chartering", "operations", "finance", "technical"],
+    "platform_admin": ["platform_mod"],
+    "pool_manager": ["finance", "analytics"],
+    "risk": ["chartering", "technical", "analytics"],
+    "bunker": ["operations", "analytics"],
+    "viewer": ["analytics"],
 }
+
+# Legacy alias — kept for back-compat; no longer used by build_navigation
+ROLE_DESK_PRIORITY: dict[str, list[str]] = ROLE_MODULE_PRIORITY
 
 WORKSPACES: dict[str, dict[str, Any]] = {
     "chartering_day": {
@@ -221,6 +275,8 @@ ROLE_DEFAULT_WORKSPACE = {
 }
 
 
+# ── Helpers ──────────────────────────────────────────────────────────
+
 def _role_match(user_roles: list[str], allowed: list[str]) -> bool:
     if "*" in allowed:
         return True
@@ -258,43 +314,67 @@ def _filter_items(items: list[dict[str, Any]], roles: list[str]) -> list[dict[st
     return out
 
 
-def _sort_desk(items: list[dict[str, Any]], roles: list[str]) -> list[dict[str, Any]]:
-    primary = _primary_role(roles)
-    order = ROLE_DESK_PRIORITY.get(primary) or ROLE_DESK_PRIORITY["viewer"]
-    rank = {iid: i for i, iid in enumerate(order)}
-    return sorted(items, key=lambda x: (rank.get(x["id"], 100), x["label"]))
+def _filter_module_items(module: dict[str, Any], roles: list[str]) -> list[dict[str, Any]]:
+    """Return role-visible items for a module, preserving catalogue order."""
+    if not _role_match(roles, module["roles"]):
+        return []
+    item_ids = module["item_ids"]
+    catalog = {item["id"]: item for item in NAV_DESK}
+    out = []
+    for iid in item_ids:
+        item = catalog.get(iid)
+        if item and _role_match(roles, item["roles"]):
+            out.append({"id": item["id"], "label": item["label"], "href": item["href"]})
+    return out
 
+
+def _sort_modules(modules: list[dict[str, Any]], roles: list[str]) -> list[dict[str, Any]]:
+    primary = _primary_role(roles)
+    order = ROLE_MODULE_PRIORITY.get(primary, ROLE_MODULE_PRIORITY.get("viewer", []))
+    rank = {mid: i for i, mid in enumerate(order)}
+    return sorted(modules, key=lambda m: (rank.get(m["id"], 100), m["label"]))
+
+
+# ── Public API ───────────────────────────────────────────────────────
 
 def build_navigation(user_roles: list[str], profile_tier: str = "M") -> list[dict[str, Any]]:
-    """Grouped nav: Daily → Master → Admin/Platform hubs."""
+    """Module-based nav: Workbench → functional modules → Master → Admin."""
     roles = user_roles or ["viewer"]
     out: list[dict[str, Any]] = []
 
-    desk_src = list(NAV_DESK)
-    if "tenant_admin" in roles and not any(
-        r in roles for r in ("chartering", "operations", "finance", "demurrage", "technical", "management")
-    ):
-        desk_src = list(NAV_ADMIN_DESK)
-    elif "tenant_admin" in roles:
-        # Has a business role + admin: keep business desk, don't duplicate admin desk
-        desk_src = list(NAV_DESK)
+    # Workbench is always the first item (standalone, not inside a module)
+    workbench = {"id": "home", "label": "Workbench", "href": "/home"}
+    tasks_items = _filter_items(
+        [{"id": "tasks", "label": "Tasks", "href": "/tasks", "roles": ["*"]}], roles
+    )
+    wb_items = [workbench] + tasks_items
+    out.append({"section": "workbench", "label": "Workbench", "items": wb_items, "collapsed_default": False})
 
-    desk = _sort_desk(_filter_items(desk_src, roles), roles)
-    if desk:
-        out.append({"section": "desk", "label": "Daily", "items": desk, "collapsed_default": False})
+    # Functional modules — only include modules with visible items
+    visible_modules = []
+    for mod in MODULES:
+        items = _filter_module_items(mod, roles)
+        if items:
+            visible_modules.append({**mod, "_items": items})
 
+    for mod in _sort_modules(visible_modules, roles):
+        out.append({
+            "section": mod["id"],
+            "label": mod["label"],
+            "items": mod["_items"],
+            "collapsed_default": mod.get("collapsed_default", False),
+        })
+
+    # Master data
     if not (profile_tier == "S" and "tenant_admin" not in roles):
         master = _filter_items(NAV_MASTER, roles)
         if master:
             out.append({"section": "master", "label": "Master data", "items": master, "collapsed_default": True})
 
+    # Administration
     admin = _filter_items(NAV_ADMIN, roles)
     if admin:
         out.append({"section": "admin", "label": "Administration", "items": admin, "collapsed_default": False})
-
-    platform = _filter_items(NAV_PLATFORM, roles)
-    if platform:
-        out.append({"section": "platform", "label": "Platform", "items": platform, "collapsed_default": False})
 
     return out
 

@@ -225,7 +225,7 @@ export default function PortReferencePage() {
                 <option value="small">Small (≤10k DWT)</option>
                 <option value="medium">Medium (10-50k DWT)</option>
                 <option value="large">Large (50-150k DWT)</option>
-                <option value="xl">XL (>150k DWT)</option>
+                <option value="xl">XL {'>'}150k DWT</option>
               </select>
               <select value={rBasis} onChange={(e) => setRBasis(e.target.value)} style={inputStyle}>
                 <option value="per_call">Per Call</option>

@@ -6,10 +6,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models_wave1 import Company, Counterparty, ExchangeRate, Port, Vessel
+from app.models_wave1 import Company, Counterparty, CounterpartyContact, ExchangeRate, Port, Vessel
 from app.schemas_wave1 import (
     CompanyIn,
     CompanyOut,
+    CounterpartyContactIn,
+    CounterpartyContactOut,
     CounterpartyIn,
     CounterpartyOut,
     ExchangeRateIn,
@@ -277,6 +279,89 @@ def delete_counterparty(
         tenant_id=auth.tenant_id,
         user_id=auth.user_id,
         entity_type="counterparty",
+        row=row,
+        title=row.name,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+# ── Counterparty contacts ─────────────────────────────────────────────
+
+
+@router.get("/counterparties/{party_id}/contacts", response_model=list[CounterpartyContactOut])
+def list_contacts(
+    party_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    party = db.get(Counterparty, party_id)
+    if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+        raise HTTPException(404, "Counterparty not found")
+    rows = db.scalars(
+        select(CounterpartyContact)
+        .where(CounterpartyContact.counterparty_id == party_id, _alive(CounterpartyContact))
+        .order_by(CounterpartyContact.is_primary.desc(), CounterpartyContact.name)
+    ).all()
+    return [CounterpartyContactOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/counterparties/{party_id}/contacts", response_model=CounterpartyContactOut)
+def create_contact(
+    party_id: UUID,
+    body: CounterpartyContactIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    party = db.get(Counterparty, party_id)
+    if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+        raise HTTPException(404, "Counterparty not found")
+    row = CounterpartyContact(tenant_id=auth.tenant_id, counterparty_id=party_id, **body.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return CounterpartyContactOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/counterparties/{party_id}/contacts/{contact_id}", response_model=CounterpartyContactOut)
+def update_contact(
+    party_id: UUID,
+    contact_id: UUID,
+    body: CounterpartyContactIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    party = db.get(Counterparty, party_id)
+    if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+        raise HTTPException(404, "Counterparty not found")
+    row = db.get(CounterpartyContact, contact_id)
+    if not row or row.counterparty_id != party_id or row.deleted_at:
+        raise HTTPException(404, "Contact not found")
+    for k, v in body.model_dump().items():
+        setattr(row, k, v)
+    db.commit()
+    db.refresh(row)
+    return CounterpartyContactOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/counterparties/{party_id}/contacts/{contact_id}")
+def delete_contact(
+    party_id: UUID,
+    contact_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    party = db.get(Counterparty, party_id)
+    if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+        raise HTTPException(404, "Counterparty not found")
+    row = db.get(CounterpartyContact, contact_id)
+    if not row or row.counterparty_id != party_id or row.deleted_at:
+        raise HTTPException(404, "Contact not found")
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="counterparty_contact",
         row=row,
         title=row.name,
     )

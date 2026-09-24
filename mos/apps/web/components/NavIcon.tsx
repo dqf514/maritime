@@ -358,6 +358,53 @@ export function NavIcon({
           <rect x="3" y="14" width="18" height="6" rx="1" />
         </svg>
       );
+    case "workbench":
+      return (
+        <svg {...common}>
+          <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z" />
+        </svg>
+      );
+    case "chartering":
+      return (
+        <svg {...common}>
+          <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" />
+          <path d="M9 13h6M9 17h4" />
+        </svg>
+      );
+    case "operations":
+      return (
+        <svg {...common}>
+          <path d="M3 17h6l3-8 3 12 3-6h3" />
+        </svg>
+      );
+    case "finance":
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 7v10M9.5 9.5c.8-1 2-1.5 2.5-1.5s1.8.4 1.8 1.5S12 11 12 11s-2 .5-2 1.8 1.2 1.7 2.5 1.7 2-.5 2.5-1.2" />
+        </svg>
+      );
+    case "technical":
+      return (
+        <svg {...common}>
+          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94L6.73 20.2a2 2 0 0 1-2.83-2.83l6.73-6.73A6 6 0 0 1 18.57 2.53Z" />
+        </svg>
+      );
+    case "analytics":
+      return (
+        <svg {...common}>
+          <path d="M4 19V5M4 19h16" />
+          <path d="M8 15v-4M12 15V8M16 15v-7" />
+        </svg>
+      );
+    case "platform_mod":
+      return (
+        <svg {...common}>
+          <rect x="3" y="4" width="18" height="6" rx="1" />
+          <rect x="3" y="14" width="18" height="6" rx="1" />
+        </svg>
+      );
     default:
       return (
         <svg {...common}>
@@ -369,11 +416,20 @@ export function NavIcon({
 }
 
 export function sectionIconId(section: string): string {
-  if (section === "desk") return "sec_desk";
-  if (section === "master") return "sec_master";
-  if (section === "admin") return "sec_admin";
-  if (section === "platform") return "sec_platform";
-  return "sec_desk";
+  const map: Record<string, string> = {
+    workbench: "workbench",
+    chartering: "chartering",
+    operations: "operations",
+    finance: "finance",
+    technical: "technical",
+    analytics: "analytics",
+    master: "sec_master",
+    admin: "sec_admin",
+    platform: "sec_platform",
+    platform_mod: "platform_mod",
+    desk: "sec_desk",
+  };
+  return map[section] || "sec_desk";
 }
 
 /** Map route / widget id → icon id (same family as sidenav). */

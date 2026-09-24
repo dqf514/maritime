@@ -17,64 +17,64 @@ type Branding = {
 import { API_BASE } from "@/lib/api";
 
 const STATS = [
-  { value: "7 环", labelKey: "portal.stat.lifecycle", label: "航次全生命周期覆盖" },
-  { value: "10 类", labelKey: "portal.stat.exceptions", label: "异常风险主动监控" },
-  { value: "30 秒", labelKey: "portal.stat.estimate", label: "完成一次航次估算" },
-  { value: "12 种", labelKey: "portal.stat.sof", label: "港口事件自动识别" },
+  { value: "7 环", labelKey: "portal.stat.lifecycle", label: { en: "Voyage lifecycle coverage", zh: "航次全生命周期覆盖" } },
+  { value: "10 类", labelKey: "portal.stat.exceptions", label: { en: "Exception types monitored", zh: "异常风险主动监控" } },
+  { value: "30 秒", labelKey: "portal.stat.estimate", label: { en: "To complete a voyage estimate", zh: "完成一次航次估算" } },
+  { value: "12 种", labelKey: "portal.stat.sof", label: { en: "Port event types recognized", zh: "港口事件自动识别" } },
 ];
 
 const LIFECYCLE = [
-  { zhKey: "portal.flow.estimate", zh: "估算", en: "Estimate" },
-  { zhKey: "portal.flow.fixture", zh: "租约", en: "Fixture" },
-  { zhKey: "portal.flow.execution", zh: "执行", en: "Execution" },
-  { zhKey: "portal.flow.demurrage", zh: "滞期", en: "Demurrage" },
-  { zhKey: "portal.flow.invoicing", zh: "开票", en: "Invoicing" },
-  { zhKey: "portal.flow.settlement", zh: "结算", en: "Settlement" },
+  { zhKey: "portal.flow.estimate", zh: { en: "Estimate", zh: "估算" }, en: "Estimate" },
+  { zhKey: "portal.flow.fixture", zh: { en: "Fixture", zh: "租约" }, en: "Fixture" },
+  { zhKey: "portal.flow.execution", zh: { en: "Execution", zh: "执行" }, en: "Execution" },
+  { zhKey: "portal.flow.demurrage", zh: { en: "Demurrage", zh: "滞期" }, en: "Demurrage" },
+  { zhKey: "portal.flow.invoicing", zh: { en: "Invoicing", zh: "开票" }, en: "Invoicing" },
+  { zhKey: "portal.flow.settlement", zh: { en: "Settlement", zh: "结算" }, en: "Settlement" },
 ];
 
 const ZONES = [
   {
     titleKey: "portal.zone.ops.title",
-    title: "商业运营",
+    title: { en: "Commercial Operations", zh: "商业运营" },
     en: "Commercial Operations",
     items: [
-      { key: "portal.zone.ops.i1", text: "航次估算与 TCE 日收益测算，佣金、油价、碳成本自动算齐" },
-      { key: "portal.zone.ops.i2", text: "租约与条款全流程管理，变更审批留痕" },
-      { key: "portal.zone.ops.i3", text: "滞期与速遣索赔，SOF 一键生成计算书" },
-      { key: "portal.zone.ops.i4", text: "发票、收款与多币种结算，航次盈亏实时可见" },
+      { key: "portal.zone.ops.i1", text: { en: "Voyage estimate & TCE calculation with commission, bunker and carbon costs", zh: "航次估算与 TCE 日收益测算，佣金、油价、碳成本自动算齐" } },
+      { key: "portal.zone.ops.i2", text: { en: "Fixture and clause management with full audit trail", zh: "租约与条款全流程管理，变更审批留痕" } },
+      { key: "portal.zone.ops.i3", text: { en: "Demurrage & despatch claims with one-click SOF statement", zh: "滞期与速遣索赔，SOF 一键生成计算书" } },
+      { key: "portal.zone.ops.i4", text: { en: "Invoicing, collection and multi-currency settlement with live P&L", zh: "发票、收款与多币种结算，航次盈亏实时可见" } },
     ],
   },
   {
     titleKey: "portal.zone.collab.title",
-    title: "协同智能",
+    title: { en: "Collaboration", zh: "协同智能" },
     en: "Collaboration",
     items: [
-      { key: "portal.zone.collab.i1", text: "角色工作台：今日待办、待审批、岗位动态一屏摆好" },
-      { key: "portal.zone.collab.i2", text: "任务分派与进度跟踪，指派自动通知同事" },
-      { key: "portal.zone.collab.i3", text: "通知中心未读角标，点击直达业务页面" },
-      { key: "portal.zone.collab.i4", text: "新人上手清单与页面操作指引，到岗即上手" },
+      { key: "portal.zone.collab.i1", text: { en: "Role workbench: today's tasks, approvals and role updates in one screen", zh: "角色工作台：今日待办、待审批、岗位动态一屏摆好" } },
+      { key: "portal.zone.collab.i2", text: { en: "Task assignment and progress tracking with auto notifications", zh: "任务分派与进度跟踪，指派自动通知同事" } },
+      { key: "portal.zone.collab.i3", text: { en: "Notification center with unread badges, click to jump to business page", zh: "通知中心未读角标，点击直达业务页面" } },
+      { key: "portal.zone.collab.i4", text: { en: "Onboarding checklist and page guides, ready from day one", zh: "新人上手清单与页面操作指引，到岗即上手" } },
     ],
   },
   {
     titleKey: "portal.zone.risk.title",
-    title: "异常与风控",
+    title: { en: "Risk & Exceptions", zh: "异常与风控" },
     en: "Risk & Exceptions",
     items: [
-      { key: "portal.zone.risk.i1", text: "10 类异常主动扫描，严重 / 提醒分级呈现" },
-      { key: "portal.zone.risk.i2", text: "索赔时效倒计时，届满前自动预警" },
-      { key: "portal.zone.risk.i3", text: "证书到期提前 30 天提醒责任人" },
-      { key: "portal.zone.risk.i4", text: "数据质量一键体检，修复自动销号" },
+      { key: "portal.zone.risk.i1", text: { en: "10 exception types with severity levels", zh: "10 类异常主动扫描，严重 / 提醒分级呈现" } },
+      { key: "portal.zone.risk.i2", text: { en: "Claim deadline countdown with auto alerts", zh: "索赔时效倒计时，届满前自动预警" } },
+      { key: "portal.zone.risk.i3", text: { en: "Certificate expiry reminder 30 days ahead", zh: "证书到期提前 30 天提醒责任人" } },
+      { key: "portal.zone.risk.i4", text: { en: "One-click data quality check with auto-fix", zh: "数据质量一键体检，修复自动销号" } },
     ],
   },
   {
     titleKey: "portal.zone.gov.title",
-    title: "平台治理",
+    title: { en: "Platform Governance", zh: "平台治理" },
     en: "Platform Governance",
     items: [
-      { key: "portal.zone.gov.i1", text: "权限分级与操作留痕，全程可审计" },
-      { key: "portal.zone.gov.i2", text: "证书扫描件上传与版本管理，历史可回看" },
-      { key: "portal.zone.gov.i3", text: "核心清单一键导出 Excel，衔接既有习惯" },
-      { key: "portal.zone.gov.i4", text: "Outlook、Teams 直接集成，不换工作方式" },
+      { key: "portal.zone.gov.i1", text: { en: "Role-based permissions with full audit trail", zh: "权限分级与操作留痕，全程可审计" } },
+      { key: "portal.zone.gov.i2", text: { en: "Certificate upload and version management", zh: "证书扫描件上传与版本管理，历史可回看" } },
+      { key: "portal.zone.gov.i3", text: { en: "One-click Excel export for core lists", zh: "核心清单一键导出 Excel，衔接既有习惯" } },
+      { key: "portal.zone.gov.i4", text: { en: "Outlook and Teams integration, no workflow change", zh: "Outlook、Teams 直接集成，不换工作方式" } },
     ],
   },
 ];
@@ -125,19 +125,22 @@ export default function PortalPage() {
           <p className="land-eyebrow">
             {t("portal.hero_eyebrow", "The Operating System for Commercial Shipping")}
           </p>
-          <h1>{t("portal.hero_tagline", "让每一个航次的商业价值，清晰可见")}</h1>
+          <h1>{t("portal.hero_tagline", { en: "Make every voyage's commercial value visible", zh: "让每一个航次的商业价值，清晰可见" })}</h1>
           <p className="land-lead">
             {t(
               "portal.hero_sub",
-              "估算、租约、执行、滞期、开票、结算——为船东、租家、Operator 与船舶管理公司而生的航运商业系统。",
+              {
+                en: "Estimate, fixture, execution, demurrage, invoicing, settlement — a commercial shipping system built for owners, charterers, operators and ship managers.",
+                zh: "估算、租约、执行、滞期、开票、结算——为船东、租家、Operator 与船舶管理公司而生的航运商业系统。",
+              },
             )}
           </p>
           <div className="land-ctas">
             <Link href="/login" className="btn land-btn land-btn-primary">
-              {t("portal.sign_in", "登录")}
+              {t("portal.sign_in", "Sign in")}
             </Link>
             <a className="btn land-btn land-btn-ghost" href="/intro.html">
-              {t("portal.cta_intro", "了解详情")}
+              {t("portal.cta_intro", "Learn more")}
             </a>
           </div>
         </div>
@@ -154,7 +157,7 @@ export default function PortalPage() {
 
       <section className="land-flow" aria-labelledby="land-flow-h">
         <h2 id="land-flow-h" className="land-h2">
-          {t("portal.flow_title", "航次全生命周期，一条主线走到底")}
+          {t("portal.flow_title", { en: "Voyage lifecycle, one continuous thread", zh: "航次全生命周期，一条主线走到底" })}
         </h2>
         <ol className="land-flow-track">
           {LIFECYCLE.map((s, i) => (
@@ -169,7 +172,7 @@ export default function PortalPage() {
 
       <section className="land-zones" aria-labelledby="land-zones-h">
         <h2 id="land-zones-h" className="land-h2">
-          {t("portal.zones_title", "一套系统，管好航运生意的每一环")}
+          {t("portal.zones_title", { en: "One system to manage every link of your shipping business", zh: "一套系统，管好航运生意的每一环" })}
         </h2>
         <div className="land-zone-grid">
           {ZONES.map((z) => (
@@ -191,8 +194,8 @@ export default function PortalPage() {
           © {new Date().getFullYear()} {name}
         </span>
         <span className="land-foot-links">
-          <a href="/intro.html">{t("portal.cta_intro", "了解详情")}</a>
-          <Link href="/login">{t("portal.cta_signin", "登录 →")}</Link>
+          <a href="/intro.html">{t("portal.cta_intro", { en: "Learn more", zh: "了解详情" })}</a>
+          <Link href="/login">{t("portal.cta_signin", { en: "Sign in →", zh: "登录 →" })}</Link>
         </span>
       </footer>
     </div>

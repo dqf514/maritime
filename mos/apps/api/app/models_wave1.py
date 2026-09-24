@@ -87,8 +87,34 @@ class Counterparty(Base):
     country: Mapped[str | None] = mapped_column(Text)
     credit_rating: Mapped[str | None] = mapped_column(Text)
     sanctions_status: Mapped[str] = mapped_column(Text, default="clear")
+    address: Mapped[str | None] = mapped_column(Text)
+    tax_id: Mapped[str | None] = mapped_column(Text)
+    swift_code: Mapped[str | None] = mapped_column(Text)
+    registration_no: Mapped[str | None] = mapped_column(Text)
+    website: Mapped[str | None] = mapped_column(Text)
+    phone: Mapped[str | None] = mapped_column(Text)
+    email: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CounterpartyContact(Base):
+    __tablename__ = "counterparty_contacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    counterparty_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("counterparties.id"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    email: Mapped[str | None] = mapped_column(Text)
+    phone: Mapped[str | None] = mapped_column(Text)
+    mobile: Mapped[str | None] = mapped_column(Text)
+    department: Mapped[str | None] = mapped_column(Text)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 class ExchangeRate(Base):

@@ -272,6 +272,19 @@ UNITS: list[ItemTuple] = [
 ]
 
 
+COUNTERPARTY_TYPES: list[ItemTuple] = [
+    _c("charterer", "Charterer", "租船人", 10),
+    _c("owner", "Owner / Shipowner", "船东", 20),
+    _c("broker", "Broker", "经纪人", 30),
+    _c("agent", "Agent", "代理", 40),
+    _c("shipper", "Shipper", "托运人", 50),
+    _c("consignee", "Consignee", "收货人", 60),
+    _c("supplier", "Supplier", "供应商", 70),
+    _c("operator", "Operator", "经营人", 80),
+    _c("other", "Other", "其他", 909),
+]
+
+
 DATASETS: list[dict] = [
     {
         "code": "countries",
@@ -335,6 +348,15 @@ DATASETS: list[dict] = [
         "description_zh": "航运常用计量单位",
         "sort_order": 70,
         "items": UNITS,
+    },
+    {
+        "code": "counterparty_types",
+        "name_en": "Counterparty types",
+        "name_zh": "对手方类型",
+        "description_en": "Business relationship types for counterparties",
+        "description_zh": "对手方业务关系类型",
+        "sort_order": 80,
+        "items": COUNTERPARTY_TYPES,
     },
 ]
 
