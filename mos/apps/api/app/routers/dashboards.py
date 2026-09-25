@@ -13,6 +13,7 @@ Still synthetic (no data source yet):
 - demurrage: Avg days to settle (no settled-at timestamp on claims)
 - technical: heatmap compliance scores
 - tenant_admin: Active users, Workflow SLA, AI token burn, SelfCheck, adoption chart
+- platform_admin: All KPIs are real (tenant/user/license/connector counts)
 Fallback demo values (used only when the real query is empty) are also flagged.
 """
 
@@ -30,6 +31,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models import Module, Tenant, TenantModuleLicense, User
 from app.models_domain import (
     Charter,
     Claim,
@@ -85,6 +87,11 @@ ROLE_SCREENS = {
         "subtitle": "Adoption · licenses · workflow health",
         "accent": "#1a8a8a",
     },
+    "platform_admin": {
+        "title": "Platform Operations Wall",
+        "subtitle": "Tenants · licenses · system health",
+        "accent": "#6366f1",
+    },
 }
 
 
@@ -102,12 +109,12 @@ def _pulse(seed: str, amplitude: float = 1.0) -> float:
 
 
 def _primary_role(roles: list[str]) -> str:
+    if "platform_admin" in roles:
+        return "platform_admin"
     order = ["management", "chartering", "operations", "finance", "demurrage", "technical", "tenant_admin"]
     for r in order:
         if r in roles:
             return r
-    if "platform_admin" in roles:
-        return "management"
     return "management"
 
 
@@ -116,7 +123,7 @@ def dashboard_catalog(auth: AuthContext = Depends(require_auth)):
     roles = auth.roles or []
     items = []
     for code, meta in ROLE_SCREENS.items():
-        if code in roles or "tenant_admin" in roles or "management" in roles:
+        if code in roles or "tenant_admin" in roles or "management" in roles or "platform_admin" in roles:
             items.append({"role": code, **meta, "href": f"/dashboards/{code}"})
     if not items:
         items = [{"role": "management", **ROLE_SCREENS["management"], "href": "/dashboards/management"}]
@@ -131,9 +138,12 @@ def dashboard_snapshot(
 ):
     if role not in ROLE_SCREENS:
         raise HTTPException(404, "Unknown dashboard role")
-    # management / tenant_admin can open any wall; others their own + management view
-    if role not in (auth.roles or []) and "tenant_admin" not in (auth.roles or []) and "management" not in (
-        auth.roles or []
+    # management / tenant_admin / platform_admin can open any wall; others their own + management view
+    if (
+        role not in (auth.roles or [])
+        and "tenant_admin" not in (auth.roles or [])
+        and "management" not in (auth.roles or [])
+        and "platform_admin" not in (auth.roles or [])
     ):
         if role != _primary_role(auth.roles or []):
             raise HTTPException(403, "Role wall not permitted")
@@ -148,6 +158,7 @@ def dashboard_snapshot(
         "demurrage": _demurrage,
         "technical": _technical,
         "tenant_admin": _admin,
+        "platform_admin": _platform,
     }
     body = builders[role](db, tid)
     return {
@@ -636,6 +647,96 @@ def _admin(db: Session, tid: UUID) -> dict:
         "fleet_positions": [],
         "heatmap": [],
         "table": {"title": "", "columns": [], "rows": []},
+    }
+
+
+def _platform(db: Session, tid: UUID) -> dict:
+    _ = tid
+    tenants = db.scalars(select(Tenant).where(Tenant.code != "sys")).all()
+    total_tenants = len(tenants)
+    active_tenants = sum(1 for t in tenants if t.status == "active")
+    suspended_tenants = sum(1 for t in tenants if t.status == "suspended")
+    tenant_ids = [t.id for t in tenants]
+    total_users = 0
+    active_users = 0
+    if tenant_ids:
+        total_users = db.scalar(
+            select(func.count()).select_from(User).where(User.tenant_id.in_(tenant_ids), User.status != "deleted")
+        ) or 0
+        active_users = db.scalar(
+            select(func.count()).select_from(User).where(User.tenant_id.in_(tenant_ids), User.status == "active")
+        ) or 0
+    total_licenses = 0
+    active_licenses = 0
+    if tenant_ids:
+        total_licenses = db.scalar(
+            select(func.count()).select_from(TenantModuleLicense).where(TenantModuleLicense.tenant_id.in_(tenant_ids))
+        ) or 0
+        active_licenses = db.scalar(
+            select(func.count())
+            .select_from(TenantModuleLicense)
+            .where(TenantModuleLicense.tenant_id.in_(tenant_ids), TenantModuleLicense.status == "active")
+        ) or 0
+    modules = db.scalars(select(Module)).all()
+    module_count = len(modules)
+    connectors = db.scalars(select(ConnectorInstance)).all()
+    conn_healthy = sum(1 for c in connectors if c.status == "active" and (c.last_health or {}).get("ok", True))
+    conn_total = len(connectors)
+    tier_dist = _count_by(tenants, "profile_tier")
+    tenant_rows = []
+    for t in tenants[:20]:
+        u_count = db.scalar(select(func.count()).select_from(User).where(User.tenant_id == t.id, User.status != "deleted")) or 0
+        l_count = db.scalar(
+            select(func.count())
+            .select_from(TenantModuleLicense)
+            .where(TenantModuleLicense.tenant_id == t.id, TenantModuleLicense.status == "active")
+        ) or 0
+        tenant_rows.append(
+            {"name": t.name, "code": t.code, "status": t.status, "tier": t.profile_tier, "users": u_count, "licenses": l_count}
+        )
+    lic_by_module: dict[str, int] = {}
+    if tenant_ids:
+        for code, cnt in db.execute(
+            select(TenantModuleLicense.module_code, func.count())
+            .where(TenantModuleLicense.tenant_id.in_(tenant_ids), TenantModuleLicense.status == "active")
+            .group_by(TenantModuleLicense.module_code)
+        ).all():
+            lic_by_module[code] = cnt
+    module_adoption = [{"t": code, "v": cnt} for code, cnt in sorted(lic_by_module.items(), key=lambda x: -x[1])[:10]]
+    if not module_adoption:
+        module_adoption = [{"t": m.code, "v": 0} for m in modules[:8]]
+    return {
+        "kpis": [
+            _kpi("Tenants", total_tenants, "", None, "neutral"),
+            _kpi("Active", active_tenants, "", None, "good"),
+            _kpi("Suspended", suspended_tenants, "", None, "warn" if suspended_tenants else "good"),
+            _kpi("Total users", total_users, "", None, "neutral"),
+            _kpi("Active users", active_users, "", None, "good"),
+            _kpi("Licenses (active)", f"{active_licenses}/{total_licenses}", "", None, "neutral"),
+            _kpi("Modules", module_count, "", None, "neutral"),
+            _kpi(
+                "Connectors",
+                f"{conn_healthy}/{conn_total}" if conn_total else "0",
+                "",
+                None,
+                "good" if conn_healthy == conn_total else "warn",
+            ),
+        ],
+        "charts": [
+            {"id": "tier_dist", "title": "Tenants by tier", "type": "bar", "series": tier_dist},
+            {"id": "module_adoption", "title": "License adoption by module", "type": "bar", "series": module_adoption},
+        ],
+        "table": {
+            "title": "Tenant overview",
+            "columns": ["name", "code", "status", "tier", "users", "licenses"],
+            "rows": tenant_rows,
+        },
+        "feed": [
+            {"tone": "info", "text": f"Platform running {total_tenants} tenant(s)", "ts": _now().isoformat()},
+            {"tone": "good" if not suspended_tenants else "warn", "text": f"{suspended_tenants} suspended tenant(s)" if suspended_tenants else "All tenants active", "ts": _now().isoformat()},
+        ],
+        "fleet_positions": [],
+        "heatmap": [],
     }
 
 
