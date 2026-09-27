@@ -209,6 +209,26 @@ export async function apiGet(path: string) {
   return res.json();
 }
 
+/** U1 列表协议: paged list envelope returned by migrated list endpoints. */
+export type Page<T> = { items: T[]; total: number; limit: number; offset: number };
+
+/** Fetch a list endpoint with the U1 pagination envelope (`items/total/limit/offset`).
+ * Endpoints that still return a bare array are wrapped into a Page with
+ * `total = items.length` so callers work during the migration. */
+export async function apiList<T>(
+  path: string,
+  params?: Record<string, string | number | null | undefined>,
+): Promise<Page<T>> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (v !== null && v !== undefined && v !== "") qs.set(k, String(v));
+  }
+  const query = qs.toString();
+  const data = await apiGet(query ? `${path}${path.includes("?") ? "&" : "?"}${query}` : path);
+  if (Array.isArray(data)) return { items: data, total: data.length, limit: data.length, offset: 0 };
+  return data as Page<T>;
+}
+
 export async function apiPost(path: string, body?: unknown) {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -341,6 +361,14 @@ export type HomeSummary = {
   schedule: { kind: string; title: string; subtitle: string; start: string; href: string }[];
   kpis: { key: string; label: { en: string; zh?: string }; value: string; hint?: string; href?: string }[];
   exceptions?: { critical: number; warning: number };
+  queues?: HomeQueue[];
+};
+
+// U3 工作队列：例外驱动的待办单据（行内直达单据详情）
+export type HomeQueue = {
+  id: string;
+  label: { en: string; zh?: string };
+  items: { id: string; title: string; meta?: string; href: string; urgency?: "critical" | "warning" | "info" }[];
 };
 
 export type ExceptionKind =

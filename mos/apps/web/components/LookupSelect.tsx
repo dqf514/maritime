@@ -48,6 +48,29 @@ function cacheGet(key: string): LookupItem[] | null {
   return hit.rows;
 }
 
+// U9 最近使用：按数据集记住最近选择，置顶显示（日常工作减少翻找）
+const RECENT_MAX = 5;
+
+function recentGet(dataset: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = JSON.parse(localStorage.getItem(`marios_recent_${tenantScope()}_${dataset}`) || "[]");
+    return Array.isArray(raw) ? raw.slice(0, RECENT_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+function recentPush(dataset: string, code: string) {
+  if (typeof window === "undefined" || !code) return;
+  const next = [code, ...recentGet(dataset).filter((c) => c !== code)].slice(0, RECENT_MAX);
+  try {
+    localStorage.setItem(`marios_recent_${tenantScope()}_${dataset}`, JSON.stringify(next));
+  } catch {
+    // 忽略存储失败
+  }
+}
+
 export function LookupSelect({
   dataset,
   value,
@@ -104,6 +127,18 @@ export function LookupSelect({
     );
   }, [items, filter]);
 
+  // U9：未过滤时最近使用置顶（optgroup），过滤时走普通列表
+  const recents = useMemo(() => {
+    if (filter.trim()) return [];
+    return recentGet(dataset)
+      .map((c) => items.find((it) => it.code === c))
+      .filter((it): it is LookupItem => Boolean(it));
+  }, [items, dataset, filter]);
+  const rest = useMemo(
+    () => filtered.filter((it) => !recents.some((r) => r.code === it.code)),
+    [filtered, recents],
+  );
+
   const longList = items.length > 40;
   const valueInList = items.some((it) => it.code === value);
 
@@ -121,7 +156,10 @@ export function LookupSelect({
       ) : null}
       <select
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          recentPush(dataset, e.target.value);
+          onChange(e.target.value);
+        }}
         required={required}
         disabled={disabled || !loaded}
       >
@@ -131,7 +169,16 @@ export function LookupSelect({
             {value} ({t("lookup.legacy", "legacy value")})
           </option>
         ) : null}
-        {filtered.map((it) => (
+        {recents.length ? (
+          <optgroup label={t("lookup.recent", "最近使用")}>
+            {recents.map((it) => (
+              <option key={`r-${it.code}`} value={it.code}>
+                {showCode ? `${it.code} — ${it.label}` : it.label}
+              </option>
+            ))}
+          </optgroup>
+        ) : null}
+        {rest.map((it) => (
           <option key={it.code} value={it.code}>
             {showCode ? `${it.code} — ${it.label}` : it.label}
           </option>

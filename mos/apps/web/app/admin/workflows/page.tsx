@@ -6,6 +6,7 @@ import { AppShell } from "@/components/AppShell";
 import { RecordModal } from "@/components/RecordModal";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Step = { name: string; role_code: string };
 type Wf = {
@@ -28,9 +29,9 @@ function normalizeSteps(raw: Wf["steps"]): Step[] {
 
 export default function WorkflowsAdminPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Wf[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
-  const [msg, setMsg] = useState("");
   const [open, setOpen] = useState<Wf | null>(null);
   const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({
@@ -49,7 +50,7 @@ export default function WorkflowsAdminPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.wf.admin_required", "需要租户管理员")));
+    load().catch(() => toast.success(t("page.wf.admin_required", "需要租户管理员")));
   }, [t]);
 
   function openCreate() {
@@ -106,12 +107,12 @@ export default function WorkflowsAdminPage() {
           enabled: edit.enabled,
         });
       }
-      setMsg(t("common.saved", "已保存"));
+      toast.success(t("common.saved", "已保存"));
       setOpen(null);
       setCreating(false);
       await load();
     } catch {
-      setMsg(t("common.failed", "保存失败"));
+      toast.success(t("common.failed", "保存失败"));
     } finally {
       setSaving(false);
     }
@@ -142,7 +143,6 @@ export default function WorkflowsAdminPage() {
           {t("page.wf.create", "新建工作流")}
         </button>
       </div>
-      {msg ? <p>{msg}</p> : null}
       <div className="panel">
         <table className="table">
           <thead>

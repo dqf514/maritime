@@ -6,6 +6,7 @@ import { AppShell } from "@/components/AppShell";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost, generateTempPassword } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type UserRow = {
   id: string;
@@ -25,6 +26,7 @@ const BUSINESS_ROLES_HINT =
 
 export default function UsersAdminPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [orgs, setOrgs] = useState<OrgUnit[]>([]);
@@ -33,7 +35,6 @@ export default function UsersAdminPage() {
   const [createRoles, setCreateRoles] = useState<string[]>(["viewer"]);
   const [createOrg, setCreateOrg] = useState("");
   const [filterOrg, setFilterOrg] = useState("");
-  const [msg, setMsg] = useState("");
   const [open, setOpen] = useState<UserRow | null>(null);
   const [edit, setEdit] = useState({
     full_name: "",
@@ -58,7 +59,7 @@ export default function UsersAdminPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.users.admin_required", "需要租户管理员角色")));
+    load().catch(() => toast.success(t("page.users.admin_required", "需要租户管理员角色")));
   }, [t]);
 
   function toggleRole(list: string[], code: string): string[] {
@@ -84,7 +85,7 @@ export default function UsersAdminPage() {
     setCreateRoles(["viewer"]);
     setCreateOrg("");
     setInitialPw(password);
-    setMsg(t("page.users.created", "用户已创建；初始密码已生成，请通过安全渠道传达。"));
+    toast.success(t("page.users.created", "用户已创建；初始密码已生成，请通过安全渠道传达。"));
     await load();
   }
 
@@ -119,7 +120,7 @@ export default function UsersAdminPage() {
         org_unit_id: edit.org_unit_id || null,
         clear_org: clearOrg,
       });
-      setMsg(t("common.saved", "已保存"));
+      toast.success(t("common.saved", "已保存"));
       setOpen(null);
       await load();
     } finally {
@@ -132,11 +133,11 @@ export default function UsersAdminPage() {
     setSaving(true);
     try {
       await apiDelete(`/api/v1/admin/users/${open.id}`);
-      setMsg(t("common.recycled", "已移入回收站"));
+      toast.success(t("common.recycled", "已移入回收站"));
       setOpen(null);
       await load();
     } catch (err: any) {
-      setMsg(String(err?.detail?.code || err?.message || t("common.failed", "失败")));
+      toast.success(String(err?.detail?.code || err?.message || t("common.failed", "失败")));
     } finally {
       setSaving(false);
     }
@@ -184,7 +185,6 @@ export default function UsersAdminPage() {
           {t("nav.recycle", "回收站")}
         </Link>
       </div>
-      {msg ? <p>{msg}</p> : null}
       {initialPw ? (
         <p className="flash">
           {t("page.users.pw_ready", "初始密码已生成（仅此一次，复制后即不再显示）。")}{" "}
@@ -193,7 +193,7 @@ export default function UsersAdminPage() {
           </button>
         </p>
       ) : null}
-      <form className="panel" onSubmit={(e) => create(e).catch(() => setMsg(t("page.users.create_fail", "创建失败")))}>
+      <form className="panel" onSubmit={(e) => create(e).catch(() => toast.success(t("page.users.create_fail", "创建失败")))}>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
           <label>
             {t("page.users.full_name", "姓名")}

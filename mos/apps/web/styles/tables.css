@@ -212,3 +212,60 @@
     -webkit-overflow-scrolling: touch;
   }
 }
+
+/* U6 列管理 */
+.dt-colmenu { position: relative; display: flex; justify-content: flex-end; margin-bottom: 0.35rem; }
+.dt-colmenu-pop {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #d7e0e6);
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 160px;
+  box-shadow: 0 6px 18px rgba(15, 28, 40, 0.12);
+  font-size: 0.84rem;
+}
+.dt-colmenu-pop label { display: flex; gap: 0.45rem; align-items: baseline; margin: 0; }
+
+/* U6 保存视图 */
+.saved-views { display: flex; gap: 0.4rem; align-items: center; }
+.saved-views-select, .saved-views-name {
+  height: 30px;
+  border: 1px solid var(--border, #d7e0e6);
+  border-radius: 6px;
+  padding: 0 0.5rem;
+  font-size: 0.84rem;
+  background: var(--surface, #fff);
+}
+.saved-views-name { width: 130px; }
+
+/* U4 单据打印模板 */
+.print-doc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.75rem 0 1rem;
+  border-bottom: 2px solid var(--border, #d7e0e6);
+  margin-bottom: 1rem;
+}
+.print-doc-title { text-align: right; }
+@media print {
+  .print-doc-head { break-inside: avoid; }
+  .print-doc-body .panel { border: none; box-shadow: none; padding: 0; }
+}
+@media print { .no-print { display: none !important; } }
+.dt-inline-edit {
+  width: 100%;
+  min-width: 60px;
+  border: 1px solid var(--accent, #1A9B96);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: inherit;
+  background: var(--surface, #fff);
+}

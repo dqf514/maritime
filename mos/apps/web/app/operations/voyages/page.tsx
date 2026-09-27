@@ -8,6 +8,7 @@ import { ExportButton } from "@/components/ExportButton";
 import { PageGuide } from "@/components/PageGuide";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type RefItem = { id: string; name: string; unlocode?: string };
 type Voyage = { id: string; voyage_no: string; status: string; cargo: string | null; vessel_id: string | null };
@@ -83,6 +84,7 @@ function fromLocalInput(v: string) {
 
 export default function VoyagesPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Voyage[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [ports, setPorts] = useState<RefItem[]>([]);
@@ -92,7 +94,6 @@ export default function VoyagesPage() {
   const [selectedPc, setSelectedPc] = useState<string>("");
   const [sofEvents, setSofEvents] = useState<Array<{ id: string; event_code: string; event_at: string | null; port_call_id: string }>>([]);
   const [twin, setTwin] = useState<Twin | null>(null);
-  const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -226,7 +227,7 @@ export default function VoyagesPage() {
         voyage_no: vno,
         cargo: newCargo || null,
       });
-      setMsg(t("page.voyages.created", "Voyage {no} created", { no: created.voyage_no }));
+      toast.success(t("page.voyages.created", "Voyage {no} created", { no: created.voyage_no }));
       setNewVoyageNo("");
       setNewCargo("");
       const list = await load();
@@ -247,7 +248,7 @@ export default function VoyagesPage() {
     setBusy(true);
     try {
       await apiPost(`/api/v1/voyages/${id}/transition`, { target });
-      setMsg(t("page.voyages.moved", "Voyage → {target}", { target }));
+      toast.success(t("page.voyages.moved", "Voyage → {target}", { target }));
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -264,7 +265,7 @@ export default function VoyagesPage() {
         voyage_no: selected.voyage_no,
         cargo: selected.cargo,
       });
-      setMsg(t("common.saved", "已保存"));
+      toast.success(t("common.saved", "已保存"));
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -280,7 +281,7 @@ export default function VoyagesPage() {
     try {
       await apiDelete(`/api/v1/voyages/${selected.id}`);
       setSelectedId(null);
-      setMsg(t("common.recycled", "已移入回收站"));
+      toast.success(t("common.recycled", "已移入回收站"));
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -308,7 +309,7 @@ export default function VoyagesPage() {
         etd: fromLocalInput(pcEtd),
         agent: pcAgent || null,
       });
-      setMsg(t("page.voyages.pc_ok", "Port call added"));
+      toast.success(t("page.voyages.pc_ok", "Port call added"));
       setPcSeq(String((Number(pcSeq) || 1) + 1));
       await loadPortCalls(selectedId);
     } catch (ex) {
@@ -335,7 +336,7 @@ export default function VoyagesPage() {
         event_code: sofCode,
         event_at: fromLocalInput(sofAt) || new Date().toISOString(),
       });
-      setMsg(t("page.voyages.sof_ok", "SOF {code} recorded", { code: sofCode }));
+      toast.success(t("page.voyages.sof_ok", "SOF {code} recorded", { code: sofCode }));
       if (selectedId) await loadPortCalls(selectedId);
     } catch (ex) {
       setErr(String(ex));
@@ -359,7 +360,7 @@ export default function VoyagesPage() {
         reason: ohReason || null,
         deduct_hire: ohDeduct,
       });
-      setMsg(t("page.voyages.oh_ok", "Off-hire opened"));
+      toast.success(t("page.voyages.oh_ok", "Off-hire opened"));
       setOhStart("");
       setOhReason("");
       await loadPortCalls(selectedId);
@@ -380,7 +381,7 @@ export default function VoyagesPage() {
     setErr("");
     try {
       await apiPost(`/api/v1/off-hire/${id}/close`, { end_at: fromLocalInput(ohCloseAt) });
-      setMsg(t("page.voyages.oh_closed", "Off-hire closed"));
+      toast.success(t("page.voyages.oh_closed", "Off-hire closed"));
       setOhCloseAt("");
       await loadPortCalls(selectedId);
     } catch (ex) {
@@ -419,7 +420,7 @@ export default function VoyagesPage() {
         sea_state: res?.sea_state ?? null,
         current_kn: res?.current_kn ?? null,
       });
-      setMsg(t("page.voyages.noon_ok", "Noon report filed"));
+      toast.success(t("page.voyages.noon_ok", "Noon report filed"));
       await loadPortCalls(selectedId);
     } catch (ex) {
       setErr(String(ex));
@@ -455,7 +456,6 @@ export default function VoyagesPage() {
         </div>
       </div>
 
-      {msg ? <p className="flash">{msg}</p> : null}
       {err ? <p className="flash-err">{err}</p> : null}
 
       <div className="desk-split">

@@ -66,7 +66,7 @@ function exportCsv(rows: VoyageRow[]) {
   const lines = [cols.join(",")];
   for (const r of rows) {
     const cells: (string | number)[] = [r.voyage_no, r.status, r.cargo ?? ""];
-    for (const col of ["estimate", "actual", "posted"]) {
+    for (const col of ["estimate", "actual", "posted"] as const) {
       for (const k of LINE_KEYS) cells.push(r.columns[col][k] ?? 0);
       const t = r.totals[col as "estimate" | "actual" | "posted"];
       cells.push(t.revenue, t.cost, t.pnl);

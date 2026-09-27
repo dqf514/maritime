@@ -7,6 +7,7 @@ import { PageGuide } from "@/components/PageGuide";
 import { CertOverview, VesselCertificates } from "@/components/ShipCertificates";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 const DEMO_TOOLS = process.env.NEXT_PUBLIC_DEMO_TOOLS === "1";
 
@@ -42,13 +43,13 @@ type CertRow = { code: string; expires_on: string };
 
 export default function ShipManagementPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [tab, setTab] = useState<"fleet" | "certs">("fleet");
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [adapters, setAdapters] = useState<Adapter[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<any>(null);
   const [logs, setLogs] = useState<any[]>([]);
-  const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
   const [selWo, setSelWo] = useState<any>(null);
@@ -64,7 +65,7 @@ export default function ShipManagementPage() {
   const [certAlerts, setCertAlerts] = useState<CertAlert[]>([]);
 
   useEffect(() => {
-    apiGet("/api/v1/ship/fleet").then(setFleet).catch(() => setMsg(t("page.ship.module_required", "Ship management module required")));
+    apiGet("/api/v1/ship/fleet").then(setFleet).catch(() => toast.success(t("page.ship.module_required", "Ship management module required")));
     apiGet("/api/v1/ship/integrations/adapters").then(setAdapters).catch(() => undefined);
     apiGet("/api/v1/ship/integrations/sync-logs").then(setLogs).catch(() => undefined);
     apiGet("/api/v1/ship/crew/cert-alerts?days=60")
@@ -83,7 +84,7 @@ export default function ShipManagementPage() {
       setDetail(await apiGet(`/api/v1/ship/vessels/${id}`));
     } catch (e: any) {
       setDetail(null);
-      setMsg(e?.message || t("common.failed", "Failed"));
+      toast.success(e?.message || t("common.failed", "Failed"));
     }
   }
 
@@ -115,11 +116,11 @@ export default function ShipManagementPage() {
     try {
       const res = await apiPatch(`/api/v1/ship/work-orders/${selWo.id}`, { status: target });
       setWoWarnings(Array.isArray(res?.warnings) ? res.warnings.map((w: unknown) => String(w)) : []);
-      setMsg(t("page.ship.wo_moved", "工单状态 → {target}", { target }));
+      toast.success(t("page.ship.wo_moved", "工单状态 → {target}", { target }));
       setSelWo((prev: any) => (prev ? { ...prev, status: res?.status || target } : prev));
       await refreshDetail();
     } catch (e: any) {
-      setMsg(e?.message || t("common.failed", "Failed"));
+      toast.success(e?.message || t("common.failed", "Failed"));
     } finally {
       setBusy(false);
     }
@@ -127,18 +128,18 @@ export default function ShipManagementPage() {
 
   async function addWoSpare() {
     if (!selWo || !woPart || !(Number(woQty) > 0)) {
-      setMsg(t("page.ship.spare_need", "请选择备件并填写数量"));
+      toast.success(t("page.ship.spare_need", "请选择备件并填写数量"));
       return;
     }
     setBusy(true);
     try {
       const res = await apiPost(`/api/v1/ship/work-orders/${selWo.id}/spares`, { part_id: woPart, qty: Number(woQty) });
       setWoWarnings(Array.isArray(res?.warnings) ? res.warnings.map((w: unknown) => String(w)) : []);
-      setMsg(t("page.ship.spare_ok", "备件消耗已登记"));
+      toast.success(t("page.ship.spare_ok", "备件消耗已登记"));
       const rows = await apiGet(`/api/v1/ship/work-orders/${selWo.id}/spares`).catch(() => []);
       setWoSpares(Array.isArray(rows) ? rows : []);
     } catch (e: any) {
-      setMsg(e?.message || t("common.failed", "Failed"));
+      toast.success(e?.message || t("common.failed", "Failed"));
     } finally {
       setBusy(false);
     }
@@ -156,10 +157,10 @@ export default function ShipManagementPage() {
         .map((r) => ({ code: r.code.trim(), expires_on: r.expires_on || null }));
       if (editingCrew) {
         await apiPatch(`/api/v1/ship/crew/${editingCrew.id}`, { certificates });
-        setMsg(t("page.ship.crew_certs_ok", "船员证书已更新"));
+        toast.success(t("page.ship.crew_certs_ok", "船员证书已更新"));
       } else {
         if (!crewName.trim() || !crewRank.trim()) {
-          setMsg(t("page.ship.crew_need", "请填写船员姓名与职务"));
+          toast.success(t("page.ship.crew_need", "请填写船员姓名与职务"));
           setBusy(false);
           return;
         }
@@ -169,7 +170,7 @@ export default function ShipManagementPage() {
           rank: crewRank.trim(),
           certificates,
         });
-        setMsg(t("page.ship.crew_ok", "船员已登记"));
+        toast.success(t("page.ship.crew_ok", "船员已登记"));
       }
       setCrewName("");
       setCrewRank("");
@@ -178,7 +179,7 @@ export default function ShipManagementPage() {
       await refreshDetail();
       await refreshCertAlerts();
     } catch (e: any) {
-      setMsg(e?.message || t("common.failed", "Failed"));
+      toast.success(e?.message || t("common.failed", "Failed"));
     } finally {
       setBusy(false);
     }
@@ -186,7 +187,7 @@ export default function ShipManagementPage() {
 
   async function inboundDemo() {
     if (!fleet?.vessels?.[0]) {
-      setMsg(t("page.ship.no_vessel", "No vessel in fleet"));
+      toast.success(t("page.ship.no_vessel", "No vessel in fleet"));
       return;
     }
     const imo = fleet.vessels[0].imo;
@@ -198,11 +199,11 @@ export default function ShipManagementPage() {
         vessel_imo: imo,
         data: { title: "External PMS corrective job", priority: "high", status: "open", category: "defect" },
       });
-      setMsg(t("page.ship.inbound_ok", "Inbound PMS sync accepted — refresh fleet."));
+      toast.success(t("page.ship.inbound_ok", "Inbound PMS sync accepted — refresh fleet."));
       setFleet(await apiGet("/api/v1/ship/fleet"));
       setLogs(await apiGet("/api/v1/ship/integrations/sync-logs"));
     } catch (e: any) {
-      setMsg(e?.message || t("page.ship.inbound_fail", "Inbound sync failed"));
+      toast.success(e?.message || t("page.ship.inbound_fail", "Inbound sync failed"));
     }
   }
 
@@ -227,7 +228,6 @@ export default function ShipManagementPage() {
           ) : null}
         </div>
       </div>
-      {msg ? <p className="flash">{msg}</p> : null}
 
       <div className="page-tabs" role="tablist">
         <button

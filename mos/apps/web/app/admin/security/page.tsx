@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { API_BASE as API, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Policy = {
   password_enabled: boolean;
@@ -29,6 +30,7 @@ type Policy = {
 
 export default function TenantSecurityPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [domains, setDomains] = useState("");
   const [msHint, setMsHint] = useState("");
@@ -38,7 +40,6 @@ export default function TenantSecurityPage() {
   const [inviteName, setInviteName] = useState("");
   const [invites, setInvites] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
-  const [msg, setMsg] = useState("");
   const [demoToken, setDemoToken] = useState("");
 
   async function load() {
@@ -53,7 +54,7 @@ export default function TenantSecurityPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.security.admin_required", "需要租户管理员")));
+    load().catch(() => toast.success(t("page.security.admin_required", "需要租户管理员")));
   }, [t]);
 
   async function save(e: FormEvent) {
@@ -69,7 +70,7 @@ export default function TenantSecurityPage() {
       google_hosted_domain: googleHd.trim() || null,
       sso_notes: ssoNotes.trim() || null,
     });
-    setMsg(t("page.security.updated", "登录与安全策略已更新"));
+    toast.success(t("page.security.updated", "登录与安全策略已更新"));
     await load();
   }
 
@@ -81,7 +82,7 @@ export default function TenantSecurityPage() {
       role_codes: ["viewer"],
     });
     setDemoToken(data.demo_token || "");
-    setMsg(t("page.security.invite_sent", "已向 {email} 发送邀请（控制台邮件通道）", { email: inviteEmail }));
+    toast.success(t("page.security.invite_sent", "已向 {email} 发送邀请（控制台邮件通道）", { email: inviteEmail }));
     setInviteEmail("");
     setInviteName("");
     await load();
@@ -90,7 +91,7 @@ export default function TenantSecurityPage() {
   if (!policy) {
     return (
       <AppShell>
-        <p>{msg || t("common.loading", "加载中…")}</p>
+        <p>{t("common.loading", "加载中…")}</p>
       </AppShell>
     );
   }
@@ -108,7 +109,6 @@ export default function TenantSecurityPage() {
           "选择平台已批准的登录方式，强制邮箱验证 / 仅邀请，并限制企业邮箱域名。SSO 密钥由平台运维配置。",
         )}
       </p>
-      {msg ? <p className="flash">{msg}</p> : null}
       {demoToken ? (
         <p className="muted">
           {t("page.security.demo_token", "演示邀请令牌:")} <code>{demoToken}</code> —{" "}
@@ -163,7 +163,7 @@ export default function TenantSecurityPage() {
         </p>
       </div>
 
-      <form className="panel" onSubmit={(e) => save(e).catch(() => setMsg(t("page.security.save_fail", "保存失败")))}>
+      <form className="panel" onSubmit={(e) => save(e).catch(() => toast.success(t("page.security.save_fail", "保存失败")))}>
         <h2>{t("page.security.methods", "登录方式")}</h2>
         <div className="check-grid">
           {(
@@ -234,7 +234,7 @@ export default function TenantSecurityPage() {
         </button>
       </form>
 
-      <form className="panel" onSubmit={(e) => invite(e).catch(() => setMsg(t("page.security.invite_fail", "邀请失败")))}>
+      <form className="panel" onSubmit={(e) => invite(e).catch(() => toast.success(t("page.security.invite_fail", "邀请失败")))}>
         <h2>{t("page.security.invite_title", "邀请用户")}</h2>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
           <label>

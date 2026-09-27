@@ -7,6 +7,7 @@ import { LookupSelect } from "@/components/LookupSelect";
 import { RecordModal } from "@/components/RecordModal";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Ref = { id: string; name: string; voyage_no?: string };
 type Order = {
@@ -27,10 +28,10 @@ type Order = {
 
 export default function BunkerDeskPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Order[]>([]);
   const [vessels, setVessels] = useState<Ref[]>([]);
   const [voyages, setVoyages] = useState<Ref[]>([]);
-  const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<Order | null>(null);
@@ -83,7 +84,7 @@ export default function BunkerDeskPage() {
           : { unit_price: Number(form.unit_price) || 0 }),
         rob_before: form.rob_before === "" ? null : Number(form.rob_before),
       });
-      setMsg(t("page.bunker.created", "Bunker order created"));
+      toast.success(t("page.bunker.created", "Bunker order created"));
       await load();
     } catch (ex: any) {
       if (ex?.status === 422 && ex?.detail?.code === "NO_INDEX_QUOTE") {
@@ -119,7 +120,7 @@ export default function BunkerDeskPage() {
       await loadInquiries(open.id);
       setInqSupplier("");
       setInqPrice("");
-      setMsg(t("page.bunker.inq_ok", "报价已登记"));
+      toast.success(t("page.bunker.inq_ok", "报价已登记"));
     } catch (ex) {
       setErr(String(ex));
     } finally {
@@ -136,7 +137,7 @@ export default function BunkerDeskPage() {
       await loadInquiries(open.id);
       setOpen({ ...open, unit_price: res.unit_price });
       setForm((f) => ({ ...f, unit_price: String(res.unit_price) }));
-      setMsg(t("page.bunker.inq_accepted", "已采纳报价并回写订单价格"));
+      toast.success(t("page.bunker.inq_accepted", "已采纳报价并回写订单价格"));
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -168,7 +169,7 @@ export default function BunkerDeskPage() {
       if (consumption) q.set("consumption", consumption);
       const res = await apiPost(`/api/v1/bunker-orders/${id}/transition?${q.toString()}`);
       if (Array.isArray(res?.warnings) && res.warnings.length) setWarnings(res.warnings.map((w: unknown) => String(w)));
-      setMsg(t("page.bunker.moved", "Status → {target}", { target }));
+      toast.success(t("page.bunker.moved", "Status → {target}", { target }));
       setOpen(null);
       await load();
     } catch (ex) {
@@ -190,7 +191,7 @@ export default function BunkerDeskPage() {
         vessel_id: form.vessel_id || null,
         voyage_id: form.voyage_id || null,
       });
-      setMsg(t("common.saved", "Saved"));
+      toast.success(t("common.saved", "Saved"));
       setOpen(null);
       await load();
     } catch (ex) {
@@ -234,7 +235,6 @@ export default function BunkerDeskPage() {
           {t("page.connectors.title", "Integration Hub")}
         </Link>
       </div>
-      {msg ? <p className="flash">{msg}</p> : null}
       {err ? <p className="flash-err">{err}</p> : null}
       {warnings.length ? (
         <div className="panel" style={{ borderColor: "var(--warn)" }}>

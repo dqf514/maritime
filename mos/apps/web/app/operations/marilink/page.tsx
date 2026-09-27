@@ -5,6 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { RecordModal } from "@/components/RecordModal";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type ShipReport = {
   id: string;
@@ -25,12 +26,12 @@ type ShipForm = {
 
 export default function MariLinkPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [reports, setReports] = useState<ShipReport[]>([]);
   const [forms, setForms] = useState<ShipForm[]>([]);
   const [filter, setFilter] = useState<string>("");
   const [open, setOpen] = useState<ShipReport | null>(null);
   const [reviewNotes, setReviewNotes] = useState("");
-  const [msg, setMsg] = useState("");
 
   async function load() {
     const params = filter ? `?form_type=${filter}` : "";
@@ -44,7 +45,7 @@ export default function MariLinkPage() {
 
   async function seedPresets() {
     await apiPost("/api/v1/marilink/forms/seed-presets", {});
-    setMsg(t("page.marilink.presets_seeded", "Form presets seeded"));
+    toast.success(t("page.marilink.presets_seeded", "Form presets seeded"));
     await load();
   }
 
@@ -54,7 +55,7 @@ export default function MariLinkPage() {
       action: "approve",
       notes: reviewNotes,
     });
-    setMsg(t("page.marilink.approved", "Report approved and imported"));
+    toast.success(t("page.marilink.approved", "Report approved and imported"));
     setOpen(null);
     setReviewNotes("");
     await load();
@@ -66,7 +67,7 @@ export default function MariLinkPage() {
       action: "reject",
       notes: reviewNotes,
     });
-    setMsg(t("page.marilink.rejected", "Report rejected"));
+    toast.success(t("page.marilink.rejected", "Report rejected"));
     setOpen(null);
     setReviewNotes("");
     await load();
@@ -90,11 +91,6 @@ export default function MariLinkPage() {
         </button>
       </div>
 
-      {msg && (
-        <div style={{ padding: "8px 12px", background: "var(--green-50)", color: "var(--green-700)", borderRadius: 6, marginBottom: 16 }}>
-          {msg}
-        </div>
-      )}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <select

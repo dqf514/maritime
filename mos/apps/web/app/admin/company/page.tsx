@@ -4,9 +4,11 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 export default function CompanyBrandPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [form, setForm] = useState({
     legal_name: "",
     display_name: "",
@@ -17,26 +19,24 @@ export default function CompanyBrandPage() {
     phone: "",
     brand_primary: "#1A9B96",
   });
-  const [msg, setMsg] = useState("");
 
   useEffect(() => {
     apiGet("/api/v1/admin/company-profile")
       .then((p) => setForm((f) => ({ ...f, ...p })))
-      .catch(() => setMsg(t("page.company.admin_required", "Tenant admin required")));
+      .catch(() => toast.success(t("page.company.admin_required", "Tenant admin required")));
   }, [t]);
 
   async function save(e: FormEvent) {
     e.preventDefault();
     await apiPut("/api/v1/admin/company-profile", form);
-    setMsg(t("page.company.saved", "Company brand saved — appears in Shell & documents."));
+    toast.success(t("page.company.saved", "Company brand saved — appears in Shell & documents."));
   }
 
   return (
     <AppShell>
       <h1 style={{ marginTop: 0 }}>{t("page.company.title", "Company & brand")}</h1>
       <p className="page-sub">{t("page.company.sub", "Tenant company profile shown in shell and documents.")}</p>
-      {msg ? <p>{msg}</p> : null}
-      <form className="panel" onSubmit={(e) => save(e).catch(() => setMsg(t("common.failed", "Failed")))}>
+      <form className="panel" onSubmit={(e) => save(e).catch(() => toast.success(t("common.failed", "Failed")))}>
         <div className="kv-grid">
           {Object.entries(form).map(([k, v]) => (
             <label key={k}>

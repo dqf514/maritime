@@ -32,11 +32,15 @@ export function RecordModal({
 }: Props) {
   const { t } = useI18n();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // U5 表单安全网：任意表单改动置 dirty，关闭/刷新前确认
+  const [dirty, setDirty] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<Element | null>(null);
 
   useEffect(() => {
     if (open) {
+      setDirty(false);
       triggerRef.current = document.activeElement;
       document.body.style.overflow = "hidden";
 
@@ -58,11 +62,30 @@ export function RecordModal({
     };
   }, [open]);
 
+  // 刷新/关标签页守卫
+  useEffect(() => {
+    if (!open || !dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [open, dirty]);
+
+  const requestClose = useCallback(() => {
+    if (dirty) {
+      setConfirmClose(true);
+      return;
+    }
+    onClose();
+  }, [dirty, onClose]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        requestClose();
         return;
       }
       if (e.key === "Tab" && modalRef.current) {
@@ -79,13 +102,13 @@ export function RecordModal({
         }
       }
     },
-    [onClose],
+    [requestClose],
   );
 
   if (!open) return null;
 
   const content = (
-    <div className="record-modal-backdrop" role="presentation" onClick={onClose}>
+    <div className="record-modal-backdrop" role="presentation" onClick={requestClose}>
       <div
         ref={modalRef}
         className="record-modal"
@@ -97,15 +120,19 @@ export function RecordModal({
       >
         <header className="record-modal-head">
           <h2>{title}</h2>
-          <button type="button" className="icon-btn record-modal-x" onClick={onClose} aria-label={t("common.close", "关闭")}>
+          <button type="button" className="icon-btn record-modal-x" onClick={requestClose} aria-label={t("common.close", "关闭")}>
             ×
           </button>
         </header>
         <form
           className="record-modal-body"
+          onChange={() => setDirty(true)}
           onSubmit={(e) => {
             e.preventDefault();
-            if (canEdit && onSave) onSave(e);
+            if (canEdit && onSave) {
+              setDirty(false);
+              onSave(e);
+            }
           }}
         >
           {children}
@@ -123,7 +150,7 @@ export function RecordModal({
               <span />
             )}
             <div className="record-modal-actions">
-              <button type="button" className="btn btn-ghost" onClick={onClose}>
+              <button type="button" className="btn btn-ghost" onClick={requestClose}>
                 {t("common.cancel", "取消")}
               </button>
               {canEdit && onSave ? (
@@ -144,6 +171,18 @@ export function RecordModal({
             onDelete?.();
           }}
           onCancel={() => setConfirmDelete(false)}
+        />
+        <ConfirmDialog
+          open={confirmClose}
+          title={t("common.confirm", "确认操作")}
+          message={t("record.unsaved_changes", "有未保存的修改，离开将丢失。确定关闭？")}
+          danger
+          onConfirm={() => {
+            setConfirmClose(false);
+            setDirty(false);
+            onClose();
+          }}
+          onCancel={() => setConfirmClose(false)}
         />
       </div>
     </div>

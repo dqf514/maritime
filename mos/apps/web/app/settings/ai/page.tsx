@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Provider = {
   id: string;
@@ -17,9 +18,9 @@ type Skill = { skill_code: string; module: string; description: string };
 
 export default function AiHubPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [msg, setMsg] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -38,14 +39,13 @@ export default function AiHubPage() {
 
   async function testProvider(id: string) {
     const res = await apiPost(`/api/v1/settings/ai/providers/${id}/test`);
-    setMsg(t("page.ai.test_result", "Provider test: {status}", { status: res.status || JSON.stringify(res) }));
+    toast.success(t("page.ai.test_result", "Provider test: {status}", { status: res.status || JSON.stringify(res) }));
   }
 
   return (
     <AppShell>
       <h1 style={{ marginTop: 0 }}>{t("page.ai.title", "AI Hub")}</h1>
       <p style={{ color: "var(--muted)" }}>{t("page.ai.sub", "Providers and skill bindings.")}</p>
-      {msg ? <p>{msg}</p> : null}
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.ai.providers", "Providers")}</h3>
         <table className="table">
@@ -66,7 +66,7 @@ export default function AiHubPage() {
                 <td>{p.model_default || "—"}</td>
                 <td>{p.status}</td>
                 <td>
-                  <button className="btn" type="button" onClick={() => testProvider(p.id).catch(() => setMsg(t("page.ai.test_fail", "Test failed")))}>
+                  <button className="btn" type="button" onClick={() => testProvider(p.id).catch(() => toast.success(t("page.ai.test_fail", "Test failed")))}>
                     {t("common.test", "Test")}
                   </button>
                 </td>

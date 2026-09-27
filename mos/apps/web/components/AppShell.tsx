@@ -32,7 +32,7 @@ export type ShellBootstrap = {
   navigation: NavSection[];
   workspaces: { id: string; label: string }[];
   active_workspace: string;
-  home_widgets: { id: string; title: string; href: string; hint: string }[];
+  home_widgets: { id: string; title: string; href: string; hint: string; icon?: string }[];
   quick_actions: { label: string; href: string }[];
   allowed_paths?: string[];
 };
@@ -67,7 +67,17 @@ function initials(name: string | null | undefined, email: string): string {
   return src.slice(0, 2).toUpperCase();
 }
 
-export function AppShell({ children, breadcrumbs }: { children: React.ReactNode; breadcrumbs?: BreadcrumbItem[] }) {
+export function AppShell({
+  children,
+  breadcrumbs,
+  title,
+  subtitle,
+}: {
+  children: React.ReactNode;
+  breadcrumbs?: BreadcrumbItem[];
+  title?: string;
+  subtitle?: string;
+}) {
   const [me, setMe] = useState<Me | null>(null);
   const [shell, setShell] = useState<ShellBootstrap | null>(null);
   const [iconUrl, setIconUrl] = useState("/branding/mark.svg");
@@ -394,6 +404,14 @@ export function AppShell({ children, breadcrumbs }: { children: React.ReactNode;
         <div className="main-col">
           <main className="content">
             {breadcrumbs?.length ? <Breadcrumb items={breadcrumbs} /> : null}
+            {title ? (
+              <div className="page-header">
+                <div>
+                  <h1 style={{ margin: 0 }}>{title}</h1>
+                  {subtitle ? <p className="page-sub">{subtitle}</p> : null}
+                </div>
+              </div>
+            ) : null}
             {children}
           </main>
           <footer className="statusbar">

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Report = {
   id: string;
@@ -23,11 +24,11 @@ type ReportResult = {
 
 export default function ReportsPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [reports, setReports] = useState<Report[]>([]);
   const [selected, setSelected] = useState<Report | null>(null);
   const [result, setResult] = useState<ReportResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
 
   async function load() {
     try {
@@ -43,10 +44,10 @@ export default function ReportsPage() {
   async function seedSystem() {
     try {
       const res = await apiPost("/api/v1/reports/system/seed", {});
-      setMsg(res.message || "System reports seeded");
+      toast.success(res.message || "System reports seeded");
       load();
     } catch {
-      setMsg("Failed to seed reports");
+      toast.success("Failed to seed reports");
     }
   }
 
@@ -74,7 +75,7 @@ export default function ReportsPage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      setMsg("Export failed");
+      toast.success("Export failed");
     }
   }
 
@@ -99,7 +100,7 @@ export default function ReportsPage() {
           </div>
           {reports.length === 0 && (
             <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
-              No reports yet. Click "Seed system" to create preset reports.
+              No reports yet. Click &quot;Seed system&quot; to create preset reports.
             </p>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -115,7 +116,6 @@ export default function ReportsPage() {
               </button>
             ))}
           </div>
-          {msg && <p style={{ color: "var(--accent)", fontSize: 12, marginTop: 8 }}>{msg}</p>}
         </div>
 
         {/* Report result */}

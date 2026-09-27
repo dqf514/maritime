@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Item = {
   id: string;
@@ -31,27 +32,27 @@ const TYPE_KEYS: Record<string, string> = {
 
 export default function RecycleBinPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Item[]>([]);
-  const [msg, setMsg] = useState("");
 
   async function load() {
     setRows(await apiGet("/api/v1/recycle-bin"));
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.recycle.load_fail", "Unable to load recycle bin (sign-in required)")));
+    load().catch(() => toast.success(t("page.recycle.load_fail", "Unable to load recycle bin (sign-in required)")));
   }, [t]);
 
   async function restore(id: string) {
     await apiPost(`/api/v1/recycle-bin/${id}/restore`);
-    setMsg(t("page.recycle.restored", "Restored"));
+    toast.success(t("page.recycle.restored", "Restored"));
     await load();
   }
 
   async function purge(id: string) {
     if (!window.confirm(t("page.recycle.purge_confirm", "Permanently purge this recycle entry? This cannot be undone."))) return;
     await apiDelete(`/api/v1/recycle-bin/${id}`);
-    setMsg(t("page.recycle.purged", "Permanently purged"));
+    toast.success(t("page.recycle.purged", "Permanently purged"));
     await load();
   }
 
@@ -68,7 +69,6 @@ export default function RecycleBinPage() {
           </p>
         </div>
       </div>
-      {msg ? <p>{msg}</p> : null}
       <div className="panel">
         <table className="table">
           <thead>
@@ -86,10 +86,10 @@ export default function RecycleBinPage() {
                 <td>{r.title}</td>
                 <td>{r.deleted_at ? new Date(r.deleted_at).toLocaleString() : "—"}</td>
                 <td style={{ display: "flex", gap: "0.4rem" }}>
-                  <button className="btn btn-primary" type="button" onClick={() => restore(r.id).catch(() => setMsg(t("common.failed", "Failed")))}>
+                  <button className="btn btn-primary" type="button" onClick={() => restore(r.id).catch(() => toast.success(t("common.failed", "Failed")))}>
                     {t("page.recycle.restore", "Restore")}
                   </button>
-                  <button className="btn btn-danger" type="button" onClick={() => purge(r.id).catch(() => setMsg(t("common.failed", "Failed")))}>
+                  <button className="btn btn-danger" type="button" onClick={() => purge(r.id).catch(() => toast.success(t("common.failed", "Failed")))}>
                     {t("page.recycle.purge", "Purge")}
                   </button>
                 </td>

@@ -5,6 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { ImageCropModal, type CropKind } from "@/components/ImageCropModal";
 import { apiGet, apiPost, apiPut, apiUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Branding = {
   product_name: string;
@@ -22,8 +23,8 @@ const OK_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
 export default function PlatformBrandingPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [form, setForm] = useState<Branding | null>(null);
-  const [msg, setMsg] = useState("");
   const [uploading, setUploading] = useState<string | null>(null);
   const [crop, setCrop] = useState<{ kind: CropKind; file: File } | null>(null);
   const [cropErr, setCropErr] = useState("");
@@ -31,7 +32,7 @@ export default function PlatformBrandingPage() {
   useEffect(() => {
     apiGet("/api/v1/platform/branding")
       .then(setForm)
-      .catch(() => setMsg(t("page.branding.admin_required", "需要平台管理员")));
+      .catch(() => toast.success(t("page.branding.admin_required", "需要平台管理员")));
   }, [t]);
 
   async function save(e: FormEvent) {
@@ -39,30 +40,30 @@ export default function PlatformBrandingPage() {
     if (!form) return;
     try {
       await apiPut("/api/v1/platform/branding", form);
-      setMsg(t("page.branding.updated", "产品品牌已更新 — 门户、登录与顶栏会随之生效。"));
+      toast.success(t("page.branding.updated", "产品品牌已更新 — 门户、登录与顶栏会随之生效。"));
     } catch {
-      setMsg(t("common.failed", "保存失败"));
+      toast.success(t("common.failed", "保存失败"));
     }
   }
 
   async function reset() {
     try {
       setForm(await apiPost("/api/v1/platform/branding/reset"));
-      setMsg(t("page.branding.reset_done", "已恢复 MariOS 默认品牌。"));
+      toast.success(t("page.branding.reset_done", "已恢复 MariOS 默认品牌。"));
     } catch {
-      setMsg(t("page.branding.reset_fail", "重置失败"));
+      toast.success(t("page.branding.reset_fail", "重置失败"));
     }
   }
 
   function pickFile(kind: CropKind, file: File | null) {
     if (!file) return;
-    setMsg("");
+    toast.success("");
     if (!OK_TYPES.includes(file.type)) {
-      setMsg(t("page.branding.bad_type", "仅支持 png / jpg / webp 图片"));
+      toast.success(t("page.branding.bad_type", "仅支持 png / jpg / webp 图片"));
       return;
     }
     if (file.size > MAX_UPLOAD_BYTES) {
-      setMsg(t("page.branding.too_large", "文件超过 2.5MB，请压缩后再传"));
+      toast.success(t("page.branding.too_large", "文件超过 2.5MB，请压缩后再传"));
       return;
     }
     setCropErr("");
@@ -78,7 +79,7 @@ export default function PlatformBrandingPage() {
       const fd = new FormData();
       fd.append("file", blob, `${kind}.png`);
       setForm(await apiUpload(`/api/v1/platform/branding/upload?kind=${kind}`, fd));
-      setMsg(t("page.branding.uploaded", "已上传 {kind}", { kind }));
+      toast.success(t("page.branding.uploaded", "已上传 {kind}", { kind }));
       setCrop(null);
     } catch (err: any) {
       setCropErr(t("page.branding.upload_fail", "上传失败：{err}", { err: String(err?.message || err) }));
@@ -90,7 +91,7 @@ export default function PlatformBrandingPage() {
   if (!form) {
     return (
       <AppShell>
-        <p>{msg || t("common.loading", "加载中…")}</p>
+        <p>{t("common.loading", "加载中…")}</p>
       </AppShell>
     );
   }
@@ -101,7 +102,6 @@ export default function PlatformBrandingPage() {
       <p className="page-sub">
         {t("page.branding.sub", "管理公共门户 Logo / 图标 / 文案。图片直接上传，可裁剪。")}
       </p>
-      {msg ? <p className="flash">{msg}</p> : null}
 
       <div className="brand-preview panel">
         <div className="brand-preview-row" style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiCreateBackup, apiListBackups } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Backup = {
   id: string;
@@ -15,8 +16,8 @@ type Backup = {
 
 export default function BackupPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Backup[]>([]);
-  const [msg, setMsg] = useState("");
 
   async function refresh() {
     const data = await apiListBackups();
@@ -24,17 +25,17 @@ export default function BackupPage() {
   }
 
   useEffect(() => {
-    refresh().catch(() => setMsg(t("page.backup.load_fail", "Unable to load backups")));
+    refresh().catch(() => toast.success(t("page.backup.load_fail", "Unable to load backups")));
   }, [t]);
 
   async function backup() {
-    setMsg(t("page.backup.creating", "Creating backup…"));
+    toast.success(t("page.backup.creating", "Creating backup…"));
     try {
       await apiCreateBackup();
       await refresh();
-      setMsg(t("page.backup.done", "Backup completed (Wave 0 placeholder snapshot)."));
+      toast.success(t("page.backup.done", "Backup completed (Wave 0 placeholder snapshot)."));
     } catch {
-      setMsg(t("page.backup.failed", "Backup failed"));
+      toast.success(t("page.backup.failed", "Backup failed"));
     }
   }
 
@@ -45,7 +46,6 @@ export default function BackupPage() {
       <button className="btn btn-primary" type="button" onClick={backup}>
         {t("page.backup.now", "Backup now")}
       </button>
-      {msg ? <p>{msg}</p> : null}
       <div className="panel">
         <table className="table">
           <thead>

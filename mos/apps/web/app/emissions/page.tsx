@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Row = {
   id: string;
@@ -20,10 +21,10 @@ type Ref = { id: string; name?: string; voyage_no?: string };
 
 export default function EmissionsPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Row[]>([]);
   const [voyages, setVoyages] = useState<Ref[]>([]);
   const [vessels, setVessels] = useState<Ref[]>([]);
-  const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [form, setForm] = useState({
@@ -68,7 +69,7 @@ export default function EmissionsPage() {
         ets_price_eur: Number(form.ets_price_eur) || 70,
       });
       setResult(res);
-      setMsg(t("page.emissions.calc_ok", "Calculated and saved emission record"));
+      toast.success(t("page.emissions.calc_ok", "Calculated and saved emission record"));
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -79,7 +80,7 @@ export default function EmissionsPage() {
     try {
       const data = await apiGet("/api/v1/emissions/export");
       setResult(data);
-      setMsg(t("page.emissions.export_ok", "Export pack generated (wire verifier connector)"));
+      toast.success(t("page.emissions.export_ok", "Export pack generated (wire verifier connector)"));
     } catch (ex) {
       setErr(String(ex));
     }
@@ -103,7 +104,6 @@ export default function EmissionsPage() {
           </button>
         </div>
       </div>
-      {msg ? <p className="flash">{msg}</p> : null}
       {err ? <p className="flash-err">{err}</p> : null}
 
       <form className="panel" onSubmit={calc}>

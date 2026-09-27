@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useRef, useState, ReactNode } from "react";
+import { createContext, useContext, useRef, useState, ReactNode } from "react";
 
 type ToastKind = "success" | "error" | "warning" | "info";
 
@@ -47,7 +47,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
   const nextId = useRef(1);
 
-  const push = useCallback((kind: ToastKind, msg: string, opts?: ToastOptions) => {
+  // 交给 React Compiler 做记忆化，不再手动 useCallback（react-hooks/preserve-manual-memoization）
+  function dismiss(id: number) {
+    setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, exiting: true } : t)));
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 150);
+  }
+
+  function push(kind: ToastKind, msg: string, opts?: ToastOptions) {
     const id = nextId.current++;
     setToasts((prev) => {
       const next = [...prev, { id, kind, msg, action: opts?.action, onAction: opts?.onAction }];
@@ -58,14 +66,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     if (autoMs > 0) {
       setTimeout(() => dismiss(id), autoMs);
     }
-  }, []);
-
-  const dismiss = useCallback((id: number) => {
-    setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, exiting: true } : t)));
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 150);
-  }, []);
+  }
 
   const ctx: ToastCtx = {
     success: (msg, opts) => push("success", msg, opts),
@@ -88,7 +89,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   type="button"
                   className="toast-action"
                   onClick={() => {
-                    t.onAction();
+                    t.onAction?.();
                     dismiss(t.id);
                   }}
                 >

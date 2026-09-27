@@ -7,6 +7,7 @@ import { LookupSelect } from "@/components/LookupSelect";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Party = {
   id: string;
@@ -49,10 +50,10 @@ const emptyContact = {
 
 export default function CounterpartiesPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Party[]>([]);
   const [name, setName] = useState("");
   const [type, setType] = useState("charterer");
-  const [msg, setMsg] = useState("");
   const [open, setOpen] = useState<Party | null>(null);
   const [edit, setEdit] = useState({ ...emptyEdit });
   const [saving, setSaving] = useState(false);
@@ -77,7 +78,7 @@ export default function CounterpartiesPage() {
     e.preventDefault();
     await apiPost("/api/v1/masterdata/counterparties", { name, type, sanctions_status: "clear" });
     setName("");
-    setMsg(t("page.parties.created", "Counterparty created"));
+    toast.success(t("page.parties.created", "Counterparty created"));
     await load();
   }
 
@@ -103,7 +104,7 @@ export default function CounterpartiesPage() {
         registration_no: edit.registration_no || null, website: edit.website || null,
         phone: edit.phone || null, email: edit.email || null, notes: edit.notes || null,
       });
-      setMsg(t("common.saved", "Saved"));
+      toast.success(t("common.saved", "Saved"));
       setOpen(null);
       await load();
     } finally { setSaving(false); }
@@ -114,7 +115,7 @@ export default function CounterpartiesPage() {
     setSaving(true);
     try {
       await apiDelete(`/api/v1/masterdata/counterparties/${open.id}`);
-      setMsg(t("common.recycled", "Moved to recycle bin"));
+      toast.success(t("common.recycled", "Moved to recycle bin"));
       setOpen(null);
       await load();
     } finally { setSaving(false); }
@@ -164,7 +165,7 @@ export default function CounterpartiesPage() {
         <Link href="/settings/recycle" className="btn btn-ghost">{t("nav.recycle", "Recycle bin")}</Link>
       </div>
 
-      <form className="panel" onSubmit={(e) => onCreate(e).catch(() => setMsg(t("page.parties.create_fail", "Create failed")))} style={{ marginBottom: "1rem" }}>
+      <form className="panel" onSubmit={(e) => onCreate(e).catch(() => toast.success(t("page.parties.create_fail", "Create failed")))} style={{ marginBottom: "1rem" }}>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
           <label>{t("common.name", "Name")}
             <input value={name} onChange={(e) => setName(e.target.value)} required />
@@ -174,7 +175,6 @@ export default function CounterpartiesPage() {
           </label>
           <button className="btn btn-primary" type="submit">{t("page.parties.add", "Add counterparty")}</button>
         </div>
-        {msg ? <p style={{ marginBottom: 0 }}>{msg}</p> : null}
       </form>
 
       <div className="panel">

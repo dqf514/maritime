@@ -4,13 +4,14 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 export default function PermissionsPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [catalog, setCatalog] = useState<Array<{ code: string; name: string; module: string }>>([]);
   const [matrix, setMatrix] = useState<Array<{ role_code: string; feature_code: string; allowed: boolean }>>([]);
   const [roles, setRoles] = useState<Array<{ code: string }>>([]);
-  const [msg, setMsg] = useState("");
 
   async function load() {
     const [c, m, r] = await Promise.all([
@@ -24,12 +25,12 @@ export default function PermissionsPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.perm.admin_required", "需要租户管理员")));
+    load().catch(() => toast.success(t("page.perm.admin_required", "需要租户管理员")));
   }, [t]);
 
   async function toggle(role_code: string, feature_code: string, allowed: boolean) {
     await apiPut("/api/v1/admin/features", { role_code, feature_code, allowed });
-    setMsg(`${role_code} · ${feature_code} = ${allowed ? t("page.perm.allow", "允许") : t("page.perm.deny", "拒绝")}`);
+    toast.success(`${role_code} · ${feature_code} = ${allowed ? t("page.perm.allow", "允许") : t("page.perm.deny", "拒绝")}`);
     await load();
   }
 
@@ -44,7 +45,6 @@ export default function PermissionsPage() {
           "按角色精细控制能力。未配置的单元格默认允许（继承角色）；取消勾选会写入拒绝并在业务 API 生效。租户管理员始终放行。",
         )}
       </p>
-      {msg ? <p>{msg}</p> : null}
       <div className="panel" style={{ overflowX: "auto" }}>
         <table className="table">
           <thead>
@@ -75,7 +75,7 @@ export default function PermissionsPage() {
                         disabled={role === "tenant_admin"}
                         onChange={(e) =>
                           toggle(role, f.code, e.target.checked).catch(() =>
-                            setMsg(t("page.perm.update_fail", "更新失败")),
+                            toast.success(t("page.perm.update_fail", "更新失败")),
                           )
                         }
                       />

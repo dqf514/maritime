@@ -140,6 +140,35 @@ export default function WorkbenchPage() {
           </div>
         ) : null}
 
+        {/* U3 工作队列：例外驱动的待办单据，行内直达单据详情 */}
+        {summary?.queues?.length ? (
+          <div className="wb-queues">
+            {summary.queues.map((q) => {
+              const label = locale.startsWith("zh") ? q.label.zh || q.label.en : q.label.en;
+              return (
+                <div key={q.id} className="wb-queue panel">
+                  <div className="wb-col-head">
+                    <h2>{label}</h2>
+                    <span className="muted">{q.items.length}</span>
+                  </div>
+                  <div className="wb-queue-list">
+                    {q.items.map((it) => (
+                      <Link
+                        key={it.id}
+                        href={it.href}
+                        className={`wb-queue-item${it.urgency === "critical" ? " wb-queue-critical" : it.urgency === "warning" ? " wb-queue-warning" : ""}`}
+                      >
+                        <span className="wb-queue-title">{it.title}</span>
+                        {it.meta ? <span className="wb-queue-meta">{it.meta}</span> : null}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+
         {/* Main 3-panel desk — compact */}
         <div className="wb-desk">
           {/* Tasks */}

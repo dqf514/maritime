@@ -4,15 +4,16 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 export default function PlatformI18nPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [overview, setOverview] = useState<any>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [terms, setTerms] = useState<any[]>([]);
   const [locale, setLocale] = useState("zh-CN");
   const [q, setQ] = useState("");
-  const [msg, setMsg] = useState("");
   const [editKey, setEditKey] = useState("");
   const [editText, setEditText] = useState("");
 
@@ -24,13 +25,13 @@ export default function PlatformI18nPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("i18n.platform_admin_required", "Platform admin required")));
+    load().catch(() => toast.success(t("i18n.platform_admin_required", "Platform admin required")));
   }, [locale]);
 
   async function saveMessage(e: FormEvent) {
     e.preventDefault();
     await apiPut("/api/v1/platform/i18n/messages", { msg_key: editKey, locale, text: editText, namespace: "app" });
-    setMsg(t("i18n.message_updated", "Message updated"));
+    toast.success(t("i18n.message_updated", "Message updated"));
     setEditKey("");
     await load();
   }
@@ -41,7 +42,6 @@ export default function PlatformI18nPage() {
       <p className="page-sub">
         {t("i18n.platform_sub", "Global language packs (en / zh-CN) and maritime terminology catalog. Tenants may override labels; secrets stay out of this plane.")}
       </p>
-      {msg ? <p className="flash">{msg}</p> : null}
 
       <div className="kpi-row">
         <div className="kpi-card">
@@ -114,7 +114,7 @@ export default function PlatformI18nPage() {
           </tbody>
         </table>
         {editKey ? (
-          <form onSubmit={(e) => saveMessage(e).catch(() => setMsg(t("common.failed", "Failed")))}>
+          <form onSubmit={(e) => saveMessage(e).catch(() => toast.success(t("common.failed", "Failed")))}>
             <h3>
               {t("common.edit", "Edit")} <code>{editKey}</code> ({locale})
             </h3>

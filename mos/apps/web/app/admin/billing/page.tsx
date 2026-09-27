@@ -5,15 +5,16 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 export default function BillingPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [sub, setSub] = useState<Record<string, unknown> | null>(null);
   const [plans, setPlans] = useState<Array<Record<string, unknown>>>([]);
   const [packs, setPacks] = useState<Array<Record<string, unknown>>>([]);
   const [wallet, setWallet] = useState<Array<{ meter_code: string; balance: number }>>([]);
   const [usage, setUsage] = useState<Array<Record<string, unknown>>>([]);
-  const [msg, setMsg] = useState("");
 
   async function load() {
     const [s, p, pk, w, u] = await Promise.all([
@@ -31,12 +32,12 @@ export default function BillingPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.billing.admin_required", "需要租户管理员")));
+    load().catch(() => toast.success(t("page.billing.admin_required", "需要租户管理员")));
   }, [t]);
 
   async function invokeAi() {
     const res = await apiPost("/api/v1/billing/ai/invoke-demo");
-    setMsg(
+    toast.success(
       t("page.billing.ai_metered", "AI 计量: -{tokens} tokens，余额 {balance}", {
         tokens: res.tokens_charged,
         balance: res.balance,
@@ -56,7 +57,6 @@ export default function BillingPage() {
           "查看当前套餐与用量。订阅与充值由平台管理员开通；线上支付开通后再支持自助下单。",
         )}
       </p>
-      {msg ? <p>{msg}</p> : null}
 
       <div className="panel" style={{ borderLeft: "3px solid var(--accent, #1A9B96)" }}>
         <p style={{ margin: 0 }}>
@@ -78,7 +78,7 @@ export default function BillingPage() {
         ) : (
           <p>{t("page.billing.no_sub", "暂无有效订阅")}</p>
         )}
-        <button className="btn" type="button" onClick={() => invokeAi().catch((e) => setMsg(String(e)))}>
+        <button className="btn" type="button" onClick={() => invokeAi().catch((e) => toast.success(String(e)))}>
           {t("page.billing.invoke_ai", "试调用计量 AI（演示）")}
         </button>
       </div>

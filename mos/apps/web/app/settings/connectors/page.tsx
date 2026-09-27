@@ -6,6 +6,7 @@ import { AppShell } from "@/components/AppShell";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type FieldSpec = {
   key: string;
@@ -37,9 +38,9 @@ type Connector = {
 
 export default function ConnectorsPage() {
   const { t, locale } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Connector[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
-  const [msg, setMsg] = useState("");
   const [ctype, setCtype] = useState("fx.manual");
   const [iname, setIname] = useState("");
   const [open, setOpen] = useState<Connector | null>(null);
@@ -83,7 +84,7 @@ export default function ConnectorsPage() {
       config: {},
     });
     setIname("");
-    setMsg(t("common.created", "Created"));
+    toast.success(t("common.created", "Created"));
     await load();
   }
 
@@ -114,7 +115,7 @@ export default function ConnectorsPage() {
         secret_ref: edit.secret_ref || null,
         config: edit.config,
       });
-      setMsg(t("common.saved", "Saved"));
+      toast.success(t("common.saved", "Saved"));
       setOpen(null);
       await load();
     } finally {
@@ -127,7 +128,7 @@ export default function ConnectorsPage() {
     setSaving(true);
     try {
       await apiDelete(`/api/v1/settings/connectors/${open.id}`);
-      setMsg(t("common.recycled", "Moved to recycle bin"));
+      toast.success(t("common.recycled", "Moved to recycle bin"));
       setOpen(null);
       await load();
     } finally {
@@ -137,7 +138,7 @@ export default function ConnectorsPage() {
 
   async function test(id: string) {
     const res = await apiPost(`/api/v1/settings/connectors/${id}/test`);
-    setMsg(
+    toast.success(
       t("page.connectors.health", "Health test: {ok}", {
         ok: res.last_health?.ok ? "OK" : "FAIL",
       }) +
@@ -149,7 +150,7 @@ export default function ConnectorsPage() {
 
   async function sync(id: string) {
     const res = await apiPost(`/api/v1/settings/connectors/${id}/sync`);
-    setMsg(t("page.connectors.synced", "Sync completed") + " — " + JSON.stringify(res));
+    toast.success(t("page.connectors.synced", "Sync completed") + " — " + JSON.stringify(res));
     await load();
   }
 
@@ -169,9 +170,8 @@ export default function ConnectorsPage() {
           {t("nav.settings_hub", "System settings")}
         </Link>
       </div>
-      {msg ? <p>{msg}</p> : null}
 
-      <form className="panel" onSubmit={(e) => create(e).catch(() => setMsg(t("common.failed", "Failed")))}>
+      <form className="panel" onSubmit={(e) => create(e).catch(() => toast.success(t("common.failed", "Failed")))}>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
           <label>
             {t("common.type", "类型")}
@@ -282,7 +282,7 @@ export default function ConnectorsPage() {
             type="button"
             className="btn"
             disabled={!open || saving}
-            onClick={() => open && test(open.id).catch(() => setMsg(t("page.connectors.test_fail", "Test failed")))}
+            onClick={() => open && test(open.id).catch(() => toast.success(t("page.connectors.test_fail", "Test failed")))}
           >
             {t("common.test", "测试连接")}
           </button>
@@ -290,7 +290,7 @@ export default function ConnectorsPage() {
             type="button"
             className="btn btn-primary"
             disabled={!open || saving}
-            onClick={() => open && sync(open.id).catch(() => setMsg(t("common.failed", "Failed")))}
+            onClick={() => open && sync(open.id).catch(() => toast.success(t("common.failed", "Failed")))}
           >
             {t("page.connectors.sync", "Sync / pull")}
           </button>

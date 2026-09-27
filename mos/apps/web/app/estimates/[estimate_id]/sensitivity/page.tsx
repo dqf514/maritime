@@ -67,8 +67,8 @@ export default function SensitivityPage() {
     setLoading(true);
     try {
       const [sens, bepRes] = await Promise.all([
-        apiGet<any>(`/estimates/${estimateId}/sensitivity?pct=${pct}`),
-        apiGet<any>(`/estimates/${estimateId}/bep`),
+        apiGet(`/api/v1/estimates/${estimateId}/sensitivity?pct=${pct}`),
+        apiGet(`/api/v1/estimates/${estimateId}/bep`),
       ]);
       setSensitivity(sens);
       setBep(bepRes);

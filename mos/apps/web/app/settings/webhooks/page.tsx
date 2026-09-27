@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Subscription = {
   id: string;
@@ -36,9 +37,9 @@ const EVENT_OPTIONS = [
 
 export default function WebhooksPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  const [msg, setMsg] = useState("");
 
   // Create form
   const [name, setName] = useState("");
@@ -67,7 +68,7 @@ export default function WebhooksPage() {
     setName("");
     setUrl("");
     setSelectedEvents([]);
-    setMsg(t("webhooks.created", "Subscription created"));
+    toast.success(t("webhooks.created", "Subscription created"));
     await load();
   }
 
@@ -84,13 +85,12 @@ export default function WebhooksPage() {
 
   async function rotateSecret(id: string) {
     const result = await apiPost(`/api/v1/webhooks/subscriptions/${id}/rotate-secret`, {});
-    setMsg(`New secret: ${result.secret}`);
+    toast.success(`New secret: ${result.secret}`);
   }
 
   return (
     <AppShell title="Webhooks">
       <div className="space-y-6">
-        {msg && <div className="rounded bg-blue-50 p-3 text-sm text-blue-800">{msg}</div>}
 
         {/* Create subscription */}
         <div className="rounded-lg border bg-white p-4">

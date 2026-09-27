@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Quote = {
   symbol: string;
@@ -26,11 +27,11 @@ type HistoryPoint = { date: string; value: number; source: string };
 
 export default function MarketDataPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [bunkerComp, setBunkerComp] = useState<BunkerPrice[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState("");
-  const [msg, setMsg] = useState("");
 
   async function load() {
     try {
@@ -66,7 +67,7 @@ export default function MarketDataPage() {
 
   async function seedDemo() {
     const result = await apiPost("/api/v1/market-data/seed-demo", {});
-    setMsg(t("market.seeded", `Seeded ${result.seeded} data points`));
+    toast.success(t("market.seeded", `Seeded ${result.seeded} data points`));
     await load();
   }
 
@@ -79,7 +80,6 @@ export default function MarketDataPage() {
   return (
     <AppShell title="Market Data">
       <div className="space-y-6">
-        {msg && <div className="rounded bg-blue-50 p-3 text-sm text-blue-800">{msg}</div>}
 
         {quotes.length === 0 && (
           <div className="rounded-lg border bg-white p-8 text-center">

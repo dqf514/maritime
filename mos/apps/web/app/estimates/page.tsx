@@ -7,6 +7,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageGuide } from "@/components/PageGuide";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type RefItem = { id: string; name: string };
 type EstResults = {
@@ -219,6 +220,7 @@ function fmt(n: number | string | undefined | null) {
 
 export default function EstimatesPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Estimate[]>([]);
   const [vessels, setVessels] = useState<RefItem[]>([]);
   const [parties, setParties] = useState<RefItem[]>([]);
@@ -236,7 +238,6 @@ export default function EstimatesPage() {
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareRows, setCompareRows] = useState<Array<{ id: string; title: string; version: number; tce?: number }>>([]);
   const [sensitivity, setSensitivity] = useState<Array<{ delta_pct: number; tce: number }>>([]);
-  const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
@@ -343,7 +344,7 @@ export default function EstimatesPage() {
         counterparty_id: partyId || parties[0]?.id || null,
         inputs: buildPayload(merged, extras),
       });
-      setMsg(t("page.estimates.created", "Draft created"));
+      toast.success(t("page.estimates.created", "Draft created"));
       const data = await load();
       const fresh = data.find((r) => r.id === est.id) || est;
       selectEstimate(fresh);
@@ -367,7 +368,7 @@ export default function EstimatesPage() {
         inputs: buildPayload(fields, currentExtras()),
       });
       setResults(est.results || {});
-      setMsg(t("page.estimates.saved", "Saved"));
+      toast.success(t("page.estimates.saved", "Saved"));
       await load();
     } catch (e) {
       setErr(String(e));
@@ -390,7 +391,7 @@ export default function EstimatesPage() {
       });
       const est: Estimate = await apiPost(`/api/v1/estimates/${selectedId}/calculate`);
       setResults(est.results || {});
-      setMsg(t("page.estimates.calculated", "Calculated TCE {tce}", { tce: fmt(est.results?.tce) }));
+      toast.success(t("page.estimates.calculated", "Calculated TCE {tce}", { tce: fmt(est.results?.tce) }));
       await load();
     } catch (e) {
       setErr(String(e));
@@ -404,7 +405,7 @@ export default function EstimatesPage() {
     setBusy(true);
     try {
       const est: Estimate = await apiPost(`/api/v1/estimates/${selectedId}/clone`);
-      setMsg(t("page.estimates.cloned", "Cloned to {title}", { title: est.title }));
+      toast.success(t("page.estimates.cloned", "Cloned to {title}", { title: est.title }));
       const data = await load();
       const fresh = data.find((r) => r.id === est.id) || est;
       selectEstimate(fresh);
@@ -429,7 +430,7 @@ export default function EstimatesPage() {
     try {
       const data = await apiPost("/api/v1/estimates/compare", compareIds);
       setCompareRows(data);
-      setMsg(t("page.estimates.compare_ok", "Compare ready"));
+      toast.success(t("page.estimates.compare_ok", "Compare ready"));
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -442,7 +443,7 @@ export default function EstimatesPage() {
     setBusy(true);
     try {
       const cp = await apiPost(`/api/v1/estimates/${selectedId}/to-charter`);
-      setMsg(t("page.estimates.cp_msg", "Created charter {no}", { no: cp.charter_no }));
+      toast.success(t("page.estimates.cp_msg", "Created charter {no}", { no: cp.charter_no }));
       await load();
     } catch (e) {
       setErr(String(e));
@@ -457,7 +458,7 @@ export default function EstimatesPage() {
     try {
       await apiDelete(`/api/v1/estimates/${selectedId}`);
       setSelectedId(null);
-      setMsg(t("common.recycled", "已移入回收站"));
+      toast.success(t("common.recycled", "已移入回收站"));
       await load();
     } catch (e) {
       setErr(String(e));
@@ -522,7 +523,6 @@ export default function EstimatesPage() {
         </div>
       </div>
 
-      {msg ? <p className="flash">{msg}</p> : null}
       {err ? <p className="flash-err">{err}</p> : null}
 
       <div className="desk-split">

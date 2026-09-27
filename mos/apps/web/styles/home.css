@@ -381,3 +381,48 @@
 .schedule-when { color: var(--muted); font-size: 0.78rem; flex: 0 0 auto; min-width: 6.5rem; }
 .schedule-main { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
 .home-quick-title { margin: 0 0 0.75rem; font-size: 1rem; }
+
+/* U3 工作队列 */
+.wb-queues {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.wb-queue .wb-col-head h2 { font-size: 0.92rem; }
+.wb-queue-list { display: flex; flex-direction: column; }
+.wb-queue-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border-left: 3px solid var(--border);
+  font-size: 0.86rem;
+  margin-bottom: 0.3rem;
+  text-decoration: none;
+  color: inherit;
+}
+.wb-queue-item:hover { background: var(--foam); }
+.wb-queue-critical { border-left-color: var(--danger); background: #fdeeed; }
+.wb-queue-warning { border-left-color: var(--warn); background: #fff8ec; }
+.wb-queue-title { font-weight: 600; }
+.wb-queue-meta { color: var(--muted); font-size: 0.78rem; flex: 0 0 auto; }
+
+/* U4 打印/PDF：浏览器打印时隐藏导航与工具条 */
+@media print {
+  .nav-col,
+  .statusbar,
+  .wb-toolbar,
+  .quick-row,
+  .record-modal-backdrop {
+    display: none !important;
+  }
+  .main-col,
+  .content {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+}

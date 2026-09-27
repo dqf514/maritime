@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Agent = {
   agent_name: string;
@@ -31,6 +32,7 @@ type Message = {
 
 export default function AiChatPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedAgent, setSelectedAgent] = useState("");
@@ -38,7 +40,6 @@ export default function AiChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
 
   async function loadAgents() {
     try {
@@ -79,7 +80,7 @@ export default function AiChatPage() {
 
   async function seedAgents() {
     await apiPost("/api/v1/ai/agents/seed", {});
-    setMsg(t("ai.seeded", "Agents seeded"));
+    toast.success(t("ai.seeded", "Agents seeded"));
     await loadAgents();
   }
 
@@ -111,7 +112,7 @@ export default function AiChatPage() {
       setInput("");
       setActiveConv({ ...activeConv, message_count: (activeConv.message_count || 0) + 2 });
     } catch {
-      setMsg(t("ai.error", "Chat error"));
+      toast.success(t("ai.error", "Chat error"));
     }
     setLoading(false);
   }
@@ -121,7 +122,6 @@ export default function AiChatPage() {
   return (
     <AppShell title="MariAI Chat">
       <div className="space-y-4">
-        {msg && <div className="rounded bg-blue-50 p-3 text-sm text-blue-800">{msg}</div>}
 
         <div className="flex gap-4">
           {/* Sidebar */}

@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Pool = {
   id: string;
@@ -16,6 +17,7 @@ type Vessel = { id: string; name: string };
 
 export default function PoolPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [pools, setPools] = useState<Pool[]>([]);
   const [vessels, setVessels] = useState<Vessel[]>([]);
   const [name, setName] = useState("");
@@ -24,7 +26,6 @@ export default function PoolPage() {
   const [points, setPoints] = useState("1");
   const [periodLabel, setPeriodLabel] = useState("2026-Q3");
   const [totalResult, setTotalResult] = useState("1000000");
-  const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
   const load = useCallback(async () => {
@@ -68,7 +69,7 @@ export default function PoolPage() {
     setErr("");
     try {
       const res = await apiPost(`/api/v1/pools?name=${encodeURIComponent(name)}`);
-      setMsg(t("page.pool.created", "船池已创建"));
+      toast.success(t("page.pool.created", "船池已创建"));
       setName("");
       await load();
       setSelected(res.id);
@@ -80,11 +81,11 @@ export default function PoolPage() {
   async function addVessel(e: FormEvent) {
     e.preventDefault();
     setErr("");
-    setMsg("");
+    toast.success("");
     if (!selected || !vesselId) return;
     try {
       await apiPost(`/api/v1/pools/${selected}/vessels?vessel_id=${vesselId}&points=${Number(points) || 1}`);
-      setMsg(t("page.pool.vessel_ok", "已加入船池"));
+      toast.success(t("page.pool.vessel_ok", "已加入船池"));
       await load();
     } catch (ex: any) {
       const code = ex?.detail?.code || ex?.code;
@@ -107,7 +108,7 @@ export default function PoolPage() {
     setErr("");
     try {
       await apiDelete(`/api/v1/pools/${selected}/vessels/${membershipId}`);
-      setMsg(t("page.pool.left", "已退出船池"));
+      toast.success(t("page.pool.left", "已退出船池"));
       await load();
     } catch (ex: any) {
       setErr(String(ex?.detail?.message || ex?.message || ex));
@@ -122,7 +123,7 @@ export default function PoolPage() {
       await apiPost(
         `/api/v1/pools/${selected}/periods?label=${encodeURIComponent(periodLabel)}&total_pool_result=${Number(totalResult) || 0}`,
       );
-      setMsg(t("page.pool.period_ok", "期间分配已生成"));
+      toast.success(t("page.pool.period_ok", "期间分配已生成"));
       await load();
     } catch (ex: any) {
       setErr(String(ex?.detail?.message || ex?.message || ex));
@@ -133,7 +134,7 @@ export default function PoolPage() {
     setErr("");
     try {
       await apiPost(`/api/v1/pools/periods/${periodId}/settle`);
-      setMsg(t("page.pool.settled", "期间已结算"));
+      toast.success(t("page.pool.settled", "期间已结算"));
       await load();
     } catch (ex: any) {
       setErr(String(ex?.detail?.message || ex?.message || ex));
@@ -150,7 +151,6 @@ export default function PoolPage() {
           </p>
         </div>
       </div>
-      {msg ? <p className="flash">{msg}</p> : null}
       {err ? <p className="flash-err">{err}</p> : null}
 
       <form className="panel" onSubmit={createPool}>

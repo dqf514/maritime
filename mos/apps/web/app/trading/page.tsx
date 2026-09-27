@@ -7,6 +7,7 @@ import { LookupSelect } from "@/components/LookupSelect";
 import { StateView } from "@/components/StateView";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Pos = { id: string; symbol: string; var_1d: number; limit_breach: boolean; side?: string; qty?: number; entry_price?: number };
 type Quote = { symbol: string; value: number; quote_date: string };
@@ -14,10 +15,10 @@ type HedgeRow = { symbol: string; paper_qty: number; physical_qty: number; net_e
 
 export default function TradingRiskPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [positions, setPositions] = useState<Pos[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [hedge, setHedge] = useState<HedgeRow[]>([]);
-  const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
@@ -64,7 +65,7 @@ export default function TradingRiskPage() {
       await apiPost(
         `/api/v1/risk/positions?symbol=${encodeURIComponent(symbol)}&qty=${qtyNum}&entry_price=${priceNum}&side=${side}`,
       );
-      setMsg(t("page.trading.pos_ok", "Position registered"));
+      toast.success(t("page.trading.pos_ok", "Position registered"));
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -81,7 +82,7 @@ export default function TradingRiskPage() {
     }
     try {
       await apiPost(`/api/v1/market/quotes?symbol=${encodeURIComponent(qSymbol)}&value=${valueNum}`);
-      setMsg(t("page.trading.quote_ok", "Quote saved"));
+      toast.success(t("page.trading.quote_ok", "Quote saved"));
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -101,7 +102,6 @@ export default function TradingRiskPage() {
           {t("page.connectors.title", "Integration Hub")}
         </Link>
       </div>
-      {msg ? <p className="flash">{msg}</p> : null}
       {err ? <p className="flash-err">{err}</p> : null}
 
       <div className="desk-split">

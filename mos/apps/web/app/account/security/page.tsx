@@ -4,11 +4,12 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 export default function AccountSecurityPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [sec, setSec] = useState<any>(null);
-  const [msg, setMsg] = useState("");
   const [cur, setCur] = useState("");
   const [next, setNext] = useState("");
   const [demoToken, setDemoToken] = useState("");
@@ -18,26 +19,26 @@ export default function AccountSecurityPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.account.signin_required", "Sign in required")));
+    load().catch(() => toast.success(t("page.account.signin_required", "Sign in required")));
   }, [t]);
 
   async function requestVerify() {
     const data = await apiPost("/api/v1/auth/email/verify/request", {});
     setDemoToken(data.demo_token || "");
-    setMsg(t("page.account.verify_queued", "Verification email queued (console channel)."));
+    toast.success(t("page.account.verify_queued", "Verification email queued (console channel)."));
   }
 
   async function confirmVerify(e: FormEvent) {
     e.preventDefault();
     await apiPost("/api/v1/auth/email/verify/confirm", { token: demoToken });
-    setMsg(t("page.account.email_verified", "Email verified."));
+    toast.success(t("page.account.email_verified", "Email verified."));
     await load();
   }
 
   async function changePassword(e: FormEvent) {
     e.preventDefault();
     await apiPost("/api/v1/me/security/password", { current_password: cur || null, new_password: next });
-    setMsg(t("page.account.pw_updated", "Password updated."));
+    toast.success(t("page.account.pw_updated", "Password updated."));
     setCur("");
     setNext("");
     await load();
@@ -45,14 +46,14 @@ export default function AccountSecurityPage() {
 
   async function unlink(provider: string) {
     await apiDelete(`/api/v1/me/identities/${provider}`);
-    setMsg(t("page.account.unlinked", "Unlinked {provider}", { provider }));
+    toast.success(t("page.account.unlinked", "Unlinked {provider}", { provider }));
     await load();
   }
 
   if (!sec) {
     return (
       <AppShell>
-        <p>{msg || t("common.loading", "Loading…")}</p>
+        <p>{t("common.loading", "Loading…")}</p>
       </AppShell>
     );
   }
@@ -61,7 +62,6 @@ export default function AccountSecurityPage() {
     <AppShell>
       <h1 style={{ marginTop: 0 }}>{t("page.account.title", "My account security")}</h1>
       <p className="page-sub">{t("page.account.sub", "Verify email, manage password, and linked Microsoft / Google identities.")}</p>
-      {msg ? <p className="flash">{msg}</p> : null}
 
       <div className="panel">
         <h2>{t("page.account.email", "Email")}</h2>
@@ -75,11 +75,11 @@ export default function AccountSecurityPage() {
         </p>
         {!sec.email_verified ? (
           <div className="quick-row">
-            <button type="button" className="btn btn-primary" onClick={() => requestVerify().catch(() => setMsg(t("common.failed", "Failed")))}>
+            <button type="button" className="btn btn-primary" onClick={() => requestVerify().catch(() => toast.success(t("common.failed", "Failed")))}>
               {t("page.account.send_verify", "Send verification email")}
             </button>
             {demoToken ? (
-              <form onSubmit={(e) => confirmVerify(e).catch(() => setMsg(t("page.account.confirm_fail", "Confirm failed")))} style={{ display: "flex", gap: "0.5rem" }}>
+              <form onSubmit={(e) => confirmVerify(e).catch(() => toast.success(t("page.account.confirm_fail", "Confirm failed")))} style={{ display: "flex", gap: "0.5rem" }}>
                 <input value={demoToken} onChange={(e) => setDemoToken(e.target.value)} />
                 <button className="btn btn-ghost" type="submit">
                   {t("page.account.confirm_token", "Confirm token")}
@@ -90,7 +90,7 @@ export default function AccountSecurityPage() {
         ) : null}
       </div>
 
-      <form className="panel" onSubmit={(e) => changePassword(e).catch(() => setMsg(t("page.account.pw_fail", "Password change failed")))}>
+      <form className="panel" onSubmit={(e) => changePassword(e).catch(() => toast.success(t("page.account.pw_fail", "Password change failed")))}>
         <h2>{t("page.account.password", "Password")}</h2>
         {sec.has_password ? (
           <label>
@@ -119,7 +119,7 @@ export default function AccountSecurityPage() {
                 type="button"
                 className="btn btn-ghost"
                 style={{ marginLeft: "0.75rem" }}
-                onClick={() => unlink(i.provider).catch(() => setMsg(t("page.account.unlink_fail", "Unlink failed")))}
+                onClick={() => unlink(i.provider).catch(() => toast.success(t("page.account.unlink_fail", "Unlink failed")))}
               >
                 {t("page.account.unlink", "Unlink")}
               </button>

@@ -6,6 +6,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { LookupSelect } from "@/components/LookupSelect";
 import { apiGet, apiPost, apiPut, generateTempPassword } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Tenant = {
   id: string;
@@ -33,11 +34,11 @@ type OfficeCfg = {
 
 export default function PlatformTenantsPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Tenant[]>([]);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
-  const [msg, setMsg] = useState("");
   const [selected, setSelected] = useState<Tenant | null>(null);
   const [edit, setEdit] = useState({ name: "", profile_tier: "M", default_locale: "en", default_timezone: "Asia/Shanghai" });
   const [licenses, setLicenses] = useState<LicRow[]>([]);
@@ -55,12 +56,12 @@ export default function PlatformTenantsPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.tenants.admin_required", "需要平台管理员（租户 sys）")));
+    load().catch(() => toast.success(t("page.tenants.admin_required", "需要平台管理员（租户 sys）")));
   }, [t]);
 
   async function openTenant(row: Tenant) {
     setBusy(true);
-    setMsg("");
+    toast.success("");
     try {
       const detail = await apiGet(`/api/v1/platform/tenants/${row.id}`);
       setSelected(detail);
@@ -82,7 +83,7 @@ export default function PlatformTenantsPage() {
       setOclear(false);
       setOtest(null);
     } catch {
-      setMsg(t("common.failed", "加载失败"));
+      toast.success(t("common.failed", "加载失败"));
     } finally {
       setBusy(false);
     }
@@ -100,7 +101,7 @@ export default function PlatformTenantsPage() {
       admin_password: adminPassword,
     });
     setInitialPw(adminPassword);
-    setMsg(
+    toast.success(
       t("page.tenants.created", "已创建租户 {code}；管理员 {email}。初始密码已生成，请通过安全渠道传达。", {
         code: res.code,
         email: res.admin_email,
@@ -126,7 +127,7 @@ export default function PlatformTenantsPage() {
       setConfirm({
         message: t("page.tenants.confirm_suspend", "暂停租户后，该租户全部用户将立即无法登录（数据保留）。确认暂停？"),
         danger: true,
-        action: () => applyStatus(id, status).catch(() => setMsg(t("common.failed", "失败"))),
+        action: () => applyStatus(id, status).catch(() => toast.success(t("common.failed", "失败"))),
       });
       return;
     }
@@ -143,7 +144,7 @@ export default function PlatformTenantsPage() {
     e.preventDefault();
     if (!selected) return;
     await apiPut(`/api/v1/platform/tenants/${selected.id}`, edit);
-    setMsg(t("page.tenants.saved", "租户资料已保存"));
+    toast.success(t("page.tenants.saved", "租户资料已保存"));
     await load();
     await openTenant(selected);
   }
@@ -159,7 +160,7 @@ export default function PlatformTenantsPage() {
           { mod: mod.module_code },
         ),
         danger: true,
-        action: () => applyLicense(mod, next).catch(() => setMsg(t("common.failed", "失败"))),
+        action: () => applyLicense(mod, next).catch(() => toast.success(t("common.failed", "失败"))),
       });
       return;
     }
@@ -191,7 +192,7 @@ export default function PlatformTenantsPage() {
     if (!ocfg) return;
     try {
       await navigator.clipboard.writeText(ocfg.redirect_uri);
-      setMsg(t("platform.officecfg.copied", "已复制"));
+      toast.success(t("platform.officecfg.copied", "已复制"));
     } catch {
       window.prompt(t("platform.officecfg.redirect_uri", "回调地址（需登记到 Entra 应用）"), ocfg.redirect_uri);
     }
@@ -210,7 +211,7 @@ export default function PlatformTenantsPage() {
     setOcfg(oc);
     setOform({ ...oform, client_secret: "" });
     setOclear(false);
-    setMsg(t("platform.officecfg.saved", "Microsoft 365 配置已保存"));
+    toast.success(t("platform.officecfg.saved", "Microsoft 365 配置已保存"));
   }
 
   async function testOffice() {
@@ -240,7 +241,6 @@ export default function PlatformTenantsPage() {
           "开通 / 暂停租户，编辑档位与时区，并按模块开关许可证。点选表格行进入编辑。",
         )}
       </p>
-      {msg ? <p className="flash">{msg}</p> : null}
       {initialPw ? (
         <p className="flash">
           {t("page.tenants.pw_ready", "初始密码已生成（仅此一次，复制后即不再显示）。")}{" "}
@@ -250,7 +250,7 @@ export default function PlatformTenantsPage() {
         </p>
       ) : null}
 
-      <form className="panel" onSubmit={(e) => create(e).catch(() => setMsg(t("page.tenants.create_fail", "创建失败")))}>
+      <form className="panel" onSubmit={(e) => create(e).catch(() => toast.success(t("page.tenants.create_fail", "创建失败")))}>
         <h2 style={{ marginTop: 0 }}>{t("page.tenants.provision", "开通租户")}</h2>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
           <label>
@@ -301,11 +301,11 @@ export default function PlatformTenantsPage() {
                 </td>
                 <td onClick={(e) => e.stopPropagation()}>
                   {row.status === "active" ? (
-                    <button className="btn" type="button" onClick={() => setStatus(row.id, "suspended").catch(() => setMsg(t("common.failed", "失败")))}>
+                    <button className="btn" type="button" onClick={() => setStatus(row.id, "suspended").catch(() => toast.success(t("common.failed", "失败")))}>
                       {t("common.suspend", "暂停")}
                     </button>
                   ) : (
-                    <button className="btn btn-primary" type="button" onClick={() => setStatus(row.id, "active").catch(() => setMsg(t("common.failed", "失败")))}>
+                    <button className="btn btn-primary" type="button" onClick={() => setStatus(row.id, "active").catch(() => toast.success(t("common.failed", "失败")))}>
                       {t("common.activate", "启用")}
                     </button>
                   )}
@@ -322,7 +322,7 @@ export default function PlatformTenantsPage() {
             {t("page.tenants.edit", "编辑租户")} · {selected.code}
             {busy ? <span className="muted"> …</span> : null}
           </h2>
-          <form onSubmit={(e) => saveEdit(e).catch(() => setMsg(t("common.failed", "保存失败")))}>
+          <form onSubmit={(e) => saveEdit(e).catch(() => toast.success(t("common.failed", "保存失败")))}>
             <div className="form-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: "0.75rem" }}>
               <label>
                 {t("common.name", "名称")}
@@ -387,7 +387,7 @@ export default function PlatformTenantsPage() {
                     {lic.is_core ? (
                       <span className="muted">—</span>
                     ) : (
-                      <button className="btn" type="button" onClick={() => toggleLicense(lic).catch(() => setMsg(t("common.failed", "失败")))}>
+                      <button className="btn" type="button" onClick={() => toggleLicense(lic).catch(() => toast.success(t("common.failed", "失败")))}>
                         {lic.status === "active" ? t("page.tenants.disable_mod", "停用") : t("page.tenants.enable_mod", "启用")}
                       </button>
                     )}
@@ -462,7 +462,7 @@ export default function PlatformTenantsPage() {
                 <button
                   className="btn btn-primary"
                   type="button"
-                  onClick={() => saveOffice().catch(() => setMsg(t("common.failed", "保存失败")))}
+                  onClick={() => saveOffice().catch(() => toast.success(t("common.failed", "保存失败")))}
                 >
                   {t("platform.officecfg.save", "保存 Microsoft 365 配置")}
                 </button>

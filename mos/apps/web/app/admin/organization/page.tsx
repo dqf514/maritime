@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Org = {
   name: string;
@@ -18,9 +19,9 @@ type Org = {
 
 export default function OrgPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [org, setOrg] = useState<Org | null>(null);
   const [tier, setTier] = useState("M");
-  const [msg, setMsg] = useState("");
 
   useEffect(() => {
     apiGet("/api/v1/admin/organization")
@@ -28,13 +29,13 @@ export default function OrgPage() {
         setOrg(o);
         setTier(o.profile_tier);
       })
-      .catch(() => setMsg(t("page.organization.admin_required", "Tenant admin role required")));
+      .catch(() => toast.success(t("page.organization.admin_required", "Tenant admin role required")));
   }, [t]);
 
   async function save(e: FormEvent) {
     e.preventDefault();
     await apiPatch("/api/v1/admin/organization", { profile_tier: tier });
-    setMsg(t("page.organization.updated", "Organization updated — nav density follows tier (S/M/L/E)."));
+    toast.success(t("page.organization.updated", "Organization updated — nav density follows tier (S/M/L/E)."));
     const o = await apiGet("/api/v1/admin/organization");
     setOrg(o);
   }
@@ -43,9 +44,8 @@ export default function OrgPage() {
     <AppShell>
       <h1 style={{ marginTop: 0 }}>{t("page.organization.title", "Organization")}</h1>
       <p className="page-sub">{t("page.organization.sub", "Tenant profile and defaults.")}</p>
-      {msg ? <p>{msg}</p> : null}
       {org ? (
-        <form className="panel" onSubmit={(e) => save(e).catch(() => setMsg(t("common.failed", "Failed")))}>
+        <form className="panel" onSubmit={(e) => save(e).catch(() => toast.success(t("common.failed", "Failed")))}>
           <div className="kv-grid">
             <div>
               <label>{t("common.name", "Name")}</label>

@@ -6,6 +6,7 @@ import { AppShell } from "@/components/AppShell";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Unit = {
   id: string;
@@ -23,11 +24,11 @@ type Member = { id: string; email: string; full_name: string | null; status: str
 
 export default function OrgStructurePage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Unit[]>([]);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
-  const [msg, setMsg] = useState("");
   const [open, setOpen] = useState<Unit | null>(null);
   const [edit, setEdit] = useState({
     code: "",
@@ -46,7 +47,7 @@ export default function OrgStructurePage() {
     setUsers(us);
   }
   useEffect(() => {
-    load().catch(() => setMsg(t("page.org.admin_required", "需要租户管理员")));
+    load().catch(() => toast.success(t("page.org.admin_required", "需要租户管理员")));
   }, [t]);
 
   async function create(e: FormEvent) {
@@ -59,7 +60,7 @@ export default function OrgStructurePage() {
     });
     setCode("");
     setName("");
-    setMsg(t("common.created", "已创建"));
+    toast.success(t("common.created", "已创建"));
     await load();
   }
 
@@ -92,7 +93,7 @@ export default function OrgStructurePage() {
         parent_id: edit.parent_id || null,
         manager_user_id: edit.manager_user_id || null,
       });
-      setMsg(t("common.saved", "已保存"));
+      toast.success(t("common.saved", "已保存"));
       setOpen(null);
       await load();
     } finally {
@@ -105,7 +106,7 @@ export default function OrgStructurePage() {
     setSaving(true);
     try {
       await apiDelete(`/api/v1/admin/org-units/${open.id}`);
-      setMsg(t("common.recycled", "已移入回收站"));
+      toast.success(t("common.recycled", "已移入回收站"));
       setOpen(null);
       await load();
     } finally {
@@ -133,8 +134,7 @@ export default function OrgStructurePage() {
           {t("nav.recycle", "回收站")}
         </Link>
       </div>
-      {msg ? <p>{msg}</p> : null}
-      <form className="panel" onSubmit={(e) => create(e).catch(() => setMsg(t("common.failed", "失败")))}>
+      <form className="panel" onSubmit={(e) => create(e).catch(() => toast.success(t("common.failed", "失败")))}>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
           <label>
             {t("common.code", "编码")}

@@ -11,6 +11,7 @@ import {
   apiUploadMigrationExcel,
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Proposal = {
   id: string;
@@ -23,11 +24,11 @@ type Proposal = {
 
 export default function MigratePage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [jobId, setJobId] = useState<string | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [step, setStep] = useState("connect");
-  const [msg, setMsg] = useState("");
 
   async function refreshProposals(id: string) {
     const rows = await apiListProposals(id);
@@ -40,32 +41,32 @@ export default function MigratePage() {
   }
 
   async function start() {
-    setMsg(t("page.migrate.creating", "Creating migration job…"));
+    toast.success(t("page.migrate.creating", "Creating migration job…"));
     const job = await apiCreateMigration("Wave 1 guided migrate");
     setJobId(job.id);
     await apiAddMigrationSource(job.id, "excel_pack");
     await apiAddMigrationSource(job.id, "m365_mail");
     await apiAddMigrationSource(job.id, "pst");
     setStep("analyze");
-    setMsg(t("page.migrate.connected", "Sources connected. Run analysis or upload Excel."));
+    toast.success(t("page.migrate.connected", "Sources connected. Run analysis or upload Excel."));
   }
 
   async function analyze() {
     if (!jobId) return;
-    setMsg(t("page.migrate.analyzing", "Analyzing…"));
+    toast.success(t("page.migrate.analyzing", "Analyzing…"));
     await apiRunAnalyze(jobId);
     await refreshProposals(jobId);
     setStep("review");
-    setMsg(t("page.migrate.review", "Review AI proposals — checkboxes only."));
+    toast.success(t("page.migrate.review", "Review AI proposals — checkboxes only."));
   }
 
   async function onExcel(file: File | null) {
     if (!jobId || !file) return;
-    setMsg(t("page.migrate.parsing", "Parsing {name}…", { name: file.name }));
+    toast.success(t("page.migrate.parsing", "Parsing {name}…", { name: file.name }));
     const res = await apiUploadMigrationExcel(jobId, file);
     await refreshProposals(jobId);
     setStep("review");
-    setMsg(t("page.migrate.excel_done", "Excel produced {n} proposal(s).", { n: res.proposals_from_excel }));
+    toast.success(t("page.migrate.excel_done", "Excel produced {n} proposal(s).", { n: res.proposals_from_excel }));
   }
 
   async function commit() {
@@ -73,10 +74,10 @@ export default function MigratePage() {
     const ids = Object.entries(selected)
       .filter(([, v]) => v)
       .map(([k]) => k);
-    setMsg(t("page.migrate.committing", "Committing {n} proposals…", { n: ids.length }));
+    toast.success(t("page.migrate.committing", "Committing {n} proposals…", { n: ids.length }));
     const res = await apiCommitMigration(jobId, ids);
     setStep("done");
-    setMsg(
+    toast.success(
       t("page.migrate.committed", "Committed — vessels {v}, ports {p}, counterparties {c}.", {
         v: res.applied?.vessel ?? 0,
         p: res.applied?.port ?? 0,
@@ -90,14 +91,14 @@ export default function MigratePage() {
       <h1 style={{ marginTop: 0 }}>{t("page.migrate.title", "AI Migration Wizard")}</h1>
       <p style={{ color: "var(--muted)" }}>{t("page.migrate.sub", "Connect sources, analyze, confirm, commit.")}</p>
       {step === "connect" ? (
-        <button className="btn btn-primary" type="button" onClick={() => start().catch(() => setMsg(t("common.failed", "Failed")))}>
+        <button className="btn btn-primary" type="button" onClick={() => start().catch(() => toast.success(t("common.failed", "Failed")))}>
           {t("page.migrate.connect", "Connect sources & start")}
         </button>
       ) : null}
       {step === "analyze" || step === "review" ? (
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", marginBottom: "1rem" }}>
           {step === "analyze" ? (
-            <button className="btn btn-primary" type="button" onClick={() => analyze().catch(() => setMsg(t("page.migrate.analyze_fail", "Analyze failed")))}>
+            <button className="btn btn-primary" type="button" onClick={() => analyze().catch(() => toast.success(t("page.migrate.analyze_fail", "Analyze failed")))}>
               {t("page.migrate.run_ai", "Run AI analysis")}
             </button>
           ) : null}
@@ -107,12 +108,11 @@ export default function MigratePage() {
               type="file"
               accept=".xlsx,.xlsm,.xls"
               style={{ display: "none" }}
-              onChange={(e) => onExcel(e.target.files?.[0] || null).catch(() => setMsg(t("page.migrate.excel_fail", "Excel upload failed")))}
+              onChange={(e) => onExcel(e.target.files?.[0] || null).catch(() => toast.success(t("page.migrate.excel_fail", "Excel upload failed")))}
             />
           </label>
         </div>
       ) : null}
-      {msg ? <p>{msg}</p> : null}
       {proposals.length ? (
         <div className="panel">
           <table className="table">
@@ -153,7 +153,7 @@ export default function MigratePage() {
             <button
               className="btn btn-primary"
               type="button"
-              onClick={() => commit().catch(() => setMsg(t("page.migrate.commit_fail", "Commit failed")))}
+              onClick={() => commit().catch(() => toast.success(t("page.migrate.commit_fail", "Commit failed")))}
               style={{ marginTop: "1rem" }}
             >
               {t("page.migrate.apply", "Apply selected")}

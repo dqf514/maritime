@@ -7,6 +7,7 @@ import { RecordModal } from "@/components/RecordModal";
 import { clearLookupCache } from "@/components/LookupSelect";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Dataset = {
   code: string;
@@ -31,12 +32,12 @@ type Item = {
 
 export default function ReferenceAdminPage() {
   const { t, locale } = useI18n();
+  const toast = useToast();
   const loc = locale?.startsWith("zh") ? "zh-CN" : "en";
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selected, setSelected] = useState<string>("countries");
   const [items, setItems] = useState<Item[]>([]);
   const [q, setQ] = useState("");
-  const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<Item | null>(null);
   const [creating, setCreating] = useState(false);
@@ -78,12 +79,12 @@ export default function ReferenceAdminPage() {
     setBusy(true);
     try {
       const res = await apiPost(`/api/v1/reference/${selected}/clone`);
-      setMsg(t("page.ref.cloned", "Cloned to local: {n} items", { n: String(res.cloned) }));
+      toast.success(t("page.ref.cloned", "Cloned to local: {n} items", { n: String(res.cloned) }));
       clearLookupCache(selected);
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      setMsg(String(e));
+      toast.success(String(e));
     } finally {
       setBusy(false);
     }
@@ -94,12 +95,12 @@ export default function ReferenceAdminPage() {
     setBusy(true);
     try {
       await apiPost(`/api/v1/reference/${selected}/reset`);
-      setMsg(t("page.ref.reset_ok", "Restored system pack"));
+      toast.success(t("page.ref.reset_ok", "Restored system pack"));
       clearLookupCache(selected);
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      setMsg(String(e));
+      toast.success(String(e));
     } finally {
       setBusy(false);
     }
@@ -134,7 +135,7 @@ export default function ReferenceAdminPage() {
           sort_order: Number(edit.sort_order) || 0,
           active: edit.active,
         });
-        setMsg(t("common.created", "Created"));
+        toast.success(t("common.created", "Created"));
       } else if (open) {
         await apiPatch(`/api/v1/reference/items/${open.id}`, {
           code: edit.code,
@@ -143,7 +144,7 @@ export default function ReferenceAdminPage() {
           sort_order: Number(edit.sort_order) || 0,
           active: edit.active,
         });
-        setMsg(t("common.saved", "Saved"));
+        toast.success(t("common.saved", "Saved"));
       }
       clearLookupCache(selected);
       setOpen(null);
@@ -151,7 +152,7 @@ export default function ReferenceAdminPage() {
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      setMsg(String(e));
+      toast.success(String(e));
     } finally {
       setBusy(false);
     }
@@ -162,13 +163,13 @@ export default function ReferenceAdminPage() {
     setBusy(true);
     try {
       await apiDelete(`/api/v1/reference/items/${open.id}`);
-      setMsg(t("common.deleted", "Deleted"));
+      toast.success(t("common.deleted", "Deleted"));
       clearLookupCache(selected);
       setOpen(null);
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      setMsg(String(e));
+      toast.success(String(e));
     } finally {
       setBusy(false);
     }
@@ -190,7 +191,6 @@ export default function ReferenceAdminPage() {
           {t("nav.settings_hub", "System settings")}
         </Link>
       </div>
-      {msg ? <p className="flash">{msg}</p> : null}
 
       <div className="panel">
         <div className="desk-toolbar" style={{ flexWrap: "wrap" }}>

@@ -5,6 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { RecordModal } from "@/components/RecordModal";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Holiday = {
   id: string;
@@ -42,10 +43,10 @@ type Tab = "holidays" | "rates" | "restrictions";
 
 export default function PortReferencePage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [tab, setTab] = useState<Tab>("holidays");
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [rates, setRates] = useState<PortRate[]>([]);
-  const [msg, setMsg] = useState("");
 
   // Holiday form
   const [hPort, setHPort] = useState("");
@@ -94,7 +95,7 @@ export default function PortReferencePage() {
       holiday_type: hType,
       recurring: hRecurring,
     });
-    setMsg(t("page.portRef.holiday_added", "Holiday added"));
+    toast.success(t("page.portRef.holiday_added", "Holiday added"));
     setHPort(""); setHDate(""); setHName("");
     await loadHolidays();
   }
@@ -108,7 +109,7 @@ export default function PortReferencePage() {
       vessel_size_band: rBand,
       basis: rBasis,
     });
-    setMsg(t("page.portRef.rate_added", "Rate added"));
+    toast.success(t("page.portRef.rate_added", "Rate added"));
     setRPort(""); setRAmount("");
     await loadRates();
   }
@@ -136,11 +137,6 @@ export default function PortReferencePage() {
         {t("page.portRef.title", "Port Reference Data")}
       </h1>
 
-      {msg && (
-        <div style={{ padding: "8px 12px", background: "var(--green-50)", color: "var(--green-700)", borderRadius: 6, marginBottom: 16 }}>
-          {msg}
-        </div>
-      )}
 
       <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 24 }}>
         <button style={tabStyle("holidays")} onClick={() => setTab("holidays")}>

@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Identity = {
   microsoft_enabled: boolean;
@@ -23,10 +24,10 @@ type Identity = {
 
 export default function PlatformIdentityPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [form, setForm] = useState<Identity | null>(null);
   const [domains, setDomains] = useState("");
   const [logs, setLogs] = useState<any[]>([]);
-  const [msg, setMsg] = useState("");
 
   async function load() {
     const data = await apiGet("/api/v1/platform/identity");
@@ -36,7 +37,7 @@ export default function PlatformIdentityPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.identity.admin_required", "Platform admin required")));
+    load().catch(() => toast.success(t("page.identity.admin_required", "Platform admin required")));
   }, [t]);
 
   async function save(e: FormEvent) {
@@ -49,14 +50,14 @@ export default function PlatformIdentityPage() {
         .map((s) => s.trim())
         .filter(Boolean),
     });
-    setMsg(t("page.identity.saved", "Platform identity settings saved. Client secrets stay in server env only."));
+    toast.success(t("page.identity.saved", "Platform identity settings saved. Client secrets stay in server env only."));
     await load();
   }
 
   if (!form) {
     return (
       <AppShell>
-        <p>{msg || t("common.loading", "Loading…")}</p>
+        <p>{t("common.loading", "Loading…")}</p>
       </AppShell>
     );
   }
@@ -69,7 +70,6 @@ export default function PlatformIdentityPage() {
       <p className="page-sub">
         {t("page.identity.sub", "Platform owns global OAuth apps, email delivery channel, and default policy templates.")}
       </p>
-      {msg ? <p className="flash">{msg}</p> : null}
 
       <div className="card verdict" style={{ marginBottom: "1rem", padding: "0.85rem 1rem", borderLeft: "4px solid var(--accent)", background: "#f3fbfa" }}>
         <strong>{t("page.identity.email_box", "邮件通道与发件人")}</strong>
@@ -100,7 +100,7 @@ export default function PlatformIdentityPage() {
         </div>
       </div>
 
-      <form className="panel" onSubmit={(e) => save(e).catch(() => setMsg(t("common.failed", "Failed")))}>
+      <form className="panel" onSubmit={(e) => save(e).catch(() => toast.success(t("common.failed", "Failed")))}>
         <h2>{t("page.identity.methods", "Global methods")}</h2>
         <div className="check-grid">
           {(

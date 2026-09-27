@@ -5,6 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { PageGuide } from "@/components/PageGuide";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Item = {
   id: string;
@@ -16,8 +17,8 @@ type Item = {
 
 export default function WorkflowInboxPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Item[]>([]);
-  const [msg, setMsg] = useState("");
 
   async function load() {
     setRows(await apiGet("/api/v1/workflows/inbox"));
@@ -29,7 +30,7 @@ export default function WorkflowInboxPage() {
 
   async function decide(id: string, decision: string) {
     await apiPost(`/api/v1/workflows/${id}/decide`, { decision });
-    setMsg(t("page.inbox.decided", "{decision} recorded", { decision }));
+    toast.success(t("page.inbox.decided", "{decision} recorded", { decision }));
     await load();
   }
 
@@ -42,7 +43,6 @@ export default function WorkflowInboxPage() {
         </div>
         <PageGuide pageKey="workflows_inbox" />
       </div>
-      {msg ? <p>{msg}</p> : null}
       <div className="panel">
         <table className="table">
           <thead>
@@ -67,11 +67,11 @@ export default function WorkflowInboxPage() {
                   <button
                     className="btn btn-primary"
                     type="button"
-                    onClick={() => decide(r.id, "approve").catch(() => setMsg(t("common.failed", "Failed")))}
+                    onClick={() => decide(r.id, "approve").catch(() => toast.success(t("common.failed", "Failed")))}
                   >
                     {t("common.approve", "Approve")}
                   </button>
-                  <button className="btn" type="button" onClick={() => decide(r.id, "reject").catch(() => setMsg(t("common.failed", "Failed")))}>
+                  <button className="btn" type="button" onClick={() => decide(r.id, "reject").catch(() => toast.success(t("common.failed", "Failed")))}>
                     {t("common.reject", "Reject")}
                   </button>
                 </td>

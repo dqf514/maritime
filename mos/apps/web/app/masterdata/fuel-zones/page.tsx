@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type FuelZone = {
   id: string;
@@ -23,8 +24,8 @@ type PositionResult = {
 
 export default function FuelZonesPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [zones, setZones] = useState<FuelZone[]>([]);
-  const [msg, setMsg] = useState("");
 
   // Position lookup
   const [lat, setLat] = useState("");
@@ -70,14 +71,14 @@ export default function FuelZonesPage() {
       zone_type: zType,
       fuel_requirements: fuelReqs,
     });
-    setMsg(t("page.fuelZones.zone_created", "Zone created"));
+    toast.success(t("page.fuelZones.zone_created", "Zone created"));
     setZName(""); setZSulfur("");
     await load();
   }
 
   async function seedPresets() {
     await apiPost("/api/v1/reference/fuel-zones/seed-presets", {});
-    setMsg(t("page.fuelZones.presets_seeded", "Preset zones seeded"));
+    toast.success(t("page.fuelZones.presets_seeded", "Preset zones seeded"));
     await load();
   }
 
@@ -99,11 +100,6 @@ export default function FuelZonesPage() {
         </button>
       </div>
 
-      {msg && (
-        <div style={{ padding: "8px 12px", background: "var(--green-50)", color: "var(--green-700)", borderRadius: 6, marginBottom: 16 }}>
-          {msg}
-        </div>
-      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginBottom: 24 }}>
         <div className="card" style={{ padding: 16 }}>

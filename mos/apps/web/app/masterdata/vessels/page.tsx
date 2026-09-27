@@ -9,6 +9,7 @@ import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Vessel = {
   id: string;
@@ -21,10 +22,10 @@ type Vessel = {
 
 export default function VesselsPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Vessel[]>([]);
   const [name, setName] = useState("");
   const [imo, setImo] = useState("");
-  const [msg, setMsg] = useState("");
   const [open, setOpen] = useState<Vessel | null>(null);
   const [edit, setEdit] = useState({ name: "", imo: "", flag: "", vessel_type: "", status: "active" });
   const [saving, setSaving] = useState(false);
@@ -39,11 +40,11 @@ export default function VesselsPage() {
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
-    setMsg("");
+    toast.success("");
     await apiPost("/api/v1/masterdata/vessels", { name, imo: imo || null, status: "active" });
     setName("");
     setImo("");
-    setMsg(t("page.vessels.created", "Vessel created"));
+    toast.success(t("page.vessels.created", "Vessel created"));
     await load();
   }
 
@@ -69,7 +70,7 @@ export default function VesselsPage() {
         vessel_type: edit.vessel_type || null,
         status: edit.status,
       });
-      setMsg(t("common.saved", "Saved"));
+      toast.success(t("common.saved", "Saved"));
       setOpen(null);
       await load();
     } finally {
@@ -82,7 +83,7 @@ export default function VesselsPage() {
     setSaving(true);
     try {
       await apiDelete(`/api/v1/masterdata/vessels/${open.id}`);
-      setMsg(t("common.recycled", "Moved to recycle bin"));
+      toast.success(t("common.recycled", "Moved to recycle bin"));
       setOpen(null);
       await load();
     } finally {
@@ -107,7 +108,7 @@ export default function VesselsPage() {
       </div>
       <form
         className="panel"
-        onSubmit={(e) => onCreate(e).catch(() => setMsg(t("page.vessels.create_fail", "Create failed")))}
+        onSubmit={(e) => onCreate(e).catch(() => toast.success(t("page.vessels.create_fail", "Create failed")))}
         style={{ marginBottom: "1rem" }}
       >
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
@@ -123,7 +124,6 @@ export default function VesselsPage() {
             {t("page.vessels.add", "New vessel")}
           </button>
         </div>
-        {msg ? <p style={{ marginBottom: 0 }}>{msg}</p> : null}
       </form>
       <div className="panel">
         <table className="table">

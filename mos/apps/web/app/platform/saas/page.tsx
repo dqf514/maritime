@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Tenant = { id: string; code: string; name: string };
 type Plan = { code: string; name: string; price_amount: number; billing_period: string };
@@ -21,6 +22,7 @@ type SubRow = {
 
 export default function PlatformSaasPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [overview, setOverview] = useState<Record<string, unknown> | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [packs, setPacks] = useState<Pack[]>([]);
@@ -34,7 +36,6 @@ export default function PlatformSaasPage() {
   const [packCode, setPackCode] = useState("");
   const [grantQuotas, setGrantQuotas] = useState(true);
   const [note, setNote] = useState("");
-  const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function load() {
@@ -62,7 +63,7 @@ export default function PlatformSaasPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("page.saas.admin_required", "需要平台管理员")));
+    load().catch(() => toast.success(t("page.saas.admin_required", "需要平台管理员")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
@@ -76,11 +77,11 @@ export default function PlatformSaasPage() {
         grant_quotas: grantQuotas,
         note: note || null,
       });
-      setMsg(t("page.saas.assigned", "已为 {tenant} 开通套餐 {plan}", { tenant: res.tenant_code, plan: res.plan_code }));
+      toast.success(t("page.saas.assigned", "已为 {tenant} 开通套餐 {plan}", { tenant: res.tenant_code, plan: res.plan_code }));
       setNote("");
       await load();
     } catch (err: any) {
-      setMsg(String(err?.detail?.message || err?.message || t("common.failed", "失败")));
+      toast.success(String(err?.detail?.message || err?.message || t("common.failed", "失败")));
     } finally {
       setBusy(false);
     }
@@ -95,7 +96,7 @@ export default function PlatformSaasPage() {
         pack_code: packCode,
         note: note || null,
       });
-      setMsg(
+      toast.success(
         t("page.saas.credited", "已为 {tenant} 充值 {pack}（{qty}）", {
           tenant: res.tenant_code,
           pack: res.pack_code,
@@ -105,7 +106,7 @@ export default function PlatformSaasPage() {
       setNote("");
       await load();
     } catch (err: any) {
-      setMsg(String(err?.detail?.message || err?.message || t("common.failed", "失败")));
+      toast.success(String(err?.detail?.message || err?.message || t("common.failed", "失败")));
     } finally {
       setBusy(false);
     }
@@ -117,10 +118,10 @@ export default function PlatformSaasPage() {
     setBusy(true);
     try {
       const res = await apiPost(`/api/v1/platform/saas/tenants/${tenantId}/cancel-subscription`, {});
-      setMsg(t("page.saas.cancelled", "已取消 {n} 条订阅（{tenant}）", { n: res.cancelled, tenant: res.tenant_code }));
+      toast.success(t("page.saas.cancelled", "已取消 {n} 条订阅（{tenant}）", { n: res.cancelled, tenant: res.tenant_code }));
       await load();
     } catch {
-      setMsg(t("common.failed", "失败"));
+      toast.success(t("common.failed", "失败"));
     } finally {
       setBusy(false);
     }
@@ -142,7 +143,6 @@ export default function PlatformSaasPage() {
           {t("page.saas.tenants_link", "租户 →")}
         </Link>
       </div>
-      {msg ? <p className="flash">{msg}</p> : null}
 
       <div className="workbench-grid">
         <div className="wb-tile">

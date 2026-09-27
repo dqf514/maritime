@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Msg = {
   id: string;
@@ -18,9 +19,9 @@ type Account = { id: string; email: string; provider: string; status: string };
 
 export default function EmailReviewPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [rows, setRows] = useState<Msg[]>([]);
-  const [msg, setMsg] = useState("");
 
   async function load() {
     const [acc, review] = await Promise.all([
@@ -49,16 +50,16 @@ export default function EmailReviewPage() {
   }
 
   async function sync() {
-    setMsg(t("page.email.syncing", "Syncing demo mailbox…"));
+    toast.success(t("page.email.syncing", "Syncing demo mailbox…"));
     const acc = await ensureDemoAccount();
     const result = await apiPost(`/api/v1/email/accounts/${acc.id}/sync`);
     await load();
-    setMsg(t("page.email.synced", "Synced {n} message(s).", { n: result.synced ?? 1 }));
+    toast.success(t("page.email.synced", "Synced {n} message(s).", { n: result.synced ?? 1 }));
   }
 
   async function confirm(id: string) {
     await apiPost(`/api/v1/email/review/${id}/confirm`, {});
-    setMsg(t("page.email.confirmed", "Parse result confirmed."));
+    toast.success(t("page.email.confirmed", "Parse result confirmed."));
     await load();
   }
 
@@ -66,10 +67,9 @@ export default function EmailReviewPage() {
     <AppShell>
       <h1 style={{ marginTop: 0 }}>{t("page.email.title", "Email Review")}</h1>
       <p style={{ color: "var(--muted)" }}>{t("page.email.sub", "AI-parsed recaps awaiting confirmation.")}</p>
-      <button className="btn btn-primary" type="button" onClick={() => sync().catch(() => setMsg(t("page.email.sync_fail", "Sync failed")))}>
+      <button className="btn btn-primary" type="button" onClick={() => sync().catch(() => toast.success(t("page.email.sync_fail", "Sync failed")))}>
         {t("page.email.sync_btn", "Sync demo inbox")}
       </button>
-      {msg ? <p>{msg}</p> : null}
       <div className="panel" style={{ marginTop: "1rem" }}>
         <table className="table">
           <thead>
@@ -97,7 +97,7 @@ export default function EmailReviewPage() {
                     <button
                       className="btn"
                       type="button"
-                      onClick={() => confirm(r.id).catch(() => setMsg(t("page.email.confirm_fail", "Confirm failed")))}
+                      onClick={() => confirm(r.id).catch(() => toast.success(t("page.email.confirm_fail", "Confirm failed")))}
                     >
                       {t("common.confirm", "Confirm")}
                     </button>

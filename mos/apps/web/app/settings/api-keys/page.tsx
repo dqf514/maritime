@@ -6,6 +6,7 @@ import { AppShell } from "@/components/AppShell";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type KeyRow = {
   id: string;
@@ -18,9 +19,9 @@ type KeyRow = {
 
 export default function ApiKeysPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<KeyRow[]>([]);
   const [name, setName] = useState("集成密钥");
-  const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [rawOnce, setRawOnce] = useState("");
   const [open, setOpen] = useState<KeyRow | null>(null);
@@ -38,14 +39,14 @@ export default function ApiKeysPage() {
   async function create(e: FormEvent) {
     e.preventDefault();
     setErr("");
-    setMsg("");
+    toast.success("");
     try {
       const created = await apiPost("/api/v1/settings/api-keys", {
         name,
         scopes: ["read", "write"],
       });
       setRawOnce(created.raw_key || "");
-      setMsg(t("page.apikeys.created", "API 密钥已创建 — 请立即复制密钥，之后不会再显示。"));
+      toast.success(t("page.apikeys.created", "API 密钥已创建 — 请立即复制密钥，之后不会再显示。"));
       await load();
     } catch (ex: any) {
       setErr(ex?.message || t("common.failed", "失败"));
@@ -69,7 +70,7 @@ export default function ApiKeysPage() {
           .map((s) => s.trim())
           .filter(Boolean),
       });
-      setMsg(t("common.saved", "已保存"));
+      toast.success(t("common.saved", "已保存"));
       setOpen(null);
       await load();
     } finally {
@@ -82,7 +83,7 @@ export default function ApiKeysPage() {
     setSaving(true);
     try {
       await apiDelete(`/api/v1/settings/api-keys/${open.id}`);
-      setMsg(t("common.recycled", "已移入回收站"));
+      toast.success(t("common.recycled", "已移入回收站"));
       setOpen(null);
       await load();
     } finally {
@@ -101,7 +102,6 @@ export default function ApiKeysPage() {
           {t("nav.recycle", "回收站")}
         </Link>
       </div>
-      {msg ? <p className="flash">{msg}</p> : null}
       {err ? <div className="error">{err}</div> : null}
       {rawOnce ? (
         <div className="panel" style={{ borderLeft: "4px solid var(--accent)" }}>

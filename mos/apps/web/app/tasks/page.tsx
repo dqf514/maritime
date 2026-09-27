@@ -9,6 +9,7 @@ import { RecordModal } from "@/components/RecordModal";
 import { StateView } from "@/components/StateView";
 import { apiGet, apiPatch, apiPost, type TaskAssignee, type TaskOut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Tab = "open" | "done" | "all";
 
@@ -34,12 +35,12 @@ const EMPTY_DRAFT: Draft = {
 
 export default function TasksPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [tab, setTab] = useState<Tab>("open");
   const [tasks, setTasks] = useState<TaskOut[]>([]);
   const [assignees, setAssignees] = useState<TaskAssignee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [msg, setMsg] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState("");
@@ -87,7 +88,7 @@ export default function TasksPage() {
   async function saveDraft() {
     if (!draft) return;
     if (!draft.title.trim()) {
-      setMsg(t("page.tasks.need_title", "请填写任务标题"));
+      toast.success(t("page.tasks.need_title", "请填写任务标题"));
       return;
     }
     setSaving(true);
@@ -101,15 +102,15 @@ export default function TasksPage() {
       };
       if (draft.id) {
         await apiPatch(`/api/v1/tasks/${draft.id}`, payload);
-        setMsg(t("page.tasks.updated", "任务已更新"));
+        toast.success(t("page.tasks.updated", "任务已更新"));
       } else {
         await apiPost("/api/v1/tasks", payload);
-        setMsg(t("page.tasks.created", "任务已创建"));
+        toast.success(t("page.tasks.created", "任务已创建"));
       }
       setDraft(null);
       await load();
     } catch (e: any) {
-      setMsg(e?.message || t("common.failed", "操作失败"));
+      toast.success(e?.message || t("common.failed", "操作失败"));
     } finally {
       setSaving(false);
     }
@@ -121,7 +122,7 @@ export default function TasksPage() {
       await apiPost(`/api/v1/tasks/${task.id}/${action}`);
       await load();
     } catch (e: any) {
-      setMsg(e?.message || t("common.failed", "操作失败"));
+      toast.success(e?.message || t("common.failed", "操作失败"));
     } finally {
       setBusyId("");
     }
@@ -148,7 +149,6 @@ export default function TasksPage() {
           </button>
         </div>
       </div>
-      {msg ? <p className="flash">{msg}</p> : null}
 
       <div className="page-tabs" role="tablist">
         {tabs.map((x) => (

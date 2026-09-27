@@ -398,13 +398,6 @@ export function NavIcon({
           <path d="M8 15v-4M12 15V8M16 15v-7" />
         </svg>
       );
-    case "platform_mod":
-      return (
-        <svg {...common}>
-          <rect x="3" y="4" width="18" height="6" rx="1" />
-          <rect x="3" y="14" width="18" height="6" rx="1" />
-        </svg>
-      );
     default:
       return (
         <svg {...common}>
@@ -426,7 +419,6 @@ export function sectionIconId(section: string): string {
     master: "sec_master",
     admin: "sec_admin",
     platform: "sec_platform",
-    platform_mod: "platform_mod",
     desk: "sec_desk",
   };
   return map[section] || "sec_desk";

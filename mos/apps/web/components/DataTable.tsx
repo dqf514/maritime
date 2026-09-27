@@ -5,6 +5,7 @@ import {
   KeyboardEvent,
   ReactNode,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -34,6 +35,16 @@ export type DataTableProps<T extends { id: string | number }> = {
   onRowContextMenu?: (row: T, e: React.MouseEvent) => void;
   selectedIds?: Set<string | number>;
   onSelectionChange?: (ids: Set<string | number>) => void;
+  // U1 服务端分页/排序: `data` 只含当前页；提供 onPageChange 即进入受控分页，
+  // 提供 onSortChange 即把排序交给服务端（本地不再排序）。
+  total?: number;
+  page?: number;
+  onPageChange?: (page: number, limit: number) => void;
+  onSortChange?: (key: string, dir: SortDir) => void;
+  // U6 列管理：提供 storageKey 即显示列显隐开关，选择持久化到 localStorage
+  storageKey?: string;
+  // U6 行内编辑：声明可编辑列，双击单元格进入编辑，回车/失焦提交 onSave
+  editable?: { keys: string[]; onSave: (row: T, key: string, value: string) => void | Promise<void> };
 };
 
 type SortDir = "asc" | "desc";
@@ -67,14 +78,52 @@ export function DataTable<T extends { id: string | number }>({
   onRowContextMenu,
   selectedIds: controlledSelected,
   onSelectionChange,
+  total,
+  page: controlledPage,
+  onPageChange,
+  onSortChange,
+  storageKey,
+  editable,
 }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [page, setPage] = useState(1);
+  const [pageState, setPageState] = useState(1);
+  const [rowLimit, setRowLimit] = useState(pageSize);
   const [internalSelected, setInternalSelected] = useState<Set<string | number>>(new Set());
   const [colWidths, setColWidths] = useState<Record<string, number>>({});
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
+  const [colMenuOpen, setColMenuOpen] = useState(false);
+  const [editing, setEditing] = useState<{ row: string | number; key: string; value: string } | null>(null);
   const [focusRow, setFocusRow] = useState(-1);
   const tbodyRef = useRef<HTMLTableSectionElement>(null);
+
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const raw = JSON.parse(localStorage.getItem(`marios_cols_${storageKey}`) || "[]");
+      setHiddenCols(new Set(Array.isArray(raw) ? raw : []));
+    } catch {
+      setHiddenCols(new Set());
+    }
+  }, [storageKey]);
+
+  function toggleCol(key: string) {
+    setHiddenCols((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      if (storageKey) {
+        try {
+          localStorage.setItem(`marios_cols_${storageKey}`, JSON.stringify([...next]));
+        } catch {
+          // 忽略存储失败
+        }
+      }
+      return next;
+    });
+  }
+
+  const visibleCols = useMemo(() => columns.filter((c) => !hiddenCols.has(c.key)), [columns, hiddenCols]);
 
   const selectedIds = controlledSelected ?? internalSelected;
   const setSelectedIds = useCallback(
@@ -85,7 +134,29 @@ export function DataTable<T extends { id: string | number }>({
     [onSelectionChange],
   );
 
+  const controlled = Boolean(onPageChange);
+
+  function gotoPage(next: number) {
+    if (onPageChange) onPageChange(next, rowLimit);
+    else setPageState(next);
+  }
+
+  function changeLimit(n: number) {
+    setRowLimit(n);
+    if (onPageChange) onPageChange(1, n);
+    else setPageState(1);
+  }
+
   function handleSort(key: string) {
+    if (onSortChange) {
+      // 服务端排序：asc ↔ desc 两态循环
+      const nextDir: SortDir = sortKey === key && sortDir === "asc" ? "desc" : "asc";
+      setSortKey(key);
+      setSortDir(nextDir);
+      onSortChange(key, nextDir);
+      gotoPage(1);
+      return;
+    }
     if (sortKey === key) {
       if (sortDir === "asc") setSortDir("desc");
       else {
@@ -96,11 +167,11 @@ export function DataTable<T extends { id: string | number }>({
       setSortKey(key);
       setSortDir("asc");
     }
-    setPage(1);
+    gotoPage(1);
   }
 
   const sorted = useMemo(() => {
-    if (!sortKey) return data;
+    if (!sortKey || onSortChange) return data;
     const col = columns.find((c) => c.key === sortKey);
     const isSortable = col?.sortable !== false && (col?.sortable || globalSortable);
     if (!isSortable) return data;
@@ -113,16 +184,18 @@ export function DataTable<T extends { id: string | number }>({
     });
     if (sortDir === "desc") arr.reverse();
     return arr;
-  }, [data, sortKey, sortDir, columns, globalSortable]);
+  }, [data, sortKey, sortDir, columns, globalSortable, onSortChange]);
 
-  const totalPages = paginatable ? Math.max(1, Math.ceil(sorted.length / pageSize)) : 1;
-  const safePage = Math.min(page, totalPages);
+  const totalRows = controlled ? (total ?? data.length) : sorted.length;
+  const totalPages = paginatable ? Math.max(1, Math.ceil(totalRows / rowLimit)) : 1;
+  const safePage = controlled ? Math.min(controlledPage ?? 1, totalPages) : Math.min(pageState, totalPages);
 
   const pageData = useMemo(() => {
+    if (controlled) return data;
     if (!paginatable) return sorted;
-    const start = (safePage - 1) * pageSize;
-    return sorted.slice(start, start + pageSize);
-  }, [sorted, paginatable, safePage, pageSize]);
+    const start = (safePage - 1) * rowLimit;
+    return sorted.slice(start, start + rowLimit);
+  }, [sorted, paginatable, safePage, rowLimit, controlled, data]);
 
   const allPageIds = pageData.map((r) => r.id);
   const allChecked = allPageIds.length > 0 && allPageIds.every((id) => selectedIds.has(id));
@@ -190,11 +263,28 @@ export function DataTable<T extends { id: string | number }>({
 
   return (
     <div className="dt-wrapper">
+      {storageKey ? (
+        <div className="dt-colmenu">
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setColMenuOpen((v) => !v)}>
+            {colMenuOpen ? "▴" : "▾"} 列
+          </button>
+          {colMenuOpen ? (
+            <div className="dt-colmenu-pop">
+              {columns.map((col) => (
+                <label key={col.key}>
+                  <input type="checkbox" checked={!hiddenCols.has(col.key)} onChange={() => toggleCol(col.key)} />
+                  {col.title || col.key}
+                </label>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="dt-scroll">
         <table className={tableClass}>
           <colgroup>
             {selectable && <col style={{ width: 40 }} />}
-            {columns.map((col) => (
+            {visibleCols.map((col) => (
               <col
                 key={col.key}
                 style={{
@@ -218,7 +308,7 @@ export function DataTable<T extends { id: string | number }>({
                   />
                 </th>
               )}
-              {columns.map((col) => {
+              {visibleCols.map((col) => {
                 const canSort =
                   col.sortable !== false && (col.sortable || globalSortable);
                 const isSorted = sortKey === col.key;
@@ -271,7 +361,7 @@ export function DataTable<T extends { id: string | number }>({
             {pageData.length === 0 ? (
               <tr>
                 <td
-                  colSpan={columns.length + (selectable ? 1 : 0)}
+                  colSpan={visibleCols.length + (selectable ? 1 : 0)}
                   className="dt-empty"
                 >
                   {emptyText}
@@ -305,7 +395,7 @@ export function DataTable<T extends { id: string | number }>({
                         />
                       </td>
                     )}
-                    {columns.map((col) => {
+                    {visibleCols.map((col) => {
                       const val = getNestedValue(row, col.key);
                       const cls = [
                         col.align ? `dt-align-${col.align}` : "",
@@ -313,13 +403,45 @@ export function DataTable<T extends { id: string | number }>({
                       ]
                         .filter(Boolean)
                         .join(" ");
+                      const editState = editing && editing.row === row.id && editing.key === col.key ? editing : null;
+                      const isEditing = Boolean(editable && editState);
                       return (
-                        <td key={col.key} className={cls || undefined}>
-                          {col.render
-                            ? col.render(val, row, i)
-                            : val != null
-                              ? String(val)
-                              : ""}
+                        <td
+                          key={col.key}
+                          className={cls || undefined}
+                          onDoubleClick={() => {
+                            if (editable && editable.keys.includes(col.key) && !col.render) {
+                              setEditing({ row: row.id, key: col.key, value: val != null ? String(val) : "" });
+                            }
+                          }}
+                        >
+                          {editState ? (
+                            <input
+                              autoFocus
+                              className="dt-inline-edit"
+                              value={editState.value}
+                              onChange={(e) => setEditing({ ...editState, value: e.target.value })}
+                              onBlur={() => {
+                                editable?.onSave(row, editState.key, editState.value);
+                                setEditing(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  editable?.onSave(row, editState.key, editState.value);
+                                  setEditing(null);
+                                } else if (e.key === "Escape") {
+                                  setEditing(null);
+                                }
+                                e.stopPropagation();
+                              }}
+                            />
+                          ) : col.render ? (
+                            col.render(val, row, i)
+                          ) : val != null ? (
+                            String(val)
+                          ) : (
+                            ""
+                          )}
                         </td>
                       );
                     })}
@@ -330,16 +452,11 @@ export function DataTable<T extends { id: string | number }>({
           </tbody>
         </table>
       </div>
-      {paginatable && sorted.length > 0 && (
+      {paginatable && totalRows > 0 && (
         <div className="dt-pagination">
           <div className="dt-page-size">
             <span>Rows per page:</span>
-            <select
-              value={pageSize}
-              onChange={(e) => {
-                setPage(1);
-              }}
-            >
+            <select value={rowLimit} onChange={(e) => changeLimit(Number(e.target.value))}>
               {[10, 25, 50, 100].map((n) => (
                 <option key={n} value={n}>
                   {n}
@@ -348,14 +465,14 @@ export function DataTable<T extends { id: string | number }>({
             </select>
           </div>
           <div className="dt-page-info">
-            {(safePage - 1) * pageSize + 1}–
-            {Math.min(safePage * pageSize, sorted.length)} of {sorted.length}
+            {(safePage - 1) * rowLimit + 1}–
+            {Math.min(safePage * rowLimit, totalRows)} of {totalRows}
           </div>
           <div className="dt-page-btns">
             <button
               type="button"
               disabled={safePage <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              onClick={() => gotoPage(Math.max(1, safePage - 1))}
               aria-label="Previous page"
             >
               ‹
@@ -363,7 +480,7 @@ export function DataTable<T extends { id: string | number }>({
             <button
               type="button"
               disabled={safePage >= totalPages}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              onClick={() => gotoPage(Math.min(totalPages, safePage + 1))}
               aria-label="Next page"
             >
               ›

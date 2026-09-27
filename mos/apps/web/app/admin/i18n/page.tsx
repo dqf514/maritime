@@ -4,13 +4,14 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 export default function TenantI18nPage() {
   const { t, term, reload } = useI18n();
+  const toast = useToast();
   const [settings, setSettings] = useState<any>(null);
   const [terms, setTerms] = useState<any[]>([]);
   const [q, setQ] = useState("");
-  const [msg, setMsg] = useState("");
   const [editKey, setEditKey] = useState("");
   const [editLabel, setEditLabel] = useState("");
 
@@ -21,13 +22,13 @@ export default function TenantI18nPage() {
   }
 
   useEffect(() => {
-    load().catch(() => setMsg(t("i18n.admin_required", "Tenant admin required")));
+    load().catch(() => toast.success(t("i18n.admin_required", "Tenant admin required")));
   }, []);
 
   async function saveSettings(e: FormEvent) {
     e.preventDefault();
     await apiPut("/api/v1/admin/i18n/settings", settings);
-    setMsg(t("common.saved", "Saved"));
+    toast.success(t("common.saved", "Saved"));
     await reload();
     await load();
   }
@@ -39,7 +40,7 @@ export default function TenantI18nPage() {
       locale: settings?.default_locale || "en",
       label: editLabel,
     });
-    setMsg(t("i18n.override_saved", "Override saved"));
+    toast.success(t("i18n.override_saved", "Override saved"));
     setEditKey("");
     setEditLabel("");
     await load();
@@ -55,10 +56,9 @@ export default function TenantI18nPage() {
         )}{" "}
         {term("term.tce", "TCE")} {t("i18n.page_sub_end", "wording).")}
       </p>
-      {msg ? <p className="flash">{msg}</p> : null}
 
       {settings ? (
-        <form className="panel" onSubmit={(e) => saveSettings(e).catch(() => setMsg(t("common.failed", "Failed")))}>
+        <form className="panel" onSubmit={(e) => saveSettings(e).catch(() => toast.success(t("common.failed", "Failed")))}>
           <h2>{t("i18n.languages", "Languages")}</h2>
           <label>
             {t("i18n.default_locale", "Default locale")}
@@ -136,7 +136,7 @@ export default function TenantI18nPage() {
           </tbody>
         </table>
         {editKey ? (
-          <form onSubmit={(e) => saveOverride(e).catch(() => setMsg(t("i18n.override_fail", "Override failed")))} style={{ marginTop: "1rem" }}>
+          <form onSubmit={(e) => saveOverride(e).catch(() => toast.success(t("i18n.override_fail", "Override failed")))} style={{ marginTop: "1rem" }}>
             <h3>
               {t("common.override", "Override")} <code>{editKey}</code>
             </h3>

@@ -7,6 +7,7 @@ import { LookupSelect } from "@/components/LookupSelect";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type Port = {
   id: string;
@@ -27,6 +28,7 @@ function parseHolidays(v: string): string[] {
 
 export default function PortsPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<Port[]>([]);
   const [name, setName] = useState("");
   const [unlocode, setUnlocode] = useState("");
@@ -34,7 +36,6 @@ export default function PortsPage() {
   const [timezone, setTimezone] = useState("Asia/Shanghai");
   const [holidays, setHolidays] = useState("");
   const [isEu, setIsEu] = useState(false);
-  const [msg, setMsg] = useState("");
   const [open, setOpen] = useState<Port | null>(null);
   const [edit, setEdit] = useState({ name: "", unlocode: "", country: "", timezone: "UTC", holidays: "", is_eu: false });
   const [saving, setSaving] = useState(false);
@@ -61,7 +62,7 @@ export default function PortsPage() {
     setUnlocode("");
     setHolidays("");
     setIsEu(false);
-    setMsg(t("page.ports.created", "Port created"));
+    toast.success(t("page.ports.created", "Port created"));
     await load();
   }
 
@@ -89,7 +90,7 @@ export default function PortsPage() {
         holidays: parseHolidays(edit.holidays),
         is_eu: edit.is_eu,
       });
-      setMsg(t("common.saved", "Saved"));
+      toast.success(t("common.saved", "Saved"));
       setOpen(null);
       await load();
     } finally {
@@ -102,7 +103,7 @@ export default function PortsPage() {
     setSaving(true);
     try {
       await apiDelete(`/api/v1/masterdata/ports/${open.id}`);
-      setMsg(t("common.recycled", "Moved to recycle bin"));
+      toast.success(t("common.recycled", "Moved to recycle bin"));
       setOpen(null);
       await load();
     } finally {
@@ -123,7 +124,7 @@ export default function PortsPage() {
       </div>
       <form
         className="panel"
-        onSubmit={(e) => onCreate(e).catch(() => setMsg(t("page.ports.create_fail", "Create failed")))}
+        onSubmit={(e) => onCreate(e).catch(() => toast.success(t("page.ports.create_fail", "Create failed")))}
         style={{ marginBottom: "1rem" }}
       >
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
@@ -155,7 +156,6 @@ export default function PortsPage() {
             {t("page.ports.add", "New port")}
           </button>
         </div>
-        {msg ? <p style={{ marginBottom: 0 }}>{msg}</p> : null}
       </form>
       <div className="panel">
         <table className="table">

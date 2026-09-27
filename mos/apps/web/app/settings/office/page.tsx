@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/components/ToastProvider";
 
 type OfficeStatus = {
   graph_mode: string;
@@ -40,13 +41,13 @@ type Webhook = {
 
 export default function OfficeEcosystemPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const [status, setStatus] = useState<OfficeStatus | null>(null);
   const [jobs, setJobs] = useState<SyncJob[]>([]);
   const [hooks, setHooks] = useState<Webhook[]>([]);
   const [mail, setMail] = useState<Array<Record<string, unknown>>>([]);
   const [drives, setDrives] = useState<Array<Record<string, unknown>>>([]);
   const [teams, setTeams] = useState<Array<Record<string, unknown>>>([]);
-  const [msg, setMsg] = useState("");
   const [hookName, setHookName] = useState("Power Automate");
   const [hookUrl, setHookUrl] = useState("stub://power-automate");
   const [notifyText, setNotifyText] = useState("MariOS alert: voyage DEMO-001 ETA updated.");
@@ -63,7 +64,7 @@ export default function OfficeEcosystemPage() {
   }
 
   useEffect(() => {
-    load().catch((e) => setMsg(String(e?.message || e)));
+    load().catch((e) => toast.success(String(e?.message || e)));
   }, []);
 
   async function connect() {
@@ -72,25 +73,25 @@ export default function OfficeEcosystemPage() {
       window.location.href = res.authorize_url;
       return;
     }
-    setMsg(t("page.office.connected_stub", "Microsoft 365 connected (demo mode)."));
+    toast.success(t("page.office.connected_stub", "Microsoft 365 connected (demo mode)."));
     await load();
   }
 
   async function disconnect() {
     await apiPost("/api/v1/office/disconnect");
-    setMsg(t("page.office.disconnected", "Office link disconnected."));
+    toast.success(t("page.office.disconnected", "Office link disconnected."));
     await load();
   }
 
   async function sync(channel: string) {
     const res = await apiPost("/api/v1/office/sync", { channel, direction: "inbound" });
-    setMsg(t("page.office.sync_done", "Sync {channel}: {status}", { channel, status: res.status }));
+    toast.success(t("page.office.sync_done", "Sync {channel}: {status}", { channel, status: res.status }));
     await load();
   }
 
   async function refreshHealth() {
     const h = await apiGet("/api/v1/office/health");
-    setMsg(t("page.office.health_ok", "Graph health OK — {user}", { user: String(h.user || h.mode) }));
+    toast.success(t("page.office.health_ok", "Graph health OK — {user}", { user: String(h.user || h.mode) }));
     await load();
   }
 
@@ -111,7 +112,7 @@ export default function OfficeEcosystemPage() {
 
   async function sendTeams() {
     const res = await apiPost("/api/v1/office/teams/notify", { text: notifyText });
-    setMsg(t("page.office.teams_sent", "Teams message queued: {id}", { id: String(res.id || "ok") }));
+    toast.success(t("page.office.teams_sent", "Teams message queued: {id}", { id: String(res.id || "ok") }));
   }
 
   async function createHook() {
@@ -120,13 +121,13 @@ export default function OfficeEcosystemPage() {
       target_url: hookUrl,
       events: ["charter.activated", "voyage.started", "invoice.issued", "office.sync.done", "*"],
     });
-    setMsg(t("page.office.hook_created", "Webhook created. Secret: {secret}", { secret: res.secret }));
+    toast.success(t("page.office.hook_created", "Webhook created. Secret: {secret}", { secret: res.secret }));
     await load();
   }
 
   async function testHook(id: string) {
     const res = await apiPost(`/api/v1/office/webhooks/${id}/test`);
-    setMsg(t("page.office.hook_test", "Delivery {status}", { status: res.status }));
+    toast.success(t("page.office.hook_test", "Delivery {status}", { status: res.status }));
     await load();
   }
 
@@ -159,19 +160,18 @@ export default function OfficeEcosystemPage() {
           </p>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <button className="btn btn-primary" type="button" onClick={() => connect().catch((e) => setMsg(String(e)))}>
+          <button className="btn btn-primary" type="button" onClick={() => connect().catch((e) => toast.success(String(e)))}>
             {t("page.office.connect", "Connect Microsoft 365")}
           </button>
-          <button className="btn" type="button" onClick={() => refreshHealth().catch((e) => setMsg(String(e)))}>
+          <button className="btn" type="button" onClick={() => refreshHealth().catch((e) => toast.success(String(e)))}>
             {t("page.office.health", "Health check")}
           </button>
-          <button className="btn" type="button" onClick={() => disconnect().catch((e) => setMsg(String(e)))}>
+          <button className="btn" type="button" onClick={() => disconnect().catch((e) => toast.success(String(e)))}>
             {t("page.office.disconnect", "Disconnect")}
           </button>
         </div>
       </div>
 
-      {msg ? <p className="flash">{msg}</p> : null}
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.office.link", "Tenant link")}</h3>
@@ -193,7 +193,7 @@ export default function OfficeEcosystemPage() {
         </p>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           {(["mail", "onedrive", "sharepoint", "teams"] as const).map((ch) => (
-            <button key={ch} className="btn" type="button" onClick={() => sync(ch).catch((e) => setMsg(String(e)))}>
+            <button key={ch} className="btn" type="button" onClick={() => sync(ch).catch((e) => toast.success(String(e)))}>
               {t("page.office.sync_ch", "Sync {channel}", { channel: ch })}
             </button>
           ))}
@@ -203,7 +203,7 @@ export default function OfficeEcosystemPage() {
       <div className="workbench-grid" style={{ marginTop: "1rem" }}>
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.mail", "Mail")}</h3>
-          <button className="btn" type="button" onClick={() => loadMail().catch((e) => setMsg(String(e)))}>
+          <button className="btn" type="button" onClick={() => loadMail().catch((e) => toast.success(String(e)))}>
             {t("page.office.load_mail", "Load inbox sample")}
           </button>
           <ul>
@@ -217,7 +217,7 @@ export default function OfficeEcosystemPage() {
         </div>
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.files", "OneDrive / SharePoint")}</h3>
-          <button className="btn" type="button" onClick={() => loadDrives().catch((e) => setMsg(String(e)))}>
+          <button className="btn" type="button" onClick={() => loadDrives().catch((e) => toast.success(String(e)))}>
             {t("page.office.load_drives", "List drives")}
           </button>
           <ul>
@@ -230,7 +230,7 @@ export default function OfficeEcosystemPage() {
         </div>
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.teams", "Teams")}</h3>
-          <button className="btn" type="button" onClick={() => loadTeams().catch((e) => setMsg(String(e)))}>
+          <button className="btn" type="button" onClick={() => loadTeams().catch((e) => toast.success(String(e)))}>
             {t("page.office.load_teams", "List teams")}
           </button>
           <ul>
@@ -244,7 +244,7 @@ export default function OfficeEcosystemPage() {
             rows={3}
             style={{ width: "100%", marginTop: "0.5rem" }}
           />
-          <button className="btn btn-primary" type="button" onClick={() => sendTeams().catch((e) => setMsg(String(e)))}>
+          <button className="btn btn-primary" type="button" onClick={() => sendTeams().catch((e) => toast.success(String(e)))}>
             {t("page.office.notify", "Post channel message")}
           </button>
         </div>
@@ -287,7 +287,7 @@ export default function OfficeEcosystemPage() {
             placeholder="https://..."
             style={{ minWidth: "280px" }}
           />
-          <button className="btn" type="button" onClick={() => createHook().catch((e) => setMsg(String(e)))}>
+          <button className="btn" type="button" onClick={() => createHook().catch((e) => toast.success(String(e)))}>
             {t("common.create", "Create")}
           </button>
         </div>
@@ -309,7 +309,7 @@ export default function OfficeEcosystemPage() {
                 </td>
                 <td>{h.status}</td>
                 <td>
-                  <button className="btn" type="button" onClick={() => testHook(h.id).catch((e) => setMsg(String(e)))}>
+                  <button className="btn" type="button" onClick={() => testHook(h.id).catch((e) => toast.success(String(e)))}>
                     {t("common.test", "Test")}
                   </button>
                 </td>
@@ -347,7 +347,7 @@ export default function OfficeEcosystemPage() {
                   )}
                 </td>
                 <td>
-                  <button className="btn" type="button" onClick={() => markAddon(String(a.id), "installed").catch((e) => setMsg(String(e)))}>
+                  <button className="btn" type="button" onClick={() => markAddon(String(a.id), "installed").catch((e) => toast.success(String(e)))}>
                     {t("page.office.mark_installed", "Mark installed")}
                   </button>
                 </td>
