@@ -103,18 +103,33 @@ def _auto_excluded_hours(
 ) -> Decimal:
     """Hours inside [start, end) falling on excepted local days (Sat/Sun/holiday...)."""
     excluded = Decimal("0")
+    for lo, hi, is_excl in _timeline(start, end, excluded_weekdays, holidays):
+        if is_excl:
+            excluded += _delta_hours(lo, hi)
+    return excluded
+
+
+def _timeline(
+    start: datetime,
+    end: datetime,
+    excluded_weekdays: frozenset[int],
+    holidays: set[date],
+) -> list[tuple[datetime, datetime, bool]]:
+    """Day-granular (lo, hi, is_excluded) intervals covering [start, end)."""
+    out: list[tuple[datetime, datetime, bool]] = []
     day = start.date()
     last = end.date()
+    cursor = start
     while day <= last:
-        if day.weekday() in excluded_weekdays or day in holidays:
-            day_start = datetime.combine(day, time.min, tzinfo=start.tzinfo)
-            day_end = day_start + timedelta(days=1)
-            lo = start if start > day_start else day_start
-            hi = end if end < day_end else day_end
-            if hi > lo:
-                excluded += _delta_hours(lo, hi)
+        day_start = datetime.combine(day, time.min, tzinfo=start.tzinfo)
+        day_end = day_start + timedelta(days=1)
+        hi = end if end < day_end else day_end
+        is_excl = day.weekday() in excluded_weekdays or day in holidays
+        if hi > cursor:
+            out.append((cursor, hi, is_excl))
+            cursor = hi
         day += timedelta(days=1)
-    return excluded
+    return out
 
 
 def _allowed_hours(inputs: dict[str, Any]) -> Decimal:
@@ -185,6 +200,11 @@ def _compute_single(inputs: dict[str, Any], warnings: list[str], include_events:
     holidays = _parse_holidays(inputs.get("port_holidays"))
     terms, excl_weekdays, hol_excl, eiu = _term_policy(inputs.get("terms"), warnings)
     parsed = _parse_events(inputs, port_tz)
+    # D9 条款语义：once on demurrage, always on demurrage —— 一旦用时达到
+    # 允许时间，此后所有挂钟时间全计（含条款除外时段）；调用方显式 excluded
+    # 的中断仍然不计。默认关闭，行为与旧行为完全一致。
+    once_on_dem = bool(inputs.get("once_on_demurrage"))
+    on_dem = False
 
     used = Decimal("0")
     auto_excluded_total = Decimal("0")
@@ -210,13 +230,48 @@ def _compute_single(inputs: dict[str, Any], warnings: list[str], include_events:
             raise ValueError(f"Laytime event end {e.isoformat()} is before start {s.isoformat()}")
         span = _delta_hours(s, e)
         skip_days = eiu or bool(ev.get("even_if_used"))
+        counted = Decimal("0")
+        auto = Decimal("0")
         if skip_days or (not excl_weekdays and not hol_excl):
-            used += span
-            auto = Decimal("0")
-        else:
+            counted = span
+        elif not once_on_dem:
             auto = _auto_excluded_hours(s, e, excl_weekdays, holidays if hol_excl else set())
             auto_excluded_total += auto
-            used += span - auto
+            counted = span - auto
+        else:
+            # 区间行走：过界前按条款除外，过界后挂钟时间全计
+            for lo, hi, is_excl in _timeline(s, e, excl_weekdays, holidays if hol_excl else set()):
+                seg = _delta_hours(lo, hi)
+                if on_dem:
+                    counted += seg
+                    used += seg
+                    continue
+                if is_excl:
+                    auto += seg
+                    continue
+                counted += seg
+                used += seg
+                if used >= allowed:
+                    on_dem = True
+            auto_excluded_total += auto
+            if include_events:
+                event_rows.append(
+                    {
+                        "start": s.isoformat(),
+                        "end": e.isoformat(),
+                        "kind": ev.get("kind") or "working",
+                        "caller_excluded": False,
+                        "gross_hours": float(span.quantize(Decimal("0.01"))),
+                        "term_excluded_hours": float(auto.quantize(Decimal("0.01"))),
+                        "counted_hours": float(counted.quantize(Decimal("0.01"))),
+                        "cumulative_hours": float(used.quantize(Decimal("0.01"))),
+                        "note": "once on demurrage — time counts in full" if on_dem else "",
+                    }
+                )
+            continue
+        used += counted
+        if once_on_dem and not on_dem and used >= allowed:
+            on_dem = True
         if include_events:
             event_rows.append(
                 {
@@ -226,7 +281,7 @@ def _compute_single(inputs: dict[str, Any], warnings: list[str], include_events:
                     "caller_excluded": False,
                     "gross_hours": float(span.quantize(Decimal("0.01"))),
                     "term_excluded_hours": float(auto.quantize(Decimal("0.01"))),
-                    "counted_hours": float((span - auto).quantize(Decimal("0.01"))),
+                    "counted_hours": float(counted.quantize(Decimal("0.01"))),
                     "cumulative_hours": float(used.quantize(Decimal("0.01"))),
                     "note": "counts in full (even if used)" if skip_days and (excl_weekdays or hol_excl) else "",
                 }

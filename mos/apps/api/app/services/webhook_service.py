@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import secrets
 from datetime import datetime, timezone
 from uuid import UUID
@@ -16,6 +17,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
 from app.models_office import WebhookEndpoint, WebhookDelivery
+from app.services.job_queue import job_handler
 
 
 def _generate_secret() -> str:
@@ -111,7 +113,13 @@ def dispatch_event(
     event: str,
     payload: dict,
 ) -> list[WebhookDelivery]:
-    """Queue event for all matching active endpoints."""
+    """Queue event for all matching active endpoints.
+
+    每条投递入后台作业队列（webhook.deliver）异步发送，失败指数退避重试；
+    idempotency_key 保证同一 delivery 只入队一次。
+    """
+    from app.services.job_queue import enqueue
+
     subs = db.scalars(
         select(WebhookEndpoint).where(
             WebhookEndpoint.tenant_id == tenant_id,
@@ -136,7 +144,59 @@ def dispatch_event(
     db.commit()
     for d in deliveries:
         db.refresh(d)
+        enqueue(
+            db,
+            "webhook.deliver",
+            {"delivery_id": str(d.id)},
+            tenant_id=tenant_id,
+            idempotency_key=f"webhook:{d.id}",
+        )
     return deliveries
+
+
+@job_handler("webhook.deliver")
+def _deliver_webhook(db: Session, job) -> None:
+    """真实 HTTP 投递：签名、状态回写；非 2xx 抛错触发队列重试。"""
+    import httpx
+
+    from app.models_jobs import Job  # noqa: F401 — 类型提示用
+
+    delivery = db.get(WebhookDelivery, UUID(str(job.payload.get("delivery_id"))))
+    if delivery is None:
+        return
+    if delivery.status == "delivered":
+        return  # at-least-once 下的幂等短路
+    sub = db.get(WebhookEndpoint, delivery.endpoint_id)
+    if sub is None or sub.status != "active":
+        delivery.status = "failed"
+        db.commit()
+        return
+    body = json.dumps({"event": delivery.event, "payload": delivery.payload}, default=str).encode()
+    resp = httpx.post(
+        sub.target_url,
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-MariOS-Event": delivery.event,
+            "X-MariOS-Signature": sign_payload(sub.secret, body),
+        },
+        timeout=10.0,
+    )
+    delivery.attempts += 1
+    delivery.response_code = resp.status_code
+    if resp.status_code < 300:
+        delivery.status = "delivered"
+        sub.last_delivery = {
+            "event": delivery.event,
+            "at": datetime.now(timezone.utc).isoformat(),
+            "code": resp.status_code,
+        }
+    else:
+        delivery.status = "failed"
+        sub.failure_count += 1
+        db.commit()
+        raise RuntimeError(f"webhook delivery {delivery.id} HTTP {resp.status_code}")
+    db.commit()
 
 
 def sign_payload(secret: str, payload: bytes) -> str:

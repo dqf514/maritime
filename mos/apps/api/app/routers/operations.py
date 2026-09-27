@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -733,3 +733,15 @@ def twin_whatif(
     except ValueError as exc:
         raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     return {"level": "L4", "base_tce": base["tce"], "faster_tce": alt["tce"], "delta_tce": alt["tce"] - base["tce"]}
+
+
+@router.get("/ops/eta-watch")
+def ops_eta_watch(
+    deviation_threshold_h: float = Query(12.0, ge=1),
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """D7 ETA 监控：午报/AIS 船位快照 + ETA 偏差预警。"""
+    from app.services.eta_service import eta_watch
+
+    return eta_watch(db, auth.tenant_id, deviation_threshold_h=deviation_threshold_h)

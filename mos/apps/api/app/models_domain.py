@@ -504,3 +504,29 @@ class PortalMessage(Base):
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CharterOffer(Base):
+    """租船报价追踪（Phase 长尾 / D2）：offer/counter 生命周期 + fix 转 CP。
+
+    status: offer | firm | declined | expired | fixed
+    fixed 后 charter_id 指向生成的租约（一键转 CP）。
+    """
+
+    __tablename__ = "charter_offers"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False, index=True)
+    counterparty_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparties.id"))
+    vessel_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("vessels.id"))
+    charterer_name: Mapped[str | None] = mapped_column(Text)
+    cargo: Mapped[str | None] = mapped_column(Text)
+    laycan_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    laycan_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rate: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    demurrage_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    status: Mapped[str] = mapped_column(Text, default="offer")  # offer|firm|declined|expired|fixed
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    charter_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("charters.id"))
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

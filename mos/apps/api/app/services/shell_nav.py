@@ -115,7 +115,7 @@ MODULES: list[dict[str, Any]] = [
         "collapsed_default": False,
     },
     {
-        "id": "platform_mod",
+        "id": "platform",
         "label": "Platform",
         "item_ids": ["plat_home", "plat_tenants", "plat_ops", "plat_saas", "plat_brand", "plat_identity", "plat_health"],
         "roles": ["platform_admin"],
@@ -134,7 +134,7 @@ ROLE_MODULE_PRIORITY: dict[str, list[str]] = {
     "technical": ["technical", "operations", "analytics", "finance"],
     "management": ["analytics", "chartering", "operations", "finance", "technical"],
     "tenant_admin": ["analytics", "chartering", "operations", "finance", "technical"],
-    "platform_admin": ["platform_mod"],
+    "platform_admin": ["platform"],
     "pool_manager": ["finance", "analytics"],
     "risk": ["chartering", "technical", "analytics"],
     "bunker": ["operations", "analytics"],
@@ -319,7 +319,12 @@ def _filter_module_items(module: dict[str, Any], roles: list[str]) -> list[dict[
     if not _role_match(roles, module["roles"]):
         return []
     item_ids = module["item_ids"]
-    catalog = {item["id"]: item for item in NAV_DESK}
+    # 模块条目可能来自任一目录（platform 模块的 plat_* 在 NAV_PLATFORM）。
+    # NAV_ADMIN_DESK 与 NAV_DESK 有同名 id（角色更宽），先到先得以 NAV_DESK 为准。
+    catalog: dict[str, dict[str, Any]] = {}
+    for lst in (NAV_DESK, NAV_ADMIN_DESK, NAV_MASTER, NAV_ADMIN, NAV_PLATFORM):
+        for item in lst:
+            catalog.setdefault(item["id"], item)
     out = []
     for iid in item_ids:
         item = catalog.get(iid)

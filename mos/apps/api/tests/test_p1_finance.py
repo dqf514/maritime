@@ -277,7 +277,7 @@ def test_laytime_from_sof_end_to_end(client, auth_headers, db_session):
     assert body["results"]["result_type"] == "demurrage"
     assert body["results"]["amount"] == 6000.0
 
-    listed = client.get("/api/v1/laytimes", headers=h).json()
+    listed = client.get("/api/v1/laytimes", headers=h).json()["items"]
     assert any(row["id"] == body["id"] for row in listed)
 
 

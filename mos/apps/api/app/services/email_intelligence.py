@@ -155,12 +155,22 @@ def process_inbound_email(
     classification = classify_email(subject, body)
     parse_result = {"classification": classification}
 
+    # D25：LLM 结构化抽取（失败自动回落规则），规则并行做字段级交叉校验。
+    # 落库形状 = 抽取字段 + _source(llm|rules) + _rule_diffs（人工确认对照）。
+    from app.services.llm_extract import extract_fields
+
     if classification["type"] == "fixture_recap":
-        parse_result["fixture_recap"] = parse_fixture_recap(body)
+        parse_result["fixture_recap"] = extract_fields(
+            "fixture_recap", subject, body, rule_fields=parse_fixture_recap(body)
+        )
     elif classification["type"] == "nor":
-        parse_result["nor"] = parse_nor(body)
+        parse_result["nor"] = extract_fields(
+            "nor", subject, body, rule_fields=parse_nor(body)
+        )
     elif classification["type"] == "laytime_statement":
-        parse_result["laytime"] = parse_laytime_statement(body)
+        parse_result["laytime"] = extract_fields(
+            "laytime_statement", subject, body, rule_fields=parse_laytime_statement(body)
+        )
 
     msg.parse_status = "parsed"
     msg.parse_confidence = Decimal(str(classification["confidence"]))

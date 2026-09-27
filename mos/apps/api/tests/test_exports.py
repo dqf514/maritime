@@ -71,7 +71,7 @@ def test_export_voyages_contains_seeded_rows(client, auth_headers):
 
 
 def test_export_invoices_contains_seeded_rows(client, auth_headers):
-    invoices = client.get("/api/v1/invoices", headers=auth_headers).json()
+    invoices = client.get("/api/v1/invoices", headers=auth_headers).json()["items"]
     assert invoices
     text = _get_csv(client, "invoices", auth_headers)
     for inv in invoices:

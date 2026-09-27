@@ -71,6 +71,77 @@ def configure_logging(level: int | str = logging.INFO) -> None:
     _CONFIGURED = True
 
 
+# ── 进程内指标（3.7 可观测性）：/metrics 输出，Prometheus 文本格式 ──
+
+METRICS: dict[str, float] = {
+    "http_requests_total": 0,
+    "http_request_duration_ms_sum": 0.0,
+    "http_5xx_total": 0,
+    "slow_queries_total": 0,
+}
+
+
+def record_request(duration_ms: float, status_code: int) -> None:
+    METRICS["http_requests_total"] += 1
+    METRICS["http_request_duration_ms_sum"] += duration_ms
+    if (status_code or 500) >= 500:
+        METRICS["http_5xx_total"] += 1
+
+
+def render_prometheus() -> str:
+    lines = [
+        "# HELP http_requests_total Total HTTP requests handled.",
+        "# TYPE http_requests_total counter",
+        f"http_requests_total {int(METRICS['http_requests_total'])}",
+        "# HELP http_request_duration_ms_sum Sum of request durations in ms.",
+        "# TYPE http_request_duration_ms_sum counter",
+        f"http_request_duration_ms_sum {METRICS['http_request_duration_ms_sum']:.1f}",
+        "# HELP http_5xx_total Total 5xx responses.",
+        "# TYPE http_5xx_total counter",
+        f"http_5xx_total {int(METRICS['http_5xx_total'])}",
+        "# HELP slow_queries_total SQL statements slower than the threshold.",
+        "# TYPE slow_queries_total counter",
+        f"slow_queries_total {int(METRICS['slow_queries_total'])}",
+    ]
+    return chr(10).join(lines) + chr(10)
+
+
+_SLOW_INSTALLED = False
+_SLOW_THRESHOLD_MS = 200.0
+
+
+def install_slow_query_log(threshold_ms: float = 200.0) -> None:
+    """SQLAlchemy 事件：超阈值语句告警 + 计数（settings.slow_query_ms 控制）。
+
+    幂等：监听器只注册一次，重复调用仅更新阈值（避免多监听器争抢计时键）。
+    """
+    global _SLOW_INSTALLED, _SLOW_THRESHOLD_MS
+    _SLOW_THRESHOLD_MS = threshold_ms
+    if _SLOW_INSTALLED:
+        return
+    _SLOW_INSTALLED = True
+    import time as _time
+
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    log = logging.getLogger("marios.slow_query")
+
+    @event.listens_for(Engine, "before_cursor_execute")
+    def _before(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        conn.info["q_start"] = _time.perf_counter()
+
+    @event.listens_for(Engine, "after_cursor_execute")
+    def _after(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        start = conn.info.get("q_start")
+        if start is None:
+            return
+        elapsed_ms = (_time.perf_counter() - start) * 1000
+        if elapsed_ms >= _SLOW_THRESHOLD_MS:
+            METRICS["slow_queries_total"] += 1
+            log.warning("slow query %.0fms: %s", elapsed_ms, statement[:200])
+
+
 class RequestObservabilityMiddleware:
     """ASGI middleware: request-id propagation + one access log per request."""
 
@@ -105,6 +176,7 @@ class RequestObservabilityMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             duration_ms = (time.perf_counter() - start) * 1000
+            record_request(duration_ms, status_code)
             self.log.info(
                 "%s %s -> %s (%.1fms)",
                 scope.get("method", "-"),

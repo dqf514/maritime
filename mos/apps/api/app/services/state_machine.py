@@ -45,9 +45,9 @@ INVOICE_TRANSITIONS = {
     "pending_approval": {"issued", "draft", "void"},
     "issued": {"partially_paid", "paid", "void"},
     # partially_paid → void is only legitimate together with a credit note /
-    # red-flush (红冲) refund of the received amount; the credit-note workflow
-    # lives in the finance router layer, which must implement it alongside
-    # this transition (void alone does not return money to the counterparty).
+    # red-flush (红冲) refund of the received amount; the invariant is enforced
+    # in services/finance_workflow.assert_void_allowed (INV-VOID-CREDIT).
+    # void alone does not return money to the counterparty.
     # partially_paid → issued / paid → partially_paid are only exercised by the
     # payment-void reversal in the finance router (POST /payments/{id}/void),
     # which rewrites paid_amount before transitioning.

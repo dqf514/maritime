@@ -168,7 +168,7 @@ def test_claim_timebar_inference_and_days_to_timebar(client, auth_headers, db_se
     expected_tb = date(2026, 3, 10) + timedelta(days=90)
     assert claim.json()["time_bar"] == expected_tb.isoformat()
 
-    items = {c["id"]: c for c in client.get("/api/v1/claims", headers=h).json()}
+    items = {c["id"]: c for c in client.get("/api/v1/claims", headers=h).json()["items"]}
     got = items[claim.json()["id"]]
     assert got["days_to_timebar"] == (expected_tb - date.today()).days
 
@@ -205,7 +205,7 @@ def test_claim_deductions_and_partial_settlement(client, auth_headers, db_sessio
     full = client.post(f"/api/v1/claims/{cid2}/transition?target=settled", headers=h)
     assert full.json()["settlement_amount"] == 10000.0
 
-    items = {c["id"]: c for c in client.get("/api/v1/claims", headers=h).json()}
+    items = {c["id"]: c for c in client.get("/api/v1/claims", headers=h).json()["items"]}
     assert items[cid]["settlement_amount"] == 7000.0
 
 
@@ -477,7 +477,7 @@ def test_claim_to_invoice(client, auth_headers):
     neg = client.post(f"/api/v1/claims/{cid}/to-invoice", headers=h)
     assert neg.status_code == 200, neg.text
     assert neg.json()["amount"] == 8000.0
-    inv = {i["id"]: i for i in client.get("/api/v1/invoices", headers=h).json()}[neg.json()["id"]]
+    inv = {i["id"]: i for i in client.get("/api/v1/invoices", headers=h).json()["items"]}[neg.json()["id"]]
     assert inv["invoice_type"] == "demurrage"
     assert inv["status"] == "draft"
 

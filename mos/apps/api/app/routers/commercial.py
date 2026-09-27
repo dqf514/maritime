@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -16,6 +16,7 @@ from app.db import get_db
 from app.models_domain import (
     Charter,
     CharterAmendment,
+    CharterOffer,
     CoaLifting,
     Estimate,
     OffHireEvent,
@@ -23,8 +24,11 @@ from app.models_domain import (
     Voyage,
 )
 from app.models_wave1 import Counterparty, Vessel
+from app.models_time_charter import HireSurvey
 from app.security import AuthContext, require_module
 from app.services.doc_numbering import next_doc_number
+from app.models_clause import ClauseTemplate
+from app.services.clause_library import list_clauses, materialize_params
 from app.services.estimate_engine import compute_estimate, sensitivity
 from app.services.recycle import soft_delete
 from app.services.tenant_guard import scoped_get
@@ -441,6 +445,193 @@ def list_charters(
         .limit(limit)
     ).all()
     return [_charter_out(r) for r in rows]
+
+
+@router.get("/charters/{charter_id}", response_model=CharterOut)
+def get_charter(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """单据详情（U2）：可深链的租约单条视图。"""
+    row = db.scalar(
+        select(Charter).where(
+            Charter.id == charter_id,
+            Charter.tenant_id == auth.tenant_id,
+            Charter.status != "deleted",
+        )
+    )
+    if row is None:
+        raise HTTPException(404, "Charter not found")
+    return _charter_out(row)
+
+
+# —— 条款库（D1） ——
+
+
+class ClauseIn(BaseModel):
+    code: str
+    cp_form: str | None = None
+    category: str = "general"
+    title_en: str
+    title_zh: str | None = None
+    params: dict = Field(default_factory=dict)
+    text: str | None = None
+
+
+@router.get("/clauses")
+def get_clauses(
+    cp_form: str | None = Query(None),
+    category: str | None = Query(None),
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    rows = list_clauses(db, auth.tenant_id, cp_form=cp_form, category=category)
+    return {
+        "items": [
+            {
+                "id": str(r.id),
+                "code": r.code,
+                "cp_form": r.cp_form,
+                "category": r.category,
+                "title_en": r.title_en,
+                "title_zh": r.title_zh,
+                "params": r.params or {},
+                "text": r.text,
+                "is_system": bool(r.is_system),
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.post("/clauses")
+def create_clause(body: ClauseIn, auth: AuthContext = Depends(require_module("chartering")), db: Session = Depends(get_db)):
+    row = ClauseTemplate(
+        tenant_id=auth.tenant_id,
+        code=body.code,
+        cp_form=body.cp_form,
+        category=body.category,
+        title_en=body.title_en,
+        title_zh=body.title_zh,
+        params=body.params,
+        text=body.text,
+        is_system=False,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": str(row.id), "code": row.code}
+
+
+@router.delete("/clauses/{clause_id}")
+def delete_clause(clause_id: UUID, auth: AuthContext = Depends(require_module("chartering")), db: Session = Depends(get_db)):
+    row = scoped_get(db, ClauseTemplate, clause_id, auth.tenant_id)
+    if row is None or row.is_system:
+        raise HTTPException(404, "Clause not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+# —— 交船/还船检验（D13） ——
+
+
+class HireSurveyIn(BaseModel):
+    kind: str  # on_hire | off_hire
+    surveyed_at: datetime
+    port_id: UUID | None = None
+    bunker_fo: float | None = None
+    bunker_do: float | None = None
+    notes: str | None = None
+
+
+@router.post("/charters/{charter_id}/surveys")
+def create_hire_survey(
+    charter_id: UUID,
+    body: HireSurveyIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    if body.kind not in ("on_hire", "off_hire"):
+        raise HTTPException(422, detail={"code": "INVALID_SURVEY_KIND", "message": "kind must be on_hire|off_hire"})
+    charter = scoped_get(db, Charter, charter_id, auth.tenant_id)
+    if charter is None:
+        raise HTTPException(404, "Charter not found")
+    row = HireSurvey(
+        tenant_id=auth.tenant_id,
+        charter_id=charter_id,
+        kind=body.kind,
+        surveyed_at=body.surveyed_at,
+        port_id=body.port_id,
+        bunker_fo=body.bunker_fo,
+        bunker_do=body.bunker_do,
+        notes=body.notes,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": str(row.id), "kind": row.kind, "surveyed_at": row.surveyed_at.isoformat()}
+
+
+@router.get("/charters/{charter_id}/surveys")
+def list_hire_surveys(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    if scoped_get(db, Charter, charter_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Charter not found")
+    rows = db.scalars(
+        select(HireSurvey)
+        .where(HireSurvey.tenant_id == auth.tenant_id, HireSurvey.charter_id == charter_id)
+        .order_by(HireSurvey.surveyed_at)
+    ).all()
+    return {
+        "items": [
+            {
+                "id": str(r.id),
+                "kind": r.kind,
+                "surveyed_at": r.surveyed_at.isoformat(),
+                "port_id": str(r.port_id) if r.port_id else None,
+                "bunker_fo": float(r.bunker_fo) if r.bunker_fo is not None else None,
+                "bunker_do": float(r.bunker_do) if r.bunker_do is not None else None,
+                "notes": r.notes,
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.get("/charters/{charter_id}/laytime-inputs")
+def charter_laytime_inputs(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """条款参数物化：租约计费字段 + 勾选条款 params → laytime 计算建议输入。"""
+    row = db.scalar(
+        select(Charter).where(
+            Charter.id == charter_id,
+            Charter.tenant_id == auth.tenant_id,
+            Charter.status != "deleted",
+        )
+    )
+    if row is None:
+        raise HTTPException(404, "Charter not found")
+    codes = list((row.clauses or {}).get("codes") or [])
+    clause_params = materialize_params(db, auth.tenant_id, codes)
+    inputs: dict = {
+        "terms": clause_params.get("laytime_terms") or row.laytime_terms or "SHINC",
+        "demurrage_rate_per_day": float(row.demurrage_rate or 0),
+        "despatch_rate_per_day": float(row.despatch_rate or 0),
+        "currency": "USD",
+    }
+    if row.load_rate_pd and row.cargo_qty:
+        inputs["cargo_qty"] = float(row.cargo_qty)
+        inputs["load_rate_per_day"] = float(row.load_rate_pd)
+    inputs.update({k: v for k, v in clause_params.items() if k != "laytime_terms"})
+    return {"charter_id": str(row.id), "clause_codes": codes, "inputs": inputs}
 
 
 CHARTER_TERM_FIELDS = (
@@ -1610,3 +1801,108 @@ def allocate_tco(
         "total_cost": float(total_cost),
         "allocations": allocations,
     }
+
+
+# —— 租船报价追踪（D2） ——
+
+OFFER_TRANSITIONS = {
+    "offer": {"firm", "declined", "expired"},
+    "firm": {"fixed", "declined", "expired"},
+    "declined": set(),
+    "expired": set(),
+    "fixed": set(),
+}
+
+
+class OfferIn(BaseModel):
+    counterparty_id: UUID | None = None
+    vessel_id: UUID | None = None
+    charterer_name: str | None = None
+    cargo: str | None = None
+    laycan_from: datetime | None = None
+    laycan_to: datetime | None = None
+    rate: float | None = None
+    demurrage_rate: float | None = None
+    expires_at: datetime | None = None
+    notes: str | None = None
+
+
+@router.post("/offers")
+def create_offer(body: OfferIn, auth: AuthContext = Depends(require_module("chartering")), db: Session = Depends(get_db)):
+    if body.counterparty_id and scoped_get(db, Counterparty, body.counterparty_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Counterparty not found")
+    row = CharterOffer(tenant_id=auth.tenant_id, **body.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": str(row.id), "status": row.status}
+
+
+@router.get("/offers")
+def list_offers(
+    status: str | None = Query(None),
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    q = select(CharterOffer).where(CharterOffer.tenant_id == auth.tenant_id)
+    if status:
+        q = q.where(CharterOffer.status == status)
+    rows = db.scalars(q.order_by(CharterOffer.created_at.desc())).all()
+    return {
+        "items": [
+            {
+                "id": str(r.id),
+                "status": r.status,
+                "charterer_name": r.charterer_name,
+                "counterparty_id": str(r.counterparty_id) if r.counterparty_id else None,
+                "vessel_id": str(r.vessel_id) if r.vessel_id else None,
+                "cargo": r.cargo,
+                "laycan_from": r.laycan_from.isoformat() if r.laycan_from else None,
+                "laycan_to": r.laycan_to.isoformat() if r.laycan_to else None,
+                "rate": float(r.rate) if r.rate is not None else None,
+                "demurrage_rate": float(r.demurrage_rate) if r.demurrage_rate is not None else None,
+                "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                "charter_id": str(r.charter_id) if r.charter_id else None,
+                "notes": r.notes,
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.post("/offers/{offer_id}/transition")
+def offer_transition(
+    offer_id: UUID,
+    target: str,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """报价流转；target=fixed 时一键转 CP（生成 draft 租约并回链）。"""
+    from app.services.state_machine import transition as _t
+
+    row = scoped_get(db, CharterOffer, offer_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Offer not found")
+    row.status = _t("offer", row.status, target, OFFER_TRANSITIONS)
+    charter_id = None
+    if target == "fixed":
+        charter = Charter(
+            tenant_id=auth.tenant_id,
+            charter_no=f"CP-{uuid4().hex[:8].upper()}",
+            charter_type="voyage",
+            status="draft",
+            counterparty_id=row.counterparty_id,
+            vessel_id=row.vessel_id,
+            laycan_from=row.laycan_from,
+            laycan_to=row.laycan_to,
+            freight_terms={"freight_rate": float(row.rate)} if row.rate is not None else {},
+            freight_rate=row.rate,
+            demurrage_rate=row.demurrage_rate,
+            clauses={"from_offer_id": str(row.id)},
+        )
+        db.add(charter)
+        db.flush()
+        row.charter_id = charter.id
+        charter_id = str(charter.id)
+    db.commit()
+    return {"id": str(row.id), "status": row.status, "charter_id": charter_id}

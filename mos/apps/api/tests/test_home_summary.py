@@ -21,13 +21,19 @@ def test_summary_structure_for_admin(client, auth_headers):
     r = client.get(f"{API}/home/summary", headers=auth_headers)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body.keys()) == {"tasks", "notifications", "approvals", "alerts", "schedule", "kpis", "exceptions"}
+    assert set(body.keys()) == {"tasks", "notifications", "approvals", "alerts", "schedule", "kpis", "exceptions", "queues"}
     assert set(body["tasks"].keys()) == {"open", "overdue", "due_today", "items"}
     assert set(body["notifications"].keys()) == {"unread", "items"}
     assert set(body["approvals"].keys()) == {"count", "items"}
     assert set(body["exceptions"].keys()) == {"critical", "warning"}
     assert isinstance(body["alerts"], list)
     assert isinstance(body["schedule"], list)
+    assert isinstance(body["queues"], list)
+    for q in body["queues"]:
+        assert set(q.keys()) == {"id", "label", "items"}
+        assert set(q["label"].keys()) == {"en", "zh"}
+        for it in q["items"]:
+            assert it["href"].startswith("/")
     assert len(body["kpis"]) >= 1
     assert len(body["kpis"]) <= 6
     keys = {k["key"] for k in body["kpis"]}
@@ -123,6 +129,33 @@ def test_summary_viewer_role_does_not_break(client, auth_headers):
     s = client.get(f"{API}/home/summary", headers=viewer_h)
     assert s.status_code == 200, s.text
     body = s.json()
-    assert set(body.keys()) == {"tasks", "notifications", "approvals", "alerts", "schedule", "kpis", "exceptions"}
+    assert set(body.keys()) == {"tasks", "notifications", "approvals", "alerts", "schedule", "kpis", "exceptions", "queues"}
     keys = {k["key"] for k in body["kpis"]}
     assert "open_tasks" in keys
+
+
+def test_work_queue_claims_timebar(client, auth_headers, db_engine):
+    """U3：临近时效的索赔进入工作队列，href 直达索赔详情。"""
+    import uuid as _uuid
+    from datetime import date, timedelta
+
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models_domain import Claim
+
+    h = auth_headers
+    claim = client.post(f"{API}/claims", headers=h, json={"amount": 9000}).json()
+    # 手工给一个 10 天后到期的时效（测试 engine，与 client 共享）
+    TestingSession = sessionmaker(bind=db_engine, autoflush=False, autocommit=False)
+    with TestingSession() as s:
+        row = s.get(Claim, _uuid.UUID(claim["id"]))
+        row.time_bar = date.today() + timedelta(days=10)
+        s.commit()
+
+    body = client.get(f"{API}/home/summary", headers=h).json()
+    q = next((x for x in body["queues"] if x["id"] == "claims_timebar"), None)
+    assert q, body["queues"]
+    hit = next((i for i in q["items"] if i["id"] == claim["id"]), None)
+    assert hit, q["items"]
+    assert hit["href"] == f"/finance/claims/{claim['id']}"
+    assert hit["urgency"] in ("critical", "warning")

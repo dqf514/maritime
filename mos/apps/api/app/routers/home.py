@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import User
-from app.models_domain import Charter, Estimate, Invoice, PortCall, Voyage
+from app.models_domain import Charter, Claim, Estimate, Invoice, LaytimeCalc, PortCall, PortDisbursement, Voyage
 from app.models_ship import ShipCertificate, ShipCrewMember, ShipDefect, ShipWorkOrder
 from app.models_task import Task
 from app.models_wave1 import Notification, Port, Vessel
@@ -352,9 +352,118 @@ def _kpis_section(db: Session, auth: AuthContext) -> list[dict]:
     return kpis[:6]
 
 
+def _queues_section(db: Session, auth: AuthContext) -> list[dict]:
+    """U3 工作队列：例外驱动的待办单据，行内可直达单据详情（可深链）。"""
+    tid = auth.tenant_id
+    queues: list[dict] = []
+
+    def days_to_timebar(tb: date | None) -> int | None:
+        return (tb - date.today()).days if tb else None
+
+    # 1) 临近时效的索赔（≤14 天，未结）——索赔流失的最大来源
+    claims = db.scalars(
+        select(Claim).where(
+            Claim.tenant_id == tid,
+            Claim.status.in_(["open", "negotiating"]),
+            Claim.time_bar.is_not(None),
+        )
+    ).all()
+    soon = sorted(
+        (c for c in claims if (d := days_to_timebar(c.time_bar)) is not None and d <= 14),
+        key=lambda c: c.time_bar,
+    )
+    if soon:
+        queues.append(
+            {
+                "id": "claims_timebar",
+                "label": {"en": "Claims nearing time bar", "zh": "临近时效的索赔"},
+                "items": [
+                    {
+                        "id": str(c.id),
+                        "title": c.claim_no,
+                        "meta": f"{days_to_timebar(c.time_bar)}d · {c.status}",
+                        "href": f"/finance/claims/{c.id}",
+                        "urgency": "critical" if (days_to_timebar(c.time_bar) or 0) <= 7 else "warning",
+                    }
+                    for c in soon[:8]
+                ],
+            }
+        )
+
+    # 2) 待审批发票
+    pending_inv = db.scalars(
+        select(Invoice)
+        .where(Invoice.tenant_id == tid, Invoice.status == "pending_approval")
+        .order_by(Invoice.due_date.is_(None), Invoice.due_date)
+        .limit(8)
+    ).all()
+    if pending_inv:
+        queues.append(
+            {
+                "id": "invoices_approval",
+                "label": {"en": "Invoices awaiting approval", "zh": "待审批发票"},
+                "items": [
+                    {"id": str(i.id), "title": i.invoice_no, "meta": i.invoice_type or "", "href": f"/finance/invoices/{i.id}", "urgency": "warning"}
+                    for i in pending_inv
+                ],
+            }
+        )
+
+    # 3) 待处理 laytime（draft=待计算 / calculated=待定稿）
+    lts = db.scalars(
+        select(LaytimeCalc)
+        .where(LaytimeCalc.tenant_id == tid, LaytimeCalc.status.in_(["draft", "calculated"]))
+        .order_by(LaytimeCalc.id)
+        .limit(8)
+    ).all()
+    if lts:
+        queues.append(
+            {
+                "id": "laytime_pending",
+                "label": {"en": "Laytime to process", "zh": "待处理 Laytime"},
+                "items": [
+                    {
+                        "id": str(l.id),
+                        "title": str(l.id)[:8],
+                        "meta": l.status,
+                        "href": "/finance?tab=laytime",
+                        "urgency": "info",
+                    }
+                    for l in lts
+                ],
+            }
+        )
+
+    # 4) 待定稿 PDA/FDA（draft/submitted）
+    pdas = db.scalars(
+        select(PortDisbursement)
+        .where(PortDisbursement.tenant_id == tid, PortDisbursement.status.in_(["draft", "submitted"]))
+        .order_by(PortDisbursement.id)
+        .limit(8)
+    ).all()
+    if pdas:
+        queues.append(
+            {
+                "id": "pda_pending",
+                "label": {"en": "PDA/FDA to settle", "zh": "待定稿 PDA/FDA"},
+                "items": [
+                    {
+                        "id": str(p.id),
+                        "title": str(p.id)[:8],
+                        "meta": f"{p.status} · {p.pda_amount or 0}",
+                        "href": "/finance?tab=pda",
+                        "urgency": "info",
+                    }
+                    for p in pdas
+                ],
+            }
+        )
+    return queues
+
+
 @router.get("/home/summary")
 def home_summary(auth: AuthContext = Depends(get_current_auth), db: Session = Depends(get_db)):
-    summary: dict = {"tasks": {}, "notifications": {}, "approvals": {}, "alerts": [], "schedule": [], "kpis": [], "exceptions": {"critical": 0, "warning": 0}}
+    summary: dict = {"tasks": {}, "notifications": {}, "approvals": {}, "alerts": [], "schedule": [], "kpis": [], "exceptions": {"critical": 0, "warning": 0}, "queues": []}
     try:
         summary["tasks"] = _tasks_section(db, auth)
     except Exception:  # noqa: BLE001
@@ -385,6 +494,12 @@ def home_summary(auth: AuthContext = Depends(get_current_auth), db: Session = De
         log.exception("home summary schedule section failed")
         db.rollback()
         summary["schedule"] = []
+    try:
+        summary["queues"] = _queues_section(db, auth)
+    except Exception:  # noqa: BLE001
+        log.exception("home summary queues section failed")
+        db.rollback()
+        summary["queues"] = []
     summary["kpis"] = _kpis_section(db, auth)
     try:
         from app.services.exceptions import scan_exceptions

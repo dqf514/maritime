@@ -1,4 +1,5 @@
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,7 +11,7 @@ from sqlalchemy import text
 
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
-from app.services.observability import RequestObservabilityMiddleware, configure_logging
+from app.services.observability import RequestObservabilityMiddleware, configure_logging, install_slow_query_log
 import app.models  # noqa: F401
 import app.models_audit  # noqa: F401
 import app.models_wave1  # noqa: F401
@@ -32,8 +33,12 @@ import app.models_config  # noqa: F401
 import app.models_shipshore  # noqa: F401
 import app.models_ai  # noqa: F401
 import app.models_report  # noqa: F401
+import app.models_jobs  # noqa: F401
+import app.models_clause  # noqa: F401
 from app.routers.admin_platform import router as admin_router
 from app.routers.ai_chat import router as ai_chat_router
+from app.routers.ai_actions import router as ai_actions_router
+from app.routers.metrics import router as metrics_router
 from app.routers.ai_hub import router as ai_router
 from app.routers.webhooks import router as webhooks_router
 from app.routers.market_data import router as market_data_router
@@ -49,6 +54,11 @@ from app.routers.exceptions import router as exceptions_router
 from app.routers.exports import router as exports_router
 from app.routers.files import router as files_router
 from app.routers.finance_ext import router as finance_router
+from app.routers.laytimes import router as laytimes_router
+from app.routers.claims import router as claims_router
+from app.routers.invoices import router as invoices_router
+from app.routers.bunker import router as bunker_router
+from app.routers.portcosts import router as portcosts_router
 from app.routers.guides import router as guides_router
 from app.routers.help import router as help_router
 from app.routers.home import router as home_router
@@ -71,6 +81,7 @@ from app.seed_demo_flow import seed_full_demo_flow
 from app.seed_i18n import seed_i18n
 from app.services.platform_ops import bootstrap_ops_catalog
 from app.services.reference_data import seed_reference_catalog
+from app.services.clause_library import seed_clause_pack
 
 log = logging.getLogger("marios.main")
 # Structured logging is configured at import time so every module logger
@@ -237,6 +248,8 @@ def _apply_rebrand_data_patches() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if settings.slow_query_ms > 0:
+        install_slow_query_log(settings.slow_query_ms)
     Base.metadata.create_all(bind=engine)
     try:
         _ensure_sqlite_user_identity_columns()
@@ -253,6 +266,7 @@ async def lifespan(_app: FastAPI):
             seed_i18n(db)
             bootstrap_ops_catalog(db)
             seed_reference_catalog(db)
+            seed_clause_pack(db)
             # Demo tenants & users only when explicitly enabled (SEED_DEMO=true)
             if settings.seed_demo:
                 seed_if_empty(db)
@@ -261,7 +275,18 @@ async def lifespan(_app: FastAPI):
             db.commit()
     except Exception:
         log.exception("Startup seed failed")
+    # Phase 0 后台作业 worker（webhook 投递等）；测试环境由 conftest 关闭
+    job_stop = threading.Event()
+    job_thread = None
+    if settings.job_worker_enabled:
+        from app.services.job_queue import run_worker
+
+        job_thread = threading.Thread(target=run_worker, args=(job_stop,), name="marios-jobs", daemon=True)
+        job_thread.start()
     yield
+    job_stop.set()
+    if job_thread is not None:
+        job_thread.join(timeout=5)
 
 
 _is_production = settings.env.lower() == "production"
@@ -295,6 +320,8 @@ app.include_router(masterdata_router, prefix="/api/v1")
 app.include_router(reference_router, prefix="/api/v1")
 app.include_router(ai_router, prefix="/api/v1")
 app.include_router(ai_chat_router, prefix="/api/v1")
+app.include_router(ai_actions_router, prefix="/api/v1")
+app.include_router(metrics_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(market_data_router, prefix="/api/v1")
 app.include_router(email_intel_router, prefix="/api/v1")
@@ -307,6 +334,11 @@ app.include_router(config_router, prefix="/api/v1")
 app.include_router(marilink_router, prefix="/api/v1")
 app.include_router(operations_router, prefix="/api/v1")
 app.include_router(finance_router, prefix="/api/v1")
+app.include_router(laytimes_router, prefix="/api/v1")
+app.include_router(claims_router, prefix="/api/v1")
+app.include_router(invoices_router, prefix="/api/v1")
+app.include_router(bunker_router, prefix="/api/v1")
+app.include_router(portcosts_router, prefix="/api/v1")
 app.include_router(ship_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")

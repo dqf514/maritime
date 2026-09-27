@@ -197,7 +197,7 @@ def test_payment_void_rewrites_invoice(client, auth_headers, db_session):
     original = [p for p in rows if float(p.amount) > 0][0]
     assert str(original.id) == str(payment_id)
 
-    listed = {i["id"]: i for i in client.get("/api/v1/invoices", headers=h).json()}
+    listed = {i["id"]: i for i in client.get("/api/v1/invoices", headers=h).json()["items"]}
     assert listed[iid]["paid_amount"] == pytest.approx(0.0)
     assert listed[iid]["status"] == "issued"
 
@@ -244,6 +244,6 @@ def test_payment_void_blocked_when_gl_posted(client, auth_headers, db_session):
     assert r.json()["detail"]["code"] == "GL_POSTED"
 
     # nothing was written back
-    listed = {i["id"]: i for i in client.get("/api/v1/invoices", headers=h).json()}
+    listed = {i["id"]: i for i in client.get("/api/v1/invoices", headers=h).json()["items"]}
     assert listed[iid]["paid_amount"] == pytest.approx(4000.0)
     assert listed[iid]["status"] == "partially_paid"

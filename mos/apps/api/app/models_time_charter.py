@@ -130,3 +130,24 @@ class HireStatement(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class HireSurvey(Base):
+    """On/Off-hire survey（交船/还船检验，D13）。
+
+    关键在交还船时点的船况与存油（bunker last word），与还船油价差结算、
+    off-hire 扣减联动。``kind``: on_hire = 交船检验, off_hire = 还船检验。
+    """
+
+    __tablename__ = "hire_surveys"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    charter_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("charters.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # on_hire|off_hire
+    surveyed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    port_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ports.id"))
+    bunker_fo: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    bunker_do: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

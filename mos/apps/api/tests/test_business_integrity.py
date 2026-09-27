@@ -255,10 +255,11 @@ def test_list_pagination_limits(client, auth_headers):
     for _ in range(3):
         _create_invoice(client, h, amount=10)
     page1 = client.get("/api/v1/invoices?limit=2", headers=h).json()
-    assert len(page1) == 2
+    assert len(page1["items"]) == 2
     page2 = client.get("/api/v1/invoices?limit=2&offset=2", headers=h).json()
-    assert len(page2) >= 1
-    assert {r["id"] for r in page1}.isdisjoint({r["id"] for r in page2})
+    assert len(page2["items"]) >= 1
+    assert page1["total"] == page2["total"]
+    assert {r["id"] for r in page1["items"]}.isdisjoint({r["id"] for r in page2["items"]})
 
     cps = client.get("/api/v1/masterdata/counterparties?limit=1", headers=h).json()
     assert len(cps) == 1

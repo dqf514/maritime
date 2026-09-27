@@ -394,3 +394,47 @@ def create_fx(
     db.commit()
     db.refresh(row)
     return ExchangeRateOut.model_validate(row, from_attributes=True)
+
+
+@router.post("/counterparties/{party_id}/rescreen")
+def rescreen_counterparty(
+    party_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """D24 制裁重筛：记录一次筛查审计并返回当前判定。"""
+    from app.services.counterparty_credit import rescreen
+
+    return rescreen(db, auth.tenant_id, party_id)
+
+
+@router.get("/counterparties/{party_id}/credit-exposure")
+def counterparty_credit_exposure(
+    party_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """D24 信用敞口：未结发票 vs 信用限额（RiskLimit scope=counterparty:{id}）。"""
+    from app.services.counterparty_credit import credit_exposure
+
+    return credit_exposure(db, auth.tenant_id, party_id)
+
+
+@router.post("/counterparties/rescreen-all")
+def rescreen_all(
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """D24 批量重筛：入后台作业队列逐个重筛（幂等键按天）。"""
+    from datetime import date
+
+    from app.services.job_queue import enqueue
+
+    job = enqueue(
+        db,
+        "counterparty.rescreen",
+        {"tenant_id": str(auth.tenant_id)},
+        tenant_id=auth.tenant_id,
+        idempotency_key=f"cp-rescreen:{auth.tenant_id}:{date.today().isoformat()}",
+    )
+    return {"job_id": str(job.id), "status": job.status}

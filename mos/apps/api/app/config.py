@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     seed_demo: bool = False
     # In-process sliding-window rate limiting for auth endpoints
     rate_limit_enabled: bool = True
+    # Background job worker (Phase 0): webhook delivery etc. Tests disable it
+    # and drive app.services.job_queue.process_pending() synchronously.
+    # AIS 数据源（D7）：配置后 eta_service 切换到外部供应商适配器
+    ais_base_url: str = ""
+    ais_api_key: str = ""
+    job_worker_enabled: bool = True
+    job_worker_interval: float = 2.0
+    # 慢查询告警阈值（ms）；0 关闭
+    slow_query_ms: float = 200.0
     # Mark the HttpOnly session cookie Secure. Must be true in production
     # (HTTPS); false for local http://localhost development.
     cookie_secure: bool = False

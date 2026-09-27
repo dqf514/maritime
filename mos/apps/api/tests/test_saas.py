@@ -290,7 +290,7 @@ def test_invoice_workflow_approval(client):
     decided = client.post(f"/api/v1/workflows/{hit['id']}/decide", headers=h_admin, json={"decision": "approve"})
     assert decided.status_code == 200
     assert decided.json()["status"] == "approved"
-    rows = client.get("/api/v1/invoices", headers=h_admin).json()
+    rows = client.get("/api/v1/invoices", headers=h_admin).json()["items"]
     row = next(r for r in rows if r["id"] == iid)
     assert row["status"] == "issued"
 

@@ -655,7 +655,7 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("section.finance", "app", "Finance", "财务"),
     ("section.technical", "app", "Technical", "技术"),
     ("section.analytics", "app", "Analytics & AI", "分析与AI"),
-    ("section.platform_mod", "app", "Platform", "平台"),
+    ("section.platform", "app", "Platform", "平台"),
     ("section.work", "app", "Work", "工作"),
     ("section.master", "app", "Master data", "主数据"),
     ("section.admin", "app", "Administration", "管理"),

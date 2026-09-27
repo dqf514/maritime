@@ -134,11 +134,11 @@ def test_direct_write_cross_tenant_blocked_and_data_untouched(client, auth_heade
     assert any(c["id"] == b["charter_id"] and c["status"] == "draft" for c in charters)
     voyages = client.get(f"{API}/voyages", headers=hb).json()
     assert any(v["id"] == b["voyage_id"] and v["status"] == "planned" and v["cargo"] is None for v in voyages)
-    laytimes = client.get(f"{API}/laytimes", headers=hb).json()
+    laytimes = client.get(f"{API}/laytimes", headers=hb).json()["items"]
     assert any(l["id"] == b["laytime_id"] and l["status"] == "draft" for l in laytimes)
-    claims = client.get(f"{API}/claims", headers=hb).json()
+    claims = client.get(f"{API}/claims", headers=hb).json()["items"]
     assert any(c["id"] == b["claim_id"] and c["amount"] == 1000 for c in claims)
-    invoices = client.get(f"{API}/invoices", headers=hb).json()
+    invoices = client.get(f"{API}/invoices", headers=hb).json()["items"]
     assert any(i["id"] == b["invoice_id"] and i["amount"] == 500 and i["status"] == "draft" for i in invoices)
     bunkers = client.get(f"{API}/bunker-orders", headers=hb).json()
     assert any(o["id"] == b["bunker_order_id"] and o["unit_price"] == 600 for o in bunkers)
@@ -328,7 +328,7 @@ def test_isolation_is_bidirectional(client, auth_headers, tenant_b):
         client.post(f"{API}/charters", headers=hb, json={"charter_type": "voyage", "counterparty_id": a["counterparty_id"]}),
         "B POST charter referencing A counterparty",
     )
-    invoices_b = client.get(f"{API}/invoices", headers=hb).json()
+    invoices_b = client.get(f"{API}/invoices", headers=hb).json()["items"]
     assert a["invoice_id"] not in {i["id"] for i in invoices_b}
     users_b = client.get(f"{API}/admin/users", headers=hb).json()
     assert a["user_id"] not in {u["id"] for u in users_b}
@@ -361,7 +361,7 @@ def test_platform_admin_semantics(client, auth_headers):
     # platform admin does NOT see tenant rows through business lists or IDs
     inv = client.get(f"{API}/invoices", headers=hp)
     assert inv.status_code == 200
-    assert b["invoice_id"] not in {i["id"] for i in inv.json()}
+    assert b["invoice_id"] not in {i["id"] for i in inv.json()["items"]}
     assert_blocked(client.get(f"{API}/estimates/{b['estimate_id']}", headers=hp), "platform ops GET B estimate")
 
 

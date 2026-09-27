@@ -230,12 +230,12 @@ def test_voyage_id_filters(client, auth_headers, db_session):
     db_session.commit()
 
     vid = str(voyage.id)
-    claims = client.get(f"/api/v1/claims?voyage_id={vid}", headers=auth_headers).json()
+    claims = client.get(f"/api/v1/claims?voyage_id={vid}", headers=auth_headers).json()["items"]
     assert {c["voyage_id"] for c in claims} == {vid}
-    invoices = client.get(f"/api/v1/invoices?voyage_id={vid}", headers=auth_headers).json()
+    invoices = client.get(f"/api/v1/invoices?voyage_id={vid}", headers=auth_headers).json()["items"]
     assert {i["voyage_id"] for i in invoices} == {vid}
-    laytimes = client.get(f"/api/v1/laytimes?voyage_id={vid}", headers=auth_headers).json()
+    laytimes = client.get(f"/api/v1/laytimes?voyage_id={vid}", headers=auth_headers).json()["items"]
     assert {lt["voyage_id"] for lt in laytimes} == {vid}
     # unfiltered lists stay backward compatible (contain both voyages' rows)
-    all_laytimes = client.get("/api/v1/laytimes", headers=auth_headers).json()
+    all_laytimes = client.get("/api/v1/laytimes", headers=auth_headers).json()["items"]
     assert {lt["voyage_id"] for lt in all_laytimes} >= {vid, str(other.id)}
