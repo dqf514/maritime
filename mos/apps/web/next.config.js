@@ -16,6 +16,8 @@ const csp = [
 
 const nextConfig = {
   output: "standalone",
+  // 隐藏 dev 模式悬浮指示器（N 徽标）；编译/运行时错误仍会正常提示
+  devIndicators: false,
   headers() {
     return [
       {

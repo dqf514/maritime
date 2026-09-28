@@ -49,6 +49,15 @@ NOR_PATTERNS = {
 }
 
 
+def _extract_email_address(raw: str) -> str | None:
+    """从 'Name <a@b.com>' / 'a@b.com' 提取纯邮箱地址。"""
+    m = re.search(r"<([^<>]+@[^<>]+)>", raw)
+    if m:
+        return m.group(1).strip().lower()
+    m = re.search(r"([\w.+-]+@[\w-]+\.[\w.-]+)", raw)
+    return m.group(1).strip().lower() if m else None
+
+
 def classify_email(subject: str, body: str) -> dict:
     """Classify an email into a shipping document type."""
     text = f"{subject or ''} {body or ''}".lower()
@@ -154,6 +163,32 @@ def process_inbound_email(
 
     classification = classify_email(subject, body)
     parse_result = {"classification": classification}
+
+    # 闭环：发件人邮箱 → 联系人通讯录 → 对手方自动识别（人工确认后落库）
+    sender = _extract_email_address(msg.from_email or "")
+    if sender:
+        from sqlalchemy import select as _select
+
+        from app.models_wave1 import Counterparty, CounterpartyContact
+
+        hit = db.execute(
+            _select(CounterpartyContact, Counterparty.name)
+            .join(Counterparty, CounterpartyContact.counterparty_id == Counterparty.id)
+            .where(
+                CounterpartyContact.tenant_id == tenant_id,
+                CounterpartyContact.email.ilike(sender),
+            )
+            .limit(1)
+        ).first()
+        if hit:
+            contact, party_name = hit
+            parse_result["matched"] = {
+                "contact_id": str(contact.id),
+                "contact_name": contact.name,
+                "counterparty_id": str(contact.counterparty_id),
+                "counterparty_name": party_name,
+                "basis": "sender_email",
+            }
 
     # D25：LLM 结构化抽取（失败自动回落规则），规则并行做字段级交叉校验。
     # 落库形状 = 抽取字段 + _source(llm|rules) + _rule_diffs（人工确认对照）。

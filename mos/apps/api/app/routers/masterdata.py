@@ -438,3 +438,54 @@ def rescreen_all(
         idempotency_key=f"cp-rescreen:{auth.tenant_id}:{date.today().isoformat()}",
     )
     return {"job_id": str(job.id), "status": job.status}
+
+
+@router.get("/counterparty-contacts")
+def list_counterparty_contacts(
+    q: str = "",
+    counterparty_id: UUID | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """联系人全局检索（跨公司，带公司名）——ContactPicker / 通讯录数据源。"""
+    from sqlalchemy import or_
+
+    from app.models_wave1 import CounterpartyContact
+
+    stmt = (
+        select(CounterpartyContact, Counterparty.name)
+        .join(Counterparty, CounterpartyContact.counterparty_id == Counterparty.id)
+        .where(CounterpartyContact.tenant_id == auth.tenant_id, _alive(Counterparty))
+    )
+    if counterparty_id is not None:
+        stmt = stmt.where(CounterpartyContact.counterparty_id == counterparty_id)
+    if q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(
+                CounterpartyContact.name.ilike(like),
+                CounterpartyContact.email.ilike(like),
+                CounterpartyContact.title.ilike(like),
+                CounterpartyContact.department.ilike(like),
+                Counterparty.name.ilike(like),
+            )
+        )
+    rows = db.execute(stmt.order_by(CounterpartyContact.name).limit(limit)).all()
+    return {
+        "items": [
+            {
+                "id": str(c.id),
+                "name": c.name,
+                "title": c.title,
+                "email": c.email,
+                "phone": c.phone,
+                "mobile": c.mobile,
+                "department": c.department,
+                "is_primary": bool(c.is_primary),
+                "counterparty_id": str(c.counterparty_id),
+                "counterparty_name": party_name,
+            }
+            for c, party_name in rows
+        ]
+    }

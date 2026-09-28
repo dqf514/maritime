@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PartyPicker } from "@/components/DataPicker";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageGuide } from "@/components/PageGuide";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
@@ -602,14 +603,7 @@ export default function EstimatesPage() {
             </label>
             <label>
               {t("page.estimates.counterparty", "Counterparty")}
-              <select value={partyId} onChange={(e) => setPartyId(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                {parties.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
+              <PartyPicker value={partyId} onChange={setPartyId} />
             </label>
             {inputDefs.map((d) => (
               <label key={d.key}>

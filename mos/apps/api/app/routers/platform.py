@@ -202,9 +202,63 @@ def omni_search(
     auth: AuthContext = Depends(get_current_auth),
     db: Session = Depends(get_db),
 ):
-    """Return only pages/commands the current role (and tenant licenses) may open."""
+    """Return only pages/commands the current role (and tenant licenses) may open.
+
+    U/闭环：q 非空时追加实体记录命中（对手方/联系人/船舶/港口），直达详情。
+    """
     allowed = allowed_omni_hits(db, tenant_id=auth.tenant_id, roles=auth.roles)
-    return filter_omni_query(allowed, q)
+    hits = filter_omni_query(allowed, q)
+    if q.strip():
+        hits = hits + _entity_hits(db, auth, q.strip())
+    return hits
+
+
+def _entity_hits(db: Session, auth: AuthContext, q: str, limit: int = 5) -> list:
+    """实体记录命中：对手方/联系人/船舶/港口（按租户过滤）。"""
+    from sqlalchemy import or_
+
+    from app.models_wave1 import Counterparty, CounterpartyContact, Port, Vessel
+    from app.models import User  # noqa: F401 — 保持导入完整
+
+    like = f"%{q}%"
+    out: list = []
+
+    def _hit(id_: str, title: str, module: str, href: str, kw: list[str]):
+        out.append(SearchHit(id=id_, title=title, keywords=kw, module=module, href=href))
+
+    try:
+        for r in db.scalars(
+            select(Counterparty)
+            .where(Counterparty.tenant_id == auth.tenant_id, Counterparty.deleted_at.is_(None), Counterparty.name.ilike(like))
+            .limit(limit)
+        ).all():
+            _hit(f"cp-{r.id}", r.name, "masterdata", f"/masterdata/counterparties?party={r.id}", ["counterparty", "对手方"])
+        for r in db.execute(
+            select(CounterpartyContact, Counterparty.name)
+            .join(Counterparty, CounterpartyContact.counterparty_id == Counterparty.id)
+            .where(
+                CounterpartyContact.tenant_id == auth.tenant_id,
+                or_(CounterpartyContact.name.ilike(like), CounterpartyContact.email.ilike(like)),
+            )
+            .limit(limit)
+        ).all():
+            contact, party_name = r
+            _hit(f"ct-{contact.id}", f"{contact.name} @ {party_name}", "masterdata", f"/masterdata/counterparties?party={contact.counterparty_id}", ["contact", "联系人"])
+        for r in db.scalars(
+            select(Vessel)
+            .where(Vessel.tenant_id == auth.tenant_id, Vessel.deleted_at.is_(None), Vessel.name.ilike(like))
+            .limit(limit)
+        ).all():
+            _hit(f"vs-{r.id}", r.name, "masterdata", "/masterdata/vessels", ["vessel", "船舶"])
+        for r in db.scalars(
+            select(Port)
+            .where(Port.tenant_id == auth.tenant_id, Port.deleted_at.is_(None), or_(Port.name.ilike(like), Port.unlocode.ilike(like)))
+            .limit(limit)
+        ).all():
+            _hit(f"pt-{r.id}", f"{r.name} ({r.unlocode})", "masterdata", "/masterdata/ports", ["port", "港口"])
+    except Exception:  # noqa: BLE001 — 搜索失败不影响页面命中
+        pass
+    return out
 
 
 @router.post("/settings/selfcheck/run", response_model=SelfCheckRunOut, tags=["SelfCheck"])

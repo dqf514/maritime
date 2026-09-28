@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PartyPicker } from "@/components/DataPicker";
 import { LookupSelect } from "@/components/LookupSelect";
 import { RecordModal } from "@/components/RecordModal";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -408,7 +409,7 @@ export default function BunkerDeskPage() {
           <div className="form-grid" style={{ marginTop: "0.5rem" }}>
             <label>
               {t("page.bunker.supplier", "Supplier")}
-              <input value={inqSupplier} onChange={(e) => setInqSupplier(e.target.value)} />
+              <PartyPicker value="" onChange={(_id, item) => item && setInqSupplier(item.label)} placeholder={inqSupplier || t("picker.search", "搜索对手方…")} />
             </label>
             <label>
               {t("page.bunker.quoted_price", "Quoted price")}

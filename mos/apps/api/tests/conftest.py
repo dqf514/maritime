@@ -17,6 +17,7 @@ os.environ["JWT_SECRET"] = "test-secret"
 os.environ["SEED_DEMO"] = "true"
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 os.environ["JOB_WORKER_ENABLED"] = "false"
+os.environ["MARIOS_LLM_OFF"] = "1"  # 测试零网络：LLM 抽取熔断（mock 除外）
 
 from app.db import Base, get_db  # noqa: E402
 import app.models  # noqa: E402, F401

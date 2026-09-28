@@ -193,7 +193,7 @@
       <a href="#chain">3. 商务全链路</a>
       <a href="#ops">4. 航次运营</a>
       <a href="#finance">5. 滞期与财务</a>
-      <a href="#tech">6. 船管与大屏</a>
+      <a href="#tech">6. 船管与数据看板</a>
       <a href="#admin">7. 管理与平台</a>
       <a href="#test">8. 全链路测试结果</a>
       <a href="#limits">9. 边界与建议</a>
@@ -202,7 +202,7 @@
     <article class="main">
       <header class="hero">
         <h1>MariOS 全流程操作手册</h1>
-        <p>面向航运公司日常工作演练：从估算成交、航次执行、滞期索赔到财务结算与管理大屏。本地演示入口 <code style="background:rgba(255,255,255,.12);color:#fff">http://localhost:3000</code>。</p>
+        <p>面向航运公司日常工作演练：从估算成交、航次执行、滞期索赔到财务结算与管理数据看板。本地演示入口 <code style="background:rgba(255,255,255,.12);color:#fff">http://localhost:3000</code>。</p>
         <span class="badge">手册版本 · 与 API 全链路测试同步 · 本地时间</span>
       </header>
 
@@ -223,7 +223,7 @@
           <span>Laytime</span><i>→</i>
           <span>索赔 / 发票</span><i>→</i>
           <span>收付款 / GL</span><i>→</i>
-          <span>损益 / 大屏</span>
+          <span>损益 / 数据看板</span>
         </div>
       </section>
 
@@ -240,7 +240,7 @@
             <tr><td><code>demurrage@demo.marios</code></td><td>滞期</td><td>财务台 · Laytime · 索赔</td></tr>
             <tr><td><code>finance@demo.marios</code></td><td>财务</td><td>发票 · 收付款 · 航次损益 · 账龄</td></tr>
             <tr><td><code>tech@demo.marios</code></td><td>机务</td><td>船舶管理 · 证书 / PMS</td></tr>
-            <tr><td><code>mgmt@demo.marios</code></td><td>管理层</td><td>工作台 · 实时大屏</td></tr>
+            <tr><td><code>mgmt@demo.marios</code></td><td>管理层</td><td>工作台 · 数据看板</td></tr>
             <tr><td><code>admin@demo.marios</code></td><td>租户管理员</td><td>控制平面 · 用户安全 · Office</td></tr>
           </tbody>
         </table>
@@ -329,7 +329,7 @@
       </section>
 
       <section id="tech" class="steps">
-        <h2>6. 船管、审批与管理大屏</h2>
+        <h2>6. 船管、审批与管理数据看板</h2>
         <div class="step">
           <h3>船舶管理</h3>
           <ol>
@@ -343,7 +343,7 @@
           </ol>
         </div>
         <div class="step">
-          <h3>实时大屏</h3>
+          <h3>数据看板</h3>
           <ol>
             <li>打开 <span class="path">/dashboards</span>，按角色进入指挥墙；支持全屏与定时刷新。</li>
           </ol>
@@ -389,7 +389,7 @@
             <tr><td>5</td><td>Laytime 定稿与索赔</td><td>滞期</td><td>金额正确，可结清</td></tr>
             <tr><td>6</td><td>发票收款</td><td>财务</td><td>部分付 → 已付 → GL</td></tr>
             <tr><td>7</td><td>控制平面图标卡</td><td>管理员</td><td>图标+标题可点，无「打开→」</td></tr>
-            <tr><td>8</td><td>角色大屏全屏</td><td>管理层</td><td>刷新与全屏正常</td></tr>
+            <tr><td>8</td><td>角色数据看板全屏</td><td>管理层</td><td>刷新与全屏正常</td></tr>
           </tbody>
         </table>
       </section>

@@ -80,11 +80,14 @@ _EXTRACTION_MODELS: dict[str, type[BaseModel]] = {
 
 
 def llm_available() -> bool:
+    import os
+
+    if os.environ.get("MARIOS_LLM_OFF") == "1":
+        return False  # 测试环境熔断：保证 pytest 零网络
     try:
         import anthropic  # noqa: F401
     except ImportError:
         return False
-    import os
 
     return bool(
         os.environ.get("ANTHROPIC_API_KEY")
@@ -102,6 +105,10 @@ def call_claude(schema: type[ModelT], subject: str, body: str) -> ModelT | None:
     import anthropic
 
     client = anthropic.Anthropic()
+    if not hasattr(client.messages, "parse"):
+        # 旧 SDK（<0.79）无结构化抽取接口：回落规则，requirements 已钉 >=0.79
+        log.warning("llm_extract: anthropic SDK lacks messages.parse (need >=0.79), falling back to rules")
+        return None
     try:
         response = client.messages.parse(
             model=CLAUDE_MODEL,
@@ -126,6 +133,9 @@ def call_claude(schema: type[ModelT], subject: str, body: str) -> ModelT | None:
         return None
     except anthropic.APIConnectionError:
         log.warning("llm_extract: connection error, falling back to rules")
+        return None
+    except Exception:  # noqa: BLE001 — 任何意外（SDK 形状差异等）都不阻塞解析流水线
+        log.exception("llm_extract: unexpected failure, falling back to rules")
         return None
 
     if response.stop_reason == "refusal":

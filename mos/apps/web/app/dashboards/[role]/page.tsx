@@ -224,7 +224,7 @@ export default function RoleDashboardPage() {
                   className="dash-switcher-btn"
                   aria-haspopup="listbox"
                   aria-expanded={menuOpen}
-                  aria-label={t("page.dash.switch", "切换数据大屏")}
+                  aria-label={t("page.dash.switch", "切换数据看板")}
                   onClick={() => setMenuOpen((o) => !o)}
                 >
                   <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden>
@@ -267,7 +267,7 @@ export default function RoleDashboardPage() {
             {fullscreen ? t("page.dash.exit_fs", "退出全屏") : t("page.dash.fullscreen", "全屏")}
           </button>
           <Link href="/dashboards" className="dash-btn">
-            {t("page.dash.all", "全部大屏")}
+            {t("page.dash.all", "全部数据看板")}
           </Link>
           <Link href="/home" className="dash-btn">
             {t("page.dash.workbench", "工作台")}

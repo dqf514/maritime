@@ -250,6 +250,8 @@ class Claim(Base):
     settlement_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     deductions: Mapped[list | None] = mapped_column(JSON)  # [{reason, amount}]
     notes: Mapped[str | None] = mapped_column(Text)
+    # 对方联系人（索赔通讯对象，D 闭环：counterparty_contacts 可被业务引用）
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparty_contacts.id"))
 
 
 class PortDisbursement(Base):
@@ -291,6 +293,8 @@ class BunkerOrder(Base):
     bdn_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     supplier: Mapped[str | None] = mapped_column(String(128))
     barge: Mapped[str | None] = mapped_column(String(128))
+    # 供油方=对手方（闭环修复：BunkerIn.counterparty_id 此前只校验不落库）
+    counterparty_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparties.id"))
 
 
 class Invoice(Base):

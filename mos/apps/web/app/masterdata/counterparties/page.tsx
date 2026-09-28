@@ -1,13 +1,20 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+// 对手方与联系人（数据闭环重做）：
+// - Tabs：公司 / 联系人 两个视角，联系人不再藏在公司弹窗里
+// - 显著搜索框（服务端 q：名称/公司/邮箱/职务/部门）
+// - 联系人目录跨公司可见；新建联系人用 PartyPicker 选公司
+// - 公司详情弹窗保留联系人区块（按公司上下文管理）
+
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { LookupSelect } from "@/components/LookupSelect";
+import { PartyPicker } from "@/components/DataPicker";
 import { RecordModal } from "@/components/RecordModal";
+import { useToast } from "@/components/ToastProvider";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { useToast } from "@/components/ToastProvider";
 
 type Party = {
   id: string;
@@ -28,6 +35,7 @@ type Party = {
 type Contact = {
   id: string;
   counterparty_id: string;
+  counterparty_name?: string;
   name: string;
   title: string | null;
   email: string | null;
@@ -48,9 +56,13 @@ const emptyContact = {
   name: "", title: "", email: "", phone: "", mobile: "", department: "", is_primary: false, notes: "",
 };
 
+type Tab = "parties" | "contacts";
+
 export default function CounterpartiesPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const [tab, setTab] = useState<Tab>("parties");
+  const [search, setSearch] = useState("");
   const [rows, setRows] = useState<Party[]>([]);
   const [name, setName] = useState("");
   const [type, setType] = useState("charterer");
@@ -58,15 +70,34 @@ export default function CounterpartiesPage() {
   const [edit, setEdit] = useState({ ...emptyEdit });
   const [saving, setSaving] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [allContacts, setAllContacts] = useState<Contact[]>([]);
   const [contactOpen, setContactOpen] = useState(false);
   const [contactEdit, setContactEdit] = useState({ ...emptyContact });
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
+  const [contactParty, setContactParty] = useState(""); // 联系人表单所属公司（跨公司新建用）
 
-  async function load() {
-    setRows(await apiGet("/api/v1/masterdata/counterparties"));
-  }
+  // 公司列表（服务端搜索）
+  const load = useCallback(async (q: string) => {
+    setRows(await apiGet(`/api/v1/masterdata/counterparties?q=${encodeURIComponent(q)}&limit=200`));
+  }, []);
 
-  useEffect(() => { load().catch(() => setRows([])); }, []);
+  // 联系人目录（服务端搜索）
+  const loadAllContacts = useCallback(async (q: string) => {
+    try {
+      const data = await apiGet(`/api/v1/masterdata/counterparty-contacts?q=${encodeURIComponent(q)}&limit=200`);
+      setAllContacts((data as { items: Contact[] }).items ?? []);
+    } catch {
+      setAllContacts([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (tab === "parties") load(search).catch(() => setRows([]));
+      else loadAllContacts(search).catch(() => setAllContacts([]));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [tab, search, load, loadAllContacts]);
 
   async function loadContacts(partyId: string) {
     try {
@@ -79,7 +110,7 @@ export default function CounterpartiesPage() {
     await apiPost("/api/v1/masterdata/counterparties", { name, type, sanctions_status: "clear" });
     setName("");
     toast.success(t("page.parties.created", "Counterparty created"));
-    await load();
+    await load(search);
   }
 
   function openRow(r: Party) {
@@ -106,7 +137,7 @@ export default function CounterpartiesPage() {
       });
       toast.success(t("common.saved", "Saved"));
       setOpen(null);
-      await load();
+      await load(search);
     } finally { setSaving(false); }
   }
 
@@ -117,33 +148,42 @@ export default function CounterpartiesPage() {
       await apiDelete(`/api/v1/masterdata/counterparties/${open.id}`);
       toast.success(t("common.recycled", "Moved to recycle bin"));
       setOpen(null);
-      await load();
+      await load(search);
     } finally { setSaving(false); }
   }
 
   async function saveContact(e: FormEvent) {
     e.preventDefault();
-    if (!open) return;
+    const partyId = open?.id || contactParty;
+    if (!partyId) {
+      toast.error(t("page.parties.need_company", "请选择所属公司"));
+      return;
+    }
     if (editingContact) {
-      await apiPatch(`/api/v1/masterdata/counterparties/${open.id}/contacts/${editingContact.id}`, contactEdit);
+      await apiPatch(`/api/v1/masterdata/counterparties/${editingContact.counterparty_id}/contacts/${editingContact.id}`, contactEdit);
     } else {
-      await apiPost(`/api/v1/masterdata/counterparties/${open.id}/contacts`, contactEdit);
+      await apiPost(`/api/v1/masterdata/counterparties/${partyId}/contacts`, contactEdit);
     }
     setContactOpen(false);
     setEditingContact(null);
     setContactEdit({ ...emptyContact });
-    await loadContacts(open.id);
+    setContactParty("");
+    toast.success(t("common.saved", "Saved"));
+    if (open) await loadContacts(open.id);
+    await loadAllContacts(search);
   }
 
   async function deleteContact(c: Contact) {
-    if (!open) return;
-    await apiDelete(`/api/v1/masterdata/counterparties/${open.id}/contacts/${c.id}`);
-    await loadContacts(open.id);
+    await apiDelete(`/api/v1/masterdata/counterparties/${c.counterparty_id}/contacts/${c.id}`);
+    toast.success(t("common.recycled", "Moved to recycle bin"));
+    if (open) await loadContacts(open.id);
+    await loadAllContacts(search);
   }
 
   function openContactForm(c?: Contact) {
     if (c) {
       setEditingContact(c);
+      setContactParty(c.counterparty_id);
       setContactEdit({
         name: c.name, title: c.title || "", email: c.email || "", phone: c.phone || "",
         mobile: c.mobile || "", department: c.department || "", is_primary: c.is_primary, notes: c.notes || "",
@@ -151,6 +191,7 @@ export default function CounterpartiesPage() {
     } else {
       setEditingContact(null);
       setContactEdit({ ...emptyContact });
+      setContactParty(open?.id || "");
     }
     setContactOpen(true);
   }
@@ -165,45 +206,134 @@ export default function CounterpartiesPage() {
         <Link href="/settings/recycle" className="btn btn-ghost">{t("nav.recycle", "Recycle bin")}</Link>
       </div>
 
-      <form className="panel" onSubmit={(e) => onCreate(e).catch(() => toast.success(t("page.parties.create_fail", "Create failed")))} style={{ marginBottom: "1rem" }}>
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
-          <label>{t("common.name", "Name")}
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </label>
-          <label style={{ minWidth: 180 }}>{t("common.type", "Type")}
-            <LookupSelect dataset="counterparty_types" value={type} onChange={setType} />
-          </label>
-          <button className="btn btn-primary" type="submit">{t("page.parties.add", "Add counterparty")}</button>
-        </div>
-      </form>
-
-      <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.name", "Name")}</th>
-              <th>{t("common.type", "Type")}</th>
-              <th>{t("page.ports.country", "Country")}</th>
-              <th>{t("page.parties.sanctions", "Sanctions")}</th>
-              <th>{t("common.email", "Email")}</th>
-              <th>{t("common.phone", "Phone")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="row-openable" onClick={() => openRow(r)}>
-                <td>{r.name}</td>
-                <td>{r.type}</td>
-                <td>{r.country || "—"}</td>
-                <td><span className={`pill ${r.sanctions_status === "clear" ? "valid" : r.sanctions_status === "blocked" ? "danger" : "warn"}`}>{r.sanctions_status}</span></td>
-                <td>{r.email || "—"}</td>
-                <td>{r.phone || "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Tabs：公司 / 联系人 */}
+      <div className="desk-tabs">
+        <button type="button" className={`desk-tab${tab === "parties" ? " active" : ""}`} onClick={() => { setTab("parties"); setSearch(""); }}>
+          {t("page.parties.tab_companies", "公司")}
+        </button>
+        <button type="button" className={`desk-tab${tab === "contacts" ? " active" : ""}`} onClick={() => { setTab("contacts"); setSearch(""); }}>
+          {t("page.parties.tab_contacts", "联系人")}
+        </button>
       </div>
 
+      {/* 显著搜索框 */}
+      <div className="panel" style={{ display: "flex", gap: "0.75rem", alignItems: "center", padding: "0.75rem 1rem", marginBottom: "1rem" }}>
+        <input
+          type="search"
+          className="party-search"
+          style={{ flex: 1, height: 40, fontSize: "0.95rem", border: "1px solid var(--border)", borderRadius: 8, padding: "0 0.85rem" }}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={
+            tab === "parties"
+              ? t("page.parties.search_companies", "搜索公司名称 / 国家 / 邮箱…")
+              : t("page.parties.search_contacts", "搜索联系人姓名 / 公司 / 邮箱 / 职务…")
+          }
+          aria-label={t("common.search", "Search")}
+        />
+        <span className="muted">
+          {tab === "parties" ? rows.length : allContacts.length} {t("common.records", "条")}
+        </span>
+      </div>
+
+      {tab === "parties" ? (
+        <>
+          <form className="panel" onSubmit={(e) => onCreate(e).catch(() => toast.error(t("page.parties.create_fail", "Create failed")))} style={{ marginBottom: "1rem" }}>
+            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
+              <label>{t("common.name", "Name")}
+                <input value={name} onChange={(e) => setName(e.target.value)} required />
+              </label>
+              <label style={{ minWidth: 180 }}>{t("common.type", "Type")}
+                <LookupSelect dataset="counterparty_types" value={type} onChange={setType} />
+              </label>
+              <button className="btn btn-primary" type="submit">{t("page.parties.add", "Add counterparty")}</button>
+            </div>
+          </form>
+
+          <div className="panel">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>{t("common.name", "Name")}</th>
+                  <th>{t("common.type", "Type")}</th>
+                  <th>{t("page.ports.country", "Country")}</th>
+                  <th>{t("page.parties.sanctions", "Sanctions")}</th>
+                  <th>{t("common.email", "Email")}</th>
+                  <th>{t("common.phone", "Phone")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="row-openable" onClick={() => openRow(r)}>
+                    <td>{r.name}</td>
+                    <td>{r.type}</td>
+                    <td>{r.country || "—"}</td>
+                    <td><span className={`pill ${r.sanctions_status === "clear" ? "valid" : r.sanctions_status === "blocked" ? "danger" : "warn"}`}>{r.sanctions_status}</span></td>
+                    <td>{r.email || "—"}</td>
+                    <td>{r.phone || "—"}</td>
+                  </tr>
+                ))}
+                {!rows.length ? (
+                  <tr><td colSpan={6} className="muted">{t("common.empty", "No records")}</td></tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <div className="panel">
+          <div className="desk-toolbar" style={{ marginTop: 0, justifyContent: "flex-end" }}>
+            <button className="btn btn-primary btn-sm" type="button" onClick={() => openContactForm()}>
+              + {t("page.parties.add_contact", "Add contact")}
+            </button>
+          </div>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>{t("common.name", "Name")}</th>
+                <th>{t("page.parties.company", "公司")}</th>
+                <th>{t("page.parties.title_role", "Title / Role")}</th>
+                <th>{t("common.email", "Email")}</th>
+                <th>{t("common.phone", "Phone")}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {allContacts.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.is_primary ? <strong>{c.name}</strong> : c.name} {c.is_primary && <span className="pill valid">primary</span>}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn-link"
+                      style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: 0, font: "inherit" }}
+                      onClick={async () => {
+                        const party = (await apiGet(`/api/v1/masterdata/counterparties/${c.counterparty_id}`)) as Party;
+                        setTab("parties");
+                        openRow(party);
+                      }}
+                    >
+                      {c.counterparty_name || "—"}
+                    </button>
+                  </td>
+                  <td>{c.title || "—"}{c.department ? ` / ${c.department}` : ""}</td>
+                  <td>{c.email || "—"}</td>
+                  <td>{c.phone || c.mobile || "—"}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <button type="button" className="btn btn-ghost" style={{ fontSize: "0.75rem", padding: "0.1rem 0.4rem", marginRight: "0.25rem" }} onClick={() => openContactForm(c)}>{t("common.edit", "Edit")}</button>
+                    <button type="button" className="btn btn-ghost" style={{ fontSize: "0.75rem", padding: "0.1rem 0.4rem", color: "var(--danger)" }} onClick={() => deleteContact(c)}>{t("common.delete", "Delete")}</button>
+                  </td>
+                </tr>
+              ))}
+              {!allContacts.length ? (
+                <tr><td colSpan={6} className="muted">{t("common.empty", "No records")}</td></tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 公司编辑弹窗（含其联系人区块） */}
       <RecordModal open={Boolean(open)} title={t("page.parties.edit", "Edit counterparty")} onClose={() => setOpen(null)} onSave={save} onDelete={remove} saving={saving}>
         <label>{t("common.name", "Name")}
           <input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} required />
@@ -288,7 +418,7 @@ export default function CounterpartiesPage() {
         </div>
       </RecordModal>
 
-      {/* Contact add/edit modal */}
+      {/* Contact add/edit modal（跨公司：用 PartyPicker 选公司） */}
       <RecordModal
         open={contactOpen}
         title={editingContact ? t("page.parties.edit_contact", "Edit contact") : t("page.parties.add_contact", "Add contact")}
@@ -296,6 +426,13 @@ export default function CounterpartiesPage() {
         onSave={saveContact as unknown as () => void}
         saving={false}
       >
+        {!open ? (
+          <label>{t("page.parties.company", "公司")}
+            <PartyPicker value={contactParty} onChange={(id) => setContactParty(id)} allowEmpty={false} placeholder={t("page.parties.search_companies", "搜索公司…")} />
+          </label>
+        ) : (
+          <p className="muted" style={{ margin: 0 }}>{t("page.parties.company", "公司")}: <strong>{open.name}</strong></p>
+        )}
         <label>{t("common.name", "Name")}
           <input value={contactEdit.name} onChange={(e) => setContactEdit({ ...contactEdit, name: e.target.value })} required />
         </label>

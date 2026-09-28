@@ -5,6 +5,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DataTable, type ColumnDef } from "@/components/DataTable";
+import { PartyPicker } from "@/components/DataPicker";
 import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
 import { useToast } from "@/components/ToastProvider";
@@ -172,14 +173,7 @@ export function InvoicesPanel() {
           </label>
           <label>
             {t("page.estimates.counterparty", "Counterparty")}
-            <select value={invParty} onChange={(e) => setInvParty(e.target.value)}>
-              <option value="">{t("common.select", "Select…")}</option>
-              {parties.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+            <PartyPicker value={invParty} onChange={setInvParty} />
           </label>
         </div>
         <div className="desk-toolbar">

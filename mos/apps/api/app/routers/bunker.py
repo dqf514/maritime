@@ -94,6 +94,7 @@ def create_bunker(body: BunkerIn, auth: AuthContext = Depends(require_module("bu
         qty_ordered=body.qty_ordered,
         unit_price=unit_price,
         rob_before=body.rob_before,
+        counterparty_id=body.counterparty_id,
     )
     if body.supplier is not None:
         row.supplier = body.supplier
@@ -219,6 +220,8 @@ def list_bunker(auth: AuthContext = Depends(require_module("bunker")), db: Sessi
             "consumption": float(r.consumption or 0) if r.consumption is not None else None,
             "currency": r.currency,
             "amount": float(r.qty_ordered or 0) * float(r.unit_price or 0),
+            "supplier": r.supplier,
+            "counterparty_id": str(r.counterparty_id) if r.counterparty_id else None,
         }
         for r in rows
     ]
@@ -231,6 +234,8 @@ class BunkerUpdate(BaseModel):
     rob_before: float | None = None
     vessel_id: UUID | None = None
     voyage_id: UUID | None = None
+    supplier: str | None = None
+    counterparty_id: UUID | None = None
 
 
 @router.patch("/bunker-orders/{order_id}")
@@ -259,6 +264,13 @@ def update_bunker(
         if scoped_get(db, Voyage, body.voyage_id, auth.tenant_id) is None:
             raise HTTPException(404, "Voyage not found")
         row.voyage_id = body.voyage_id
+    if body.supplier is not None:
+        row.supplier = body.supplier
+    if body.counterparty_id is not None:
+        party = db.get(Counterparty, body.counterparty_id)
+        if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+            raise HTTPException(404, "Counterparty not found")
+        row.counterparty_id = body.counterparty_id
     db.commit()
     return {"id": str(row.id), "order_no": row.order_no, "status": row.status}
 

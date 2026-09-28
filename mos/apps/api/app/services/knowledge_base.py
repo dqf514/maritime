@@ -227,7 +227,7 @@ Commercial and technical views share the same vessel master data.""",
 
 - 选择船舶查看证书、工单、缺陷与船员快照。
 - 若船队已使用 SpecTec、ABS NS、ShipNet 或通用 Webhook，可在集成中枢配置对接。
-- 技术大屏与仪表盘突出过期证书与未关闭缺陷。
+- 技术数据看板与仪表盘突出过期证书与未关闭缺陷。
 
 商务与机务视图共用同一船舶主数据。""",
     },

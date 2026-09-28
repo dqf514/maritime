@@ -8,6 +8,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput } from "@/components/DateInput";
+import { PartyPicker } from "@/components/DataPicker";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -640,14 +641,7 @@ export function CharterEditor({ charterId }: { charterId: string }) {
           </label>
           <label>
             {t("page.estimates.counterparty", "对手方")}
-            <select value={edit.counterparty_id} onChange={(e) => setEdit({ ...edit, counterparty_id: e.target.value })}>
-              <option value="">—</option>
-              {parties.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+            <PartyPicker value={edit.counterparty_id} onChange={(id) => setEdit({ ...edit, counterparty_id: id })} />
           </label>
           <label>
             {t("page.charters.laycan_from", "Laycan from")}

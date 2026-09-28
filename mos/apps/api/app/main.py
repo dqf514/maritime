@@ -246,6 +246,24 @@ def _apply_rebrand_data_patches() -> None:
         conn.commit()
 
 
+def _apply_wording_patches() -> None:
+    """文案整改（幂等）：中文「大屏/实时大屏」统一为「数据看板」。
+
+    代码/种子已改，这里同步存量 i18n 行（ui_messages.text），
+    任何部署升级后可见文案一次性迁移；REPLACE 幂等，重复执行无副作用。
+    """
+    stmts = (
+        "UPDATE ui_messages SET text = REPLACE(REPLACE(REPLACE(text, '实时大屏', '数据看板'), '数据大屏', '数据看板'), '大屏', '数据看板') WHERE text LIKE '%大屏%'",
+    )
+    with engine.connect() as conn:
+        for stmt in stmts:
+            try:
+                conn.execute(text(stmt))
+            except Exception:  # noqa: BLE001
+                log.exception("Wording patch failed: %s", stmt)
+        conn.commit()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     if settings.slow_query_ms > 0:
@@ -259,6 +277,10 @@ async def lifespan(_app: FastAPI):
         _apply_rebrand_data_patches()
     except Exception:
         log.exception("Rebrand data patch failed")
+    try:
+        _apply_wording_patches()
+    except Exception:
+        log.exception("Wording data patch failed")
     try:
         with SessionLocal() as db:
             # Catalog / reference data is required for the app to function

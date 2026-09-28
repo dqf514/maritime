@@ -6,6 +6,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
 import { PageGuide } from "@/components/PageGuide";
+import { PartyPicker } from "@/components/DataPicker";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -320,14 +321,7 @@ export default function ChartersPage() {
           </label>
           <label>
             {t("page.estimates.counterparty", "Counterparty")}
-            <select value={partyId} onChange={(e) => setPartyId(e.target.value)}>
-              <option value="">{t("common.select", "Select…")}</option>
-              {parties.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+            <PartyPicker value={partyId} onChange={setPartyId} />
           </label>
           <label>
             {t("page.charters.laycan_from", "Laycan from")}

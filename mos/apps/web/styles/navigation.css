@@ -9,6 +9,14 @@
   background: var(--sea-deep);
   color: #f4f8fb;
   z-index: 40;
+  position: relative;
+}
+
+/* 搜索框居中（不贴品牌区），随视口宽度恒居中 */
+.topbar-search {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .brand {

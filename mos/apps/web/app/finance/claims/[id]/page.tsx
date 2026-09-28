@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ContactPicker } from "@/components/DataPicker";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -35,6 +36,7 @@ function ClaimDetailPage() {
   const [claim, setClaim] = useState<Claim | null>(null);
   const [claimTypes, setClaimTypes] = useState<ClaimTypeOpt[]>([]);
   const [editType, setEditType] = useState("demurrage");
+  const [editContact, setEditContact] = useState("");
   const [editAmount, setEditAmount] = useState("");
   const [editNotes, setEditNotes] = useState("");
   const [settleAmount, setSettleAmount] = useState("");
@@ -48,6 +50,7 @@ function ClaimDetailPage() {
     const data = await apiGet(`/api/v1/claims/${id}`);
     setClaim(data);
     setEditType(data.claim_type || "demurrage");
+    setEditContact(data.contact?.id || "");
     setEditAmount(String(data.amount ?? ""));
     setEditNotes(data.notes || "");
     setSettleAmount(String(data.settlement_amount ?? data.amount ?? ""));
@@ -69,6 +72,7 @@ function ClaimDetailPage() {
     try {
       await apiPatch(`/api/v1/claims/${id}`, {
         claim_type: editType,
+        contact_id: editContact || null,
         amount: Number(editAmount) || 0,
         notes: editNotes || null,
       });
@@ -197,6 +201,10 @@ function ClaimDetailPage() {
               ))}
               {!claimTypes.some((ct) => ct.code === editType) ? <option value={editType}>{editType}</option> : null}
             </select>
+          </label>
+          <label>
+            {t("page.parties.contact", "对方联系人")}
+            <ContactPicker value={editContact} onChange={setEditContact} placeholder={t("picker.search", "搜索联系人…")} />
           </label>
           <label>
             {t("common.amount", "Amount")}

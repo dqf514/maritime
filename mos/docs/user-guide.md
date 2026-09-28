@@ -14,9 +14,9 @@ MariOS 是航运商业操作系统：把估算 → 租约 → 航次执行 → �
 |----------|----------|----------|
 | 租船 | Chartering / Analytics | 工作台 · 估算 · 租约 · 邮件复核 · 交易风险 |
 | 运营 | Operations / Technical | 航次 · MariLink · 燃油 · 排放 · 船队孪生 |
-| 财务 / 滞期 | Finance / Analytics | 财务台 · 联营池 · 交易风险 · 分析大屏 |
+| 财务 / 滞期 | Finance / Analytics | 财务台 · 联营池 · 交易风险 · 分析数据看板 |
 | 机务 | Technical / Operations | 船舶管理 · 船队孪生 · 燃油 · 航次 |
-| 管理层 | Analytics / 全模块 | 实时大屏 · TCE 看板 · 情景推演 · 损益 |
+| 管理层 | Analytics / 全模块 | 数据看板 · TCE 看板 · 情景推演 · 损益 |
 | 租户管理员 | 全模块 + Administration | 用户 · 安全 · Office 生态 · 集成 · 语言术语 |
 | 平台运营 | Platform | `/platform` · 租户 · 数据面与部署 · 品牌 · 健康 |
 

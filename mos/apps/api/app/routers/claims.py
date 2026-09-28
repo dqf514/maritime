@@ -16,6 +16,7 @@ from app.pagination import envelope, paginate
 from app.security import AuthContext, require_module
 
 from app.models_domain import Charter, Claim, Invoice, LaytimeCalc, NoonReport, PortCall, Voyage
+from app.models_wave1 import CounterpartyContact
 from app.services.claim_taxonomy import CLAIM_TYPES, assert_claim_type
 from app.services.doc_numbering import next_doc_number
 from app.services.performance_engine import compute_performance
@@ -34,6 +35,7 @@ router = APIRouter()
 # —— Claims ——
 class ClaimIn(BaseModel):
     claim_type: str = "demurrage"
+    contact_id: UUID | None = None
     voyage_id: UUID | None = None
     laytime_id: UUID | None = None
     amount: float | None = None
@@ -75,6 +77,8 @@ def create_claim(body: ClaimIn, auth: AuthContext = Depends(require_module("clai
                 bl_dates.append(bl)
         if bl_dates:
             time_bar = max(bl_dates) + timedelta(days=TIMEBAR_DAYS_AFTER_BL)
+    if body.contact_id is not None and scoped_get(db, CounterpartyContact, body.contact_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Contact not found")
     row = Claim(
         tenant_id=auth.tenant_id,
         claim_no=f"CL-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:5].upper()}",
@@ -85,6 +89,7 @@ def create_claim(body: ClaimIn, auth: AuthContext = Depends(require_module("clai
         currency=body.currency,
         time_bar=time_bar,
         notes=body.notes,
+        contact_id=body.contact_id,
     )
     if body.deductions is not None:
         row.deductions = body.deductions
@@ -127,6 +132,7 @@ class ClaimUpdate(BaseModel):
     notes: str | None = None
     claim_type: str | None = None
     deductions: dict | list | None = None
+    contact_id: UUID | None = None
 
 
 @router.patch("/claims/{claim_id}")
@@ -147,6 +153,10 @@ def update_claim(
         row.claim_type = assert_claim_type(body.claim_type)
     if body.deductions is not None:
         row.deductions = body.deductions
+    if body.contact_id is not None:
+        if scoped_get(db, CounterpartyContact, body.contact_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Contact not found")
+        row.contact_id = body.contact_id
     db.commit()
     return {"id": str(row.id), "claim_no": row.claim_no, "status": row.status, "amount": float(row.amount or 0)}
 
@@ -189,6 +199,7 @@ def list_claims(
                 "id": str(r.id),
                 "claim_no": r.claim_no,
                 "claim_type": r.claim_type,
+                "contact_id": str(r.contact_id) if r.contact_id else None,
                 "status": r.status,
                 "amount": float(r.amount or 0),
                 "voyage_id": str(r.voyage_id) if r.voyage_id else None,
@@ -219,6 +230,11 @@ def get_claim(
         "claim_no": r.claim_no,
         "claim_type": r.claim_type,
         "status": r.status,
+        "contact": (
+            {"id": str(ct.id), "name": ct.name, "email": ct.email, "phone": ct.phone}
+            if (ct := db.get(CounterpartyContact, r.contact_id)) is not None
+            else None
+        ),
         "amount": float(r.amount or 0),
         "currency": r.currency,
         "voyage_id": str(r.voyage_id) if r.voyage_id else None,
