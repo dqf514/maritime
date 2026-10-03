@@ -269,3 +269,47 @@ class ConfigService:
             return json.dumps(value)
         else:
             return str(value)
+
+
+def seed_config_flag_presets(db: Session) -> int:
+    """Seed platform-scope preset flags from CONFIG_FLAG_PRESETS (idempotent).
+
+    Existing (platform, key) rows are left untouched — never overwrites
+    operator-adjusted platform defaults. Returns the number of rows added.
+    """
+    from app.models_config import CONFIG_FLAG_PRESETS
+
+    existing = set(
+        db.scalars(
+            select(ConfigFlag.flag_key).where(ConfigFlag.scope_key == "platform")
+        ).all()
+    )
+    added = 0
+    for category, items in CONFIG_FLAG_PRESETS.items():
+        for item in items:
+            key = item["key"]
+            if key in existing:
+                continue
+            value_type = item.get("type", "string")
+            raw = item.get("default")
+            if raw is None:
+                raw = False if value_type == "bool" else (0.0 if value_type == "number" else "")
+            flag_value = ConfigService._serialize_value(raw, value_type)
+            db.add(
+                ConfigFlag(
+                    tenant_id=None,
+                    user_id=None,
+                    scope_key="platform",
+                    flag_key=key,
+                    flag_value=flag_value,
+                    value_type=value_type,
+                    category=category,
+                    description=item.get("description"),
+                )
+            )
+            existing.add(key)
+            added += 1
+    if added:
+        db.commit()
+        ConfigService._cache.clear()
+    return added

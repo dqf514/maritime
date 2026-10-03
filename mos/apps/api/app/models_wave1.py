@@ -55,6 +55,35 @@ class Vessel(Base):
     speed_knots: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     consumption_sea: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     consumption_port: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    # —— DWT / draft tab（载重吨/吃水表）——
+    summer_dwt: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    tropical_dwt: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    winter_dwt: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    summer_draft: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    tropical_draft: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    winter_draft: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    lightship: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    deadweight_scale: Mapped[list | None] = mapped_column(JSON)  # 吃水-载重吨曲线 [{draft_m, deadweight_mt}]
+    # —— vessel type detail（船型明细）——
+    hull_type: Mapped[str | None] = mapped_column(Text)
+    build_year: Mapped[int | None] = mapped_column(Integer)
+    build_yard: Mapped[str | None] = mapped_column(Text)
+    flag_state: Mapped[str | None] = mapped_column(Text)
+    ism_manager: Mapped[str | None] = mapped_column(Text)
+    isps_manager: Mapped[str | None] = mapped_column(Text)
+    # —— consumption detail（航速/油耗明细，MT/day）——
+    sea_speed_25: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    sea_speed_75: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    sea_speed_100: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    port_working: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    port_idle: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    port_maneuvering: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    ifo_mdo_ratio: Mapped[Decimal | None] = mapped_column(Numeric(6, 3))
+    # —— capacity / commercial aids（舱容与营运参数）——
+    max_lift_qty: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    stowage_factor: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))  # m3/MT
+    design_speed: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    tank_capacity_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     status: Mapped[str] = mapped_column(Text, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

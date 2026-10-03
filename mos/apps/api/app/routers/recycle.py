@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import ApiKey, User
+from app.models_cargo import Cargo
 from app.models_domain import Charter, Claim, Estimate, Invoice, LaytimeCalc, Voyage
 from app.models_saas import OrgUnit
 from app.models_wave1 import ConnectorInstance, Counterparty, Port, Vessel
@@ -38,6 +39,7 @@ ENTITY_LOOKUP: dict[str, tuple[type, bool]] = {
     "invoice": (Invoice, True),
     "claim": (Claim, True),
     "laytime": (LaytimeCalc, True),
+    "cargo": (Cargo, True),
 }
 
 

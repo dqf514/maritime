@@ -40,19 +40,19 @@ const ZONES = [
     items: [
       { key: "portal.zone.ops.i1", text: { en: "Voyage estimate & TCE calculation with commission, bunker and carbon costs", zh: "航次估算与 TCE 日收益测算，佣金、油价、碳成本自动算齐" } },
       { key: "portal.zone.ops.i2", text: { en: "Fixture and clause management with full audit trail", zh: "租约与条款全流程管理，变更审批留痕" } },
-      { key: "portal.zone.ops.i3", text: { en: "Demurrage & despatch claims with one-click SOF statement", zh: "滞期与速遣索赔，SOF 一键生成计算书" } },
-      { key: "portal.zone.ops.i4", text: { en: "Invoicing, collection and multi-currency settlement with live P&L", zh: "发票、收款与多币种结算，航次盈亏实时可见" } },
+      { key: "portal.zone.ops.i3", text: { en: "Demurrage, despatch and performance claims — good weather evaluation, about tolerance analysis, one-click SOF statement", zh: "滞期、速遣与航速绩效索赔——好天气评估、about 容差分析，SOF 一键生成计算书" } },
+      { key: "portal.zone.ops.i4", text: { en: "Clause-aware NOR delivery validation, invoicing and multi-currency settlement with live P&L", zh: "NOR 递交条件按条款校验，开票、收款与多币种结算，航次盈亏实时可见" } },
     ],
   },
   {
     titleKey: "portal.zone.collab.title",
-    title: { en: "Collaboration", zh: "协同智能" },
-    en: "Collaboration",
+    title: { en: "Collaboration & AI", zh: "协同智能" },
+    en: "Collaboration & AI",
     items: [
       { key: "portal.zone.collab.i1", text: { en: "Role workbench: today's tasks, approvals and role updates in one screen", zh: "角色工作台：今日待办、待审批、岗位动态一屏摆好" } },
-      { key: "portal.zone.collab.i2", text: { en: "Task assignment and progress tracking with auto notifications", zh: "任务分派与进度跟踪，指派自动通知同事" } },
-      { key: "portal.zone.collab.i3", text: { en: "Notification center with unread badges, click to jump to business page", zh: "通知中心未读角标，点击直达业务页面" } },
-      { key: "portal.zone.collab.i4", text: { en: "Onboarding checklist and page guides, ready from day one", zh: "新人上手清单与页面操作指引，到岗即上手" } },
+      { key: "portal.zone.collab.i2", text: { en: "Task assignment and progress tracking with notification center alerts", zh: "任务分派与进度跟踪，通知中心自动提醒、点击直达业务页面" } },
+      { key: "portal.zone.collab.i3", text: { en: "MariAI assistant and smart actions — laytime statements and voyage instructions drafted from live data", zh: "MariAI 智能助手与智能动作——计算书、航次指令按业务数据自动起草" } },
+      { key: "portal.zone.collab.i4", text: { en: "Email intelligence and LLM document extraction — fixture recaps, NORs and statements parsed into records", zh: "邮件智能与 LLM 单据抽取——recap、NOR、计算书自动解析入库" } },
     ],
   },
   {
@@ -62,8 +62,19 @@ const ZONES = [
     items: [
       { key: "portal.zone.risk.i1", text: { en: "10 exception types with severity levels", zh: "10 类异常主动扫描，严重 / 提醒分级呈现" } },
       { key: "portal.zone.risk.i2", text: { en: "Claim deadline countdown with auto alerts", zh: "索赔时效倒计时，届满前自动预警" } },
-      { key: "portal.zone.risk.i3", text: { en: "Certificate expiry reminder 30 days ahead", zh: "证书到期提前 30 天提醒责任人" } },
-      { key: "portal.zone.risk.i4", text: { en: "One-click data quality check with auto-fix", zh: "数据质量一键体检，修复自动销号" } },
+      { key: "portal.zone.risk.i3", text: { en: "Sanctions screening and counterparty credit limit monitoring", zh: "制裁名单筛查与客户信用额度监控，超限即时告警" } },
+      { key: "portal.zone.risk.i4", text: { en: "Certificate expiry reminder 30 days ahead", zh: "证书到期提前 30 天提醒责任人" } },
+    ],
+  },
+  {
+    titleKey: "portal.zone.analytics.title",
+    title: { en: "Analytics & Twin", zh: "分析与数字孪生" },
+    en: "Analytics & Twin",
+    items: [
+      { key: "portal.zone.analytics.i1", text: { en: "Voyage P&L and reporting — revenue, hire, bunker, port and emissions in one view", zh: "航次盈亏与报表——收入、租金、油耗、港口费、排放一屏算清" } },
+      { key: "portal.zone.analytics.i2", text: { en: "Market data: freight rates, bunker prices, distance and ETA services", zh: "市场数据：运价、油价、距离与 ETA 服务随取随用" } },
+      { key: "portal.zone.analytics.i3", text: { en: "Emissions & CII: carbon calculator, EU ETS, CII rating and carbon cost allocation", zh: "碳排放与 CII：碳成本测算、EU ETS、CII 评级与碳成本分摊" } },
+      { key: "portal.zone.analytics.i4", text: { en: "Fleet digital twin with what-if simulation on speed and TCE", zh: "船队数字孪生，航速与 TCE 一键推演" } },
     ],
   },
   {
@@ -72,9 +83,20 @@ const ZONES = [
     en: "Platform Governance",
     items: [
       { key: "portal.zone.gov.i1", text: { en: "Role-based permissions with full audit trail", zh: "权限分级与操作留痕，全程可审计" } },
-      { key: "portal.zone.gov.i2", text: { en: "Certificate upload and version management", zh: "证书扫描件上传与版本管理，历史可回看" } },
-      { key: "portal.zone.gov.i3", text: { en: "One-click Excel export for core lists", zh: "核心清单一键导出 Excel，衔接既有习惯" } },
+      { key: "portal.zone.gov.i2", text: { en: "PrintDoc PDF export with company header and one-click Excel export for core lists", zh: "PrintDoc 公司抬头专业打印导出，核心清单一键导出 Excel" } },
+      { key: "portal.zone.gov.i3", text: { en: "Ctrl+K OmniSearch, saved views and bulk operations — column visibility, bulk CSV export, inline editing", zh: "Ctrl+K 全局搜索、常用视图与批量操作——列显隐、批量导出 CSV、行内编辑" } },
       { key: "portal.zone.gov.i4", text: { en: "Outlook and Teams integration, no workflow change", zh: "Outlook、Teams 直接集成，不换工作方式" } },
+    ],
+  },
+  {
+    titleKey: "portal.zone.data.title",
+    title: { en: "Data & Integration", zh: "数据与集成" },
+    en: "Data & Integration",
+    items: [
+      { key: "portal.zone.data.i1", text: { en: "Background jobs and webhooks — async processing and external notifications", zh: "后台作业与 Webhook——异步处理，外部系统实时通知" } },
+      { key: "portal.zone.data.i2", text: { en: "Data quality SelfCheck — automated data health checks with auto-fix", zh: "数据质量 SelfCheck——自动体检，修复销号" } },
+      { key: "portal.zone.data.i3", text: { en: "Port cost benchmarking against historical disbursement costs", zh: "港口使费对标历史 PDA 成本，高低一眼看清" } },
+      { key: "portal.zone.data.i4", text: { en: "Clause library: 10 system clause templates, tenant custom clauses and parameter materialization", zh: "条款库：10 条系统条款模板、租户自定义条款，参数物化直通计算引擎" } },
     ],
   },
 ];

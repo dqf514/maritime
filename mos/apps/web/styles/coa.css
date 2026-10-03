@@ -1,0 +1,143 @@
+/* COA (Phase 6) — COA list + COA Manager workspace */
+
+.coa-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+}
+.coa-toolbar select,
+.coa-toolbar input {
+  height: var(--control-h);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0 var(--gap-md);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: var(--font-ui);
+}
+
+.coa-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-md);
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--gap-md);
+}
+.coa-head-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+.coa-head-title h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+.coa-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+}
+
+/* Contract progress + P&L KPI tiles */
+.coa-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--gap-sm);
+  margin-bottom: var(--gap-md);
+}
+.coa-kpi {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--gap-sm) var(--gap-md);
+  background: var(--bg);
+  min-width: 0;
+}
+.coa-kpi span {
+  display: block;
+  color: var(--muted);
+  font-size: var(--font-label);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.coa-kpi strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--sea-deep);
+}
+.coa-kpi.coa-kpi-pos strong { color: #1e7a3c; }
+.coa-kpi.coa-kpi-neg strong { color: #b3261e; }
+
+.coa-tab-body {
+  display: grid;
+  gap: var(--gap-md);
+}
+
+.coa-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  min-width: 0;
+}
+.coa-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--gap-sm) var(--gap-md);
+  border-bottom: 1px solid var(--border);
+}
+.coa-panel-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.coa-panel-body {
+  padding: var(--gap-sm) var(--gap-md) var(--gap-md);
+}
+.coa-panel-body .grid-wrapper {
+  border: 0;
+}
+
+/* Allocation progress bar: allocated vs contracted qty */
+.coa-alloc-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #eef2f5;
+  margin: var(--gap-sm) 0;
+}
+.coa-alloc-bar .alloc-done {
+  background: var(--accent);
+}
+.coa-alloc-bar .alloc-open {
+  background: #d7e0e6;
+}
+
+.coa-pnl-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-table);
+}
+.coa-pnl-table th,
+.coa-pnl-table td {
+  padding: var(--gap-xs) var(--gap-md);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.coa-pnl-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.coa-pnl-table tr.coa-pnl-total td {
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+}

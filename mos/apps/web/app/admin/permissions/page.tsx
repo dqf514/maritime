@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -38,13 +39,13 @@ export default function PermissionsPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.perm.title", "功能权限")}</h1>
-      <p className="page-sub">
-        {t(
+      <PageHeader
+        title={t("page.perm.title", "功能权限")}
+        subtitle={t(
           "page.perm.sub",
           "按角色精细控制能力。未配置的单元格默认允许（继承角色）；取消勾选会写入拒绝并在业务 API 生效。租户管理员始终放行。",
         )}
-      </p>
+      />
       <div className="panel" style={{ overflowX: "auto" }}>
         <table className="table">
           <thead>

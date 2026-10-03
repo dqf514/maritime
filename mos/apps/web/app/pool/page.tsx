@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -143,14 +144,10 @@ export default function PoolPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.pool.title", "船舶池")}</h1>
-          <p className="page-sub">
-            {t("page.pool.sub", "入池船舶、期间结果与按点分配结算。同一船舶不可重复入池，也不可同时在多个池中。")}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.pool.title", "船舶池")}
+        subtitle={t("page.pool.sub", "入池船舶、期间结果与按点分配结算。同一船舶不可重复入池，也不可同时在多个池中。")}
+      />
       {err ? <p className="flash-err">{err}</p> : null}
 
       <form className="panel" onSubmit={createPool}>

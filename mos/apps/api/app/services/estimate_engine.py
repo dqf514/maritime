@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -42,7 +43,72 @@ def _apply_legs(inputs: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
     return sea_days, port_days, leg_cargo
 
 
-def compute_estimate(inputs: dict[str, Any]) -> dict[str, Any]:
+def _rate_table_dims(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Lookup dims drawn from estimate inputs (rows only care about their own keys)."""
+    keys = ("load_port", "disch_port", "from_port", "to_port", "route", "cargo_type", "vessel_class")
+    return {k: inputs[k] for k in keys if inputs.get(k)}
+
+
+def _as_of(inputs: dict[str, Any]) -> date | None:
+    raw = inputs.get("rate_as_of")
+    if not raw:
+        return None
+    if isinstance(raw, date) and not isinstance(raw, datetime):
+        return raw
+    try:
+        return date.fromisoformat(str(raw)[:10])
+    except ValueError:
+        return None
+
+
+def _resolve_rate_table_inputs(inputs: dict[str, Any], db: Any, tenant_id: Any) -> dict[str, Decimal]:
+    """Resolve Phase 4 rate-table inputs into concrete amounts/rates.
+
+    Optional override inputs (all omitted from legacy gold fixtures):
+
+    - ``freight_rate_table_id`` — per-mt freight rate via ``resolve_rate``
+      (dims: load_port/disch_port/cargo_type/...). Used when no direct
+      ``freight_rate`` is provided; a direct rate wins (backward compat).
+    - ``demurrage_rate_table_id`` — per-day demurrage rate ×
+      ``demurrage_days`` → ``demurrage_income`` (only when the latter is
+      not provided directly).
+    - ``surcharge_rate_table_id`` — per-mt surcharge × ``cargo_qty`` →
+      ``surcharge_income`` (added to revenue; no legacy direct equivalent).
+
+    Returns only the keys that resolved, e.g.
+    ``{"freight_rate": Decimal("12.5"), "surcharge_income": Decimal("...")}``.
+    """
+    from app.services.rates import resolve_rate  # local import: engine stays import-light
+
+    out: dict[str, Decimal] = {}
+    as_of = _as_of(inputs)
+    dims = _rate_table_dims(inputs)
+
+    freight_tid = inputs.get("freight_rate_table_id")
+    if freight_tid:
+        val = resolve_rate(db, tenant_id, freight_tid, dims, as_of=as_of)
+        if val is not None and not _d(inputs.get("freight_rate") or 0):
+            out["freight_rate"] = val
+
+    dem_tid = inputs.get("demurrage_rate_table_id")
+    if dem_tid and not _d(inputs.get("demurrage_income") or 0) and inputs.get("demurrage_days") is not None:
+        val = resolve_rate(db, tenant_id, dem_tid, dims, as_of=as_of)
+        if val is not None:
+            out["demurrage_income"] = (val * _d(inputs.get("demurrage_days"))).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+
+    sur_tid = inputs.get("surcharge_rate_table_id")
+    if sur_tid:
+        val = resolve_rate(db, tenant_id, sur_tid, dims, as_of=as_of)
+        if val is not None and inputs.get("cargo_qty") is not None:
+            out["surcharge_income"] = (val * _d(inputs.get("cargo_qty"))).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+    return out
+
+
+def compute_estimate(inputs: dict[str, Any], *, db: Any = None, tenant_id: Any = None) -> dict[str, Any]:
     """
     TCE = (total_revenue - voyage_cost) / total_days
     voyage_cost excludes hire / opportunity hire; brokerage and EU ETS
@@ -68,6 +134,12 @@ def compute_estimate(inputs: dict[str, Any]) -> dict[str, Any]:
       (non-blocking — an estimate may intentionally explore an over-capacity
       cargo; the chartering desk decides). The key is omitted when empty so
       legacy results stay byte-identical.
+    - Phase 4 rate tables (require db + tenant_id kwargs, see
+      _resolve_rate_table_inputs): freight_rate_table_id fills freight_rate
+      when no direct rate is given; demurrage_rate_table_id × demurrage_days
+      fills demurrage_income; surcharge_rate_table_id × cargo_qty adds
+      surcharge_income to revenue. Direct values win when provided
+      (backward compatibility) — the rate table is the optional fill-in.
     """
     legs = inputs.get("legs") or []
     leg_sea_days = leg_port_days = leg_cargo = None
@@ -87,6 +159,13 @@ def compute_estimate(inputs: dict[str, Any]) -> dict[str, Any]:
     ws_flat = _d(inputs.get("ws_flat") or 0)
     ws_pct = _d(inputs.get("ws_pct") or 0)
 
+    # Phase 4 rate tables (optional; no-op without *_rate_table_id keys)
+    rate_table_hits: dict[str, Decimal] = {}
+    if db is not None and tenant_id is not None:
+        rate_table_hits = _resolve_rate_table_inputs(inputs, db, tenant_id)
+    if "freight_rate" in rate_table_hits:
+        freight_rate = rate_table_hits["freight_rate"]
+
     freight_basis = "rate"
     if lump_sum > 0:
         gross_freight = lump_sum
@@ -103,9 +182,10 @@ def compute_estimate(inputs: dict[str, Any]) -> dict[str, Any]:
     commission = address_commission  # legacy output key
     net_freight = gross_freight - address_commission
 
-    demurrage = _d(inputs.get("demurrage_income") or 0)
+    demurrage = rate_table_hits.get("demurrage_income", _d(inputs.get("demurrage_income") or 0))
     other_income = _d(inputs.get("other_income") or 0)
-    total_revenue = net_freight + demurrage + other_income
+    surcharge_income = rate_table_hits.get("surcharge_income", Decimal("0"))
+    total_revenue = net_freight + demurrage + other_income + surcharge_income
 
     sea_days = _d(inputs.get("sea_days") or 0)
     port_days = _d(inputs.get("port_days") or 0)
@@ -189,6 +269,16 @@ def compute_estimate(inputs: dict[str, Any]) -> dict[str, Any]:
         "currency": inputs.get("currency") or "USD",
     }
 
+    # rate-table provenance — only present when a table actually contributed,
+    # so legacy results stay byte-identical.
+    if rate_table_hits:
+        result["surcharge_income"] = float(surcharge_income.quantize(TWOPLACES))
+        result["rate_table_rates"] = {
+            "freight_rate": float(rate_table_hits["freight_rate"]) if "freight_rate" in rate_table_hits else None,
+            "demurrage_income": float(rate_table_hits["demurrage_income"]) if "demurrage_income" in rate_table_hits else None,
+            "surcharge_income": float(rate_table_hits["surcharge_income"]) if "surcharge_income" in rate_table_hits else None,
+        }
+
     # cargo quantity tolerance (±pct MOL, "more or less" owner's/charterer's option)
     tolerance_pct = inputs.get("cargo_tolerance_pct")
     if tolerance_pct is not None:
@@ -230,6 +320,9 @@ def sensitivity(
     field: str,
     deltas: list[float],
     mode: str = "pct",
+    *,
+    db: Any = None,
+    tenant_id: Any = None,
 ) -> list[dict[str, Any]]:
     """Perturb `field` and recompute TCE.
 
@@ -247,7 +340,7 @@ def sensitivity(
             inp[field] = float(base_value + Decimal(str(d)))
         else:
             inp[field] = float(base_value * (Decimal("1") + Decimal(str(d))))
-        out = compute_estimate(inp)
+        out = compute_estimate(inp, db=db, tenant_id=tenant_id)
         row = {"field": field, "mode": mode, "tce": out["tce"], "result": out}
         row["delta_abs" if mode == "abs" else "delta_pct"] = d
         rows.append(row)

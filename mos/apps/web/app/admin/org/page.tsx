@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -122,18 +123,20 @@ export default function OrgStructurePage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.org.title", "组织架构")}</h1>
-          <p className="page-sub">
+      <PageHeader
+        title={t("page.org.title", "组织架构")}
+        subtitle={
+          <>
             {t("page.org.sub", "总部、部门与团队。人员归属在「用户与角色」中设置，此处可查看成员与负责人。")}{" "}
             <Link href="/admin/users">{t("page.users.title", "用户与角色")}</Link>
-          </p>
-        </div>
-        <Link href="/settings/recycle" className="btn btn-ghost">
-          {t("nav.recycle", "回收站")}
-        </Link>
-      </div>
+          </>
+        }
+        actions={
+          <Link href="/settings/recycle" className="btn btn-ghost">
+            {t("nav.recycle", "回收站")}
+          </Link>
+        }
+      />
       <form className="panel" onSubmit={(e) => create(e).catch(() => toast.success(t("common.failed", "失败")))}>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
           <label>

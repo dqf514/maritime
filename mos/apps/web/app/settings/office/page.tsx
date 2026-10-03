@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -149,28 +150,26 @@ export default function OfficeEcosystemPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.office.title", "Office ecosystem")}</h1>
-          <p className="page-sub">
-            {t(
-              "page.office.sub",
-              "Microsoft 365 — Teams, SharePoint, OneDrive, Outlook — shared with MariOS resources."
-            )}
-          </p>
-        </div>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <button className="btn btn-primary" type="button" onClick={() => connect().catch((e) => toast.success(String(e)))}>
-            {t("page.office.connect", "Connect Microsoft 365")}
-          </button>
-          <button className="btn" type="button" onClick={() => refreshHealth().catch((e) => toast.success(String(e)))}>
-            {t("page.office.health", "Health check")}
-          </button>
-          <button className="btn" type="button" onClick={() => disconnect().catch((e) => toast.success(String(e)))}>
-            {t("page.office.disconnect", "Disconnect")}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.office.title", "Office ecosystem")}
+        subtitle={t(
+          "page.office.sub",
+          "Microsoft 365 — Teams, SharePoint, OneDrive, Outlook — shared with MariOS resources."
+        )}
+        actions={
+          <>
+            <button className="btn btn-primary" type="button" onClick={() => connect().catch((e) => toast.success(String(e)))}>
+              {t("page.office.connect", "Connect Microsoft 365")}
+            </button>
+            <button className="btn" type="button" onClick={() => refreshHealth().catch((e) => toast.success(String(e)))}>
+              {t("page.office.health", "Health check")}
+            </button>
+            <button className="btn" type="button" onClick={() => disconnect().catch((e) => toast.success(String(e)))}>
+              {t("page.office.disconnect", "Disconnect")}
+            </button>
+          </>
+        }
+      />
 
 
       <div className="panel">

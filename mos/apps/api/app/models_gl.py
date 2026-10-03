@@ -75,3 +75,33 @@ class PeriodJournal(Base):
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     posted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AccountGroup(Base):
+    """科目组 — groups chart-of-account entries for reporting rollups."""
+
+    __tablename__ = "gl_account_groups"
+    __table_args__ = (UniqueConstraint("tenant_id", "group_code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    group_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    group_name: Mapped[str] = mapped_column(Text, nullable=False)
+    account_type: Mapped[str] = mapped_column(String(16), nullable=False)  # revenue|expense|asset|liability|equity
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AccountingPeriod(Base):
+    """会计期间 — open/close control per YYYY-MM period."""
+
+    __tablename__ = "gl_accounting_periods"
+    __table_args__ = (UniqueConstraint("tenant_id", "period"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    period: Mapped[str] = mapped_column(String(7), nullable=False)  # YYYY-MM
+    status: Mapped[str] = mapped_column(Text, default="open")  # open|closed
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_by: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

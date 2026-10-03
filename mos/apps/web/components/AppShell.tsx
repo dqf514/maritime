@@ -5,8 +5,10 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OmniSearch } from "@/components/OmniSearch";
 import { NavIcon, sectionIconId } from "@/components/NavIcon";
+import { NavPopup } from "@/components/NavPopup";
 import { NotificationBell } from "@/components/NotificationBell";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { DensityToggle } from "@/components/DensityToggle";
 import { Breadcrumb, type BreadcrumbItem } from "@/components/Breadcrumb";
 import { clearLookupCache } from "@/components/LookupSelect";
 import { apiGet, apiLogout, apiMe, readStorage, removeStorage, TOKEN_STORAGE_KEY, type Me } from "@/lib/api";
@@ -72,17 +74,22 @@ export function AppShell({
   breadcrumbs,
   title,
   subtitle,
+  rightPanel,
+  rightPanelTitle,
 }: {
   children: React.ReactNode;
   breadcrumbs?: BreadcrumbItem[];
   title?: string;
   subtitle?: string;
+  rightPanel?: React.ReactNode;
+  rightPanelTitle?: string;
 }) {
   const [me, setMe] = useState<Me | null>(null);
   const [shell, setShell] = useState<ShellBootstrap | null>(null);
   const [iconUrl, setIconUrl] = useState("/branding/mark.svg");
   const [productName, setProductName] = useState("MariOS");
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [secOpen, setSecOpen] = useState<Record<string, boolean>>({});
   const [navHint, setNavHint] = useState<{ text: string; x: number; y: number } | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -222,7 +229,7 @@ export function AppShell({
 
   return (
     <div
-      className={`app-shell ${navCollapsed ? "nav-collapsed" : ""} ${mobileNavOpen ? "mobile-nav-open" : ""}`}
+      className={`app-shell ${navCollapsed ? "nav-collapsed" : ""} ${mobileNavOpen ? "mobile-nav-open" : ""} ${rightPanel && !rightPanelOpen ? "right-panel-hidden" : ""}`}
     >
       <header className="topbar">
         <button
@@ -250,9 +257,44 @@ export function AppShell({
           <OmniSearch />
         </div>
         <div className="topbar-right">
+          {/* Refresh (F5) */}
+          <button
+            type="button"
+            className="icon-btn"
+            title={t("shell.refresh", "刷新 (F5)")}
+            aria-label={t("shell.refresh", "刷新")}
+            onClick={() => window.location.reload()}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M13.6 2.4A7 7 0 0 0 2.5 6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M2.4 13.6A7 7 0 0 0 13.5 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M13.5 2.5v3.5h-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M2.5 13.5v-3.5h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+          {/* Fullscreen (F11) */}
+          <button
+            type="button"
+            className="icon-btn"
+            title={t("shell.fullscreen", "全屏 (F11)")}
+            aria-label={t("shell.fullscreen", "全屏")}
+            onClick={() => {
+              if (document.fullscreenElement) {
+                document.exitFullscreen();
+              } else {
+                document.documentElement.requestFullscreen();
+              }
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M2 6V2h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M14 6V2h-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M2 10v4h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M14 10v4h-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
           <NotificationBell />
-          <ThemeToggle />
-          <LanguageSwitcher />
+          <DensityToggle />
           <div className="user-menu" ref={userMenuRef}>
             <button
               type="button"
@@ -283,6 +325,16 @@ export function AppShell({
                 <Link href="/help" role="menuitem" onClick={() => setUserMenuOpen(false)}>
                   {t("help.centre", "帮助中心")}
                 </Link>
+                <div className="user-menu-sep" />
+                <div className="user-menu-setting">
+                  <span>{t("shell.theme", "主题")}</span>
+                  <ThemeToggle />
+                </div>
+                <div className="user-menu-setting">
+                  <span>{t("shell.language", "语言")}</span>
+                  <LanguageSwitcher />
+                </div>
+                <div className="user-menu-sep" />
                 <button type="button" role="menuitem" className="user-menu-danger" onClick={signOut}>
                   {t("shell.sign_out", "退出登录")}
                 </button>
@@ -306,60 +358,12 @@ export function AppShell({
             </button>
           </div>
           <div className="sidenav-inner">
-            {shell.navigation.map((sec) => {
-              const open = navCollapsed ? true : secOpen[sec.section] !== false;
-              const secLabel = t(`section.${sec.section}`, sec.label);
-              return (
-                <div key={sec.section} className={`nav-section ${open ? "open" : "closed"}`}>
-                  <button
-                    type="button"
-                    className="nav-section-label"
-                    onClick={() => !navCollapsed && toggleSection(sec.section)}
-                    aria-expanded={open}
-                    aria-label={secLabel}
-                    title={navCollapsed ? undefined : secLabel}
-                    onMouseEnter={(e) => revealNavHint(e.currentTarget, secLabel)}
-                    onMouseLeave={hideNavHint}
-                    onFocus={(e) => revealNavHint(e.currentTarget, secLabel)}
-                    onBlur={hideNavHint}
-                  >
-                    <span className="nav-section-icon" aria-hidden>
-                      <NavIcon id={sectionIconId(sec.section)} />
-                    </span>
-                    <span className="nav-section-text">{secLabel}</span>
-                    <em className="nav-section-caret" aria-hidden>
-                      {open ? "−" : "+"}
-                    </em>
-                  </button>
-                  {open ? (
-                    <div className="nav-section-items">
-                      {sec.items.map((item) => {
-                        const label = t(`nav.${item.id}`, item.label);
-                        return (
-                          <Link
-                            key={item.href}
-                            href={item.href}
-                            className={isActive(item.href) ? "active" : ""}
-                            title={navCollapsed ? undefined : label}
-                            aria-label={label}
-                            onClick={closeMobileNav}
-                            onMouseEnter={(e) => revealNavHint(e.currentTarget, label)}
-                            onMouseLeave={hideNavHint}
-                            onFocus={(e) => revealNavHint(e.currentTarget, label)}
-                            onBlur={hideNavHint}
-                          >
-                            <span className="nav-icon-wrap" aria-hidden>
-                              <NavIcon id={item.id} />
-                            </span>
-                            <span className="nav-item-text">{label}</span>
-                          </Link>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+            <NavPopup
+              sections={shell.navigation}
+              navCollapsed={navCollapsed}
+              pathname={pathname}
+              onNavigate={closeMobileNav}
+            />
           </div>
           <div className="sidenav-foot">
             <Link
@@ -426,6 +430,52 @@ export function AppShell({
             <span className="ok-dot">{t("common.online", "在线")}</span>
           </footer>
         </div>
+        {/* Right contextual panel — AI / properties / details */}
+        {rightPanel ? (
+          <aside className={`right-panel ${rightPanelOpen ? "visible" : "hidden"}`}>
+            <div className="panel-header">
+              <span>{rightPanelTitle || t("shell.details", "详情")}</span>
+              <button
+                type="button"
+                className="icon-btn"
+                style={{ width: 18, height: 18 }}
+                onClick={() => setRightPanelOpen(false)}
+                aria-label={t("shell.close_panel", "收起面板")}
+              >
+                ×
+              </button>
+            </div>
+            <div className="panel-body" style={{ flex: 1, overflow: "auto" }}>
+              {rightPanel}
+            </div>
+          </aside>
+        ) : null}
+        {/* Right panel toggle (floating) */}
+        {rightPanel && !rightPanelOpen ? (
+          <button
+            type="button"
+            className="right-panel-toggle icon-btn"
+            onClick={() => setRightPanelOpen(true)}
+            title={t("shell.open_panel", "展开面板")}
+            style={{
+              position: "fixed",
+              right: 0,
+              top: "50%",
+              transform: "translateY(-50%)",
+              zIndex: 40,
+              width: 18,
+              height: 48,
+              borderRadius: "4px 0 0 4px",
+              border: "1px solid var(--chrome-border)",
+              borderRight: "none",
+              background: "var(--chrome-bg)",
+              color: "var(--muted)",
+              fontSize: 12,
+            }}
+          >
+            ‹
+          </button>
+        ) : null}
       </div>
     </div>
   );

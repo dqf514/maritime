@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { StateView } from "@/components/StateView";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -50,11 +51,15 @@ export default function TwinPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.twin.title", "Fleet Twin")}</h1>
-      <p style={{ color: "var(--muted)" }}>{t("page.twin.sub", "Positions, alerts and what-if.")}</p>
-      <button className="btn btn-primary" type="button" onClick={() => runWhatIf().catch(() => setWhatif(t("common.failed", "Failed")))}>
-        {t("page.twin.run_whatif", "Run L4 what-if")}
-      </button>
+      <PageHeader
+        title={t("page.twin.title", "Fleet Twin")}
+        subtitle={t("page.twin.sub", "Positions, alerts and what-if.")}
+        actions={
+          <button className="btn btn-primary" type="button" onClick={() => runWhatIf().catch(() => setWhatif(t("common.failed", "Failed")))}>
+            {t("page.twin.run_whatif", "Run L4 what-if")}
+          </button>
+        }
+      />
       {whatif ? <p>{whatif}</p> : null}
       <div className="panel" style={{ marginTop: "1rem" }}>
         <h3 style={{ marginTop: 0 }}>{t("page.twin.fleet", "Fleet (L1)")}</h3>

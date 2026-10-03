@@ -6,6 +6,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
 import { PageGuide } from "@/components/PageGuide";
+import { PageHeader } from "@/components/PageHeader";
 import { PartyPicker } from "@/components/DataPicker";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -22,8 +23,19 @@ type Charter = {
   vessel_id: string | null;
   counterparty_id: string | null;
   estimate_id: string | null;
+  fixture_type?: string | null;
   sanctions_blocked: boolean;
 };
+type MasterContract = {
+  id: string;
+  contract_no: string;
+  title: string;
+  contract_type: string;
+  status: string;
+};
+
+// 单据种类：fixture_type（Head/Relet Fixture）+ 独立的 Master Contract 单据
+type DocKind = "voyage_fixture" | "head" | "relet" | "master_contract";
 
 type TermFields = {
   freight_basis: string;
@@ -194,9 +206,11 @@ export default function ChartersPage() {
   const [rows, setRows] = useState<Charter[]>([]);
   const [vessels, setVessels] = useState<RefItem[]>([]);
   const [parties, setParties] = useState<RefItem[]>([]);
+  const [masters, setMasters] = useState<MasterContract[]>([]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const [docKind, setDocKind] = useState<DocKind>("voyage_fixture");
   const [charterType, setCharterType] = useState("voyage");
   const [vesselId, setVesselId] = useState("");
   const [partyId, setPartyId] = useState("");
@@ -207,20 +221,30 @@ export default function ChartersPage() {
   const [cargoQty, setCargoQty] = useState("");
   const [terms, setTerms] = useState<TermFields>(EMPTY_TERMS);
   const [clausesNotes, setClausesNotes] = useState("");
+  const [direction, setDirection] = useState("out");
+  const [masterContractId, setMasterContractId] = useState("");
+  // master contract fields（docKind === "master_contract" 时显示）
+  const [mcTitle, setMcTitle] = useState("");
+  const [mcType, setMcType] = useState("voyage_coa");
+  const [mcQty, setMcQty] = useState("");
+  const [mcFrom, setMcFrom] = useState("");
+  const [mcTo, setMcTo] = useState("");
 
   function setTerm(key: keyof TermFields, value: string) {
     setTerms((prev) => ({ ...prev, [key]: value }));
   }
 
   const load = useCallback(async () => {
-    const [c, v, p] = await Promise.all([
+    const [c, v, p, m] = await Promise.all([
       apiGet("/api/v1/charters"),
       apiGet("/api/v1/masterdata/vessels"),
       apiGet("/api/v1/masterdata/counterparties"),
+      apiGet("/api/v1/master-contracts").catch(() => []),
     ]);
     setRows(c);
     setVessels(v);
     setParties(p);
+    setMasters(Array.isArray(m) ? m : (m?.items ?? []));
     if (!vesselId && v[0]?.id) setVesselId(v[0].id);
     if (!partyId && p[0]?.id) setPartyId(p[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -236,6 +260,23 @@ export default function ChartersPage() {
     setBusy(true);
     setErr("");
     try {
+      if (docKind === "master_contract") {
+        const mc = await apiPost("/api/v1/master-contracts", {
+          title: mcTitle || null,
+          counterparty_id: partyId || null,
+          contract_type: mcType,
+          total_qty: mcQty === "" ? null : Number(mcQty),
+          period_from: mcFrom || null,
+          period_to: mcTo || null,
+        });
+        toast.success(t("page.charters.master_created", "Master contract {no} created", { no: mc.contract_no }));
+        setMcTitle("");
+        setMcQty("");
+        setMcFrom("");
+        setMcTo("");
+        await load();
+        return;
+      }
       const freight_terms: Record<string, number | string> = {};
       if (freightRate !== "") freight_terms.freight_rate = Number(freightRate);
       if (cargoQty !== "") {
@@ -244,6 +285,9 @@ export default function ChartersPage() {
       }
       const cp = await apiPost("/api/v1/charters", {
         charter_type: charterType,
+        fixture_type: docKind,
+        charter_direction: direction,
+        master_contract_id: masterContractId || null,
         vessel_id: vesselId || null,
         counterparty_id: partyId || null,
         laycan_from: laycanFrom || null,
@@ -278,20 +322,18 @@ export default function ChartersPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.charters.title", "租约工作台")}</h1>
-          <p className="page-sub">
-            {t("page.charters.sub", "新建租约；点击行打开单据详情（可分享链接），编辑、变更与状态推进在详情页。")}
-          </p>
-        </div>
-        <div className="quick-row">
-          <PageGuide pageKey="charters" />
-          <Link href="/settings/recycle" className="btn btn-ghost">
-            {t("nav.recycle", "回收站")}
-          </Link>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.charters.title", "租约工作台")}
+        subtitle={t("page.charters.sub", "新建租约；点击行打开单据详情（可分享链接），编辑、变更与状态推进在详情页。")}
+        actions={
+          <>
+            <PageGuide pageKey="charters" />
+            <Link href="/settings/recycle" className="btn btn-ghost">
+              {t("nav.recycle", "回收站")}
+            </Link>
+          </>
+        }
+      />
 
       {err ? <p className="flash-err">{err}</p> : null}
 
@@ -299,55 +341,117 @@ export default function ChartersPage() {
         <h3 style={{ marginTop: 0 }}>{t("page.charters.create", "New charter")}</h3>
         <div className="form-grid">
           <label>
-            {t("page.charters.type", "Charter type")}
-            <select value={charterType} onChange={(e) => setCharterType(e.target.value)}>
-              <option value="voyage">voyage</option>
-              <option value="time">time</option>
-              <option value="tct">tct</option>
-              <option value="coa">coa</option>
-              <option value="bb">bb</option>
+            {t("page.charters.contract_type", "Contract type")}
+            <select value={docKind} onChange={(e) => setDocKind(e.target.value as DocKind)}>
+              <option value="voyage_fixture">{t("page.charters.fixture_voyage", "Voyage Fixture")}</option>
+              <option value="head">{t("page.charters.fixture_head", "Head Fixture")}</option>
+              <option value="relet">{t("page.charters.fixture_relet", "Relet Fixture")}</option>
+              <option value="master_contract">{t("page.charters.master_contract", "Master Contract")}</option>
             </select>
           </label>
-          <label>
-            {t("page.estimates.vessel", "Vessel")}
-            <select value={vesselId} onChange={(e) => setVesselId(e.target.value)}>
-              <option value="">{t("common.select", "Select…")}</option>
-              {vessels.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {docKind !== "master_contract" ? (
+            <>
+              <label>
+                {t("page.charters.type", "Charter type")}
+                <select value={charterType} onChange={(e) => setCharterType(e.target.value)}>
+                  <option value="voyage">voyage</option>
+                  <option value="time">time</option>
+                  <option value="tct">tct</option>
+                  <option value="coa">coa</option>
+                  <option value="bb">bb</option>
+                </select>
+              </label>
+              <label>
+                {t("page.charters.direction", "Direction")}
+                <select value={direction} onChange={(e) => setDirection(e.target.value)}>
+                  <option value="out">out</option>
+                  <option value="in">in</option>
+                </select>
+              </label>
+              <label>
+                {t("page.charters.master_contract", "Master Contract")}
+                <select value={masterContractId} onChange={(e) => setMasterContractId(e.target.value)}>
+                  <option value="">{t("common.none", "None")}</option>
+                  {masters.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.contract_no} — {m.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          ) : (
+            <>
+              <label>
+                {t("page.charters.mc_title", "Contract title")}
+                <input value={mcTitle} onChange={(e) => setMcTitle(e.target.value)} placeholder="COA 2026 …" />
+              </label>
+              <label>
+                {t("page.charters.mc_contract_type", "Master contract type")}
+                <select value={mcType} onChange={(e) => setMcType(e.target.value)}>
+                  <option value="voyage_coa">voyage_coa</option>
+                  <option value="time_charter">time_charter</option>
+                  <option value="bareboat">bareboat</option>
+                </select>
+              </label>
+              <label>
+                {t("page.charters.mc_total_qty", "Total qty")}
+                <input type="number" step="any" value={mcQty} onChange={(e) => setMcQty(e.target.value)} />
+              </label>
+              <label>
+                {t("page.charters.mc_period_from", "Period from")}
+                <DateInput value={mcFrom} onChange={setMcFrom} />
+              </label>
+              <label>
+                {t("page.charters.mc_period_to", "Period to")}
+                <DateInput value={mcTo} onChange={setMcTo} />
+              </label>
+            </>
+          )}
           <label>
             {t("page.estimates.counterparty", "Counterparty")}
             <PartyPicker value={partyId} onChange={setPartyId} />
           </label>
-          <label>
-            {t("page.charters.laycan_from", "Laycan from")}
-            <DateInput value={laycanFrom} onChange={setLaycanFrom} />
-          </label>
-          <label>
-            {t("page.charters.laycan_to", "Laycan to")}
-            <DateInput value={laycanTo} onChange={setLaycanTo} />
-          </label>
-          <label>
-            {t("page.estimates.commission", "Commission %")}
-            <input type="number" step="any" value={commission} onChange={(e) => setCommission(e.target.value)} />
-          </label>
-          <label>
-            {t("page.estimates.freight_rate", "Freight rate")}
-            <input type="number" step="any" value={freightRate} onChange={(e) => setFreightRate(e.target.value)} />
-          </label>
-          <label>
-            {t("page.estimates.cargo_qty", "Cargo qty")}
-            <input type="number" step="any" value={cargoQty} onChange={(e) => setCargoQty(e.target.value)} />
-          </label>
-          <TermInputs value={terms} onChange={setTerm} showTc={isTc(charterType)} />
-          <label style={{ gridColumn: "1 / -1" }}>
-            {t("page.charters.clauses", "Clauses / notes")}
-            <input value={clausesNotes} onChange={(e) => setClausesNotes(e.target.value)} placeholder="CP notes" />
-          </label>
+          {docKind !== "master_contract" ? (
+            <>
+              <label>
+                {t("page.estimates.vessel", "Vessel")}
+                <select value={vesselId} onChange={(e) => setVesselId(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  {vessels.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t("page.charters.laycan_from", "Laycan from")}
+                <DateInput value={laycanFrom} onChange={setLaycanFrom} />
+              </label>
+              <label>
+                {t("page.charters.laycan_to", "Laycan to")}
+                <DateInput value={laycanTo} onChange={setLaycanTo} />
+              </label>
+              <label>
+                {t("page.estimates.commission", "Commission %")}
+                <input type="number" step="any" value={commission} onChange={(e) => setCommission(e.target.value)} />
+              </label>
+              <label>
+                {t("page.estimates.freight_rate", "Freight rate")}
+                <input type="number" step="any" value={freightRate} onChange={(e) => setFreightRate(e.target.value)} />
+              </label>
+              <label>
+                {t("page.estimates.cargo_qty", "Cargo qty")}
+                <input type="number" step="any" value={cargoQty} onChange={(e) => setCargoQty(e.target.value)} />
+              </label>
+              <TermInputs value={terms} onChange={setTerm} showTc={isTc(charterType)} />
+              <label style={{ gridColumn: "1 / -1" }}>
+                {t("page.charters.clauses", "Clauses / notes")}
+                <input value={clausesNotes} onChange={(e) => setClausesNotes(e.target.value)} placeholder="CP notes" />
+              </label>
+            </>
+          ) : null}
         </div>
         <div className="desk-toolbar">
           <button className="btn btn-primary" type="submit" disabled={busy}>
@@ -374,7 +478,12 @@ export default function ChartersPage() {
             {rows.map((r) => (
               <tr key={r.id} className="row-openable" onClick={() => router.push(`/charters/${r.id}`)}>
                 <td>{r.charter_no}</td>
-                <td>{r.charter_type}</td>
+                <td>
+                  {r.charter_type}
+                  {r.fixture_type && r.fixture_type !== "voyage_fixture" ? (
+                    <span className="muted" style={{ marginLeft: "0.35rem", fontSize: "0.75rem" }}>{r.fixture_type}</span>
+                  ) : null}
+                </td>
                 <td>{r.status}</td>
                 <td>{vesselName(r.vessel_id)}</td>
                 <td>{partyName(r.counterparty_id)}</td>

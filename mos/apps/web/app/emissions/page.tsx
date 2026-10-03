@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -88,22 +89,20 @@ export default function EmissionsPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.emissions.title", "Emissions / FuelEU")}</h1>
-          <p className="page-sub">
-            {t("page.emissions.sub", "Voyage emissions, EU ETS exposure and FuelEU intensity checks.")}
-          </p>
-        </div>
-        <div className="quick-row">
-          <Link href="/settings/connectors" className="btn btn-ghost">
-            {t("page.connectors.title", "Integration Hub")}
-          </Link>
-          <button type="button" className="btn btn-ghost" onClick={() => exportPack()}>
-            {t("page.emissions.export", "Export report")}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.emissions.title", "Emissions / FuelEU")}
+        subtitle={t("page.emissions.sub", "Voyage emissions, EU ETS exposure and FuelEU intensity checks.")}
+        actions={
+          <>
+            <Link href="/settings/connectors" className="btn btn-ghost">
+              {t("page.connectors.title", "Integration Hub")}
+            </Link>
+            <button type="button" className="btn btn-ghost" onClick={() => exportPack()}>
+              {t("page.emissions.export", "Export report")}
+            </button>
+          </>
+        }
+      />
       {err ? <p className="flash-err">{err}</p> : null}
 
       <form className="panel" onSubmit={calc}>

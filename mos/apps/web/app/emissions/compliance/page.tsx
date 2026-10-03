@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -85,7 +86,11 @@ export default function CompliancePage() {
   }
 
   return (
-    <AppShell title="Carbon Compliance" subtitle="EU ETS, FuelEU Maritime, CII — full emissions compliance dashboard">
+    <AppShell>
+      <PageHeader
+        title="Carbon Compliance"
+        subtitle="EU ETS, FuelEU Maritime, CII — full emissions compliance dashboard"
+      />
       {/* Fleet compliance summary */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
         <div className="card" style={{ padding: 16 }}>

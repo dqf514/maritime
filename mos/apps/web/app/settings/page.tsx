@@ -1,6 +1,7 @@
 "use client";
 
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { HubTile } from "@/components/HubTile";
 import { useI18n } from "@/lib/i18n";
 
@@ -179,12 +180,10 @@ export default function SettingsHubPage() {
   const { t } = useI18n();
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("settings.title", "系统设置")}</h1>
-          <p className="page-sub">{t("settings.sub", "租户级配置入口：用户、安全、许可、集成等。")}</p>
-        </div>
-      </div>
+      <PageHeader
+        title={t("settings.title", "系统设置")}
+        subtitle={t("settings.sub", "租户级配置入口：用户、安全、许可、集成等。")}
+      />
       <div className="workbench-grid">
         {TILES.map((tile) => (
           <HubTile

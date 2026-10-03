@@ -1,0 +1,299 @@
+/* —— Report template gallery + my reports + schedules —— */
+
+.rg-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-lg);
+}
+
+/* —— section blocks —— */
+.rg-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--gap-md);
+}
+
+.rg-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-md);
+  margin-bottom: var(--gap-sm);
+  flex-wrap: wrap;
+}
+
+.rg-section-head h2 {
+  margin: 0;
+  font-size: var(--font-ui);
+  font-weight: 600;
+}
+
+.rg-section-head .sub {
+  color: var(--muted);
+  font-size: var(--font-label);
+}
+
+/* —— category block —— */
+.rg-cat {
+  margin-top: var(--gap-md);
+}
+
+.rg-cat:first-of-type {
+  margin-top: var(--gap-sm);
+}
+
+.rg-cat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--gap-sm);
+  color: var(--sea-deep);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rg-cat-head .count {
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* —— template cards: compact, 3 per row —— */
+.rg-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--gap-md);
+}
+
+@media (max-width: 1200px) {
+  .rg-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .rg-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.rg-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--gap-sm) var(--gap-md);
+  background: var(--surface);
+  min-height: 108px;
+}
+
+.rg-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 1px 4px rgba(11, 31, 42, 0.07);
+}
+
+.rg-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gap-sm);
+}
+
+.rg-card-icon {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--foam);
+  color: var(--accent);
+  border: 1px solid var(--border);
+}
+
+.rg-card-name {
+  margin: 0;
+  font-size: var(--font-ui);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+.rg-card-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  height: 15px;
+  line-height: 15px;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  vertical-align: 1px;
+}
+
+.rg-card-desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-label);
+  line-height: 1.45;
+  flex: 1 1 auto;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rg-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  margin-top: auto;
+}
+
+.rg-card-actions .btn {
+  height: 22px;
+  padding: 0 10px;
+  font-size: var(--font-label);
+}
+
+/* —— category filter chips (gallery header) —— */
+.rg-filter {
+  display: flex;
+  gap: var(--gap-xs);
+  flex-wrap: wrap;
+}
+
+.rg-filter button {
+  height: 22px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: var(--font-label);
+  cursor: pointer;
+}
+
+.rg-filter button:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+.rg-filter button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* —— run result drawer —— */
+.rg-result {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--gap-md);
+}
+
+.rg-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-md);
+  margin-bottom: var(--gap-sm);
+  flex-wrap: wrap;
+}
+
+.rg-result-head h3 {
+  margin: 0;
+  font-size: var(--font-ui);
+  font-weight: 600;
+}
+
+.rg-result-head .meta {
+  color: var(--muted);
+  font-size: var(--font-label);
+  font-weight: 400;
+  margin-left: 8px;
+}
+
+/* —— schedules / reports toolbar rows —— */
+.rg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  flex-wrap: wrap;
+  margin-bottom: var(--gap-sm);
+}
+
+.rg-toolbar .spacer {
+  flex: 1 1 auto;
+}
+
+.rg-empty {
+  padding: var(--gap-lg);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--font-ui);
+}
+
+/* —— status pill —— */
+.rg-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 9px;
+  font-size: var(--font-label);
+  border: 1px solid var(--border);
+  background: var(--foam);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rg-pill.on {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, var(--surface));
+}
+
+.rg-pill.off {
+  border-color: color-mix(in srgb, var(--muted) 45%, var(--border));
+  color: var(--muted);
+}
+
+/* action link row inside DataGrid cells */
+.rg-actions {
+  display: inline-flex;
+  gap: var(--gap-xs);
+  align-items: center;
+}
+
+.rg-actions button {
+  height: 20px;
+  padding: 0 8px;
+  font-size: var(--font-label);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rg-actions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rg-actions button.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}

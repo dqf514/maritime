@@ -1,0 +1,320 @@
+/* —— AI Settings workspace (providers / model settings / skill bindings / usage) —— */
+/* 密集布局：控制条 26px、表格 12px，与 tokens.css 密度体系对齐 */
+
+.ai-shell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-md);
+}
+
+/* —— tab strip —— */
+.ai-tabs {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0 0.5rem;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.ai-tab {
+  height: 30px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--font-ui);
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+
+.ai-tab:hover {
+  color: var(--ink);
+  background: var(--foam);
+}
+
+.ai-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.ai-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* —— toolbar —— */
+.ai-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  flex-wrap: wrap;
+  min-height: var(--control-h);
+}
+
+.ai-toolbar .spacer {
+  flex: 1 1 auto;
+}
+
+.ai-toolbar .hint {
+  color: var(--muted);
+  font-size: var(--font-label);
+}
+
+/* —— generic panel blocks —— */
+.ai-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--gap-md);
+}
+
+.ai-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-md);
+  margin-bottom: var(--gap-sm);
+}
+
+.ai-panel-head h3 {
+  margin: 0;
+  font-size: var(--font-ui);
+  font-weight: 600;
+}
+
+.ai-panel-head .sub {
+  color: var(--muted);
+  font-size: var(--font-label);
+}
+
+/* —— split layout (grid + side panel) —— */
+.ai-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--gap-lg);
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .ai-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* —— test connection result —— */
+.ai-test-result {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  background: var(--foam);
+  border-radius: var(--radius-sm);
+  padding: var(--gap-sm) var(--gap-md);
+  font-size: var(--font-table);
+  margin-bottom: var(--gap-md);
+}
+
+.ai-test-result.fail {
+  border-left-color: var(--danger);
+}
+
+.ai-test-result .row {
+  display: flex;
+  gap: var(--gap-lg);
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.ai-test-result .label {
+  color: var(--muted);
+  font-size: var(--font-label);
+}
+
+.ai-test-result .value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-test-result .models {
+  margin-top: var(--gap-xs);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs);
+}
+
+/* —— model chips —— */
+.ai-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs);
+}
+
+.ai-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--foam);
+  color: var(--ink);
+  font-size: var(--font-label);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: pointer;
+}
+
+.ai-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ai-chip.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* —— KPI strip (usage) —— */
+.ai-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--gap-md);
+}
+
+@media (max-width: 900px) {
+  .ai-kpi-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.ai-kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--gap-sm) var(--gap-md);
+}
+
+.ai-kpi span {
+  display: block;
+  color: var(--muted);
+  font-size: var(--font-label);
+}
+
+.ai-kpi strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--sea-deep);
+}
+
+/* —— model settings form block —— */
+.ai-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--gap-sm) var(--gap-md);
+}
+
+.ai-agent-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  flex-wrap: wrap;
+  margin-bottom: var(--gap-sm);
+}
+
+.ai-agent-bar label {
+  font-size: var(--font-label);
+  color: var(--muted);
+}
+
+/* —— skill binding status pill —— */
+.ai-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 9px;
+  font-size: var(--font-label);
+  border: 1px solid var(--border);
+  background: var(--foam);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ai-pill.on {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, var(--surface));
+}
+
+.ai-pill.off {
+  border-color: color-mix(in srgb, var(--muted) 45%, var(--border));
+  color: var(--muted);
+}
+
+.ai-provider-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-provider-name .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: 0 0 auto;
+}
+
+.ai-provider-name .dot.active {
+  background: var(--ok);
+}
+
+.ai-provider-name .dot.error {
+  background: var(--danger);
+}
+
+.ai-provider-name .dot.testing {
+  background: var(--warn);
+}
+
+/* action link row inside DataGrid cells */
+.ai-actions {
+  display: inline-flex;
+  gap: var(--gap-xs);
+  align-items: center;
+}
+
+.ai-actions button {
+  height: 20px;
+  padding: 0 8px;
+  font-size: var(--font-label);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ai-actions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ai-actions button.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* password input inside modal keeps dense height */
+.ai-panel input[type="password"],
+.record-modal input[type="password"] {
+  height: var(--input-h);
+}

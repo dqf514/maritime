@@ -15,6 +15,7 @@ from app.services.observability import RequestObservabilityMiddleware, configure
 import app.models  # noqa: F401
 import app.models_audit  # noqa: F401
 import app.models_wave1  # noqa: F401
+import app.models_vessel_ext  # noqa: F401
 import app.models_domain  # noqa: F401
 import app.models_saas  # noqa: F401
 import app.models_ship  # noqa: F401
@@ -35,6 +36,13 @@ import app.models_ai  # noqa: F401
 import app.models_report  # noqa: F401
 import app.models_jobs  # noqa: F401
 import app.models_clause  # noqa: F401
+import app.models_cargo  # noqa: F401
+import app.models_rates  # noqa: F401
+import app.models_coa  # noqa: F401
+import app.models_trading  # noqa: F401
+import app.models_pooling  # noqa: F401
+import app.models_lightering  # noqa: F401
+import app.models_reference_ext  # noqa: F401
 from app.routers.admin_platform import router as admin_router
 from app.routers.ai_chat import router as ai_chat_router
 from app.routers.ai_actions import router as ai_actions_router
@@ -46,6 +54,7 @@ from app.routers.email_intelligence import router as email_intel_router
 from app.routers.report import router as report_router
 from app.routers.compliance import router as compliance_router
 from app.routers.commercial import router as commercial_router
+from app.routers.time_charter import router as time_charter_router
 from app.routers.config import router as config_router
 from app.routers.connectors import router as connectors_router
 from app.routers.dashboards import router as dashboards_router
@@ -54,11 +63,15 @@ from app.routers.exceptions import router as exceptions_router
 from app.routers.exports import router as exports_router
 from app.routers.files import router as files_router
 from app.routers.finance_ext import router as finance_router
+from app.routers.finance_depth import router as finance_depth_router
+from app.routers.payment_batches import router as payment_batches_router
+from app.routers.gl_management import router as gl_management_router
 from app.routers.laytimes import router as laytimes_router
 from app.routers.claims import router as claims_router
 from app.routers.invoices import router as invoices_router
 from app.routers.bunker import router as bunker_router
 from app.routers.portcosts import router as portcosts_router
+from app.routers.rates import router as rates_router
 from app.routers.guides import router as guides_router
 from app.routers.help import router as help_router
 from app.routers.home import router as home_router
@@ -75,13 +88,23 @@ from app.routers.recycle import router as recycle_router
 from app.routers.reference import router as reference_router
 from app.routers.saas import router as saas_router
 from app.routers.ship_mgmt import router as ship_router
+from app.routers.vessel_detail import router as vessel_detail_router
 from app.routers.tasks import router as tasks_router
+from app.routers.cargo import router as cargo_router
+from app.routers.scheduling import router as scheduling_router
+from app.routers.coa import router as coa_router
+from app.routers.trading import router as trading_router
+from app.routers.pooling import router as pooling_router
+from app.routers.lightering import router as lightering_router
+from app.routers.masterdata_ext import router as masterdata_ext_router
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo
 from app.seed_demo_flow import seed_full_demo_flow
 from app.seed_i18n import seed_i18n
 from app.services.platform_ops import bootstrap_ops_catalog
 from app.services.reference_data import seed_reference_catalog
 from app.services.clause_library import seed_clause_pack
+from app.services.report_builder import seed_report_datasets
+from app.services.config_service import seed_config_flag_presets
 
 log = logging.getLogger("marios.main")
 # Structured logging is configured at import time so every module logger
@@ -254,6 +277,9 @@ def _apply_wording_patches() -> None:
     """
     stmts = (
         "UPDATE ui_messages SET text = REPLACE(REPLACE(REPLACE(text, '实时大屏', '数据看板'), '数据大屏', '数据看板'), '大屏', '数据看板') WHERE text LIKE '%大屏%'",
+        # 修复 tab 标题误显示 key 后缀（如 "tab fleet" → "Fleet"）
+        "UPDATE ui_messages SET text = 'Fleet' WHERE key = 'page.ship.tab_fleet' AND (text LIKE '%tab%' OR text = '')",
+        "UPDATE ui_messages SET text = 'Certificate overview' WHERE key = 'page.ship.tab_certs' AND (text LIKE '%tab%' OR text = '')",
     )
     with engine.connect() as conn:
         for stmt in stmts:
@@ -289,6 +315,8 @@ async def lifespan(_app: FastAPI):
             bootstrap_ops_catalog(db)
             seed_reference_catalog(db)
             seed_clause_pack(db)
+            seed_report_datasets(db)
+            seed_config_flag_presets(db)
             # Demo tenants & users only when explicitly enabled (SEED_DEMO=true)
             if settings.seed_demo:
                 seed_if_empty(db)
@@ -302,7 +330,14 @@ async def lifespan(_app: FastAPI):
     job_thread = None
     if settings.job_worker_enabled:
         from app.services.job_queue import run_worker
+        from app.services.report_scheduler import install_scheduler, register_handlers
 
+        register_handlers()
+        try:
+            with SessionLocal() as db:
+                install_scheduler(db)
+        except Exception:
+            log.exception("report schedule bootstrap failed")
         job_thread = threading.Thread(target=run_worker, args=(job_stop,), name="marios-jobs", daemon=True)
         job_thread.start()
     yield
@@ -352,16 +387,22 @@ app.include_router(compliance_router, prefix="/api/v1")
 app.include_router(connectors_router, prefix="/api/v1")
 app.include_router(email_router, prefix="/api/v1")
 app.include_router(commercial_router, prefix="/api/v1")
+app.include_router(time_charter_router, prefix="/api/v1")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(marilink_router, prefix="/api/v1")
 app.include_router(operations_router, prefix="/api/v1")
 app.include_router(finance_router, prefix="/api/v1")
+app.include_router(finance_depth_router, prefix="/api/v1")
+app.include_router(payment_batches_router, prefix="/api/v1")
+app.include_router(gl_management_router, prefix="/api/v1")
 app.include_router(laytimes_router, prefix="/api/v1")
 app.include_router(claims_router, prefix="/api/v1")
 app.include_router(invoices_router, prefix="/api/v1")
 app.include_router(bunker_router, prefix="/api/v1")
 app.include_router(portcosts_router, prefix="/api/v1")
+app.include_router(rates_router, prefix="/api/v1")
 app.include_router(ship_router, prefix="/api/v1")
+app.include_router(vessel_detail_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(home_router, prefix="/api/v1")
@@ -375,6 +416,13 @@ app.include_router(recycle_router, prefix="/api/v1")
 app.include_router(guides_router, prefix="/api/v1")
 app.include_router(onboarding_router, prefix="/api/v1")
 app.include_router(exports_router, prefix="/api/v1")
+app.include_router(cargo_router, prefix="/api/v1")
+app.include_router(scheduling_router, prefix="/api/v1")
+app.include_router(coa_router, prefix="/api/v1")
+app.include_router(trading_router, prefix="/api/v1")
+app.include_router(pooling_router, prefix="/api/v1")
+app.include_router(lightering_router, prefix="/api/v1")
+app.include_router(masterdata_ext_router, prefix="/api/v1")
 
 # Only branding assets are public; backups and other uploads are never statically served
 app.mount("/uploads/branding", StaticFiles(directory=str(UPLOAD_ROOT / "branding")), name="branding")

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { PageHeader } from "@/components/PageHeader";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -238,27 +239,25 @@ function InvoiceDetailPage() {
         { label: inv?.invoice_no || t("page.finance.no", "编号") },
       ]}
     >
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>
+      <PageHeader
+        title={
+          <>
             {inv?.invoice_no || "…"}
-            {inv ? (
-              <span className={`badge ${inv.status === "paid" ? "badge-ok" : "badge-warn"}`} style={{ marginLeft: "0.6rem" }}>
-                {inv.status}
-              </span>
-            ) : null}
-          </h1>
-          <p className="page-sub">{t("page.finance.edit_inv", "编辑发票")}</p>
-        </div>
-        <div className="desk-toolbar" style={{ margin: 0 }}>
-          <Link href="/finance?tab=invoices" className="btn btn-ghost">
-            {t("common.back", "返回")}
-          </Link>
-          <button className="btn btn-sm" type="button" disabled={busy || saving} onClick={() => window.print()}>
-            {t("common.print", "打印 / PDF")}
-          </button>
-        </div>
-      </div>
+            {inv ? <span className={`badge ${inv.status === "paid" ? "badge-ok" : "badge-warn"}`}>{inv.status}</span> : null}
+          </>
+        }
+        subtitle={t("page.finance.edit_inv", "编辑发票")}
+        actions={
+          <>
+            <Link href="/finance?tab=invoices" className="btn btn-ghost">
+              {t("common.back", "返回")}
+            </Link>
+            <button className="btn btn-sm" type="button" disabled={busy || saving} onClick={() => window.print()}>
+              {t("common.print", "打印 / PDF")}
+            </button>
+          </>
+        }
+      />
 
       {err ? <p className="err-text">{err}</p> : null}
 

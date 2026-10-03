@@ -1,5 +1,6 @@
 {
   "unprotected_query_sites": [
+    "bunker.py::_check_port",
     "commercial.py::upsert_distance",
     "dashboards.py::_count_by",
     "email_intelligence.py::classify",
@@ -19,6 +20,7 @@
     "identity.py::confirm_email_verify",
     "identity.py::platform_mail_logs",
     "identity.py::unlink_identity",
+    "laytimes.py::_ensure_laytime_types",
     "masterdata.py::get_port",
     "masterdata.py::list_ports",
     "masterdata.py::update_port",

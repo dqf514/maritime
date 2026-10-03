@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -156,20 +157,18 @@ export default function ConnectorsPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.connectors.title", "Integration Hub")}</h1>
-          <p className="page-sub">
-            {t(
-              "page.connectors.sub",
-              "外部系统对接：汇率、燃油指数、AIS、PMS、ERP/SAP/Oracle、制裁名单、排放上报等。填写配置后可测试与同步。",
-            )}
-          </p>
-        </div>
-        <Link href="/settings" className="btn btn-ghost">
-          {t("nav.settings_hub", "System settings")}
-        </Link>
-      </div>
+      <PageHeader
+        title={t("page.connectors.title", "Integration Hub")}
+        subtitle={t(
+          "page.connectors.sub",
+          "外部系统对接：汇率、燃油指数、AIS、PMS、ERP/SAP/Oracle、制裁名单、排放上报等。填写配置后可测试与同步。",
+        )}
+        actions={
+          <Link href="/settings" className="btn btn-ghost">
+            {t("nav.settings_hub", "System settings")}
+          </Link>
+        }
+      />
 
       <form className="panel" onSubmit={(e) => create(e).catch(() => toast.success(t("common.failed", "Failed")))}>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>

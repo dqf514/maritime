@@ -146,19 +146,31 @@ def send_mail(
     purpose: str,
     tenant_id: UUID | None = None,
     meta: dict | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> OutboundMailLog:
+    """Send (or log) an outbound mail.
+
+    ``attachments`` items: ``{filename, content_type, content_b64 | content(bytes)}``.
+    Attachment bytes are never persisted in the mail log — only filename/size meta.
+    """
     plat = ensure_platform_identity(db)
     settings = get_settings()
     channel = plat.email_channel or settings.email_channel
     status = "sent"
     send_meta: dict[str, Any] = dict(meta or {})
+    atts = list(attachments or [])
+    if atts:
+        send_meta["attachments"] = [
+            {"filename": a.get("filename"), "size": a.get("size") or len(a.get("content") or b"")}
+            for a in atts
+        ]
     # Prefer Graph when channel is graph and tenant has Office link (or stub)
     if channel in {"graph", "m365", "email.graph"} and tenant_id:
         try:
             from app.services import office_hub as office_hub
 
             client = office_hub.get_graph_client(db, tenant_id)
-            out = client.send_mail(to=to_email, subject=subject, body=body)
+            out = client.send_mail(to=to_email, subject=subject, body=body, attachments=atts)
             send_meta["graph"] = out
             channel = "graph"
         except Exception as exc:  # noqa: BLE001

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { HubTile } from "@/components/HubTile";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -18,17 +19,13 @@ export default function DashboardsIndexPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.dashboards.title", "Live dashboards")}</h1>
-          <p className="page-sub">
-            {t(
-              "page.dashboards.sub",
-              "Role walls for owner / director / chartering / ops / finance / technical — fullscreen, live pulse.",
-            )}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.dashboards.title", "Live dashboards")}
+        subtitle={t(
+          "page.dashboards.sub",
+          "Role walls for owner / director / chartering / ops / finance / technical — fullscreen, live pulse.",
+        )}
+      />
       <div className="workbench-grid">
         {(catalog?.screens || []).map((s) => (
           <HubTile

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -60,8 +61,10 @@ export default function AccountSecurityPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.account.title", "My account security")}</h1>
-      <p className="page-sub">{t("page.account.sub", "Verify email, manage password, and linked Microsoft / Google identities.")}</p>
+      <PageHeader
+        title={t("page.account.title", "My account security")}
+        subtitle={t("page.account.sub", "Verify email, manage password, and linked Microsoft / Google identities.")}
+      />
 
       <div className="panel">
         <h2>{t("page.account.email", "Email")}</h2>

@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageGuide } from "@/components/PageGuide";
+import { PageHeader } from "@/components/PageHeader";
 import { SavedViews } from "@/components/SavedViews";
 import { AccrualsPanel } from "@/components/finance/AccrualsPanel";
 import { ClaimsPanel } from "@/components/finance/ClaimsPanel";
@@ -42,21 +43,19 @@ function FinanceHubPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.finance.title", "Finance / laytime / P&L")}</h1>
-          <p className="page-sub">
-            {t("page.finance.sub", "Invoices, laytime, claims, accruals and PDA/FDA. Open a row to edit or delete.")}
-          </p>
-        </div>
-        <div className="quick-row">
-          <PageGuide pageKey="finance" />
-          <SavedViews storageKey="finance" onApply={(q) => router.replace(`/finance${q}`)} />
-          <Link href="/settings/recycle" className="btn btn-ghost">
-            {t("nav.recycle", "Recycle bin")}
-          </Link>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.finance.title", "Finance / laytime / P&L")}
+        subtitle={t("page.finance.sub", "Invoices, laytime, claims, accruals and PDA/FDA. Open a row to edit or delete.")}
+        actions={
+          <>
+            <PageGuide pageKey="finance" />
+            <SavedViews storageKey="finance" onApply={(q) => router.replace(`/finance${q}`)} />
+            <Link href="/settings/recycle" className="btn btn-ghost">
+              {t("nav.recycle", "Recycle bin")}
+            </Link>
+          </>
+        }
+      />
 
       <div className="desk-tabs">
         {tabs.map((tb) => (

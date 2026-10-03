@@ -1,0 +1,142 @@
+/* Time Charter (Phase 5) — TC list + TC Manager workspace */
+
+.tc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+}
+.tc-toolbar select,
+.tc-toolbar input {
+  height: var(--control-h);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0 var(--gap-md);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: var(--font-ui);
+}
+
+/* Workspace header: contract identity + status + state actions */
+.tc-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-md);
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--gap-md);
+}
+.tc-head-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+.tc-head-title h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+.tc-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+}
+
+/* KPI strip (hire summary) */
+.tc-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--gap-sm);
+  margin-bottom: var(--gap-md);
+}
+.tc-kpi {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--gap-sm) var(--gap-md);
+  background: var(--bg);
+  min-width: 0;
+}
+.tc-kpi span {
+  display: block;
+  color: var(--muted);
+  font-size: var(--font-label);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tc-kpi strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--sea-deep);
+}
+
+.tc-tab-body {
+  display: grid;
+  gap: var(--gap-md);
+}
+
+/* Sub-panel blocks inside a tab (statements / off-hire side by side) */
+.tc-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--gap-md);
+  align-items: start;
+}
+.tc-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  min-width: 0;
+}
+.tc-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--gap-sm) var(--gap-md);
+  border-bottom: 1px solid var(--border);
+}
+.tc-panel-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.tc-panel-body {
+  padding: var(--gap-sm) var(--gap-md) var(--gap-md);
+}
+.tc-panel-body .grid-wrapper {
+  border: 0;
+}
+
+.tc-inline-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--gap-sm);
+  align-items: end;
+  margin-bottom: var(--gap-sm);
+}
+.tc-inline-form label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+  font-size: var(--font-label);
+  color: var(--muted);
+}
+.tc-inline-form input,
+.tc-inline-form select {
+  height: var(--input-h);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0 var(--gap-md);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: var(--font-ui);
+}
+
+.tc-status-draft { background: #eef2f5; color: var(--muted); }
+.tc-status-active { background: #dff3f2; color: var(--sea-deep); }
+.tc-status-completed { background: #e6f4ea; color: #1e7a3c; }
+.tc-status-cancelled { background: #fdecea; color: #b3261e; }

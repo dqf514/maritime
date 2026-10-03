@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -78,7 +79,8 @@ export default function MarketDataPage() {
   const maxBunker = Math.max(...bunkerComp.map((b) => b.price_usd), 1);
 
   return (
-    <AppShell title="Market Data">
+    <AppShell>
+      <PageHeader title="Market Data" />
       <div className="space-y-6">
 
         {quotes.length === 0 && (

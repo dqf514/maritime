@@ -6,8 +6,10 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { SkeletonCard } from "@/components/Skeleton";
 import { PrintDoc } from "@/components/PrintDoc";
+import { LaytimeDemurragePanel } from "@/components/finance/LaytimeDemurragePanel";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -112,22 +114,24 @@ export default function LaytimeDetailPage() {
         { label: t("page.finance.lt_statement", "Laytime 计算书") },
       ]}
     >
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>
+      <PageHeader
+        title={
+          <>
             {t("page.finance.lt_statement", "Laytime 计算书")} {st ? <span className="badge badge-warn">{st.status}</span> : null}
-          </h1>
-          <p className="page-sub">{st ? `${st.format || "LAYTIME_STATEMENT_v1"}${st.terms ? ` · ${st.terms}` : ""}` : "…"}</p>
-        </div>
-        <div className="desk-toolbar" style={{ margin: 0 }}>
-          <Link href="/finance?tab=laytime" className="btn btn-ghost">
-            {t("common.back", "返回")}
-          </Link>
-          <button className="btn btn-sm" type="button" onClick={() => window.print()}>
-            {t("common.print", "打印 / PDF")}
-          </button>
-        </div>
-      </div>
+          </>
+        }
+        subtitle={st ? `${st.format || "LAYTIME_STATEMENT_v1"}${st.terms ? ` · ${st.terms}` : ""}` : "…"}
+        actions={
+          <>
+            <Link href="/finance?tab=laytime" className="btn btn-ghost">
+              {t("common.back", "返回")}
+            </Link>
+            <button className="btn btn-sm" type="button" onClick={() => window.print()}>
+              {t("common.print", "打印 / PDF")}
+            </button>
+          </>
+        }
+      />
 
       {err ? <p className="err-text">{err}</p> : null}
 
@@ -200,6 +204,8 @@ export default function LaytimeDetailPage() {
               </table>
             </div>
           ) : null}
+
+          <LaytimeDemurragePanel laytimeId={st.id || id} />
 
           <div className="panel no-print">
             <h3 style={{ marginTop: 0 }}>{t("page.finance.lt_compare", "对账（粘贴对手方计算书 JSON）")}</h3>

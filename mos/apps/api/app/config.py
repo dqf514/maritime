@@ -60,6 +60,19 @@ class Settings(BaseSettings):
     # Dedicated key for encrypting ops/office data at rest; falls back to jwt_secret
     ops_data_key: str = ""
 
+    # AI / LLM — platform defaults; per-tenant AiProvider rows override these.
+    # MARIOS_LLM_OFF=1 is a runtime kill switch (llm_client raises LLMNotConfigured
+    # and callers fall back to rules) — kept as an env check, not a setting, so the
+    # test suite can trip it without touching cached Settings.
+    anthropic_api_key: str = ""
+    anthropic_base_url: str = "https://api.anthropic.com"
+    llm_model: str = "claude-sonnet-5"
+    llm_max_tokens: int = 4096
+    llm_temperature: float = 0.3
+    llm_timeout_seconds: int = 60
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+
     def s3_configured(self) -> bool:
         return bool(self.s3_access_key and self.s3_secret_key)
 

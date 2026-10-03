@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { StateView } from "@/components/StateView";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -48,8 +49,10 @@ export default function AnalyticsPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.analytics.title", "Analytics")}</h1>
-      <p style={{ color: "var(--muted)" }}>{t("page.analytics.sub", "TCE, voyage P&L and AR aging.")}</p>
+      <PageHeader
+        title={t("page.analytics.title", "Analytics")}
+        subtitle={t("page.analytics.sub", "TCE, voyage P&L and AR aging.")}
+      />
       {warn && (tce.length || pnl.length || aging.length) ? <p className="muted">{warn}</p> : null}
       <StateView
         loading={loading}

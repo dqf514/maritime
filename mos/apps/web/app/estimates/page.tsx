@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PartyPicker } from "@/components/DataPicker";
+import { EstimateCompare, type CompareFieldDef } from "@/components/EstimateCompare";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageGuide } from "@/components/PageGuide";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
@@ -73,6 +74,30 @@ type InputFields = {
   ets_price: string;
   co2_factor: string;
 };
+
+const COMPARE_FIELDS: CompareFieldDef[] = [
+  // Core metrics
+  { key: "tce", label: "TCE ($/day)", labelEn: "TCE ($/day)", labelZh: "TCE ($/天)", category: "core", categoryEn: "Core Metrics", categoryZh: "核心指标", format: "money", preference: "higher" },
+  { key: "voyage_days", label: "Voyage days", labelEn: "Voyage days", labelZh: "航次天数", category: "core", categoryEn: "Core Metrics", categoryZh: "核心指标", format: "number", unit: "days", preference: "lower" },
+  { key: "freight_revenue", label: "Freight revenue", labelEn: "Freight revenue", labelZh: "运费收入", category: "core", categoryEn: "Core Metrics", categoryZh: "核心指标", format: "money", preference: "higher" },
+  { key: "voyage_cost", label: "Voyage cost", labelEn: "Voyage cost", labelZh: "航次成本", category: "core", categoryEn: "Core Metrics", categoryZh: "核心指标", format: "money", preference: "lower" },
+  // Cost breakdown
+  { key: "bunker_cost", label: "Bunker cost", labelEn: "Bunker cost", labelZh: "燃油成本", category: "cost", categoryEn: "Cost Breakdown", categoryZh: "成本分解", format: "money", preference: "lower" },
+  { key: "port_cost", label: "Port cost", labelEn: "Port cost", labelZh: "港口费用", category: "cost", categoryEn: "Cost Breakdown", categoryZh: "成本分解", format: "money", preference: "lower" },
+  { key: "commission", label: "Commission", labelEn: "Commission", labelZh: "佣金", category: "cost", categoryEn: "Cost Breakdown", categoryZh: "成本分解", format: "money", preference: "lower" },
+  { key: "eu_ets_cost", label: "EU ETS cost", labelEn: "EU ETS cost", labelZh: "EU ETS 碳配额", category: "cost", categoryEn: "Cost Breakdown", categoryZh: "成本分解", format: "money", preference: "lower" },
+  // Cargo & rates
+  { key: "cargo_qty", label: "Cargo qty", labelEn: "Cargo qty", labelZh: "货量", category: "cargo", categoryEn: "Cargo & Rates", categoryZh: "货物与运价", format: "number", unit: "MT" },
+  { key: "freight_rate", label: "Freight rate", labelEn: "Freight rate", labelZh: "运价", category: "cargo", categoryEn: "Cargo & Rates", categoryZh: "货物与运价", format: "money", unit: "/MT" },
+  { key: "demurrage_rate", label: "Demurrage rate", labelEn: "Demurrage rate", labelZh: "滞期费率", category: "cargo", categoryEn: "Cargo & Rates", categoryZh: "货物与运价", format: "money", unit: "/day" },
+  { key: "despatch_rate", label: "Despatch rate", labelEn: "Despatch rate", labelZh: "速遣费率", category: "cargo", categoryEn: "Cargo & Rates", categoryZh: "货物与运价", format: "money", unit: "/day" },
+  // Navigation
+  { key: "sea_days", label: "Sea days", labelEn: "Sea days", labelZh: "海上天数", category: "nav", categoryEn: "Navigation", categoryZh: "航行参数", format: "number", unit: "days" },
+  { key: "port_days", label: "Port days", labelEn: "Port days", labelZh: "在港天数", category: "nav", categoryEn: "Navigation", categoryZh: "航行参数", format: "number", unit: "days" },
+  { key: "speed_kn", label: "Speed", labelEn: "Speed", labelZh: "航速", category: "nav", categoryEn: "Navigation", categoryZh: "航行参数", format: "number", unit: "kn", preference: "higher" },
+  { key: "consumption_mt_day", label: "Consumption", labelEn: "Consumption", labelZh: "日耗油", category: "nav", categoryEn: "Navigation", categoryZh: "航行参数", format: "number", unit: "MT/d", preference: "lower" },
+  { key: "fuel_price", label: "Fuel price", labelEn: "Fuel price", labelZh: "油价", category: "nav", categoryEn: "Navigation", categoryZh: "航行参数", format: "money", unit: "/MT", preference: "lower" },
+];
 
 const EMPTY_INPUTS: InputFields = {
   cargo_qty: "",
@@ -238,6 +263,7 @@ export default function EstimatesPage() {
   const [results, setResults] = useState<EstResults>({});
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareRows, setCompareRows] = useState<Array<{ id: string; title: string; version: number; tce?: number }>>([]);
+  const [compareVariants, setCompareVariants] = useState<Array<{ id: string; name: string; subtitle?: string; values: Record<string, unknown> }>>([]);
   const [sensitivity, setSensitivity] = useState<Array<{ delta_pct: number; tce: number }>>([]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -431,6 +457,43 @@ export default function EstimatesPage() {
     try {
       const data = await apiPost("/api/v1/estimates/compare", compareIds);
       setCompareRows(data);
+      // Fetch full details for comparison matrix
+      const variants = await Promise.all(
+        compareIds.map(async (id, i) => {
+          try {
+            const full = await apiGet(`/api/v1/estimates/${id}`);
+            const inputs = full.inputs || {};
+            const results = full.results || {};
+            return {
+              id,
+              name: full.title || `Estimate ${i + 1}`,
+              subtitle: `v${full.version || 1}`,
+              values: {
+                tce: results.tce,
+                voyage_days: results.total_days ?? inputs.voyage_days,
+                freight_revenue: results.freight_revenue ?? inputs.lump_sum_freight ?? (inputs.cargo_qty && inputs.freight_rate ? Number(inputs.cargo_qty) * Number(inputs.freight_rate) : undefined),
+                bunker_cost: results.bunker_cost,
+                port_cost: results.port_cost,
+                commission: results.commission_cost ?? results.commission,
+                eu_ets_cost: results.emissions_cost ?? results.eu_ets_cost,
+                voyage_cost: results.voyage_cost,
+                cargo_qty: inputs.cargo_qty,
+                freight_rate: inputs.freight_rate,
+                demurrage_rate: inputs.demurrage_rate,
+                despatch_rate: inputs.despatch_rate,
+                sea_days: results.sea_days,
+                port_days: results.port_days,
+                speed_kn: inputs.speed_kn,
+                consumption_mt_day: inputs.consumption_mt_day,
+                fuel_price: inputs.fuel_price,
+              },
+            };
+          } catch {
+            return { id, name: `Estimate ${i + 1}`, values: {} as Record<string, unknown> };
+          }
+        }),
+      );
+      setCompareVariants(variants);
       toast.success(t("page.estimates.compare_ok", "Compare ready"));
     } catch (e) {
       setErr(String(e));
@@ -858,27 +921,14 @@ export default function EstimatesPage() {
             </div>
           ) : null}
 
-          {compareRows.length ? (
+          {compareVariants.length >= 2 ? (
             <div className="desk-section">
               <h3>{t("page.estimates.compare_table", "Compare")}</h3>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>{t("common.title", "Title")}</th>
-                    <th>{t("page.estimates.ver", "Ver")}</th>
-                    <th>TCE</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {compareRows.map((r) => (
-                    <tr key={r.id}>
-                      <td>{r.title}</td>
-                      <td>v{r.version}</td>
-                      <td>{fmt(r.tce)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <EstimateCompare
+                variants={compareVariants}
+                fields={COMPARE_FIELDS}
+                highlightBest
+              />
             </div>
           ) : null}
         </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -58,17 +59,13 @@ export default function RecycleBinPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.recycle.title", "Recycle bin")}</h1>
-          <p className="page-sub">
-            {t(
-              "page.recycle.sub",
-              "软删除的数据会出现在此。可恢复到业务列表，或由管理员永久清除回收记录。",
-            )}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.recycle.title", "Recycle bin")}
+        subtitle={t(
+          "page.recycle.sub",
+          "软删除的数据会出现在此。可恢复到业务列表，或由管理员永久清除回收记录。",
+        )}
+      />
       <div className="panel">
         <table className="table">
           <thead>

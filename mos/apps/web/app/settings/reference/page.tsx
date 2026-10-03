@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { clearLookupCache } from "@/components/LookupSelect";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -177,20 +178,18 @@ export default function ReferenceAdminPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.ref.title", "Reference data")}</h1>
-          <p className="page-sub">
-            {t(
-              "page.ref.sub",
-              "国家、时区、货币、船型、油种等标准选项。可复制系统包到本租户后自定义；业务表单将自动按当前模式取值。",
-            )}
-          </p>
-        </div>
-        <Link href="/settings" className="btn btn-ghost">
-          {t("nav.settings_hub", "System settings")}
-        </Link>
-      </div>
+      <PageHeader
+        title={t("page.ref.title", "Reference data")}
+        subtitle={t(
+          "page.ref.sub",
+          "国家、时区、货币、船型、油种等标准选项。可复制系统包到本租户后自定义；业务表单将自动按当前模式取值。",
+        )}
+        actions={
+          <Link href="/settings" className="btn btn-ghost">
+            {t("nav.settings_hub", "System settings")}
+          </Link>
+        }
+      />
 
       <div className="panel">
         <div className="desk-toolbar" style={{ flexWrap: "wrap" }}>

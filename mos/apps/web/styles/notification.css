@@ -5,31 +5,35 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #f4f8fb;
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
   cursor: pointer;
 }
-.notify-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.notify-btn:hover {
+  background: var(--toolbar-bg);
+  border-color: var(--accent);
+}
 .notify-badge {
   position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 4px;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
   border-radius: 999px;
   background: var(--danger);
   color: #fff;
-  font-size: 0.64rem;
+  font-size: 9px;
   font-weight: 700;
-  line-height: 17px;
+  line-height: 15px;
   text-align: center;
   pointer-events: none;
+  border: 1.5px solid var(--surface);
 }
 .notify-pop {
   position: absolute;

@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { LookupSelect } from "@/components/LookupSelect";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -113,15 +114,15 @@ export default function PortsPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.ports.title", "Ports")}</h1>
-          <p className="page-sub">{t("page.ports.sub", "Port master data (UN/LOCODE). Open a row to edit.")}</p>
-        </div>
-        <Link href="/settings/recycle" className="btn btn-ghost">
-          {t("nav.recycle", "Recycle bin")}
-        </Link>
-      </div>
+      <PageHeader
+        title={t("page.ports.title", "Ports")}
+        subtitle={t("page.ports.sub", "Port master data (UN/LOCODE). Open a row to edit.")}
+        actions={
+          <Link href="/settings/recycle" className="btn btn-ghost">
+            {t("nav.recycle", "Recycle bin")}
+          </Link>
+        }
+      />
       <form
         className="panel"
         onSubmit={(e) => onCreate(e).catch(() => toast.success(t("page.ports.create_fail", "Create failed")))}

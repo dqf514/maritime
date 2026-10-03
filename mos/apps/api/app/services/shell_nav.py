@@ -21,21 +21,28 @@ NAV_DESK: list[dict[str, Any]] = [
     {"id": "tasks", "label": "Tasks", "href": "/tasks", "roles": ["*"]},
     {"id": "estimates", "label": "Estimates", "href": "/estimates", "roles": ["chartering", "management"]},
     {"id": "charters", "label": "Charters", "href": "/charters", "roles": ["chartering", "management"]},
+    {"id": "tc-contracts", "label": "Time Charter", "label_zh": "期租管理", "href": "/charters/tc", "roles": ["chartering", "management"]},
+    {"id": "coa-contracts", "label": "COA", "label_zh": "包运合同", "href": "/charters/coa", "roles": ["chartering", "management"]},
     {"id": "email", "label": "Email Review", "href": "/email/review", "roles": ["chartering", "operations"]},
     {"id": "ops", "label": "Voyages", "href": "/operations/voyages", "roles": ["operations", "management", "technical"]},
+    {"id": "schedule", "label": "Scheduling", "label_zh": "调度管理", "href": "/operations/schedule", "roles": ["operations", "management", "technical", "chartering"]},
+    {"id": "cargo-book", "label": "Cargo Book", "label_zh": "货物台账", "href": "/operations/cargo", "roles": ["operations", "management", "chartering"]},
     {"id": "marilink", "label": "MariLink", "href": "/operations/marilink", "roles": ["operations", "management", "technical"]},
     {"id": "bunker", "label": "Bunker desk", "href": "/bunker", "roles": ["bunker", "operations", "technical", "management", "chartering"]},
     {"id": "ship", "label": "Ship management", "href": "/ship", "roles": ["technical", "operations", "management"]},
     {"id": "finance", "label": "Finance desk", "href": "/finance", "roles": ["finance", "demurrage", "management"]},
+    {"id": "payment-batches", "label": "Payment batches", "label_zh": "付款批次", "href": "/finance/payments", "roles": ["finance", "management", "tenant_admin"]},
+    {"id": "gl", "label": "GL management", "label_zh": "总账管理", "href": "/finance/gl", "roles": ["finance", "management", "tenant_admin"]},
     {"id": "emissions", "label": "Emissions / FuelEU", "href": "/emissions", "roles": ["operations", "management", "technical", "finance"]},
     {"id": "pool", "label": "Pooling", "href": "/pool", "roles": ["pool_manager", "management", "finance"]},
-    {"id": "trading", "label": "Trading & risk", "href": "/trading", "roles": ["risk", "management", "chartering", "finance"]},
+    {"id": "trading", "label": "Trading & Risk", "label_zh": "交易与风控", "href": "/trading", "roles": ["risk", "management", "chartering", "finance"]},
     {"id": "twin", "label": "Fleet Twin", "href": "/twin", "roles": ["operations", "management", "technical", "risk"]},
     {"id": "exceptions", "label": "Exceptions", "href": "/exceptions", "roles": ["*"]},
     {"id": "analytics", "label": "Analytics", "href": "/analytics", "roles": ["management", "finance", "pool_manager"]},
     {"id": "ai_chat", "label": "MariAI", "href": "/ai/chat", "roles": ["chartering", "operations", "management", "bunker"]},
     {"id": "market", "label": "Market data", "href": "/analytics/market", "roles": ["chartering", "operations", "management", "bunker"]},
     {"id": "reports", "label": "Reports", "href": "/analytics/reports", "roles": ["management", "finance", "chartering", "operations"]},
+    {"id": "report-builder", "label": "Report Builder", "label_zh": "报表设计器", "href": "/analytics/reports/builder", "roles": ["management", "finance", "chartering", "operations"]},
     {"id": "compliance", "label": "Carbon compliance", "href": "/emissions/compliance", "roles": ["operations", "management", "technical", "finance"]},
 ]
 
@@ -45,6 +52,8 @@ NAV_ADMIN_DESK: list[dict[str, Any]] = [
     {"id": "tasks", "label": "Tasks", "href": "/tasks", "roles": ["tenant_admin"]},
     {"id": "estimates", "label": "Estimates", "href": "/estimates", "roles": ["tenant_admin"]},
     {"id": "ops", "label": "Voyages", "href": "/operations/voyages", "roles": ["tenant_admin"]},
+    {"id": "schedule", "label": "Scheduling", "label_zh": "调度管理", "href": "/operations/schedule", "roles": ["tenant_admin"]},
+    {"id": "cargo-book", "label": "Cargo Book", "label_zh": "货物台账", "href": "/operations/cargo", "roles": ["tenant_admin"]},
     {"id": "bunker", "label": "Bunker desk", "href": "/bunker", "roles": ["tenant_admin"]},
     {"id": "finance", "label": "Finance desk", "href": "/finance", "roles": ["tenant_admin"]},
     {"id": "emissions", "label": "Emissions / FuelEU", "href": "/emissions", "roles": ["tenant_admin"]},
@@ -57,6 +66,7 @@ NAV_MASTER: list[dict[str, Any]] = [
     {"id": "vessels", "label": "Vessels", "href": "/masterdata/vessels", "roles": ["chartering", "operations", "tenant_admin", "technical", "bunker"]},
     {"id": "ports", "label": "Ports", "href": "/masterdata/ports", "roles": ["operations", "chartering", "tenant_admin"]},
     {"id": "port_reference", "label": "Port reference", "href": "/masterdata/port-reference", "roles": ["operations", "chartering", "tenant_admin"]},
+    {"id": "rate-tables", "label": "Rate Tables", "label_zh": "费率表", "href": "/masterdata/rates", "roles": ["chartering", "operations", "tenant_admin", "finance", "bunker"]},
     {"id": "fuel_zones", "label": "Fuel zones", "href": "/masterdata/fuel-zones", "roles": ["operations", "bunker", "tenant_admin", "compliance"]},
     {"id": "parties", "label": "Counterparties", "href": "/masterdata/counterparties", "roles": ["chartering", "finance", "tenant_admin", "compliance"]},
 ]
@@ -82,22 +92,22 @@ MODULES: list[dict[str, Any]] = [
     {
         "id": "chartering",
         "label": "Chartering",
-        "item_ids": ["estimates", "charters", "email", "trading"],
+        "item_ids": ["estimates", "charters", "tc-contracts", "coa-contracts", "email"],
         "roles": ["chartering", "management", "risk"],
         "collapsed_default": False,
     },
     {
         "id": "operations",
         "label": "Operations",
-        "item_ids": ["ops", "marilink", "bunker", "emissions", "compliance", "exceptions"],
+        "item_ids": ["ops", "schedule", "cargo-book", "marilink", "bunker", "emissions", "compliance", "exceptions"],
         "roles": ["operations", "management", "technical", "bunker"],
         "collapsed_default": False,
     },
     {
         "id": "finance",
         "label": "Finance",
-        "item_ids": ["finance", "pool"],
-        "roles": ["finance", "demurrage", "management", "pool_manager"],
+        "item_ids": ["finance", "payment-batches", "gl", "pool", "trading"],
+        "roles": ["finance", "demurrage", "management", "pool_manager", "risk", "chartering"],
         "collapsed_default": False,
     },
     {
@@ -108,17 +118,17 @@ MODULES: list[dict[str, Any]] = [
         "collapsed_default": False,
     },
     {
-        "id": "analytics",
-        "label": "Analytics & AI",
-        "item_ids": ["dashboards", "analytics", "market", "reports", "ai_chat"],
-        "roles": ["*"],
-        "collapsed_default": False,
-    },
-    {
         "id": "platform",
         "label": "Platform",
         "item_ids": ["plat_home", "plat_tenants", "plat_ops", "plat_saas", "plat_brand", "plat_identity", "plat_health"],
         "roles": ["platform_admin"],
+        "collapsed_default": False,
+    },
+    {
+        "id": "analytics",
+        "label": "Analytics & AI",
+        "item_ids": ["dashboards", "analytics", "market", "reports", "report-builder", "ai_chat"],
+        "roles": ["*"],
         "collapsed_default": False,
     },
 ]
@@ -355,9 +365,11 @@ def build_navigation(user_roles: list[str], profile_tier: str = "M") -> list[dic
     wb_items = [workbench] + tasks_items
     out.append({"section": "workbench", "label": "Workbench", "items": wb_items, "collapsed_default": False})
 
-    # Functional modules — only include modules with visible items
+    # Functional modules — only include modules with visible items (Analytics & AI is appended last)
     visible_modules = []
     for mod in MODULES:
+        if mod["id"] == "analytics":
+            continue  # handled separately after Administration
         items = _filter_module_items(mod, roles)
         if items:
             visible_modules.append({**mod, "_items": items})
@@ -380,6 +392,19 @@ def build_navigation(user_roles: list[str], profile_tier: str = "M") -> list[dic
     admin = _filter_items(NAV_ADMIN, roles)
     if admin:
         out.append({"section": "admin", "label": "Administration", "items": admin, "collapsed_default": False})
+
+    # Analytics & AI — always last (after Administration)
+    for mod in MODULES:
+        if mod["id"] == "analytics":
+            items = _filter_module_items(mod, roles)
+            if items:
+                out.append({
+                    "section": mod["id"],
+                    "label": mod["label"],
+                    "items": items,
+                    "collapsed_default": False,
+                })
+            break
 
     return out
 

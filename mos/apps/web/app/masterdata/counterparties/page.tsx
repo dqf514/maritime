@@ -9,6 +9,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { LookupSelect } from "@/components/LookupSelect";
 import { PartyPicker } from "@/components/DataPicker";
 import { RecordModal } from "@/components/RecordModal";
@@ -198,13 +199,11 @@ export default function CounterpartiesPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.parties.title", "Counterparties")}</h1>
-          <p className="page-sub">{t("page.parties.sub", "Shipowners, charterers, brokers & agents. Click row to edit.")}</p>
-        </div>
-        <Link href="/settings/recycle" className="btn btn-ghost">{t("nav.recycle", "Recycle bin")}</Link>
-      </div>
+      <PageHeader
+        title={t("page.parties.title", "Counterparties")}
+        subtitle={t("page.parties.sub", "Shipowners, charterers, brokers & agents. Click row to edit.")}
+        actions={<Link href="/settings/recycle" className="btn btn-ghost">{t("nav.recycle", "Recycle bin")}</Link>}
+      />
 
       {/* Tabs：公司 / 联系人 */}
       <div className="desk-tabs">

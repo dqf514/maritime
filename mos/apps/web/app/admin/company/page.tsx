@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -34,8 +35,10 @@ export default function CompanyBrandPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.company.title", "Company & brand")}</h1>
-      <p className="page-sub">{t("page.company.sub", "Tenant company profile shown in shell and documents.")}</p>
+      <PageHeader
+        title={t("page.company.title", "Company & brand")}
+        subtitle={t("page.company.sub", "Tenant company profile shown in shell and documents.")}
+      />
       <form className="panel" onSubmit={(e) => save(e).catch(() => toast.success(t("common.failed", "Failed")))}>
         <div className="kv-grid">
           {Object.entries(form).map(([k, v]) => (

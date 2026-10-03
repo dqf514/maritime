@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
 import { PageGuide } from "@/components/PageGuide";
@@ -136,19 +137,19 @@ export default function TasksPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.tasks.title", "我的任务")}</h1>
-          <p className="page-sub">{t("page.tasks.sub", "跟进指派给你的待办、截止与完成情况。")}</p>
-        </div>
-        <div className="quick-row">
-          <ExportButton entity="tasks" />
-          <PageGuide pageKey="tasks" />
-          <button type="button" className="btn btn-primary" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
-            {t("page.tasks.new", "新建任务")}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.tasks.title", "我的任务")}
+        subtitle={t("page.tasks.sub", "跟进指派给你的待办、截止与完成情况。")}
+        actions={
+          <>
+            <ExportButton entity="tasks" />
+            <PageGuide pageKey="tasks" />
+            <button type="button" className="btn btn-primary" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
+              {t("page.tasks.new", "新建任务")}
+            </button>
+          </>
+        }
+      />
 
       <div className="page-tabs" role="tablist">
         {tabs.map((x) => (

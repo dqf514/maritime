@@ -78,7 +78,7 @@ def test_rescreen_all_enqueues_job(client, auth_headers, db_session):
 
     assert process_pending(db_session) >= 1
     job = db_session.get(Job, uuid.UUID(job_id))
-    assert job.status == "done"
+    assert job.status == "done", f"last_error={job.last_error!r} attempts={job.attempts}"
     # 幂等键：当日重复调用返回同一作业
     again = client.post("/api/v1/masterdata/counterparties/rescreen-all", headers=h).json()
     assert again["job_id"] == job_id

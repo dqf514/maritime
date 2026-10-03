@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -139,20 +140,20 @@ export default function PnlOverviewPage() {
 
   return (
     <AppShell breadcrumbs={[{ label: "Finance", href: "/finance" }, { label: "P&L" }]}>
-      <div className="panel">
-        <div className="desk-toolbar" style={{ marginBottom: "0.75rem" }}>
-          <h1 style={{ margin: 0, fontSize: "1.25rem" }}>
-            {t("page.pnl.title", "Profit & Loss — 4-Column Comparison")}
-          </h1>
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+      <PageHeader
+        title={t("page.pnl.title", "Profit & Loss — 4-Column Comparison")}
+        actions={
+          <>
             <button className="btn btn-sm btn-ghost" type="button" onClick={load}>
               {t("common.refresh", "Refresh")}
             </button>
             <button className="btn btn-sm" type="button" onClick={() => exportCsv(sorted)}>
               {t("common.export_csv", "Export CSV")}
             </button>
-          </div>
-        </div>
+          </>
+        }
+      />
+      <div className="panel">
 
         {fleet ? (
           <div className="pnl-fleet-summary">

@@ -1,0 +1,116 @@
+/* DataGrid — Excel-like cell-centric grid (extreme density) */
+
+.grid-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  outline: none;
+  min-width: 0;
+}
+.grid-wrapper:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.grid-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: inherit;
+  -webkit-overflow-scrolling: touch;
+}
+
+.grid-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-table);
+  table-layout: fixed;
+}
+.grid-table th,
+.grid-table td {
+  text-align: left;
+  padding: var(--cell-pad-y) var(--cell-pad-x);
+  border-bottom: 1px solid var(--border-light);
+  border-right: 1px solid rgba(0,0,0,0.03);
+  height: var(--row-h);
+  max-height: var(--row-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: cell;
+}
+.grid-table thead th {
+  background: var(--panel-header-bg);
+  font-weight: 700;
+  font-size: var(--font-label);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  user-select: none;
+  cursor: pointer;
+  height: 20px;
+}
+.grid-table thead th:hover {
+  background: rgba(26, 155, 150, 0.08);
+}
+
+.grid-row:hover td {
+  background: rgba(26, 155, 150, 0.03);
+}
+
+.cell-selected {
+  background: rgba(26, 155, 150, 0.1) !important;
+}
+.cell-focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  z-index: 1;
+  position: relative;
+}
+
+.grid-cell-input {
+  width: 100%;
+  height: calc(var(--row-h) - 1px);
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  padding: 0 1px;
+  font-size: var(--font-table);
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+}
+
+/* Grouping */
+.grid-group-header td {
+  background: var(--panel-header-bg);
+  cursor: pointer;
+  font-size: var(--font-label);
+  border-bottom: 1px solid var(--border);
+  height: 20px;
+}
+.grid-group-header:hover td {
+  background: rgba(26, 155, 150, 0.06);
+}
+.grid-group-toggle {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  margin-right: 2px;
+}
+
+/* Aggregation footer */
+.grid-footer td {
+  background: var(--panel-header-bg);
+  font-size: var(--font-label);
+  font-weight: 700;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+  height: 20px;
+}
+.grid-footer-selection {
+  color: var(--accent);
+  font-weight: 700;
+}

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -42,8 +43,10 @@ export default function OrgPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.organization.title", "Organization")}</h1>
-      <p className="page-sub">{t("page.organization.sub", "Tenant profile and defaults.")}</p>
+      <PageHeader
+        title={t("page.organization.title", "Organization")}
+        subtitle={t("page.organization.sub", "Tenant profile and defaults.")}
+      />
       {org ? (
         <form className="panel" onSubmit={(e) => save(e).catch(() => toast.success(t("common.failed", "Failed")))}>
           <div className="kv-grid">

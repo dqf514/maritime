@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -93,15 +94,15 @@ export default function ApiKeysPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.apikeys.title", "API 密钥")}</h1>
-          <p className="page-sub">{t("page.apikeys.sub", "用于集成与合作方系统。点击行打开编辑或删除。")}</p>
-        </div>
-        <Link href="/settings/recycle" className="btn btn-ghost">
-          {t("nav.recycle", "回收站")}
-        </Link>
-      </div>
+      <PageHeader
+        title={t("page.apikeys.title", "API 密钥")}
+        subtitle={t("page.apikeys.sub", "用于集成与合作方系统。点击行打开编辑或删除。")}
+        actions={
+          <Link href="/settings/recycle" className="btn btn-ghost">
+            {t("nav.recycle", "回收站")}
+          </Link>
+        }
+      />
       {err ? <div className="error">{err}</div> : null}
       {rawOnce ? (
         <div className="panel" style={{ borderLeft: "4px solid var(--accent)" }}>

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { PageGuide } from "@/components/PageGuide";
 import { CertOverview, VesselCertificates } from "@/components/ShipCertificates";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -209,25 +210,23 @@ export default function ShipManagementPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.ship.title", "Ship management")}</h1>
-          <p className="page-sub">
-            {t("page.ship.sub", "Technical fleet for owners & managers — certificates, PMS, crew, defects.")}
-          </p>
-        </div>
-        <div className="quick-row">
-          <PageGuide pageKey="ship" />
-          <Link href="/dashboards/technical" className="btn btn-primary">
-            {t("page.ship.wall", "Technical live wall")}
-          </Link>
-          {DEMO_TOOLS ? (
-            <button type="button" className="btn btn-ghost" onClick={inboundDemo}>
-              {t("page.ship.simulate", "Simulate PMS inbound")}
-            </button>
-          ) : null}
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.ship.title", "Ship management")}
+        subtitle={t("page.ship.sub", "Technical fleet for owners & managers — certificates, PMS, crew, defects.")}
+        actions={
+          <>
+            <PageGuide pageKey="ship" />
+            <Link href="/dashboards/technical" className="btn btn-primary">
+              {t("page.ship.wall", "Technical live wall")}
+            </Link>
+            {DEMO_TOOLS ? (
+              <button type="button" className="btn btn-ghost" onClick={inboundDemo}>
+                {t("page.ship.simulate", "Simulate PMS inbound")}
+              </button>
+            ) : null}
+          </>
+        }
+      />
 
       <div className="page-tabs" role="tablist">
         <button
@@ -297,9 +296,20 @@ export default function ShipManagementPage() {
               {(fleet?.vessels || []).map((v) => (
                 <tr key={v.vessel_id} className={selected === v.vessel_id ? "active" : ""} onClick={() => openVessel(v.vessel_id)}>
                   <td>
-                    <strong>{v.name}</strong>
+                    <strong>
+                      <Link
+                        href={`/ship/vessels/${v.vessel_id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ color: "inherit", textDecoration: "none" }}
+                      >
+                        {v.name}
+                      </Link>
+                    </strong>
                     <div className="muted">
-                      {v.imo} · {v.flag}
+                      {v.imo} · {v.flag} ·{" "}
+                      <Link href={`/ship/vessels/${v.vessel_id}`} onClick={(e) => e.stopPropagation()}>
+                        {t("page.ship.vessel_card", "Vessel card")}
+                      </Link>
                     </div>
                   </td>
                   <td>{v.technical_status}</td>

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import {
   apiAddMigrationSource,
   apiCommitMigration,
@@ -88,31 +89,34 @@ export default function MigratePage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.migrate.title", "AI Migration Wizard")}</h1>
-      <p style={{ color: "var(--muted)" }}>{t("page.migrate.sub", "Connect sources, analyze, confirm, commit.")}</p>
-      {step === "connect" ? (
-        <button className="btn btn-primary" type="button" onClick={() => start().catch(() => toast.success(t("common.failed", "Failed")))}>
-          {t("page.migrate.connect", "Connect sources & start")}
-        </button>
-      ) : null}
-      {step === "analyze" || step === "review" ? (
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", marginBottom: "1rem" }}>
-          {step === "analyze" ? (
-            <button className="btn btn-primary" type="button" onClick={() => analyze().catch(() => toast.success(t("page.migrate.analyze_fail", "Analyze failed")))}>
-              {t("page.migrate.run_ai", "Run AI analysis")}
+      <PageHeader
+        title={t("page.migrate.title", "AI Migration Wizard")}
+        subtitle={t("page.migrate.sub", "Connect sources, analyze, confirm, commit.")}
+        actions={
+          step === "connect" ? (
+            <button className="btn btn-primary" type="button" onClick={() => start().catch(() => toast.success(t("common.failed", "Failed")))}>
+              {t("page.migrate.connect", "Connect sources & start")}
             </button>
-          ) : null}
-          <label className="btn" style={{ cursor: "pointer" }}>
-            {t("page.migrate.upload", "Upload Excel")}
-            <input
-              type="file"
-              accept=".xlsx,.xlsm,.xls"
-              style={{ display: "none" }}
-              onChange={(e) => onExcel(e.target.files?.[0] || null).catch(() => toast.success(t("page.migrate.excel_fail", "Excel upload failed")))}
-            />
-          </label>
-        </div>
-      ) : null}
+          ) : step === "analyze" || step === "review" ? (
+            <>
+              {step === "analyze" ? (
+                <button className="btn btn-primary" type="button" onClick={() => analyze().catch(() => toast.success(t("page.migrate.analyze_fail", "Analyze failed")))}>
+                  {t("page.migrate.run_ai", "Run AI analysis")}
+                </button>
+              ) : null}
+              <label className="btn" style={{ cursor: "pointer" }}>
+                {t("page.migrate.upload", "Upload Excel")}
+                <input
+                  type="file"
+                  accept=".xlsx,.xlsm,.xls"
+                  style={{ display: "none" }}
+                  onChange={(e) => onExcel(e.target.files?.[0] || null).catch(() => toast.success(t("page.migrate.excel_fail", "Excel upload failed")))}
+                />
+              </label>
+            </>
+          ) : null
+        }
+      />
       {proposals.length ? (
         <div className="panel">
           <table className="table">

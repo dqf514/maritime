@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { PageHeader } from "@/components/PageHeader";
 import { ContactPicker } from "@/components/DataPicker";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -17,6 +18,7 @@ type Claim = {
   id: string;
   claim_no: string;
   claim_type?: string;
+  subtype?: string | null;
   status: string;
   amount: number;
   currency?: string;
@@ -25,7 +27,16 @@ type Claim = {
   settlement_amount?: number | null;
   notes?: string | null;
 };
-type ClaimTypeOpt = { code: string; label: { en: string; zh?: string } };
+type Labeled = { code: string; label: { en: string; zh?: string } };
+type ClaimTypeOpt = Labeled & { subtypes?: Labeled[] };
+type ClaimActionRow = {
+  id: string;
+  action_type: string;
+  action_date: string | null;
+  notes: string | null;
+  result: string | null;
+  created_at: string | null;
+};
 
 function ClaimDetailPage() {
   const { t, locale } = useI18n();
@@ -35,25 +46,39 @@ function ClaimDetailPage() {
 
   const [claim, setClaim] = useState<Claim | null>(null);
   const [claimTypes, setClaimTypes] = useState<ClaimTypeOpt[]>([]);
+  const [actionCatalog, setActionCatalog] = useState<Labeled[]>([]);
+  const [claimActions, setClaimActions] = useState<ClaimActionRow[]>([]);
   const [editType, setEditType] = useState("demurrage");
+  const [editSubtype, setEditSubtype] = useState("");
   const [editContact, setEditContact] = useState("");
   const [editAmount, setEditAmount] = useState("");
   const [editNotes, setEditNotes] = useState("");
   const [settleAmount, setSettleAmount] = useState("");
+  const [actType, setActType] = useState("negotiate");
+  const [actDate, setActDate] = useState("");
+  const [actNotes, setActNotes] = useState("");
+  const [actResult, setActResult] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [confirm, setConfirm] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
 
+  const subtypeOpts = claimTypes.find((ct) => ct.code === editType)?.subtypes || [];
+
   const refresh = useCallback(async () => {
-    const data = await apiGet(`/api/v1/claims/${id}`);
+    const [data, acts] = await Promise.all([
+      apiGet(`/api/v1/claims/${id}`),
+      apiGet(`/api/v1/claims/${id}/actions`).catch(() => ({ items: [] })),
+    ]);
     setClaim(data);
     setEditType(data.claim_type || "demurrage");
+    setEditSubtype(data.subtype || "");
     setEditContact(data.contact?.id || "");
     setEditAmount(String(data.amount ?? ""));
     setEditNotes(data.notes || "");
     setSettleAmount(String(data.settlement_amount ?? data.amount ?? ""));
+    setClaimActions(Array.isArray(acts?.items) ? acts.items : []);
   }, [id]);
 
   useEffect(() => {
@@ -62,8 +87,14 @@ function ClaimDetailPage() {
       else setErr(String(ex));
     });
     apiGet("/api/v1/claims/types")
-      .then((r: { items: ClaimTypeOpt[] }) => setClaimTypes(r.items))
-      .catch(() => setClaimTypes([]));
+      .then((r: { items: ClaimTypeOpt[]; actions?: Labeled[] }) => {
+        setClaimTypes(r.items);
+        setActionCatalog(r.actions || []);
+      })
+      .catch(() => {
+        setClaimTypes([]);
+        setActionCatalog([]);
+      });
   }, [refresh]);
 
   async function save() {
@@ -72,6 +103,7 @@ function ClaimDetailPage() {
     try {
       await apiPatch(`/api/v1/claims/${id}`, {
         claim_type: editType,
+        subtype: editSubtype,
         contact_id: editContact || null,
         amount: Number(editAmount) || 0,
         notes: editNotes || null,
@@ -82,6 +114,45 @@ function ClaimDetailPage() {
       setErr(String(ex));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function addAction() {
+    setBusy(true);
+    setErr("");
+    try {
+      await apiPost(`/api/v1/claims/${id}/actions`, {
+        action_type: actType,
+        action_date: actDate || null,
+        notes: actNotes || null,
+        result: actResult || null,
+      });
+      toast.success(t("page.finance.action_added", "Action logged"));
+      setActDate("");
+      setActNotes("");
+      setActResult("");
+      await refresh();
+    } catch (ex) {
+      setErr(String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function timeBarTask() {
+    setBusy(true);
+    setErr("");
+    try {
+      const task = await apiPost(`/api/v1/claims/${id}/generate-time-bar-task`);
+      toast.success(
+        task.reused
+          ? t("page.finance.timebar_task_reused", "Existing time-bar task reused")
+          : t("page.finance.timebar_task_created", "Time-bar task created"),
+      );
+    } catch (ex) {
+      setErr(String(ex));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -158,27 +229,25 @@ function ClaimDetailPage() {
         { label: claim?.claim_no || t("page.finance.no", "编号") },
       ]}
     >
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>
+      <PageHeader
+        title={
+          <>
             {claim?.claim_no || "…"}
-            {claim ? (
-              <span className="badge badge-warn" style={{ marginLeft: "0.6rem" }}>
-                {claim.status}
-              </span>
-            ) : null}
-          </h1>
-          <p className="page-sub">{t("page.finance.edit_claim", "编辑索赔")}</p>
-        </div>
-        <div className="desk-toolbar" style={{ margin: 0 }}>
-          <Link href="/finance?tab=claims" className="btn btn-ghost">
-            {t("common.back", "返回")}
-          </Link>
-          <button className="btn btn-sm" type="button" disabled={busy || saving} onClick={() => window.print()}>
-            {t("common.print", "打印 / PDF")}
-          </button>
-        </div>
-      </div>
+            {claim ? <span className="badge badge-warn">{claim.status}</span> : null}
+          </>
+        }
+        subtitle={t("page.finance.edit_claim", "编辑索赔")}
+        actions={
+          <>
+            <Link href="/finance?tab=claims" className="btn btn-ghost">
+              {t("common.back", "返回")}
+            </Link>
+            <button className="btn btn-sm" type="button" disabled={busy || saving} onClick={() => window.print()}>
+              {t("common.print", "打印 / PDF")}
+            </button>
+          </>
+        }
+      />
 
       {err ? <p className="err-text">{err}</p> : null}
 
@@ -193,13 +262,27 @@ function ClaimDetailPage() {
         <div className="form-grid">
           <label>
             {t("page.finance.claim_type", "索赔类型")}
-            <select value={editType} onChange={(e) => setEditType(e.target.value)}>
+            <select value={editType} onChange={(e) => { setEditType(e.target.value); setEditSubtype(""); }}>
               {claimTypes.map((ct) => (
                 <option key={ct.code} value={ct.code}>
                   {locale.startsWith("zh") ? ct.label.zh || ct.label.en : ct.label.en}
                 </option>
               ))}
               {!claimTypes.some((ct) => ct.code === editType) ? <option value={editType}>{editType}</option> : null}
+            </select>
+          </label>
+          <label>
+            {t("page.finance.claim_subtype", "索赔子类")}
+            <select value={editSubtype} onChange={(e) => setEditSubtype(e.target.value)}>
+              <option value="">—</option>
+              {subtypeOpts.map((st) => (
+                <option key={st.code} value={st.code}>
+                  {locale.startsWith("zh") ? st.label.zh || st.label.en : st.label.en}
+                </option>
+              ))}
+              {editSubtype && !subtypeOpts.some((st) => st.code === editSubtype) ? (
+                <option value={editSubtype}>{editSubtype}</option>
+              ) : null}
             </select>
           </label>
           <label>
@@ -245,6 +328,9 @@ function ClaimDetailPage() {
               {t("page.finance.to_invoice", "生成发票")}
             </button>
           ) : null}
+          <button className="btn btn-sm" type="button" disabled={busy} onClick={timeBarTask}>
+            {t("page.finance.timebar_task", "Time-bar task")}
+          </button>
           <button
             className="btn btn-danger btn-sm"
             type="button"
@@ -259,6 +345,64 @@ function ClaimDetailPage() {
           >
             {t("common.delete", "删除")}
           </button>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3 style={{ marginTop: 0 }}>{t("page.finance.claim_actions", "Claim actions")}</h3>
+        {claimActions.length ? (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>{t("page.finance.action_type", "Action")}</th>
+                <th>{t("common.date", "日期")}</th>
+                <th>{t("page.finance.notes", "备注")}</th>
+                <th>{t("page.finance.action_result", "Result")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {claimActions.map((a) => (
+                <tr key={a.id}>
+                  <td>{a.action_type}</td>
+                  <td>{a.action_date || "—"}</td>
+                  <td>{a.notes || "—"}</td>
+                  <td>{a.result || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="muted" style={{ margin: "0 0 0.5rem" }}>{t("page.finance.no_actions", "暂无处置动作")}</p>
+        )}
+        <div className="form-grid">
+          <label>
+            {t("page.finance.action_type", "Action")}
+            <select value={actType} onChange={(e) => setActType(e.target.value)}>
+              {actionCatalog.map((a) => (
+                <option key={a.code} value={a.code}>
+                  {locale.startsWith("zh") ? a.label.zh || a.label.en : a.label.en}
+                </option>
+              ))}
+              {!actionCatalog.some((a) => a.code === actType) ? <option value={actType}>{actType}</option> : null}
+            </select>
+          </label>
+          <label>
+            {t("common.date", "日期")}
+            <input type="date" value={actDate} onChange={(e) => setActDate(e.target.value)} />
+          </label>
+          <label>
+            {t("page.finance.notes", "备注")}
+            <input value={actNotes} onChange={(e) => setActNotes(e.target.value)} />
+          </label>
+          <label>
+            {t("page.finance.action_result", "Result")}
+            <input value={actResult} onChange={(e) => setActResult(e.target.value)} />
+          </label>
+          <div style={{ display: "flex", alignItems: "end" }}>
+            <button className="btn btn-sm" type="button" disabled={busy} onClick={addAction}>
+              {t("page.finance.log_action", "Log action")}
+            </button>
+          </div>
         </div>
       </div>
 

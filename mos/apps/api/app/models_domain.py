@@ -43,6 +43,24 @@ class Estimate(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class EstimateTemplate(Base):
+    """估算模板：可复用 inputs（船舶/货种/航线锚点），from-template 一键起估算。"""
+
+    __tablename__ = "estimate_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    template_name: Mapped[str] = mapped_column(Text, nullable=False)
+    vessel_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("vessels.id"))
+    cargo_type: Mapped[str | None] = mapped_column(String(32))
+    route_name: Mapped[str | None] = mapped_column(String(128))
+    inputs: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Charter(Base):
     __tablename__ = "charters"
     __table_args__ = (UniqueConstraint("tenant_id", "charter_no"),)
@@ -80,8 +98,56 @@ class Charter(Base):
     delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     redelivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ets_responsibility: Mapped[str | None] = mapped_column(String(16))  # owner/charterer
+    # 合同方向与成交类型（VC In vs VC Out；head/relet 转租）
+    charter_direction: Mapped[str] = mapped_column(String(8), default="out")  # in|out
+    master_contract_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("master_contracts.id"))
+    fixture_type: Mapped[str] = mapped_column(String(16), default="voyage_fixture")  # head|relet|voyage_fixture
+    # 租约页签：敞口/计价基准/转分账/规划期/收支/自定义属性
+    exposure_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    pricing_basis: Mapped[str | None] = mapped_column(String(32))
+    rebill_settings: Mapped[dict | None] = mapped_column(JSON)
+    planning_periods: Mapped[dict | None] = mapped_column(JSON)
+    rev_exp: Mapped[dict | None] = mapped_column(JSON)
+    properties: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MasterContract(Base):
+    """主合同（COA / 期租 / 光租框架）：航次成交可挂靠 master_contract_id。"""
+
+    __tablename__ = "master_contracts"
+    __table_args__ = (UniqueConstraint("tenant_id", "contract_no"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    contract_no: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    counterparty_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("counterparties.id"), nullable=False)
+    contract_type: Mapped[str] = mapped_column(String(32), default="voyage_coa")  # voyage_coa|time_charter|bareboat
+    total_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3))
+    period_from: Mapped[date | None] = mapped_column(Date)
+    period_to: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(16), default="draft")  # draft|active|completed|cancelled
+    clauses: Mapped[dict | None] = mapped_column(JSON)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CargoBrokerRule(Base):
+    """Cargo broker 佣金规则（brokerage / address），按租约逐条约定。"""
+
+    __tablename__ = "cargo_broker_rules"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    charter_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("charters.id"), nullable=False)
+    broker_party_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("counterparties.id"), nullable=False)
+    commission_type: Mapped[str] = mapped_column(String(16), nullable=False)  # brokerage|address
+    commission_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    applies_to: Mapped[str] = mapped_column(String(16), default="all")  # freight|demurrage|all
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class OffHireEvent(Base):
@@ -107,6 +173,7 @@ class CoaLifting(Base):
     __tablename__ = "coa_liftings"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     charter_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("charters.id"), nullable=False)
     period_label: Mapped[str] = mapped_column(Text, nullable=False)
     planned_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3))
@@ -228,10 +295,74 @@ class LaytimeCalc(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     voyage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("voyages.id"))
     port_call_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("port_calls.id"))
+    booking_reference: Mapped[str | None] = mapped_column(String(64))  # booking 订舱单号（from-booking）
     status: Mapped[str] = mapped_column(Text, default="draft")
     inputs: Mapped[dict] = mapped_column(JSON, default=dict)
     results: Mapped[dict] = mapped_column(JSON, default=dict)
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LaytimeType(Base):
+    """装卸时间条款类型字典（SHINC/SHEX/SHEXUU/WWDSHEX...），laytime_terms 的取值来源。"""
+
+    __tablename__ = "laytime_types"
+    __table_args__ = (UniqueConstraint("code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(32), nullable=False)  # SHINC, SHEX, SHEXUU, WWDSHEX, etc.
+    label_en: Mapped[str] = mapped_column(Text, nullable=False)
+    label_zh: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+
+
+class DemurrageOnAccount(Base):
+    """预付/暂付滞期费 (demurrage on account)：结算时冲抵应付滞期。"""
+
+    __tablename__ = "demurrage_on_account"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    laytime_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("laytime_calcs.id"), nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    payment_date: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|paid|applied
+    applied_to_settlement: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DemurrageRootCause(Base):
+    """滞期根因归集：延误原因 × 责任方 × 小时数，用于责任分摊与索赔支持。"""
+
+    __tablename__ = "demurrage_root_causes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    laytime_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("laytime_calcs.id"), nullable=False, index=True)
+    cause: Mapped[str] = mapped_column(String(32), nullable=False)  # port_congestion|weather|cargo_delay|documentation|other
+    delay_hours: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    responsible_party: Mapped[str] = mapped_column(String(16), nullable=False)  # owner|charterer|port|agent|other
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LaytimeDelay(Base):
+    """装卸时间延误明细：可标记为条款除外（不计 laytime）并记录成本影响。"""
+
+    __tablename__ = "laytime_delays"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    laytime_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("laytime_calcs.id"), nullable=False, index=True)
+    delay_type: Mapped[str] = mapped_column(String(32), nullable=False)  # weather|port_congestion|cargo|documentation|breakdown|other
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    excluded_from_laytime: Mapped[bool] = mapped_column(Boolean, default=False)
+    cost_impact: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Claim(Base):
@@ -241,6 +372,7 @@ class Claim(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     claim_no: Mapped[str] = mapped_column(Text, nullable=False)
     claim_type: Mapped[str] = mapped_column(Text, default="demurrage")
+    subtype: Mapped[str | None] = mapped_column(String(32))  # claim_taxonomy CLAIM_SUBTYPES 子类
     status: Mapped[str] = mapped_column(Text, default="open")
     voyage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("voyages.id"))
     laytime_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("laytime_calcs.id"))
@@ -252,6 +384,21 @@ class Claim(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     # 对方联系人（索赔通讯对象，D 闭环：counterparty_contacts 可被业务引用）
     contact_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparty_contacts.id"))
+
+
+class ClaimAction(Base):
+    """索赔动作记录：negotiate|litigate|arbitrate|settle|write_off，跟踪处置过程与结果。"""
+
+    __tablename__ = "claim_actions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    claim_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("claims.id"), nullable=False, index=True)
+    action_type: Mapped[str] = mapped_column(String(16), nullable=False)  # negotiate|litigate|arbitrate|settle|write_off
+    action_date: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class PortDisbursement(Base):
@@ -295,6 +442,83 @@ class BunkerOrder(Base):
     barge: Mapped[str | None] = mapped_column(String(128))
     # 供油方=对手方（闭环修复：BunkerIn.counterparty_id 此前只校验不落库）
     counterparty_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparties.id"))
+
+
+class BunkerRequirement(Base):
+    """加油需求 (bunker requirement)：draft→approved→tendering→ordered→fulfilled。
+
+    采购链起点：需求 → 招标 (tender) → 供应商报价 (BunkerOption) → 选定 →
+    转 BunkerOrder 执行。
+    """
+
+    __tablename__ = "bunker_requirements"
+    __table_args__ = (UniqueConstraint("tenant_id", "requirement_no"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    requirement_no: Mapped[str] = mapped_column(Text, nullable=False)
+    vessel_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("vessels.id"), nullable=False)
+    voyage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("voyages.id"))
+    fuel_type: Mapped[str] = mapped_column(String(32), default="VLSFO")
+    qty_required: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    port_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("ports.id"))
+    window_from: Mapped[date | None] = mapped_column(Date)
+    window_to: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(16), default="draft")  # draft|approved|tendering|ordered|fulfilled|cancelled
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BunkerOption(Base):
+    """供应商报价选项 (bunker option)：offered|selected|rejected。"""
+
+    __tablename__ = "bunker_options"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    requirement_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("bunker_requirements.id"), nullable=False, index=True)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("counterparties.id"), nullable=False)
+    port_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("ports.id"), nullable=False)
+    fuel_type: Mapped[str] = mapped_column(String(32), default="VLSFO")
+    qty: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    price_per_mt: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    delivery_date: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(16), default="offered")  # offered|selected|rejected
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BunkerCapCollar(Base):
+    """燃油价格上限/下限保护 (cap/collar)：指数价夹紧到 [collar, cap] 区间。"""
+
+    __tablename__ = "bunker_cap_collar"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    charter_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("charters.id"))
+    fuel_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    cap_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    collar_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    index_symbol: Mapped[str | None] = mapped_column(String(32))
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FuelConsumptionCategory(Base):
+    """分场景油耗定额 (sea/port_working/port_idle/maneuvering/cargo_heating/ballast)。"""
+
+    __tablename__ = "fuel_consumption_categories"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    vessel_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("vessels.id"), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)  # sea|port_working|port_idle|maneuvering|cargo_heating|ballast
+    fuel_type: Mapped[str] = mapped_column(String(32), default="VLSFO")
+    consumption_per_day: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Invoice(Base):

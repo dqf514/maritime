@@ -1,15 +1,16 @@
-/* Desktop-app chrome: topbar + sidenav + statusbar */
+/* Desktop-app chrome: topbar + sidenav + right-panel + statusbar */
 .topbar {
   height: var(--topbar);
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 0 1rem 0 1.25rem;
-  background: var(--sea-deep);
-  color: #f4f8fb;
+  gap: var(--gap-sm);
+  padding: 0 var(--gap-sm) 0 var(--gap-md);
+  background: var(--topbar-bg);
+  color: var(--ink);
   z-index: 40;
   position: relative;
+  border-bottom: 1px solid var(--chrome-border);
 }
 
 /* 搜索框居中（不贴品牌区），随视口宽度恒居中 */
@@ -21,34 +22,36 @@
 
 .brand {
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: var(--gap-sm);
+  font-size: 0.85rem;
 }
 .brand-link { color: inherit; }
-.brand-text { display: flex; flex-direction: column; line-height: 1.05; }
-.brand-text span { color: var(--accent-soft); font-weight: 500; font-size: 0.72rem; margin-left: 0; }
-.brand img { border-radius: 7px; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.1; }
+.brand-text span { color: var(--muted); font-weight: 500; font-size: var(--font-label); margin-left: 0; }
+.brand img { border-radius: var(--radius-sm); }
 
 .search-btn {
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.14);
-  color: #d7e8ef;
-  border-radius: 8px;
-  padding: 0.4rem 0.8rem;
+  background: var(--surface);
+  border: 1px solid var(--chrome-border);
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--gap-sm);
   cursor: pointer;
-  min-height: 36px;
+  height: var(--control-h);
+  font-size: 0.85rem;
 }
-.search-btn:hover { background: rgba(255,255,255,0.14); }
+.search-btn:hover { background: var(--toolbar-bg); }
 .search-label-short { display: none; }
 
 .topbar-right {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 0.65rem;
+  gap: 2px;
 }
 
 .user-menu { position: relative; }
@@ -56,8 +59,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 1px solid rgba(255,255,255,0.18);
   border-radius: 999px;
@@ -567,4 +570,212 @@
     line-height: 1;
     cursor: pointer;
   }
+}
+
+/* ── Popup Menu Navigation (left sidebar sections → popup menus) ── */
+
+.nav-popup-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--gap-xs);
+}
+
+.nav-popup-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: left;
+  min-height: 24px;
+  transition: background 0.1s;
+}
+.nav-popup-btn:hover {
+  background: rgba(26, 155, 150, 0.08);
+}
+.nav-popup-btn.open {
+  background: var(--accent);
+  color: white;
+}
+.nav-popup-btn.has-active {
+  border-left: 2px solid var(--accent);
+}
+.nav-popup-btn .nav-section-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.nav-popup-btn .nav-section-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-popup-arrow {
+  font-style: normal;
+  font-size: 9px;
+  opacity: 0.5;
+  transition: transform 0.12s;
+}
+.nav-popup-btn.open .nav-popup-arrow {
+  transform: rotate(90deg);
+  opacity: 0.9;
+}
+
+/* Popup menu panel */
+.nav-popup-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 220px;
+  max-width: 320px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  padding: 0;
+}
+
+.nav-popup-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: var(--gap-sm) var(--gap-md);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--panel-header-bg);
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  position: sticky;
+  top: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.nav-popup-count {
+  margin-left: auto;
+  background: var(--border-light);
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.nav-popup-body {
+  padding: var(--gap-xs);
+}
+
+.nav-popup-group {
+  padding: 2px 0;
+}
+.nav-popup-group + .nav-popup-group {
+  border-top: 1px solid var(--border-light);
+}
+.nav-popup-group-label {
+  padding: 0.35rem 0.5rem;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.nav-popup-item {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 0.85rem;
+  text-decoration: none;
+  min-height: 22px;
+  transition: background 0.08s;
+}
+.nav-popup-item:hover {
+  background: rgba(26, 155, 150, 0.1);
+}
+.nav-popup-item.active {
+  background: rgba(26, 155, 150, 0.15);
+  color: var(--accent);
+  font-weight: 700;
+}
+.nav-popup-item svg,
+.nav-popup-item [class*="NavIcon"] {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* Collapsed sidebar: icon-only, still clickable */
+.app-shell.nav-collapsed .nav-popup-btn {
+  justify-content: center;
+  padding: var(--gap-xs);
+}
+.app-shell.nav-collapsed .nav-popup-btn .nav-section-text,
+.app-shell.nav-collapsed .nav-popup-btn .nav-popup-arrow {
+  display: none;
+}
+
+/* Compact popup for narrow sidebar */
+.app-shell.nav-collapsed .nav-popup-menu {
+  min-width: 200px;
+}
+
+/* ── User menu settings (theme / language inside avatar dropdown) ── */
+.user-menu-sep {
+  height: 1px;
+  background: var(--border-light);
+  margin: var(--gap-xs) 0;
+}
+.user-menu-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-md);
+  padding: var(--gap-xs) var(--gap-sm);
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.user-menu-setting > span {
+  flex-shrink: 0;
+}
+
+/* ── Topbar button contrast fix ── */
+.topbar .icon-btn {
+  color: var(--ink);
+  border-color: var(--chrome-border);
+  background: var(--surface);
+}
+.topbar .icon-btn:hover {
+  background: var(--toolbar-bg);
+  border-color: var(--accent);
+}
+.topbar .density-toggle {
+  color: var(--ink);
+  border-color: var(--chrome-border);
+  background: var(--surface);
+}
+.topbar .density-toggle:hover {
+  background: var(--toolbar-bg);
+}
+.topbar .notification-bell-btn {
+  color: var(--ink);
+  border-color: var(--chrome-border);
+  background: var(--surface);
+}
+.topbar .notification-bell-btn:hover {
+  background: var(--toolbar-bg);
 }

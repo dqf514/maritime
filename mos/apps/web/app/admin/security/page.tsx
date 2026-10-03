@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { API_BASE as API, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -102,13 +103,13 @@ export default function TenantSecurityPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.security.title", "登录与安全")}</h1>
-      <p className="page-sub">
-        {t(
+      <PageHeader
+        title={t("page.security.title", "登录与安全")}
+        subtitle={t(
           "page.security.sub",
           "选择平台已批准的登录方式，强制邮箱验证 / 仅邀请，并限制企业邮箱域名。SSO 密钥由平台运维配置。",
         )}
-      </p>
+      />
       {demoToken ? (
         <p className="muted">
           {t("page.security.demo_token", "演示邀请令牌:")} <code>{demoToken}</code> —{" "}

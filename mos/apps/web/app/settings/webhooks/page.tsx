@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -89,7 +90,8 @@ export default function WebhooksPage() {
   }
 
   return (
-    <AppShell title="Webhooks">
+    <AppShell>
+      <PageHeader title={t("page.webhooks.title", "Webhooks")} />
       <div className="space-y-6">
 
         {/* Create subscription */}

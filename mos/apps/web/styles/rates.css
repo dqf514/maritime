@@ -1,0 +1,229 @@
+/* Phase 4 Rate Tables — 运价/费率表密集工作台 */
+
+.rates-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+  margin-bottom: var(--gap-md);
+}
+.rates-toolbar .spacer { flex: 1 1 auto; }
+.rates-toolbar select {
+  height: var(--control-h);
+  padding: 0 var(--gap-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: var(--font-ui);
+}
+
+/* 左栏表目录 + 右栏编辑区 */
+.rates-layout {
+  display: grid;
+  grid-template-columns: minmax(230px, 270px) minmax(0, 1fr);
+  gap: var(--gap-md);
+  align-items: start;
+}
+.rates-side-list {
+  max-height: calc(100vh - 250px);
+  overflow-y: auto;
+  padding: 0;
+  min-width: 0;
+}
+.rates-side-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  background: transparent;
+  padding: var(--gap-sm) var(--gap-md);
+  cursor: pointer;
+  font-size: var(--font-ui);
+  color: var(--ink);
+}
+.rates-side-item:hover { background: rgba(26, 155, 150, 0.05); }
+.rates-side-item.active {
+  background: rgba(26, 155, 150, 0.1);
+  border-left-color: var(--accent);
+}
+.rates-side-item .rates-side-name {
+  display: block;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rates-side-item .rates-side-meta {
+  display: flex;
+  gap: var(--gap-sm);
+  align-items: center;
+  font-size: var(--font-label);
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+/* 右栏头部：表信息 + 行工具栏 */
+.rates-main { min-width: 0; }
+.rates-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+  padding: var(--gap-sm) var(--gap-md);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-bottom: 0;
+}
+.rates-head .rates-head-title { font-weight: 700; font-size: var(--font-ui); }
+.rates-head .rates-head-meta { font-size: var(--font-label); color: var(--muted); }
+.rates-head .spacer { flex: 1 1 auto; }
+.rates-body {
+  border: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--bg);
+  min-height: 260px;
+  overflow: hidden;
+}
+
+/* 视图切换（行视图 / 运价矩阵） */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.seg button {
+  height: var(--control-h);
+  padding: 0 var(--gap-md);
+  border: 0;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: var(--font-ui);
+  cursor: pointer;
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { background: var(--foam); color: var(--ink); }
+.seg button.active {
+  background: rgba(26, 155, 150, 0.14);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* 运价矩阵：装港行 × 卸港列 */
+.rate-matrix-wrap { overflow: auto; max-height: calc(100vh - 330px); }
+.rate-matrix {
+  border-collapse: collapse;
+  font-size: var(--font-table);
+  min-width: 100%;
+}
+.rate-matrix th,
+.rate-matrix td {
+  border: 1px solid var(--border);
+  padding: 0 var(--gap-sm);
+  height: var(--row-h);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.rate-matrix thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--foam);
+  color: var(--muted);
+  font-size: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 600;
+}
+.rate-matrix th.matrix-corner {
+  left: 0;
+  z-index: 3;
+  text-align: left;
+}
+.rate-matrix th.matrix-row-head {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--foam);
+  text-align: left;
+  font-weight: 600;
+}
+.rate-matrix td { text-align: right; background: var(--bg); }
+.rate-matrix td.matrix-empty { background: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0, 0, 0, 0.02) 4px, rgba(0, 0, 0, 0.02) 8px); }
+.rate-matrix td input {
+  width: 100%;
+  min-width: 64px;
+  height: calc(var(--row-h) - 2px);
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: right;
+  font-size: var(--font-table);
+  font-variant-numeric: tabular-nums;
+  padding: 0 var(--gap-xs);
+}
+.rate-matrix td input:hover { border-color: var(--border); background: var(--bg); }
+.rate-matrix td input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg);
+}
+.rate-matrix .matrix-total {
+  background: var(--foam);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* 维度编辑器（新建行弹窗） */
+.dim-editor { display: grid; gap: var(--gap-xs); }
+.dim-editor-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(90px, 1fr) var(--control-h);
+  gap: var(--gap-sm);
+  align-items: center;
+}
+.dim-editor-row input {
+  height: var(--input-h);
+  padding: 0 var(--gap-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: var(--font-ui);
+}
+.icon-btn-sm {
+  width: var(--control-h);
+  height: var(--control-h);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--font-ui);
+  line-height: 1;
+}
+.icon-btn-sm:hover { background: var(--foam); color: var(--danger); }
+
+/* 定价模板 */
+.rates-templates { margin-top: var(--gap-lg); }
+.rates-templates h3 { margin: 0 0 var(--gap-sm); font-size: 1rem; }
+.tpl-ref-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 140px) minmax(0, 1fr) var(--control-h);
+  gap: var(--gap-sm);
+  align-items: center;
+}
+.tpl-ref-row select {
+  height: var(--input-h);
+  padding: 0 var(--gap-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: var(--font-ui);
+}

@@ -103,11 +103,11 @@ export function RiskLimitPanel() {
               emptyText={t("common.empty", "No records")}
               editable={{
                 keys: ["amount"],
-                onSave: async (row, key, value) => {
+                onSave: async (rowId, key, value) => {
                   const n = Number(value);
                   if (!Number.isFinite(n)) return;
                   try {
-                    await apiPatch(`/api/v1/risk/limits/${row.id}`, { [key]: n });
+                    await apiPatch(`/api/v1/risk/limits/${rowId}`, { [key]: n });
                     await load();
                   } catch {
                     // 保存失败静默回读（行内编辑容错）

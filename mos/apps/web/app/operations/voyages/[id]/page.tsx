@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageGuide } from "@/components/PageGuide";
+import { PageHeader } from "@/components/PageHeader";
 import { StateView } from "@/components/StateView";
 import { apiGet, type VoyageOverview } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -63,28 +64,30 @@ export default function VoyageOverviewPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <p style={{ margin: "0 0 0.2rem" }}>
-            <Link href="/operations/voyages" className="muted" style={{ fontSize: "0.85rem" }}>
-              ← {t("page.voyage.back", "返回航次列表")}
-            </Link>
-          </p>
-          <h1 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+      <PageHeader
+        left={
+          <Link href="/operations/voyages" className="muted" style={{ fontSize: "0.85rem" }}>
+            ← {t("page.voyage.back", "返回航次列表")}
+          </Link>
+        }
+        title={
+          <>
             {t("page.voyage.title", "航次 360")}
             <span>{title}</span>
             {voyage ? <span className="pill">{voyage.status}</span> : null}
-          </h1>
-          <p className="page-sub">
+          </>
+        }
+        subtitle={
+          <>
             {voyage?.vessel_name
               ? t("page.voyage.sub_vessel", "船舶 {vessel}", { vessel: voyage.vessel_name })
               : t("page.voyage.sub", "航次全生命周期与盈亏归因")}
             {data?.charter?.charter_no ? ` · ${data.charter.charter_no}` : ""}
             {data?.charter?.counterparty_name ? ` · ${data.charter.counterparty_name}` : ""}
-          </p>
-        </div>
-        <PageGuide pageKey="voyage_detail" />
-      </div>
+          </>
+        }
+        actions={<PageGuide pageKey="voyage_detail" />}
+      />
 
       <StateView loading={loading && !data} error={error} empty={false} onRetry={load}>
         {data?.lifecycle?.length ? (

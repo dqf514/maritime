@@ -15,9 +15,15 @@ export const metadata: Metadata = {
   },
 };
 
+// Density bootstrap — runs before paint to avoid flash
+const densityScript = `try{var d=localStorage.getItem('marios_density')||'compact';document.documentElement.dataset.density=d}catch(e){}`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: densityScript }} />
+      </head>
       <body suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>

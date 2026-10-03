@@ -3,8 +3,10 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { BunkerRequirementsPanel } from "@/components/BunkerRequirementsPanel";
 import { PartyPicker } from "@/components/DataPicker";
 import { LookupSelect } from "@/components/LookupSelect";
+import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -227,15 +229,15 @@ export default function BunkerDeskPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.bunker.title", "Bunker desk")}</h1>
-          <p className="page-sub">{t("page.bunker.sub", "Stem, delivery and ROB. Price feeds live in Integration Hub.")}</p>
-        </div>
-        <Link href="/settings/connectors" className="btn btn-ghost">
-          {t("page.connectors.title", "Integration Hub")}
-        </Link>
-      </div>
+      <PageHeader
+        title={t("page.bunker.title", "Bunker desk")}
+        subtitle={t("page.bunker.sub", "Stem, delivery and ROB. Price feeds live in Integration Hub.")}
+        actions={
+          <Link href="/settings/connectors" className="btn btn-ghost">
+            {t("page.connectors.title", "Integration Hub")}
+          </Link>
+        }
+      />
       {err ? <p className="flash-err">{err}</p> : null}
       {warnings.length ? (
         <div className="panel" style={{ borderColor: "var(--warn)" }}>
@@ -337,6 +339,8 @@ export default function BunkerDeskPage() {
           </tbody>
         </table>
       </div>
+
+      <BunkerRequirementsPanel />
 
       <RecordModal
         open={Boolean(open)}

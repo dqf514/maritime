@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiListLicenses } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -17,8 +18,10 @@ export default function LicensesPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.licenses.title", "Module licenses")}</h1>
-      <p style={{ color: "var(--muted)" }}>{t("page.licenses.sub", "Active module entitlements for this tenant.")}</p>
+      <PageHeader
+        title={t("page.licenses.title", "Module licenses")}
+        subtitle={t("page.licenses.sub", "Active module entitlements for this tenant.")}
+      />
       <div className="panel">
         <table className="table">
           <thead>

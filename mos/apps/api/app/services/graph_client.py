@@ -8,6 +8,7 @@ back to the global settings, preserving pre-tenant-aware behavior.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import secrets
 from dataclasses import dataclass
@@ -229,19 +230,46 @@ class GraphClient:
         data = self._get(f"/me/mailFolders/{folder}/messages?$top={top}&$orderby=receivedDateTime desc")
         return data.get("value") or []
 
-    def send_mail(self, *, to: str, subject: str, body: str, content_type: str = "Text") -> dict[str, Any]:
+    def send_mail(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        content_type: str = "Text",
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         if self.mode == "stub":
-            return {"id": f"stub-sent-{secrets.token_hex(4)}", "status": "queued", "mode": "stub"}
-        payload = {
-            "message": {
-                "subject": subject,
-                "body": {"contentType": content_type, "content": body},
-                "toRecipients": [{"emailAddress": {"address": to}}],
-            },
-            "saveToSentItems": True,
+            return {
+                "id": f"stub-sent-{secrets.token_hex(4)}",
+                "status": "queued",
+                "mode": "stub",
+                "attachments": len(attachments or []),
+            }
+        message: dict[str, Any] = {
+            "subject": subject,
+            "body": {"contentType": content_type, "content": body},
+            "toRecipients": [{"emailAddress": {"address": to}}],
         }
+        if attachments:
+            file_attachments = []
+            for att in attachments:
+                content_b64 = att.get("content_b64")
+                if content_b64 is None:
+                    raw = att.get("content") or b""
+                    content_b64 = base64.b64encode(raw).decode("ascii")
+                file_attachments.append(
+                    {
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": att.get("filename") or "attachment",
+                        "contentType": att.get("content_type") or "application/octet-stream",
+                        "contentBytes": content_b64,
+                    }
+                )
+            message["attachments"] = file_attachments
+        payload = {"message": message, "saveToSentItems": True}
         self._post("/me/sendMail", payload)
-        return {"status": "sent", "mode": "live"}
+        return {"status": "sent", "mode": "live", "attachments": len(attachments or [])}
 
     def list_drives(self) -> list[dict[str, Any]]:
         if self.mode == "stub":

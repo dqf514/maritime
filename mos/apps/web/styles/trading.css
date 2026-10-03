@@ -1,0 +1,111 @@
+/* Phase 7 Trading — 交易工作台：Blotter / Positions / MtM P&L / Exposure */
+
+.trading-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+  margin-bottom: var(--gap-md);
+}
+.trading-toolbar .spacer { flex: 1 1 auto; }
+.trading-toolbar .field-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  font-size: var(--font-label);
+  color: var(--muted);
+}
+.trading-toolbar .field-inline input,
+.trading-toolbar .field-inline select {
+  height: var(--control-h);
+  padding: 0 var(--gap-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: var(--font-ui);
+}
+
+/* 标签栏（沿用 desk-tabs 视觉，紧凑版） */
+.trading-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  margin-bottom: var(--gap-md);
+}
+.trading-tab {
+  height: var(--control-h);
+  padding: 0 var(--gap-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: var(--font-ui);
+  font-weight: 600;
+  cursor: pointer;
+}
+.trading-tab:hover { background: var(--foam); color: var(--ink); }
+.trading-tab.active {
+  background: rgba(26, 155, 150, 0.14);
+  border-color: #9fd4d1;
+  color: var(--ink);
+}
+
+/* 交易簿/持仓网格容器 */
+.trading-grid-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  overflow: hidden;
+}
+.trading-grid-wrap .grid-scroll { max-height: calc(100vh - 300px); }
+
+/* MtM 汇总瓦片 */
+.mtm-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-md);
+  margin-bottom: var(--gap-md);
+}
+.mtm-tile {
+  min-width: 150px;
+  padding: var(--gap-sm) var(--gap-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+.mtm-tile span {
+  display: block;
+  font-size: var(--font-label);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.mtm-tile strong {
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
+.mtm-tile.pos strong { color: var(--ok); }
+.mtm-tile.neg strong { color: var(--danger); }
+
+/* 敞口超限告警条 */
+.exposure-alert {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+  padding: var(--gap-sm) var(--gap-md);
+  margin-bottom: var(--gap-md);
+  border: 1px solid rgba(192, 57, 43, 0.35);
+  border-radius: var(--radius-md);
+  background: #fde8e6;
+  color: var(--danger);
+  font-size: var(--font-ui);
+  font-weight: 600;
+}
+.exposure-alert .spacer { flex: 1 1 auto; }
+
+/* 持仓净头寸着色 */
+.pnl-pos { color: var(--ok); }
+.pnl-neg { color: var(--danger); }
+.num-cell { text-align: right; font-variant-numeric: tabular-nums; }

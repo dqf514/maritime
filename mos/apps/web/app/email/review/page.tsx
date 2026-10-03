@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -65,11 +66,15 @@ export default function EmailReviewPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.email.title", "Email Review")}</h1>
-      <p style={{ color: "var(--muted)" }}>{t("page.email.sub", "AI-parsed recaps awaiting confirmation.")}</p>
-      <button className="btn btn-primary" type="button" onClick={() => sync().catch(() => toast.success(t("page.email.sync_fail", "Sync failed")))}>
-        {t("page.email.sync_btn", "Sync demo inbox")}
-      </button>
+      <PageHeader
+        title={t("page.email.title", "Email Review")}
+        subtitle={t("page.email.sub", "AI-parsed recaps awaiting confirmation.")}
+        actions={
+          <button className="btn btn-primary" type="button" onClick={() => sync().catch(() => toast.success(t("page.email.sync_fail", "Sync failed")))}>
+            {t("page.email.sync_btn", "Sync demo inbox")}
+          </button>
+        }
+      />
       <div className="panel" style={{ marginTop: "1rem" }}>
         <table className="table">
           <thead>

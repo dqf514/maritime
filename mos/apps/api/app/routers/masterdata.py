@@ -428,6 +428,7 @@ def rescreen_all(
     """D24 批量重筛：入后台作业队列逐个重筛（幂等键按天）。"""
     from datetime import date
 
+    from app.services import counterparty_credit  # noqa: F401 — 注册 counterparty.rescreen handler
     from app.services.job_queue import enqueue
 
     job = enqueue(

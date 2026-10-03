@@ -304,6 +304,7 @@
             <li>打开 <span class="path">/twin</span> 查看船队态势；可运行 what-if 推演（演示级）。</li>
           </ol>
         </div>
+        <p class="muted">系统同步追踪 EU ETS 碳排放与 CII 评级，碳成本可按航次自动分摊。</p>
       </section>
 
       <section id="finance" class="steps">
@@ -315,6 +316,8 @@
             <li>创建装卸时间单：关联航次 / 挂靠港，录入允许时间、周转时间、滞期费率与时间段（含除外时间）。</li>
             <li><strong>计算 → 定稿</strong>后，可发起 demurrage 索赔并流转谈判 / 结清。</li>
           </ol>
+          <p>条款库：系统预置 10 套标准租约条款模板（SHINC、SHEX、WWD、WWDSHEX 等），可保存租家定制条款；计算时参数自动填入。</p>
+          <p class="muted" style="margin-bottom:0">计算书可直接打印为 PDF（含公司抬头），支持批量导出 Excel。</p>
         </div>
         <div class="step">
           <h3>港口使费、燃油、发票</h3>
@@ -346,6 +349,7 @@
           <h3>数据看板</h3>
           <ol>
             <li>打开 <span class="path">/dashboards</span>，按角色进入指挥墙；支持全屏与定时刷新。</li>
+            <li>船队孪生（Twin）支持 what-if 推演；市场数据面板提供运价与油价参考。</li>
           </ol>
         </div>
       </section>
@@ -371,9 +375,10 @@
         <h2>8. 全链路自动化测试结果</h2>
         <div class="card ok-box">
           <p><strong>本次执行：</strong> <code>apps/api/tests</code> 全量 pytest</p>
-          <p><strong>结果：47 passed</strong>（约 166s），含：</p>
+          <p><strong>结果：384 passed</strong>（62 个测试文件 / 384 个测试函数），含：</p>
           <ul>
             <li><code>test_full_chain.py</code>：估算计算 → 转租约 → 审批激活 → 航次进行 → 挂靠/午报/SOF → Laytime 定稿 → 索赔 → PDA/FDA → 燃油 → 发票收款与 GL → 市场/排放/分析 → Pool/Risk/Berth → Twin what-if → SelfCheck → 航次完成</li>
+            <li>条款库、性能索赔（performance claims）、后台作业队列（job queue）、Webhooks、可观测性指标等新特性的覆盖</li>
             <li>制裁拦截、状态机非法跳转、身份/SaaS/Office/知识中心/平台运维/冒烟面等</li>
           </ul>
           <p class="muted" style="margin-bottom:0">说明：自动化覆盖的是 API 业务链路正确性；浏览器 UI 请按本手册各角色路径做一次人工走查。</p>
@@ -390,6 +395,8 @@
             <tr><td>6</td><td>发票收款</td><td>财务</td><td>部分付 → 已付 → GL</td></tr>
             <tr><td>7</td><td>控制平面图标卡</td><td>管理员</td><td>图标+标题可点，无「打开→」</td></tr>
             <tr><td>8</td><td>角色数据看板全屏</td><td>管理层</td><td>刷新与全屏正常</td></tr>
+            <tr><td>9</td><td>全局搜索 Ctrl+K</td><td>任意角色</td><td>可搜到船舶、租约、航次等核心数据</td></tr>
+            <tr><td>10</td><td>打印 / PDF 导出</td><td>任意角色</td><td>计算书含公司抬头，PDF 可正常打印</td></tr>
           </tbody>
         </table>
       </section>
@@ -408,7 +415,7 @@
       </section>
 
       <footer>
-        <p>© MariOS · 本手册供内部演练与客户培训使用 · 生成时 pytest <strong>47 passed</strong></p>
+        <p>© MariOS · 本手册供内部演练与客户培训使用 · 生成时 pytest <strong>384 passed</strong></p>
         <p>在线打开：开发环境 <a href="/manual/">/manual/</a> · 打印可用浏览器「打印 → PDF」。</p>
       </footer>
     </article>

@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -133,17 +134,11 @@ export default function VoyagePnlDetailPage() {
         { label: data.voyage_no },
       ]}
     >
-      <div className="panel">
-        <div className="desk-toolbar" style={{ marginBottom: "0.75rem" }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: "1.25rem" }}>
-              {t("page.pnl.voyage_title", "Voyage P&L")} — {data.voyage_no}
-            </h1>
-            <div className="muted" style={{ fontSize: "0.85rem", marginTop: "0.25rem" }}>
-              {data.status} {data.cargo ? `· ${data.cargo}` : ""}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+      <PageHeader
+        title={`${t("page.pnl.voyage_title", "Voyage P&L")} — ${data.voyage_no}`}
+        subtitle={`${data.status} ${data.cargo ? `· ${data.cargo}` : ""}`}
+        actions={
+          <>
             <div className="btn-group">
               <button
                 className={`btn btn-sm${grossNet === "gross" ? " btn-primary" : ""}`}
@@ -163,8 +158,10 @@ export default function VoyagePnlDetailPage() {
             <button className="btn btn-sm btn-ghost" type="button" onClick={load}>
               {t("common.refresh", "Refresh")}
             </button>
-          </div>
-        </div>
+          </>
+        }
+      />
+      <div className="panel">
 
         <div className="pnl-kpi-row">
           <div className="pnl-kpi">

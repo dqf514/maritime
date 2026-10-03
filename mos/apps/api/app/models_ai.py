@@ -12,6 +12,7 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     JSON,
@@ -97,6 +98,7 @@ class AIAgentDefinition(Base):
     model_name: Mapped[str] = mapped_column(
         String(64), default="default"
     )  # which LLM to use
+    temperature: Mapped[float | None] = mapped_column(Float)  # NULL = provider default
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("tenants.id"), index=True

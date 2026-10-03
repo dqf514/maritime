@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -128,21 +129,23 @@ export default function WorkflowsAdminPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.wf.title", "企业工作流")}</h1>
-          <p className="page-sub">
+      <PageHeader
+        title={t("page.wf.title", "企业工作流")}
+        subtitle={
+          <>
             {t(
               "page.wf.sub",
               "配置审批步骤（按角色）。启用后，租约提交审批 / 发票提交审批会进入待办箱。",
             )}{" "}
             <Link href="/workflows/inbox">{t("nav.inbox", "审批待办")}</Link>
-          </p>
-        </div>
-        <button type="button" className="btn btn-primary" onClick={openCreate}>
-          {t("page.wf.create", "新建工作流")}
-        </button>
-      </div>
+          </>
+        }
+        actions={
+          <button type="button" className="btn btn-primary" onClick={openCreate}>
+            {t("page.wf.create", "新建工作流")}
+          </button>
+        }
+      />
       <div className="panel">
         <table className="table">
           <thead>

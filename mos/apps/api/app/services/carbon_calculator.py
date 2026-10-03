@@ -231,3 +231,203 @@ def get_voyage_compliance(db: Session, tenant_id: uuid.UUID, voyage_id: uuid.UUI
         "eu_ets": eu_ets,
         "fueleu": fueleu,
     }
+
+
+# ── IMO 2020 / SOx / ECA sulphur compliance ──
+# MARPOL Annex VI Reg. 14 fuel sulphur limits (% m/m):
+#   global cap 3.50% pre-2020 → 0.50% from 2020-01-01 (IMO 2020)
+#   ECA cap 0.10% since 2015-01-01 (SOx ECA: Baltic / North Sea / North America /
+#   US Caribbean + 中国长三角/珠三角/环渤海 (2019) + 台湾海域 (Taiwan ECA))
+from app.services.fuel_zone_service import (  # noqa: E402
+    ECA_SULFUR_CAP,
+    IMO2020_GLOBAL_SULFUR_CAP,
+    preset_eca_matches,
+    route_eca_matches,
+)
+
+SOX_2015_ECA_CAP = ECA_SULFUR_CAP  # 0.10 — binding since 2015-01-01
+SOX_PRE2020_GLOBAL_CAP = 3.50
+
+# Typical sulphur content by grade (% m/m) — used when no measured sulphur_pct is given.
+FUEL_SULFUR_PCT = {
+    "HSFO": 3.50,
+    "HFO": 3.50,
+    "IFO380": 3.50,
+    "IFO180": 3.50,
+    "VLSFO": 0.50,
+    "LSFO": 0.50,
+    "MGO": 0.10,
+    "MDO": 0.10,
+    "LSMGO": 0.10,
+    "LNG": 0.00,
+    "METHANOL": 0.00,
+    "AMMONIA": 0.00,
+}
+
+
+def _normalize_route(route: Any) -> list[dict]:
+    """Accept [{lat, lon}, ...], [[lat, lon], ...] or a single {lat, lon} point."""
+    if route is None:
+        return []
+    if isinstance(route, dict):
+        route = [route]
+    points: list[dict] = []
+    for item in route:
+        if isinstance(item, dict):
+            lat, lon = item.get("lat"), item.get("lon")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            lat, lon = item[0], item[1]
+        else:
+            continue
+        if lat is None or lon is None:
+            continue
+        points.append({"lat": float(lat), "lon": float(lon)})
+    return points
+
+
+def _fuel_sulfur(fuel_type: str | None, sulfur_pct: float | None) -> float | None:
+    if sulfur_pct is not None:
+        return float(sulfur_pct)
+    if fuel_type:
+        key = str(fuel_type).strip().upper()
+        if key in FUEL_SULFUR_PCT:
+            return FUEL_SULFUR_PCT[key]
+        for name, pct in FUEL_SULFUR_PCT.items():
+            if name in key or key in name:
+                return pct
+    return None
+
+
+def eca_compliance(
+    vessel_id: Any = None,
+    route: Any = None,
+    fuel_type: str | None = None,
+    sulfur_pct: float | None = None,
+    db: Session | None = None,
+) -> dict[str, Any]:
+    """ECA sulphur compliance along a route (含中国长三角/珠三角/环渤海与台湾 ECA).
+
+    In-zone fuel must be ≤ 0.10% sulphur (0.1% since 2015; Chinese ECAs from
+    2019 with 0.10% binding from 2020). ``route`` is a list of {lat, lon} points.
+    """
+    points = _normalize_route(route)
+    sulfur = _fuel_sulfur(fuel_type, sulfur_pct)
+    per_point = route_eca_matches(points)
+    if db is not None:
+        # Merge DB-defined zones (multi-tenant custom zones) with the presets.
+        from app.services.fuel_zone_service import get_zones_at_position
+
+        for entry in per_point:
+            for z in get_zones_at_position(db, entry["lat"], entry["lon"]):
+                if z.get("zone_type") != "eca":
+                    continue
+                if all(z["zone_name"] != e["zone_name"] for e in entry["zones"]):
+                    entry["zones"].append(
+                        {
+                            "zone_name": z["zone_name"],
+                            "zone_type": z["zone_type"],
+                            "fuel_requirements": z.get("fuel_requirements") or {},
+                        }
+                    )
+            entry["in_eca"] = bool(entry["zones"])
+
+    zone_names: list[str] = []
+    for entry in per_point:
+        for z in entry["zones"]:
+            if z["zone_name"] not in zone_names:
+                zone_names.append(z["zone_name"])
+
+    violations: list[str] = []
+    points_in_eca = sum(1 for e in per_point if e["in_eca"])
+    if points_in_eca and sulfur is not None and sulfur > ECA_SULFUR_CAP:
+        violations.append(
+            f"Fuel sulphur {sulfur}% exceeds ECA limit {ECA_SULFUR_CAP}% "
+            f"(zones: {', '.join(zone_names) or 'ECA'})"
+        )
+    return {
+        "vessel_id": str(vessel_id) if vessel_id is not None else None,
+        "fuel_type": fuel_type,
+        "sulfur_pct": sulfur,
+        "eca_sulfur_cap": ECA_SULFUR_CAP,
+        "eca_zones": zone_names,
+        "points_total": len(per_point),
+        "points_in_eca": points_in_eca,
+        "in_eca": points_in_eca > 0,
+        "compliant": not violations,
+        "violations": violations,
+        "route": per_point,
+    }
+
+
+def imo2020_compliance(
+    vessel_id: Any = None,
+    fuel_type: str | None = None,
+    route: Any = None,
+    sulfur_pct: float | None = None,
+    db: Session | None = None,
+) -> dict[str, Any]:
+    """IMO 2020 global 0.50% sulphur cap (+ ECA 0.10% where applicable).
+
+    Non-compliant when the fuel exceeds the 0.50% global cap anywhere, or the
+    0.10% cap inside an ECA (which implies the stricter of the two applies).
+    """
+    points = _normalize_route(route)
+    sulfur = _fuel_sulfur(fuel_type, sulfur_pct)
+    violations: list[str] = []
+    if sulfur is not None and sulfur > IMO2020_GLOBAL_SULFUR_CAP:
+        violations.append(
+            f"Fuel sulphur {sulfur}% exceeds IMO 2020 global cap {IMO2020_GLOBAL_SULFUR_CAP}%"
+        )
+    eca = eca_compliance(vessel_id=vessel_id, route=points, fuel_type=fuel_type, sulfur_pct=sulfur, db=db)
+    violations.extend(eca["violations"])
+    # Deduplicate while keeping order
+    seen: set[str] = set()
+    uniq = [v for v in violations if not (v in seen or seen.add(v))]
+    return {
+        "vessel_id": str(vessel_id) if vessel_id is not None else None,
+        "fuel_type": fuel_type,
+        "sulfur_pct": sulfur,
+        "global_cap": IMO2020_GLOBAL_SULFUR_CAP,
+        "eca_cap": ECA_SULFUR_CAP,
+        "imo2020_compliant": not uniq,
+        "compliant": not uniq,
+        "violations": uniq,
+        "eca": eca,
+    }
+
+
+def sox_compliance(
+    vessel_id: Any = None,
+    fuel_type: str | None = None,
+    route: Any = None,
+    sulfur_pct: float | None = None,
+    year: int = 2020,
+    db: Session | None = None,
+) -> dict[str, Any]:
+    """SOx (MARPOL Annex VI Reg. 14) compliance for a voyage year.
+
+    2015 rules: ECA sulphur cap 0.10% (from 2015-01-01). The global cap is
+    3.50% before 2020 and 0.50% from 2020 (IMO 2020).
+    """
+    points = _normalize_route(route)
+    sulfur = _fuel_sulfur(fuel_type, sulfur_pct)
+    global_cap = IMO2020_GLOBAL_SULFUR_CAP if int(year) >= 2020 else SOX_PRE2020_GLOBAL_CAP
+    violations: list[str] = []
+    if sulfur is not None and sulfur > global_cap:
+        violations.append(f"Fuel sulphur {sulfur}% exceeds global cap {global_cap}% for year {year}")
+    eca = eca_compliance(vessel_id=vessel_id, route=points, fuel_type=fuel_type, sulfur_pct=sulfur, db=db)
+    violations.extend(eca["violations"])
+    seen: set[str] = set()
+    uniq = [v for v in violations if not (v in seen or seen.add(v))]
+    return {
+        "vessel_id": str(vessel_id) if vessel_id is not None else None,
+        "fuel_type": fuel_type,
+        "sulfur_pct": sulfur,
+        "year": int(year),
+        "global_cap": global_cap,
+        "eca_cap": SOX_2015_ECA_CAP,
+        "compliant": not uniq,
+        "violations": uniq,
+        "eca_zones": eca["eca_zones"],
+        "in_eca": eca["in_eca"],
+    }

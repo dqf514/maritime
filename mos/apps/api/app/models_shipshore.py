@@ -19,6 +19,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -52,10 +53,10 @@ class ShipTerminal(Base):
         String(16), default="active"
     )  # active | inactive | maintenance
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
 
 
@@ -87,10 +88,10 @@ class ShipForm(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
 
 
@@ -123,7 +124,7 @@ class ShipReport(Base):
         String(64), nullable=False, unique=True
     )  # e.g. NR-20260923-001
     submitted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
     submitted_by: Mapped[str] = mapped_column(String(128))  # ship user name/rank
     data_json: Mapped[dict] = mapped_column(JSON, default=dict)  # form field values
@@ -142,8 +143,8 @@ class ShipReport(Base):
         String(16), default="synced"
     )  # synced | pending | conflict
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="now()"
+        DateTime(timezone=True), server_default=func.now()
     )

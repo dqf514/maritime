@@ -33,8 +33,9 @@ def _point_in_polygon(lat: float, lon: float, polygon: list[list[list[float]]]) 
         for i in range(n):
             xi, yi = ring[i][0], ring[i][1]  # lon, lat
             xj, yj = ring[j][0], ring[j][1]
-            if ((yi > lon) != (yj > lon)) and (
-                lat < (xj - xi) * (lon - yi) / (yj - yi) + xi
+            # Ray cast in +lon direction at the query latitude (py=lat, px=lon).
+            if ((yi > lat) != (yj > lat)) and (
+                lon < (xj - xi) * (lat - yi) / (yj - yi) + xi
             ):
                 inside = not inside
             j = i
@@ -251,6 +252,37 @@ NORTH_SEA_ECA_GEOMETRY = {
     ]],
 }
 
+# 中国沿海船舶排放控制区（长三角/珠三角/环渤海，2019-01-01 起实施，0.1% 硫限值
+# —— 2019 为 0.5% 过渡限值，2020 起全区 0.1%）。几何为示意多边形（覆盖核心水域）。
+CHINA_YANGTZE_ECA_GEOMETRY = {
+    "type": "Polygon",
+    "coordinates": [[
+        [118.0, 27.0], [123.5, 27.0], [123.5, 33.5], [118.0, 33.5], [118.0, 27.0]
+    ]],
+}
+
+CHINA_PEARL_RIVER_ECA_GEOMETRY = {
+    "type": "Polygon",
+    "coordinates": [[
+        [110.0, 20.0], [117.5, 20.0], [117.5, 24.5], [110.0, 24.5], [110.0, 20.0]
+    ]],
+}
+
+CHINA_BOHAI_ECA_GEOMETRY = {
+    "type": "Polygon",
+    "coordinates": [[
+        [117.0, 37.0], [122.5, 37.0], [122.5, 41.0], [117.0, 41.0], [117.0, 37.0]
+    ]],
+}
+
+# 台湾海域排放控制区（ECA）——示意多边形，覆盖台湾本岛周边水域。
+TAIWAN_ECA_GEOMETRY = {
+    "type": "Polygon",
+    "coordinates": [[
+        [118.0, 20.5], [123.5, 20.5], [123.5, 26.5], [118.0, 26.5], [118.0, 20.5]
+    ]],
+}
+
 EU_ETS_GEOMETRY = {
     "type": "MultiPolygon",
     "coordinates": [
@@ -258,9 +290,106 @@ EU_ETS_GEOMETRY = {
     ],
 }
 
+# IMO 2020 全球硫限值（MARPOL Annex VI Reg. 14）：0.50% m/m 全球上限，
+# ECA 内仍为 0.10%（2015-01-01 起）。
+IMO2020_GLOBAL_SULFUR_CAP = 0.50
+ECA_SULFUR_CAP = 0.10
+
+# ECA 预置（纯函数检测用，与 seed_preset_zones 同源）
+PRESET_ECA_ZONES = [
+    {
+        "zone_name": "Baltic Sea ECA",
+        "zone_type": "eca",
+        "geometry": BALTIC_ECA_GEOMETRY,
+        "fuel_requirements": {"sulfur_max": ECA_SULFUR_CAP, "fuel_type": "MGO"},
+        "effective_from": "2010-07-01",
+        "description": "Baltic Sea Emission Control Area — 0.1% sulfur limit",
+    },
+    {
+        "zone_name": "North Sea ECA",
+        "zone_type": "eca",
+        "geometry": NORTH_SEA_ECA_GEOMETRY,
+        "fuel_requirements": {"sulfur_max": ECA_SULFUR_CAP, "fuel_type": "MGO"},
+        "effective_from": "2007-11-22",
+        "description": "North Sea Emission Control Area — 0.1% sulfur limit",
+    },
+    {
+        "zone_name": "China Yangtze River Delta ECA",
+        "zone_type": "eca",
+        "geometry": CHINA_YANGTZE_ECA_GEOMETRY,
+        "fuel_requirements": {"sulfur_max": ECA_SULFUR_CAP},
+        "effective_from": "2019-01-01",
+        "description": "中国长三角船舶排放控制区（2019-01-01 生效，2020 起 0.1% 硫限值）",
+    },
+    {
+        "zone_name": "China Pearl River Delta ECA",
+        "zone_type": "eca",
+        "geometry": CHINA_PEARL_RIVER_ECA_GEOMETRY,
+        "fuel_requirements": {"sulfur_max": ECA_SULFUR_CAP},
+        "effective_from": "2019-01-01",
+        "description": "中国珠三角船舶排放控制区（2019-01-01 生效，2020 起 0.1% 硫限值）",
+    },
+    {
+        "zone_name": "China Bohai Rim ECA",
+        "zone_type": "eca",
+        "geometry": CHINA_BOHAI_ECA_GEOMETRY,
+        "fuel_requirements": {"sulfur_max": ECA_SULFUR_CAP},
+        "effective_from": "2019-01-01",
+        "description": "中国环渤海船舶排放控制区（2019-01-01 生效，2020 起 0.1% 硫限值）",
+    },
+    {
+        "zone_name": "Taiwan ECA",
+        "zone_type": "eca",
+        "geometry": TAIWAN_ECA_GEOMETRY,
+        "fuel_requirements": {"sulfur_max": ECA_SULFUR_CAP},
+        "effective_from": "2019-01-01",
+        "description": "台湾海域排放控制区 (Taiwan ECA) — 0.1% sulfur limit",
+    },
+]
+
+
+def preset_eca_matches(lat: float, lon: float) -> list[dict]:
+    """Pure (DB-free) preset ECA lookup — used by IMO 2020 / SOx compliance checks."""
+    matches = []
+    for zone in PRESET_ECA_ZONES:
+        if _point_in_zone(lat, lon, zone.get("geometry") or {}):
+            matches.append(
+                {
+                    "zone_name": zone["zone_name"],
+                    "zone_type": zone["zone_type"],
+                    "fuel_requirements": zone.get("fuel_requirements") or {},
+                    "effective_from": zone.get("effective_from"),
+                }
+            )
+    return matches
+
+
+def route_eca_matches(route_points: list[dict]) -> list[dict]:
+    """ECA detection along a route: [{lat, lon}, ...] → per-point matched zones.
+
+    Combines preset zones (always) with DB-defined zones (when present in the
+    geometry library — pass points through get_zones_at_position for DB-only).
+    """
+    out: list[dict] = []
+    for i, point in enumerate(route_points or []):
+        lat, lon = point.get("lat"), point.get("lon")
+        if lat is None or lon is None:
+            continue
+        zones = preset_eca_matches(float(lat), float(lon))
+        out.append(
+            {
+                "index": i,
+                "lat": float(lat),
+                "lon": float(lon),
+                "in_eca": bool(zones),
+                "zones": zones,
+            }
+        )
+    return out
+
 
 def seed_preset_zones(db: Session):
-    """Seed preset fuel zones (Baltic ECA, North Sea ECA, EU ETS)."""
+    """Seed preset fuel zones (IMO/China/Taiwan ECAs + EU ETS)."""
     presets = [
         {
             "zone_name": "Baltic Sea ECA",
@@ -275,6 +404,38 @@ def seed_preset_zones(db: Session):
             "geometry": NORTH_SEA_ECA_GEOMETRY,
             "fuel_requirements": {"sulfur_max": 0.1, "fuel_type": "MGO"},
             "description": "North Sea Emission Control Area — 0.1% sulfur limit",
+        },
+        {
+            "zone_name": "China Yangtze River Delta ECA",
+            "zone_type": "eca",
+            "geometry": CHINA_YANGTZE_ECA_GEOMETRY,
+            "fuel_requirements": {"sulfur_max": 0.1},
+            "effective_from": "2019-01-01",
+            "description": "中国长三角船舶排放控制区（2019-01-01 生效）— 0.1% sulfur limit",
+        },
+        {
+            "zone_name": "China Pearl River Delta ECA",
+            "zone_type": "eca",
+            "geometry": CHINA_PEARL_RIVER_ECA_GEOMETRY,
+            "fuel_requirements": {"sulfur_max": 0.1},
+            "effective_from": "2019-01-01",
+            "description": "中国珠三角船舶排放控制区（2019-01-01 生效）— 0.1% sulfur limit",
+        },
+        {
+            "zone_name": "China Bohai Rim ECA",
+            "zone_type": "eca",
+            "geometry": CHINA_BOHAI_ECA_GEOMETRY,
+            "fuel_requirements": {"sulfur_max": 0.1},
+            "effective_from": "2019-01-01",
+            "description": "中国环渤海船舶排放控制区（2019-01-01 生效）— 0.1% sulfur limit",
+        },
+        {
+            "zone_name": "Taiwan ECA",
+            "zone_type": "eca",
+            "geometry": TAIWAN_ECA_GEOMETRY,
+            "fuel_requirements": {"sulfur_max": 0.1},
+            "effective_from": "2019-01-01",
+            "description": "台湾海域排放控制区 (Taiwan ECA) — 0.1% sulfur limit",
         },
         {
             "zone_name": "EU ETS Zone",

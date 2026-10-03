@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -50,13 +51,13 @@ export default function BillingPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.billing.title", "订阅与用量")}</h1>
-      <p className="page-sub">
-        {t(
+      <PageHeader
+        title={t("page.billing.title", "订阅与用量")}
+        subtitle={t(
           "page.billing.sub_readonly",
           "查看当前套餐与用量。订阅与充值由平台管理员开通；线上支付开通后再支持自助下单。",
         )}
-      </p>
+      />
 
       <div className="panel" style={{ borderLeft: "3px solid var(--accent, #1A9B96)" }}>
         <p style={{ margin: 0 }}>

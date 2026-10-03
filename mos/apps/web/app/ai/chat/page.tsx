@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -120,7 +121,8 @@ export default function AiChatPage() {
   const agent = agents.find((a) => a.agent_name === selectedAgent);
 
   return (
-    <AppShell title="MariAI Chat">
+    <AppShell>
+      <PageHeader title="MariAI Chat" />
       <div className="space-y-4">
 
         <div className="flex gap-4">

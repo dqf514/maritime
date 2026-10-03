@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { ExportButton } from "@/components/ExportButton";
 import { LookupSelect } from "@/components/LookupSelect";
 import { PageGuide } from "@/components/PageGuide";
@@ -93,19 +94,19 @@ export default function VesselsPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.vessels.title", "Vessels")}</h1>
-          <p className="page-sub">{t("page.vessels.sub", "Fleet master data. Open a row to edit or delete.")}</p>
-        </div>
-        <div className="quick-row">
-          <ExportButton entity="vessels" />
-          <PageGuide pageKey="masterdata_vessels" />
-          <Link href="/settings/recycle" className="btn btn-ghost">
-            {t("nav.recycle", "Recycle bin")}
-          </Link>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.vessels.title", "Vessels")}
+        subtitle={t("page.vessels.sub", "Fleet master data. Open a row to edit or delete.")}
+        actions={
+          <>
+            <ExportButton entity="vessels" />
+            <PageGuide pageKey="masterdata_vessels" />
+            <Link href="/settings/recycle" className="btn btn-ghost">
+              {t("nav.recycle", "Recycle bin")}
+            </Link>
+          </>
+        }
+      />
       <form
         className="panel"
         onSubmit={(e) => onCreate(e).catch(() => toast.success(t("page.vessels.create_fail", "Create failed")))}

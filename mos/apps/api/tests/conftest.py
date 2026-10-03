@@ -22,6 +22,7 @@ os.environ["MARIOS_LLM_OFF"] = "1"  # 测试零网络：LLM 抽取熔断（mock 
 from app.db import Base, get_db  # noqa: E402
 import app.models  # noqa: E402, F401
 import app.models_wave1  # noqa: E402, F401
+import app.models_vessel_ext  # noqa: E402, F401
 import app.models_domain  # noqa: E402, F401
 import app.models_saas  # noqa: E402, F401
 import app.models_ship  # noqa: E402, F401
@@ -40,6 +41,13 @@ import app.models_ai  # noqa: E402, F401
 import app.models_report  # noqa: E402, F401
 import app.models_jobs  # noqa: E402, F401
 import app.models_clause  # noqa: E402, F401
+import app.models_cargo  # noqa: E402, F401
+import app.models_rates  # noqa: E402, F401
+import app.models_coa  # noqa: E402, F401
+import app.models_trading  # noqa: E402, F401
+import app.models_pooling  # noqa: E402, F401
+import app.models_lightering  # noqa: E402, F401
+import app.models_reference_ext  # noqa: E402, F401
 from app.main import app as fastapi_app  # noqa: E402
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo  # noqa: E402
 from app.seed_demo_flow import seed_full_demo_flow  # noqa: E402
@@ -47,6 +55,8 @@ from app.seed_i18n import seed_i18n  # noqa: E402
 from app.services.platform_ops import bootstrap_ops_catalog  # noqa: E402
 from app.services.reference_data import seed_reference_catalog
 from app.services.clause_library import seed_clause_pack  # noqa: E402
+from app.services.report_builder import seed_report_datasets  # noqa: E402
+from app.services.config_service import seed_config_flag_presets  # noqa: E402
 
 
 @pytest.fixture()
@@ -77,6 +87,8 @@ def db_engine():
         bootstrap_ops_catalog(db)
         seed_reference_catalog(db)
         seed_clause_pack(db)
+        seed_report_datasets(db)
+        seed_config_flag_presets(db)
         db.commit()
     yield engine
     Base.metadata.drop_all(bind=engine)

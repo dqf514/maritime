@@ -13,7 +13,8 @@ from app.db import get_db
 from app.models_shipshore import ShipTerminal, ShipForm, ShipReport
 from app.services import marilink
 
-router = APIRouter(prefix="/api/v1/marilink", tags=["marilink"])
+# 无自前缀：main.py 以 /api/v1 统一挂载（此前双前缀导致路由落在 /api/v1/api/v1/marilink/...，前端调不通）
+router = APIRouter(prefix="/marilink", tags=["marilink"])
 
 
 # ── Terminal Management ──

@@ -441,3 +441,30 @@ def compute_laytime_statement(inputs: dict[str, Any]) -> dict[str, Any]:
     if _is_multi(inputs):
         return _compute_multi(inputs, warnings, include_events=True)
     return _compute_single(inputs, warnings, include_events=True)
+
+
+def settle_with_on_account(
+    demurrage_amount: Decimal | float | str,
+    on_account_amounts: list[Decimal | float | str] | tuple[Decimal | float | str, ...] = (),
+) -> dict[str, Any]:
+    """Demurrage on account settlement (预付滞期冲抵)。
+
+    on-account payments made during the voyage are credited against the final
+    demurrage amount: outstanding = max(demurrage − on_account_total, 0);
+    anything beyond the final amount is reported as overpaid (to be refunded or
+    offset elsewhere).
+    """
+    dem = Decimal(str(demurrage_amount or 0)).quantize(Decimal("0.01"))
+    if dem < 0:
+        # despatch / negative balances have no demurrage to credit against
+        dem = Decimal("0.00")
+    total = sum((Decimal(str(a or 0)) for a in on_account_amounts), Decimal("0")).quantize(Decimal("0.01"))
+    outstanding = max(dem - total, Decimal("0.00"))
+    overpaid = max(total - dem, Decimal("0.00"))
+    return {
+        "demurrage_amount": float(dem),
+        "on_account_total": float(total),
+        "outstanding": float(outstanding),
+        "overpaid": float(overpaid),
+        "settled": outstanding == 0,
+    }

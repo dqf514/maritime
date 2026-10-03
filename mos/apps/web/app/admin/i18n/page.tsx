@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -48,14 +49,13 @@ export default function TenantI18nPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("i18n.page_title", "Languages & terminology")}</h1>
-      <p className="page-sub">
-        {t(
+      <PageHeader
+        title={t("i18n.page_title", "Languages & terminology")}
+        subtitle={`${t(
           "i18n.page_sub",
           "Tenant policy for default UI language and local overrides of maritime terms (e.g. company-preferred)",
-        )}{" "}
-        {term("term.tce", "TCE")} {t("i18n.page_sub_end", "wording).")}
-      </p>
+        )} ${term("term.tce", "TCE")} ${t("i18n.page_sub_end", "wording).")}`}
+      />
 
       {settings ? (
         <form className="panel" onSubmit={(e) => saveSettings(e).catch(() => toast.success(t("common.failed", "Failed")))}>

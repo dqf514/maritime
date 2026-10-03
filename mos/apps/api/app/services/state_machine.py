@@ -79,6 +79,16 @@ BUNKER_TRANSITIONS = {
     "cancelled": set(),
 }
 
+# 加油需求采购链：draft→approved→tendering→ordered→fulfilled（draft 亦可直接招标）。
+BUNKER_REQUIREMENT_TRANSITIONS = {
+    "draft": {"approved", "tendering", "ordered", "cancelled"},
+    "approved": {"tendering", "ordered", "cancelled"},
+    "tendering": {"ordered", "cancelled"},
+    "ordered": {"fulfilled", "cancelled"},
+    "fulfilled": set(),
+    "cancelled": set(),
+}
+
 OFFHIRE_TRANSITIONS = {
     "open": {"closed"},
     "closed": set(),
@@ -92,10 +102,58 @@ COA_LIFTING_TRANSITIONS = {
     "withdrawn": set(),
 }
 
+# 货盘生命周期 (Phase 3 Cargo): open→booked→nominated→fixed→completed;
+# cancelled 只在早期状态 (open/booked/nominated) 允许, fixed 之后只能走向 completed。
+CARGO_TRANSITIONS = {
+    "open": {"booked", "cancelled"},
+    "booked": {"nominated", "cancelled"},
+    "nominated": {"fixed", "cancelled"},
+    "fixed": {"completed"},
+    "completed": set(),
+    "cancelled": set(),
+}
+
 CHARTER_AMENDMENT_TRANSITIONS = {
     "proposed": {"approved", "rejected"},
     "approved": set(),
     "rejected": set(),
+}
+
+# Phase 6 COA — CoaContract lifecycle: draft → active → completed;
+# cancel allowed from any early state. Lifting allocation is only meaningful
+# while the contract is active (enforced in services/coa.py).
+COA_CONTRACT_TRANSITIONS = {
+    "draft": {"active", "cancelled"},
+    "active": {"completed", "cancelled"},
+    "completed": set(),
+    "cancelled": set(),
+}
+
+# Phase 7 Trading — Trade lifecycle: draft → confirmed → settled | cancelled;
+# cancel is only legal before settlement.
+TRADE_TRANSITIONS = {
+    "draft": {"confirmed", "cancelled"},
+    "confirmed": {"settled", "cancelled"},
+    "settled": set(),
+    "cancelled": set(),
+}
+
+# Phase 5 TC depth — TimeCharterContract lifecycle (draft → active → completed;
+# cancel allowed from any early state).
+TIME_CHARTER_TRANSITIONS = {
+    "draft": {"active", "cancelled"},
+    "active": {"completed", "cancelled"},
+    "completed": set(),
+    "cancelled": set(),
+}
+
+# HireStatement lifecycle: draft → sent → approved → paid → void.
+HIRE_STATEMENT_TRANSITIONS = {
+    "draft": {"sent", "void"},
+    "sent": {"approved", "void"},
+    "approved": {"paid", "void"},
+    "paid": {"void"},
+    "void": set(),
 }
 
 PDA_TRANSITIONS = {

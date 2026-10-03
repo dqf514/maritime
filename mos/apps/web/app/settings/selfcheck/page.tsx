@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiRunSelfCheck } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -30,11 +31,15 @@ export default function SelfCheckPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.selfcheck.title", "SelfCheck")}</h1>
-      <p style={{ color: "var(--muted)" }}>{t("page.selfcheck.sub", "Install & runtime diagnostics.")}</p>
-      <button className="btn btn-primary" type="button" onClick={run} disabled={loading}>
-        {loading ? t("page.selfcheck.running", "Running…") : t("page.selfcheck.run", "Run SelfCheck")}
-      </button>
+      <PageHeader
+        title={t("page.selfcheck.title", "SelfCheck")}
+        subtitle={t("page.selfcheck.sub", "Install & runtime diagnostics.")}
+        actions={
+          <button className="btn btn-primary" type="button" onClick={run} disabled={loading}>
+            {loading ? t("page.selfcheck.running", "Running…") : t("page.selfcheck.run", "Run SelfCheck")}
+          </button>
+        }
+      />
       {error ? <p style={{ color: "var(--danger)" }}>{error}</p> : null}
       {score !== null ? (
         <div className="panel">

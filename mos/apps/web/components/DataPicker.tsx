@@ -77,6 +77,7 @@ export function DataPicker({
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<PickerItem[]>(preload || []);
   const [open, setOpen] = useState(false);
+  const [kbdIndex, setKbdIndex] = useState(-1);
   const [selected, setSelected] = useState<PickerItem | null>(
     () => preload?.find((x) => x.id === value) || recentGet(storeKey).find((x) => x.id === value) || null,
   );
@@ -140,6 +141,7 @@ export function DataPicker({
 
   const recents = query ? [] : recentGet(storeKey).filter((r) => !items.some((i) => i.id === r.id));
   const list = [...recents, ...items];
+  const totalItems = list.length + (allowEmpty ? 1 : 0);
 
   return (
     <div className="data-picker" ref={boxRef}>
@@ -160,13 +162,41 @@ export function DataPicker({
         disabled={disabled}
         required={required && !selected}
         onKeyDown={(e) => {
-          if (e.key === "Escape") setOpen(false);
-          if (e.key === "Enter" && open && list[0]) {
+          if (e.key === "Escape") { setOpen(false); setKbdIndex(-1); return; }
+          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
             e.preventDefault();
-            onChange(list[0].id, list[0]);
-            setSelected(list[0]);
-            recentPush(storeKey, list[0]);
-            setOpen(false);
+            setOpen(true);
+            setKbdIndex(0);
+            return;
+          }
+          if (!open) return;
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setKbdIndex((i) => (i + 1) % totalItems);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setKbdIndex((i) => (i <= 0 ? totalItems - 1 : i - 1));
+          } else if (e.key === "Home") {
+            e.preventDefault();
+            setKbdIndex(0);
+          } else if (e.key === "End") {
+            e.preventDefault();
+            setKbdIndex(totalItems - 1);
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (allowEmpty && kbdIndex === 0) {
+              setSelected(null); setQuery(""); onChange(""); setOpen(false); setKbdIndex(-1);
+            } else {
+              const itemIdx = kbdIndex - (allowEmpty ? 1 : 0);
+              const item = list[itemIdx >= 0 ? itemIdx : 0];
+              if (item) {
+                onChange(item.id, item);
+                setSelected(item);
+                recentPush(storeKey, item);
+                setOpen(false);
+                setKbdIndex(-1);
+              }
+            }
           }
         }}
       />
@@ -189,33 +219,38 @@ export function DataPicker({
           {allowEmpty ? (
             <button
               type="button"
-              className="data-picker-item muted"
+              className={`data-picker-item muted${kbdIndex === 0 ? " kbd-active" : ""}`}
               onClick={() => {
                 setSelected(null);
                 setQuery("");
                 onChange("");
                 setOpen(false);
+                setKbdIndex(-1);
               }}
             >
               {emptyLabel || t("common.select", "Select…")}
             </button>
           ) : null}
-          {list.map((it) => (
-            <button
-              key={it.id}
-              type="button"
-              className={`data-picker-item${it.id === value ? " active" : ""}`}
-              onClick={() => {
-                setSelected(it);
-                onChange(it.id, it);
-                recentPush(storeKey, it);
-                setOpen(false);
-              }}
-            >
-              <span>{it.label}</span>
-              {it.sublabel ? <span className="muted">{it.sublabel}</span> : null}
-            </button>
-          ))}
+          {list.map((it, idx) => {
+            const kbdIdx = idx + (allowEmpty ? 1 : 0);
+            return (
+              <button
+                key={it.id}
+                type="button"
+                className={`data-picker-item${it.id === value ? " active" : ""}${kbdIndex === kbdIdx ? " kbd-active" : ""}`}
+                onClick={() => {
+                  setSelected(it);
+                  onChange(it.id, it);
+                  recentPush(storeKey, it);
+                  setOpen(false);
+                  setKbdIndex(-1);
+                }}
+              >
+                <span>{it.label}</span>
+                {it.sublabel ? <span className="muted">{it.sublabel}</span> : null}
+              </button>
+            );
+          })}
           {!list.length ? <div className="data-picker-item muted">{t("common.empty", "No records")}</div> : null}
         </div>
       ) : null}

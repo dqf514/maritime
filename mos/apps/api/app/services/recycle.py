@@ -26,6 +26,7 @@ DEFAULT_RESTORE_STATUS: dict[str, str] = {
     "invoice": "draft",
     "claim": "open",
     "laytime": "draft",
+    "cargo": "open",
 }
 
 

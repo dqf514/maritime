@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { apiDelete, apiGet, apiPatch, apiPost, generateTempPassword } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -171,20 +172,22 @@ export default function UsersAdminPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.users.title", "用户与角色")}</h1>
-          <p className="page-sub">
+      <PageHeader
+        title={t("page.users.title", "用户与角色")}
+        subtitle={
+          <>
             {t("page.users.sub", "点击用户行打开编辑。一人可同时拥有多个业务角色，并归属到组织部门。")}{" "}
             <Link href="/admin/org">{t("page.org.title", "组织架构")}</Link>
             {" · "}
             <Link href="/admin/security">{t("page.security.title", "登录与安全")}</Link>
-          </p>
-        </div>
-        <Link href="/settings/recycle" className="btn btn-ghost">
-          {t("nav.recycle", "回收站")}
-        </Link>
-      </div>
+          </>
+        }
+        actions={
+          <Link href="/settings/recycle" className="btn btn-ghost">
+            {t("nav.recycle", "回收站")}
+          </Link>
+        }
+      />
       {initialPw ? (
         <p className="flash">
           {t("page.users.pw_ready", "初始密码已生成（仅此一次，复制后即不再显示）。")}{" "}

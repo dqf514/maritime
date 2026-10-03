@@ -15,9 +15,18 @@ from app.db import get_db
 from app.pagination import envelope, paginate
 from app.security import AuthContext, require_module
 
-from app.models_domain import Charter, Claim, Invoice, LaytimeCalc, NoonReport, PortCall, Voyage
+from app.models_domain import Charter, Claim, ClaimAction, Invoice, LaytimeCalc, NoonReport, PortCall, Voyage
+from app.models_task import Task
 from app.models_wave1 import CounterpartyContact
-from app.services.claim_taxonomy import CLAIM_TYPES, assert_claim_type
+from app.services.claim_taxonomy import (
+    CLAIM_TYPES,
+    assert_claim_action,
+    assert_claim_subtype,
+    assert_claim_type,
+    claim_types_payload,
+    default_time_bar_days,
+    is_valid_claim_subtype,
+)
 from app.services.doc_numbering import next_doc_number
 from app.services.performance_engine import compute_performance
 from app.services.recycle import soft_delete
@@ -35,6 +44,7 @@ router = APIRouter()
 # —— Claims ——
 class ClaimIn(BaseModel):
     claim_type: str = "demurrage"
+    subtype: str | None = None
     contact_id: UUID | None = None
     voyage_id: UUID | None = None
     laytime_id: UUID | None = None
@@ -47,13 +57,15 @@ class ClaimIn(BaseModel):
 
 @router.get("/claims/types")
 def list_claim_types(auth: AuthContext = Depends(require_module("claims"))):
-    """索赔分类字典（D10）：前端类型选择器数据源。"""
-    return {"items": [{"code": code, **meta} for code, meta in CLAIM_TYPES.items()]}
+    """索赔分类字典（D10）：类型 + 子类 + 处置动作，前端选择器数据源。"""
+    return claim_types_payload()
 
 
 @router.post("/claims")
 def create_claim(body: ClaimIn, auth: AuthContext = Depends(require_module("claims")), db: Session = Depends(get_db)):
     assert_claim_type(body.claim_type)
+    if body.subtype is not None:
+        assert_claim_subtype(body.claim_type, body.subtype)
     if body.voyage_id is not None and scoped_get(db, Voyage, body.voyage_id, auth.tenant_id) is None:
         raise HTTPException(404, "Voyage not found")
     if body.laytime_id is not None and scoped_get(db, LaytimeCalc, body.laytime_id, auth.tenant_id) is None:
@@ -83,6 +95,7 @@ def create_claim(body: ClaimIn, auth: AuthContext = Depends(require_module("clai
         tenant_id=auth.tenant_id,
         claim_no=f"CL-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:5].upper()}",
         claim_type=body.claim_type,
+        subtype=body.subtype,
         voyage_id=body.voyage_id,
         laytime_id=body.laytime_id,
         amount=amount,
@@ -99,6 +112,7 @@ def create_claim(body: ClaimIn, auth: AuthContext = Depends(require_module("clai
         "id": str(row.id),
         "claim_no": row.claim_no,
         "claim_type": row.claim_type,
+        "subtype": row.subtype,
         "status": row.status,
         "amount": float(row.amount or 0),
         "time_bar": row.time_bar.isoformat() if row.time_bar else None,
@@ -131,6 +145,7 @@ class ClaimUpdate(BaseModel):
     amount: float | None = None
     notes: str | None = None
     claim_type: str | None = None
+    subtype: str | None = None
     deductions: dict | list | None = None
     contact_id: UUID | None = None
 
@@ -151,6 +166,13 @@ def update_claim(
         row.notes = body.notes
     if body.claim_type is not None:
         row.claim_type = assert_claim_type(body.claim_type)
+        if body.subtype is None and row.subtype and not is_valid_claim_subtype(row.claim_type, row.subtype):
+            # 类型变更后原子类若不归属新类型则清空
+            row.subtype = None
+    if body.subtype == "":
+        row.subtype = None
+    elif body.subtype is not None:
+        row.subtype = assert_claim_subtype(row.claim_type, body.subtype)
     if body.deductions is not None:
         row.deductions = body.deductions
     if body.contact_id is not None:
@@ -199,6 +221,7 @@ def list_claims(
                 "id": str(r.id),
                 "claim_no": r.claim_no,
                 "claim_type": r.claim_type,
+                "subtype": r.subtype,
                 "contact_id": str(r.contact_id) if r.contact_id else None,
                 "status": r.status,
                 "amount": float(r.amount or 0),
@@ -229,10 +252,11 @@ def get_claim(
         "id": str(r.id),
         "claim_no": r.claim_no,
         "claim_type": r.claim_type,
+        "subtype": r.subtype,
         "status": r.status,
         "contact": (
             {"id": str(ct.id), "name": ct.name, "email": ct.email, "phone": ct.phone}
-            if (ct := db.get(CounterpartyContact, r.contact_id)) is not None
+            if r.contact_id is not None and (ct := db.get(CounterpartyContact, r.contact_id)) is not None
             else None
         ),
         "amount": float(r.amount or 0),
@@ -339,5 +363,125 @@ def claim_to_invoice(claim_id: UUID, auth: AuthContext = Depends(require_module(
     db.add(inv)
     db.commit()
     return {"id": str(inv.id), "invoice_no": inv.invoice_no, "status": inv.status, "amount": float(inv.amount), "claim_id": str(row.id)}
+
+
+# —— 索赔处置动作（negotiate/litigate/arbitrate/settle/write_off） ——
+
+
+class ClaimActionIn(BaseModel):
+    action_type: str
+    action_date: date | None = None
+    notes: str | None = None
+    result: str | None = None
+
+
+def _claim_action_out(a: ClaimAction) -> dict:
+    return {
+        "id": str(a.id),
+        "claim_id": str(a.claim_id),
+        "action_type": a.action_type,
+        "action_date": a.action_date.isoformat() if a.action_date else None,
+        "notes": a.notes,
+        "result": a.result,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+    }
+
+
+@router.get("/claims/{claim_id}/actions")
+def list_claim_actions(
+    claim_id: UUID,
+    auth: AuthContext = Depends(require_module("claims")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, Claim, claim_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Claim not found")
+    rows = db.scalars(
+        select(ClaimAction)
+        .where(ClaimAction.tenant_id == auth.tenant_id, ClaimAction.claim_id == claim_id)
+        .order_by(ClaimAction.created_at)
+    ).all()
+    return {"items": [_claim_action_out(a) for a in rows]}
+
+
+@router.post("/claims/{claim_id}/actions", status_code=201)
+def add_claim_action(
+    claim_id: UUID,
+    body: ClaimActionIn,
+    auth: AuthContext = Depends(require_module("claims")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(Claim, claim_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Claim not found")
+    assert_claim_action(body.action_type)
+    action = ClaimAction(
+        tenant_id=auth.tenant_id,
+        claim_id=claim_id,
+        action_type=body.action_type,
+        action_date=body.action_date or datetime.now(timezone.utc).date(),
+        notes=body.notes,
+        result=body.result,
+    )
+    db.add(action)
+    # settle 动作自动推进索赔状态（若仍 open/negotiating）
+    if body.action_type == "settle" and row.status in ("open", "negotiating"):
+        row.status = transition("claim", row.status, "settled", CLAIM_TRANSITIONS)
+    db.commit()
+    db.refresh(action)
+    return _claim_action_out(action)
+
+
+@router.post("/claims/{claim_id}/generate-time-bar-task")
+def generate_time_bar_task(
+    claim_id: UUID,
+    auth: AuthContext = Depends(require_module("claims")),
+    db: Session = Depends(get_db),
+):
+    """Generate a follow-up task pinned to the claim's time bar (one open task per claim)."""
+    row = db.get(Claim, claim_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Claim not found")
+    existing = db.scalar(
+        select(Task).where(
+            Task.tenant_id == auth.tenant_id,
+            Task.entity_type == "claim",
+            Task.entity_id == row.id,
+            Task.status.in_(("todo", "in_progress")),
+        )
+    )
+    if existing is not None:
+        return {
+            "id": str(existing.id),
+            "title": existing.title,
+            "status": existing.status,
+            "due_at": existing.due_at.isoformat() if existing.due_at else None,
+            "reused": True,
+        }
+    due = row.time_bar
+    if due is None:
+        due = (datetime.now(timezone.utc).date() + timedelta(days=default_time_bar_days(row.claim_type)))
+    task = Task(
+        tenant_id=auth.tenant_id,
+        title=f"Time bar follow-up: {row.claim_no}",
+        description=f"Claim {row.claim_no} ({row.claim_type}) time bar {due.isoformat()} — protect the claim before it time-bars.",
+        priority="high",
+        due_at=datetime.combine(due, datetime.min.time()).replace(tzinfo=timezone.utc),
+        assignee_user_id=auth.user_id,
+        created_by=auth.user_id,
+        entity_type="claim",
+        entity_id=row.id,
+        source="system",
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return {
+        "id": str(task.id),
+        "title": task.title,
+        "status": task.status,
+        "due_at": task.due_at.isoformat() if task.due_at else None,
+        "reused": False,
+    }
 
 

@@ -6,6 +6,7 @@ import { AppShell } from "@/components/AppShell";
 import { DateTimeInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
 import { PageGuide } from "@/components/PageGuide";
+import { PageHeader } from "@/components/PageHeader";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -440,21 +441,19 @@ export default function VoyagesPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.voyages.title", "营运工作台")}</h1>
-          <p className="page-sub">
-            {t("page.voyages.sub", "航次、港序、SOF、正午报与冲突。选中航次后可在右侧编辑或删除。")}
-          </p>
-        </div>
-        <div className="quick-row">
-          <ExportButton entity="voyages" />
-          <PageGuide pageKey="voyages" />
-          <Link href="/settings/recycle" className="btn btn-ghost">
-            {t("nav.recycle", "回收站")}
-          </Link>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.voyages.title", "营运工作台")}
+        subtitle={t("page.voyages.sub", "航次、港序、SOF、正午报与冲突。选中航次后可在右侧编辑或删除。")}
+        actions={
+          <>
+            <ExportButton entity="voyages" />
+            <PageGuide pageKey="voyages" />
+            <Link href="/settings/recycle" className="btn btn-ghost">
+              {t("nav.recycle", "回收站")}
+            </Link>
+          </>
+        }
+      />
 
       {err ? <p className="flash-err">{err}</p> : null}
 

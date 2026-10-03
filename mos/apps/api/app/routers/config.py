@@ -15,7 +15,8 @@ from app.services.config_service import ConfigService
 from app.services import rule_engine
 from app.services import alert_engine
 
-router = APIRouter(prefix="/api/v1/config", tags=["config"])
+# 无自前缀：main.py 以 /api/v1 统一挂载（此前 /api/v1/config 双前缀导致路由落在 /api/v1/api/v1/...）
+router = APIRouter(prefix="/config", tags=["config"])
 
 
 class ConfigFlagOut(BaseModel):
@@ -135,27 +136,28 @@ def delete_config_flag(
 
 @router.get("/presets")
 def list_config_presets():
-    """List common configuration keys and their descriptions."""
+    """List common configuration keys and their descriptions (70+ presets)."""
+    from app.models_config import CONFIG_FLAG_PRESETS
+
     return {
-        "financials": [
-            {"key": "CFG_INVOICE_MIRROR", "description": "Enable mirror invoice generation", "type": "bool"},
-            {"key": "CFG_USE_NATURAL_ROUNDING", "description": "Use natural rounding instead of banker's rounding", "type": "bool"},
-            {"key": "CFG_COMMISSION_BASIS", "description": "Commission calculation basis (net/gross)", "type": "string"},
-            {"key": "CFG_DEMURRAGE_INCLUDE_IN_PNL", "description": "Include demurrage in P&L calculation", "type": "bool"},
-        ],
-        "operations": [
-            {"key": "CFG_BILL_BY", "description": "Default billing basis (cp_qty/bl_qty)", "type": "string"},
-            {"key": "CFG_LAYTIME_TERMS", "description": "Default laytime terms (SHINC/SHEX/SSHEX)", "type": "string"},
-            {"key": "CFG_CHARTERER_VIEW", "description": "Enable charterer view mode", "type": "bool"},
-        ],
-        "bunkering": [
-            {"key": "CFG_TCO_BUNKER_ADJ", "description": "TCO bunker adjustment factor", "type": "number"},
-        ],
-        "emissions": [
-            {"key": "CFG_EU_ETS_ENABLED", "description": "Enable EU ETS calculation", "type": "bool"},
-            {"key": "CFG_FUELEU_ENABLED", "description": "Enable FuelEU Maritime calculation", "type": "bool"},
-        ],
+        category: [
+            {"key": item["key"], "description": item["description"], "type": item["type"]}
+            for item in items
+        ]
+        for category, items in CONFIG_FLAG_PRESETS.items()
     }
+
+
+@router.post("/flags/seed-presets", status_code=201)
+def seed_config_flag_presets_endpoint(
+    auth: AuthContext = Depends(require_module("admin")),
+    db: Session = Depends(get_db),
+):
+    """Seed platform-scope preset flags (idempotent; existing rows untouched)."""
+    from app.services.config_service import seed_config_flag_presets
+
+    added = seed_config_flag_presets(db)
+    return {"added": added}
 
 
 # ── Business Rules ──

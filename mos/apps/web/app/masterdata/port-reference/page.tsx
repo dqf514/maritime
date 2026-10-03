@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -133,9 +134,7 @@ export default function PortReferencePage() {
 
   return (
     <AppShell>
-      <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 24 }}>
-        {t("page.portRef.title", "Port Reference Data")}
-      </h1>
+      <PageHeader title={t("page.portRef.title", "Port Reference Data")} />
 
 
       <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 24 }}>

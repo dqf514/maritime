@@ -14,6 +14,7 @@ type Props = {
   canEdit?: boolean;
   canDelete?: boolean;
   saving?: boolean;
+  size?: "md" | "lg" | "xl";
   children: ReactNode;
 };
 
@@ -28,6 +29,7 @@ export function RecordModal({
   canEdit = true,
   canDelete = true,
   saving,
+  size = "md",
   children,
 }: Props) {
   const { t } = useI18n();
@@ -111,7 +113,7 @@ export function RecordModal({
     <div className="record-modal-backdrop" role="presentation" onClick={requestClose}>
       <div
         ref={modalRef}
-        className="record-modal"
+        className={`record-modal${size !== "md" ? ` modal-${size}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}

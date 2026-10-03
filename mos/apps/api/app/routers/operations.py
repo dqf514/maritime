@@ -720,16 +720,16 @@ def twin_alerts(auth: AuthContext = Depends(require_module("twin")), db: Session
 def twin_whatif(
     body: dict,
     auth: AuthContext = Depends(require_module("twin")),
+    db: Session = Depends(get_db),
 ):
     from app.services.estimate_engine import compute_estimate
 
-    _ = auth
     estimate_inputs = body.get("estimate_inputs") or body
     try:
-        base = compute_estimate(estimate_inputs)
+        base = compute_estimate(estimate_inputs, db=db, tenant_id=auth.tenant_id)
         faster = dict(estimate_inputs)
         faster["sea_days"] = float(Decimal(str(estimate_inputs.get("sea_days") or 10)) * Decimal("0.9"))
-        alt = compute_estimate(faster)
+        alt = compute_estimate(faster, db=db, tenant_id=auth.tenant_id)
     except ValueError as exc:
         raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     return {"level": "L4", "base_tce": base["tce"], "faster_tce": alt["tce"], "delta_tce": alt["tce"] - base["tce"]}

@@ -14,11 +14,14 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models_domain import (
+    CargoBrokerRule,
     Charter,
     CharterAmendment,
     CharterOffer,
     CoaLifting,
     Estimate,
+    EstimateTemplate,
+    MasterContract,
     OffHireEvent,
     ScheduleBlock,
     Voyage,
@@ -36,6 +39,7 @@ from app.services.state_machine import (
     CHARTER_AMENDMENT_TRANSITIONS,
     CHARTER_TRANSITIONS,
     COA_LIFTING_TRANSITIONS,
+    HIRE_STATEMENT_TRANSITIONS,
     OFFHIRE_TRANSITIONS,
     transition,
 )
@@ -99,6 +103,16 @@ class _CharterTermsMixin(BaseModel):
     delivery_at: datetime | None = None
     redelivery_at: datetime | None = None
     ets_responsibility: Literal["owner", "charterer"] | None = None
+    # 合同方向 / 成交类型 / 主合同挂靠 + 租约页签字段
+    charter_direction: Literal["in", "out"] | None = None
+    master_contract_id: Optional[UUID] = None
+    fixture_type: Literal["head", "relet", "voyage_fixture"] | None = None
+    exposure_amount: float | None = None
+    pricing_basis: str | None = None
+    rebill_settings: dict | None = None
+    planning_periods: dict | None = None
+    rev_exp: dict | None = None
+    properties: dict | None = None
 
     @field_validator("laytime_terms")
     @classmethod
@@ -156,6 +170,15 @@ class CharterOut(BaseModel):
     delivery_at: datetime | None = None
     redelivery_at: datetime | None = None
     ets_responsibility: str | None = None
+    charter_direction: str = "out"
+    master_contract_id: UUID | None = None
+    fixture_type: str = "voyage_fixture"
+    exposure_amount: float | None = None
+    pricing_basis: str | None = None
+    rebill_settings: dict | None = None
+    planning_periods: dict | None = None
+    rev_exp: dict | None = None
+    properties: dict | None = None
 
 
 class ScheduleIn(BaseModel):
@@ -209,6 +232,325 @@ def create_estimate(body: EstimateIn, auth: AuthContext = Depends(require_module
     db.commit()
     db.refresh(row)
     return EstimateOut.model_validate(row)
+
+
+# —— 估算模板（template CRUD / from-template / save-as-template） ——
+
+
+class EstimateTemplateIn(BaseModel):
+    template_name: str
+    vessel_id: UUID | None = None
+    cargo_type: str | None = None
+    route_name: str | None = None
+    inputs: dict = Field(default_factory=dict)
+    is_system: bool = False
+
+
+class EstimateTemplateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    template_name: str
+    vessel_id: UUID | None
+    cargo_type: str | None
+    route_name: str | None
+    inputs: dict
+    is_system: bool
+
+
+def _template_out(t: EstimateTemplate) -> EstimateTemplateOut:
+    return EstimateTemplateOut(
+        id=t.id,
+        template_name=t.template_name,
+        vessel_id=t.vessel_id,
+        cargo_type=t.cargo_type,
+        route_name=t.route_name,
+        inputs=t.inputs or {},
+        is_system=bool(t.is_system),
+    )
+
+
+@router.get("/estimates/templates", response_model=list[EstimateTemplateOut])
+def list_estimate_templates(
+    auth: AuthContext = Depends(require_module("estimate")),
+    db: Session = Depends(get_db),
+):
+    rows = db.scalars(
+        select(EstimateTemplate)
+        .where(EstimateTemplate.tenant_id == auth.tenant_id, EstimateTemplate.deleted_at.is_(None))
+        .order_by(EstimateTemplate.template_name)
+    ).all()
+    return [_template_out(r) for r in rows]
+
+
+@router.post("/estimates/templates", response_model=EstimateTemplateOut)
+def create_estimate_template(
+    body: EstimateTemplateIn,
+    auth: AuthContext = Depends(require_module("estimate")),
+    db: Session = Depends(get_db),
+):
+    if body.vessel_id is not None and scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Vessel not found")
+    row = EstimateTemplate(
+        tenant_id=auth.tenant_id,
+        template_name=body.template_name,
+        vessel_id=body.vessel_id,
+        cargo_type=body.cargo_type,
+        route_name=body.route_name,
+        inputs=body.inputs,
+        is_system=body.is_system,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _template_out(row)
+
+
+@router.get("/estimates/templates/{template_id}", response_model=EstimateTemplateOut)
+def get_estimate_template(
+    template_id: UUID,
+    auth: AuthContext = Depends(require_module("estimate")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, EstimateTemplate, template_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Template not found")
+    return _template_out(row)
+
+
+@router.patch("/estimates/templates/{template_id}", response_model=EstimateTemplateOut)
+def update_estimate_template(
+    template_id: UUID,
+    body: EstimateTemplateIn,
+    auth: AuthContext = Depends(require_module("estimate")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, EstimateTemplate, template_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Template not found")
+    if row.is_system:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "SYSTEM_TEMPLATE", "message": "System templates cannot be edited"},
+        )
+    if body.vessel_id is not None and scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Vessel not found")
+    row.template_name = body.template_name
+    row.vessel_id = body.vessel_id
+    row.cargo_type = body.cargo_type
+    row.route_name = body.route_name
+    row.inputs = body.inputs
+    row.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(row)
+    return _template_out(row)
+
+
+@router.delete("/estimates/templates/{template_id}")
+def delete_estimate_template(
+    template_id: UUID,
+    auth: AuthContext = Depends(require_module("estimate")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, EstimateTemplate, template_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Template not found")
+    if row.is_system:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "SYSTEM_TEMPLATE", "message": "System templates cannot be deleted"},
+        )
+    row.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True, "deleted": True}
+
+
+@router.post("/estimates/from-template/{template_id}", response_model=EstimateOut)
+def estimate_from_template(
+    template_id: UUID,
+    body: EstimateIn | None = None,
+    auth: AuthContext = Depends(require_module("estimate")),
+    db: Session = Depends(get_db),
+):
+    """One-click estimate seeded from a template; body fields override template defaults."""
+    tpl = scoped_get(db, EstimateTemplate, template_id, auth.tenant_id)
+    if tpl is None:
+        raise HTTPException(404, "Template not found")
+    overrides = body or EstimateIn(title=tpl.template_name)
+    title = overrides.title or tpl.template_name
+    inputs = dict(tpl.inputs or {})
+    if overrides.inputs:
+        inputs.update(overrides.inputs)
+    vessel_id = overrides.vessel_id or tpl.vessel_id
+    if vessel_id is not None and scoped_get(db, Vessel, vessel_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Vessel not found")
+    if overrides.counterparty_id is not None and scoped_get(db, Counterparty, overrides.counterparty_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Counterparty not found")
+    row = Estimate(
+        tenant_id=auth.tenant_id,
+        title=title,
+        mode=overrides.mode,
+        vessel_id=vessel_id,
+        counterparty_id=overrides.counterparty_id,
+        inputs=inputs,
+        results={},
+        created_by=auth.user_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return EstimateOut.model_validate(row)
+
+
+class SaveAsTemplateIn(BaseModel):
+    template_name: str | None = None
+    cargo_type: str | None = None
+    route_name: str | None = None
+
+
+@router.post("/estimates/{estimate_id}/save-as-template", response_model=EstimateTemplateOut)
+def save_estimate_as_template(
+    estimate_id: UUID,
+    body: SaveAsTemplateIn | None = None,
+    auth: AuthContext = Depends(require_module("estimate")),
+    db: Session = Depends(get_db),
+):
+    est = db.get(Estimate, estimate_id)
+    if not est or est.tenant_id != auth.tenant_id or not _alive(est.status):
+        raise HTTPException(404, "Estimate not found")
+    payload = body or SaveAsTemplateIn()
+    row = EstimateTemplate(
+        tenant_id=auth.tenant_id,
+        template_name=payload.template_name or f"{est.title} (template)",
+        vessel_id=est.vessel_id,
+        cargo_type=payload.cargo_type,
+        route_name=payload.route_name,
+        inputs=dict(est.inputs or {}),
+        is_system=False,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _template_out(row)
+
+
+@router.get("/estimates/column-view")
+def estimate_column_view(
+    ids: str = Query(..., description="comma-separated estimate ids"),
+    auth: AuthContext = Depends(require_module("estimate")),
+    db: Session = Depends(get_db),
+):
+    """Column comparison view: side-by-side key metrics for the given estimates."""
+    raw_ids: list[UUID] = []
+    for part in ids.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            raw_ids.append(UUID(part))
+        except ValueError:
+            raise HTTPException(422, detail={"code": "INVALID_ID", "message": f"Invalid estimate id '{part}'"})
+    rows = db.scalars(
+        select(Estimate).where(Estimate.tenant_id == auth.tenant_id, Estimate.id.in_(raw_ids))
+    ).all()
+    by_id = {r.id: r for r in rows}
+    missing = [str(i) for i in raw_ids if i not in by_id]
+    fields = [
+        "title",
+        "mode",
+        "status",
+        "freight_basis",
+        "gross_freight",
+        "net_freight",
+        "total_revenue",
+        "voyage_cost",
+        "hire_cost",
+        "total_days",
+        "tce",
+        "net_result",
+    ]
+    columns = []
+    for eid in raw_ids:
+        est = by_id.get(eid)
+        if est is None:
+            continue
+        results = est.results or {}
+        if not results:
+            try:
+                results = compute_estimate(est.inputs or {}, db=db, tenant_id=auth.tenant_id)
+            except ValueError:
+                results = {}
+        values: dict = {
+            "title": est.title,
+            "mode": est.mode,
+            "status": est.status,
+        }
+        for f in fields:
+            if f in results:
+                values[f] = results[f]
+        columns.append({"id": str(est.id), "version": est.version, "values": values})
+    return {"fields": fields, "columns": columns, "missing": missing}
+
+
+@router.get("/estimates/benchmark/{vessel_id}")
+def estimate_benchmark(
+    vessel_id: UUID,
+    auth: AuthContext = Depends(require_module("estimate")),
+    db: Session = Depends(get_db),
+):
+    """Benchmark panel: historical TCE / revenue stats for the vessel's estimates."""
+    if scoped_get(db, Vessel, vessel_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Vessel not found")
+    rows = db.scalars(
+        select(Estimate).where(
+            Estimate.tenant_id == auth.tenant_id,
+            Estimate.vessel_id == vessel_id,
+            Estimate.status != "deleted",
+        )
+    ).all()
+    tces: list[float] = []
+    net_results: list[float] = []
+    total_days: list[float] = []
+    samples = []
+    for r in rows:
+        results = r.results or {}
+        if not results:
+            try:
+                results = compute_estimate(r.inputs or {}, db=db, tenant_id=auth.tenant_id)
+            except ValueError:
+                continue
+        tce = results.get("tce")
+        if tce is not None:
+            tces.append(float(tce))
+        nr = results.get("net_result")
+        if nr is not None:
+            net_results.append(float(nr))
+        td = results.get("total_days")
+        if td is not None:
+            total_days.append(float(td))
+        samples.append(
+            {
+                "id": str(r.id),
+                "title": r.title,
+                "status": r.status,
+                "tce": tce,
+                "net_result": nr,
+                "total_days": td,
+            }
+        )
+
+    def _avg(xs: list[float]) -> float | None:
+        return round(sum(xs) / len(xs), 2) if xs else None
+
+    return {
+        "vessel_id": str(vessel_id),
+        "sample_size": len(samples),
+        "avg_tce": _avg(tces),
+        "min_tce": min(tces) if tces else None,
+        "max_tce": max(tces) if tces else None,
+        "avg_net_result": _avg(net_results),
+        "avg_total_days": _avg(total_days),
+        "estimates": samples,
+    }
 
 
 @router.get("/estimates/{estimate_id}", response_model=EstimateOut)
@@ -290,7 +632,7 @@ def calculate_estimate(estimate_id: UUID, auth: AuthContext = Depends(require_mo
     if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Estimate not found")
     try:
-        row.results = compute_estimate(row.inputs or {})
+        row.results = compute_estimate(row.inputs or {}, db=db, tenant_id=auth.tenant_id)
     except ValueError as exc:
         raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     row.status = "calculated"
@@ -334,7 +676,7 @@ def estimate_sensitivity(
     if not row or row.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Estimate not found")
     try:
-        return sensitivity(row.inputs or {}, field, [-0.1, -0.05, 0.0, 0.05, 0.1])
+        return sensitivity(row.inputs or {}, field, [-0.1, -0.05, 0.0, 0.05, 0.1], db=db, tenant_id=auth.tenant_id)
     except ValueError as exc:
         raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
 
@@ -359,7 +701,7 @@ def estimate_to_charter(estimate_id: UUID, auth: AuthContext = Depends(require_m
         raise HTTPException(404, "Estimate not found")
     if not est.results:
         try:
-            est.results = compute_estimate(est.inputs or {})
+            est.results = compute_estimate(est.inputs or {}, db=db, tenant_id=auth.tenant_id)
         except ValueError as exc:
             raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     basis_map = {"rate": "per_mt", "lump_sum": "lumpsum", "worldscale": "worldscale"}
@@ -427,6 +769,15 @@ def _charter_out(c: Charter) -> CharterOut:
         delivery_at=c.delivery_at,
         redelivery_at=c.redelivery_at,
         ets_responsibility=c.ets_responsibility,
+        charter_direction=c.charter_direction or "out",
+        master_contract_id=c.master_contract_id,
+        fixture_type=c.fixture_type or "voyage_fixture",
+        exposure_amount=_f(c.exposure_amount),
+        pricing_basis=c.pricing_basis,
+        rebill_settings=c.rebill_settings,
+        planning_periods=c.planning_periods,
+        rev_exp=c.rev_exp,
+        properties=c.properties,
     )
 
 
@@ -464,6 +815,279 @@ def get_charter(
     if row is None:
         raise HTTPException(404, "Charter not found")
     return _charter_out(row)
+
+
+# —— 主合同（Master Contract） ——
+
+
+class MasterContractIn(BaseModel):
+    contract_no: str | None = None  # 缺省自动编号 MC-YYYY-NNNNN
+    title: str
+    counterparty_id: UUID
+    contract_type: Literal["voyage_coa", "time_charter", "bareboat"] = "voyage_coa"
+    total_qty: float | None = None
+    period_from: date | None = None
+    period_to: date | None = None
+    status: Literal["draft", "active", "completed", "cancelled"] = "draft"
+    clauses: dict | None = None
+
+
+class MasterContractOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    contract_no: str
+    title: str
+    counterparty_id: UUID
+    contract_type: str
+    total_qty: float | None = None
+    period_from: date | None = None
+    period_to: date | None = None
+    status: str
+    clauses: dict | None = None
+
+
+def _master_out(m: MasterContract) -> MasterContractOut:
+    return MasterContractOut(
+        id=m.id,
+        contract_no=m.contract_no,
+        title=m.title,
+        counterparty_id=m.counterparty_id,
+        contract_type=m.contract_type,
+        total_qty=_f(m.total_qty),
+        period_from=m.period_from,
+        period_to=m.period_to,
+        status=m.status,
+        clauses=m.clauses,
+    )
+
+
+@router.get("/master-contracts", response_model=list[MasterContractOut])
+def list_master_contracts(
+    status: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    q = select(MasterContract).where(
+        MasterContract.tenant_id == auth.tenant_id,
+        MasterContract.deleted_at.is_(None),
+    )
+    if status is not None:
+        q = q.where(MasterContract.status == status)
+    rows = db.scalars(
+        q.order_by(MasterContract.created_at.desc()).offset(offset).limit(limit)
+    ).all()
+    return [_master_out(r) for r in rows]
+
+
+@router.post("/master-contracts", response_model=MasterContractOut, status_code=201)
+def create_master_contract(
+    body: MasterContractIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    party = db.get(Counterparty, body.counterparty_id)
+    if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+        raise HTTPException(404, "Counterparty not found")
+    contract_no = body.contract_no or next_doc_number(
+        db, auth.tenant_id, MasterContract, MasterContract.contract_no, "MC"
+    )
+    row = MasterContract(
+        tenant_id=auth.tenant_id,
+        contract_no=contract_no,
+        title=body.title,
+        counterparty_id=body.counterparty_id,
+        contract_type=body.contract_type,
+        total_qty=body.total_qty,
+        period_from=body.period_from,
+        period_to=body.period_to,
+        status=body.status,
+        clauses=body.clauses,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _master_out(row)
+
+
+def _get_master(db: Session, auth: AuthContext, master_id: UUID) -> MasterContract:
+    row = scoped_get(db, MasterContract, master_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Master contract not found")
+    return row
+
+
+@router.get("/master-contracts/{master_id}", response_model=MasterContractOut)
+def get_master_contract(
+    master_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    return _master_out(_get_master(db, auth, master_id))
+
+
+@router.patch("/master-contracts/{master_id}", response_model=MasterContractOut)
+def update_master_contract(
+    master_id: UUID,
+    body: MasterContractIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    row = _get_master(db, auth, master_id)
+    party = db.get(Counterparty, body.counterparty_id)
+    if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+        raise HTTPException(404, "Counterparty not found")
+    if body.contract_no:
+        row.contract_no = body.contract_no
+    row.title = body.title
+    row.counterparty_id = body.counterparty_id
+    row.contract_type = body.contract_type
+    row.total_qty = body.total_qty
+    row.period_from = body.period_from
+    row.period_to = body.period_to
+    row.status = body.status
+    if body.clauses is not None:
+        row.clauses = body.clauses
+    row.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(row)
+    return _master_out(row)
+
+
+@router.delete("/master-contracts/{master_id}")
+def delete_master_contract(
+    master_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    row = _get_master(db, auth, master_id)
+    linked = db.scalar(
+        select(Charter.id).where(Charter.master_contract_id == row.id, Charter.status != "deleted").limit(1)
+    )
+    if linked is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "MASTER_CONTRACT_IN_USE", "message": "Master contract still linked to charters"},
+        )
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="master_contract",
+        row=row,
+        title=row.contract_no,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+@router.get("/master-contracts/{master_id}/charters", response_model=list[CharterOut])
+def list_master_contract_charters(
+    master_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """Fixtures linked to the master contract (master_contract_id)."""
+    _get_master(db, auth, master_id)
+    rows = db.scalars(
+        select(Charter)
+        .where(Charter.tenant_id == auth.tenant_id, Charter.master_contract_id == master_id, Charter.status != "deleted")
+        .order_by(Charter.created_at.desc())
+    ).all()
+    return [_charter_out(r) for r in rows]
+
+
+# —— Cargo broker rules ——
+
+
+class CargoBrokerRuleIn(BaseModel):
+    broker_party_id: UUID
+    commission_type: Literal["brokerage", "address"]
+    commission_pct: float = Field(..., ge=0, le=100)
+    applies_to: Literal["freight", "demurrage", "all"] = "all"
+
+
+class CargoBrokerRuleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    charter_id: UUID
+    broker_party_id: UUID
+    commission_type: str
+    commission_pct: float
+    applies_to: str
+
+
+def _broker_rule_out(r: CargoBrokerRule) -> CargoBrokerRuleOut:
+    return CargoBrokerRuleOut(
+        id=r.id,
+        charter_id=r.charter_id,
+        broker_party_id=r.broker_party_id,
+        commission_type=r.commission_type,
+        commission_pct=float(r.commission_pct),
+        applies_to=r.applies_to,
+    )
+
+
+def _get_charter(db: Session, auth: AuthContext, charter_id: UUID) -> Charter:
+    row = db.get(Charter, charter_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Charter not found")
+    return row
+
+
+@router.get("/charters/{charter_id}/broker-rules", response_model=list[CargoBrokerRuleOut])
+def list_broker_rules(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_charter(db, auth, charter_id)
+    rows = db.scalars(
+        select(CargoBrokerRule)
+        .where(CargoBrokerRule.tenant_id == auth.tenant_id, CargoBrokerRule.charter_id == charter_id)
+        .order_by(CargoBrokerRule.created_at)
+    ).all()
+    return [_broker_rule_out(r) for r in rows]
+
+
+@router.post("/charters/{charter_id}/broker-rules", response_model=CargoBrokerRuleOut, status_code=201)
+def add_broker_rule(
+    charter_id: UUID,
+    body: CargoBrokerRuleIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_charter(db, auth, charter_id)
+    party = db.get(Counterparty, body.broker_party_id)
+    if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+        raise HTTPException(404, "Broker not found")
+    row = CargoBrokerRule(
+        tenant_id=auth.tenant_id,
+        charter_id=charter_id,
+        broker_party_id=body.broker_party_id,
+        commission_type=body.commission_type,
+        commission_pct=Decimal(str(body.commission_pct)),
+        applies_to=body.applies_to,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _broker_rule_out(row)
+
+
+@router.delete("/broker-rules/{rule_id}")
+def delete_broker_rule(
+    rule_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, CargoBrokerRule, rule_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Broker rule not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 # —— 条款库（D1） ——
@@ -655,6 +1279,19 @@ CHARTER_TERM_FIELDS = (
     "ets_responsibility",
 )
 
+# 租约页签字段（方向/成交类型/主合同 + Rebill/敞口/收支/属性 页签），随 create/patch 直通
+CHARTER_TAB_FIELDS = (
+    "charter_direction",
+    "master_contract_id",
+    "fixture_type",
+    "exposure_amount",
+    "pricing_basis",
+    "rebill_settings",
+    "planning_periods",
+    "rev_exp",
+    "properties",
+)
+
 
 # Key commercial terms that are locked once the charter is active/completed;
 # changing them requires an approved CharterAmendment (DDS change-order flow).
@@ -682,6 +1319,8 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
         raise HTTPException(404, "Vessel not found")
     if body.estimate_id is not None and scoped_get(db, Estimate, body.estimate_id, auth.tenant_id) is None:
         raise HTTPException(404, "Estimate not found")
+    if body.master_contract_id is not None and scoped_get(db, MasterContract, body.master_contract_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Master contract not found")
     row = Charter(
         tenant_id=auth.tenant_id,
         charter_no=next_doc_number(db, auth.tenant_id, Charter, Charter.charter_no, "CP"),
@@ -696,6 +1335,7 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
         clauses=body.clauses,
         sanctions_blocked=blocked,
         **{f: getattr(body, f) for f in CHARTER_TERM_FIELDS},
+        **{f: getattr(body, f) for f in CHARTER_TAB_FIELDS},
     )
     db.add(row)
     db.commit()
@@ -762,6 +1402,12 @@ def update_charter(
     if "commission_pct" in fields:
         row.commission_pct = body.commission_pct
     for f in CHARTER_TERM_FIELDS:
+        if f in fields:
+            setattr(row, f, getattr(body, f))
+    if "master_contract_id" in fields and body.master_contract_id is not None:
+        if scoped_get(db, MasterContract, body.master_contract_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Master contract not found")
+    for f in CHARTER_TAB_FIELDS:
         if f in fields:
             setattr(row, f, getattr(body, f))
     if body.freight_terms is not None:
@@ -891,7 +1537,12 @@ def add_lifting(
     row = db.get(Charter, charter_id)
     if not row or row.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Charter not found")
-    lift = CoaLifting(charter_id=row.id, period_label=period_label, planned_qty=planned_qty)
+    lift = CoaLifting(
+        tenant_id=auth.tenant_id,
+        charter_id=row.id,
+        period_label=period_label,
+        planned_qty=planned_qty,
+    )
     db.add(lift)
     db.commit()
     return {"id": str(lift.id), "period_label": period_label, "planned_qty": planned_qty}
@@ -1400,11 +2051,11 @@ class TCContractIn(BaseModel):
 
 class TCContractOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: str
-    charter_id: str
+    id: UUID
+    charter_id: UUID
     contract_type: str
-    vessel_id: str
-    counterparty_id: str
+    vessel_id: UUID
+    counterparty_id: UUID
     delivery_port: str | None
     delivery_date: date | None
     redelivery_port: str | None
@@ -1492,8 +2143,8 @@ class HireStatementIn(BaseModel):
 
 class HireStatementOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: str
-    contract_id: str
+    id: UUID
+    contract_id: UUID
     statement_number: str
     period_start: date
     period_end: date
@@ -1570,17 +2221,7 @@ def hire_statement_transition(
     stmt = scoped_get(db, HireStatement, statement_id, auth.tenant_id)
     if not stmt:
         raise HTTPException(404, "Statement not found")
-    allowed = {
-        "draft": {"sent", "void"},
-        "sent": {"approved", "void"},
-        "approved": {"paid", "void"},
-        "paid": set(),
-        "void": set(),
-    }
-    current = stmt.status
-    if target not in allowed.get(current, set()):
-        raise HTTPException(409, f"Cannot transition {current} → {target}")
-    stmt.status = target
+    stmt.status = transition("hire_statement", stmt.status, target, HIRE_STATEMENT_TRANSITIONS)
     db.commit()
     return {"id": str(stmt.id), "status": stmt.status}
 

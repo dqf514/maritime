@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiCreateBackup, apiListBackups } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -41,11 +42,15 @@ export default function BackupPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.backup.title", "Backup")}</h1>
-      <p style={{ color: "var(--muted)" }}>{t("page.backup.sub", "One-click tenant backup and restore drills.")}</p>
-      <button className="btn btn-primary" type="button" onClick={backup}>
-        {t("page.backup.now", "Backup now")}
-      </button>
+      <PageHeader
+        title={t("page.backup.title", "Backup")}
+        subtitle={t("page.backup.sub", "One-click tenant backup and restore drills.")}
+        actions={
+          <button className="btn btn-primary" type="button" onClick={backup}>
+            {t("page.backup.now", "Backup now")}
+          </button>
+        }
+      />
       <div className="panel">
         <table className="table">
           <thead>

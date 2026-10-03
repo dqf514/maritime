@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -91,14 +92,14 @@ export default function FuelZonesPage() {
 
   return (
     <AppShell>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>
-          {t("page.fuelZones.title", "Fuel Zone Management")}
-        </h1>
-        <button onClick={seedPresets} className="btn btn-secondary">
-          {t("page.fuelZones.seed_presets", "Seed Preset Zones")}
-        </button>
-      </div>
+      <PageHeader
+        title={t("page.fuelZones.title", "Fuel Zone Management")}
+        actions={
+          <button onClick={seedPresets} className="btn btn-secondary">
+            {t("page.fuelZones.seed_presets", "Seed Preset Zones")}
+          </button>
+        }
+      />
 
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginBottom: 24 }}>

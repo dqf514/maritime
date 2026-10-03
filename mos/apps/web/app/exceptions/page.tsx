@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { PageGuide } from "@/components/PageGuide";
 import { StateView } from "@/components/StateView";
 import { apiGet, type ExceptionItem, type ExceptionScan } from "@/lib/api";
@@ -83,25 +84,24 @@ export default function ExceptionsPage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.exceptions.title", "异常管理中心")}</h1>
-          <p className="page-sub">
-            {t("page.exceptions.sub", "跨模块业务异常扫描，点击条目直达处理页面。")}
-            {scannedAt
-              ? ` · ${t("page.exceptions.scanned_at", "扫描于 {time}", {
-                  time: scannedAt.toLocaleTimeString(locale.startsWith("zh") ? "zh-CN" : "en-US"),
-                })}`
-              : ""}
-          </p>
-        </div>
-        <div className="quick-row">
-          <PageGuide pageKey="exceptions" />
-          <button type="button" className="btn btn-ghost" onClick={load} disabled={loading}>
-            {t("page.exceptions.refresh", "刷新")}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.exceptions.title", "异常管理中心")}
+        subtitle={`${t("page.exceptions.sub", "跨模块业务异常扫描，点击条目直达处理页面。")}${
+          scannedAt
+            ? ` · ${t("page.exceptions.scanned_at", "扫描于 {time}", {
+                time: scannedAt.toLocaleTimeString(locale.startsWith("zh") ? "zh-CN" : "en-US"),
+              })}`
+            : ""
+        }`}
+        actions={
+          <>
+            <PageGuide pageKey="exceptions" />
+            <button type="button" className="btn btn-ghost" onClick={load} disabled={loading}>
+              {t("page.exceptions.refresh", "刷新")}
+            </button>
+          </>
+        }
+      />
 
       <StateView loading={loading && !scan} error={error} empty={false} onRetry={load}>
         <div className="exc-summary">

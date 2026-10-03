@@ -1,49 +1,51 @@
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--gap-sm);
 }
 
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1rem 1.1rem;
+  border-radius: var(--radius-sm);
+  padding: var(--gap-sm) var(--gap-md);
 }
-.card h3 { margin: 0 0 0.35rem; font-size: 0.95rem; }
-.card p { margin: 0; color: var(--muted); font-size: 0.9rem; }
-.card .metric { font-size: 1.6rem; font-weight: 700; margin-top: 0.5rem; color: var(--sea-deep); }
+.card h3 { margin: 0 0 2px; font-size: var(--font-ui); }
+.card p { margin: 0; color: var(--muted); font-size: var(--font-label); }
+.card .metric { font-size: 1.2rem; font-weight: 700; margin-top: var(--gap-xs); color: var(--sea-deep); }
 
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1.25rem;
-  margin-top: 1rem;
+  border-radius: var(--radius-sm);
+  padding: var(--gap-sm) var(--gap-md);
+  margin-bottom: var(--gap-sm);
 }
 
-.kpi-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+.kpi-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--gap-sm); margin-bottom: var(--gap-sm); }
 .kpi-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 0.9rem 1rem;
+  border-radius: var(--radius-sm);
+  padding: var(--gap-sm) var(--gap-md);
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 1px;
 }
-.kpi-card span { color: var(--muted); font-size: 0.8rem; }
-.kpi-card strong { font-size: 1.45rem; }
+.kpi-card span { color: var(--muted); font-size: var(--font-label); }
+.kpi-card strong { font-size: 1.15rem; }
 .kpi-card.warn strong { color: var(--warn); }
 
 .pill {
   display: inline-block;
-  font-size: 0.7rem;
-  padding: 0.12rem 0.45rem;
-  border-radius: 999px;
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
   background: #e7f0f3;
-  margin-right: 0.35rem;
+  margin-right: 2px;
   text-transform: uppercase;
+  font-weight: 700;
+  line-height: 1.4;
 }
 .pill.critical, .pill.expired, .pill.danger { background: #fde8e6; color: #9b1c1c; }
 .pill.high, .pill.expiring, .pill.warn { background: #fff4de; color: #8a5a00; }

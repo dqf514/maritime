@@ -1,0 +1,209 @@
+/* ── MariOS 3 Theme System ── */
+/* 1. Ocean (default) — 航海青绿，专业清新 */
+/* 2. Slate — 深色专注，长时间工作 */
+/* 3. Indigo — 现代蓝紫，科技感 */
+
+/* ═══ Theme: Ocean (default) — 航海青绿 ═══ */
+[data-theme="ocean"],
+:root {
+  --theme-name: "Ocean";
+  --sea-deep: #0B1F2A;
+  --sea-mid: #123047;
+  --foam: #eef3f6;
+  --bg: #f4f6f8;
+  --ink: #1a2332;
+  --muted: #5a6e7d;
+  --accent: #1A9B96;
+  --accent-soft: #2BB5B0;
+  --accent-hover: #158A85;
+  --accent-bg: rgba(26, 155, 150, 0.08);
+  --accent-bg-strong: rgba(26, 155, 150, 0.15);
+  --surface: #ffffff;
+  --border: #c8d4de;
+  --border-light: #dde5ec;
+  --danger: #c0392b;
+  --ok: #1e7a46;
+  --warn: #b7791f;
+  --chrome-bg: #e8edf2;
+  --chrome-border: #b0bec9;
+  --toolbar-bg: #f0f4f7;
+  --panel-header-bg: #e4eaf0;
+  --btn-bg: linear-gradient(180deg, #fafbfc, #e8edf2);
+  --btn-hover: linear-gradient(180deg, #f0f4f7, #dde5ec);
+  --btn-primary-bg: linear-gradient(180deg, var(--accent-soft), var(--accent));
+  --btn-primary-hover: var(--accent);
+  --topbar-bg: linear-gradient(180deg, #f5f7fa, #e8edf2);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
+  --shadow-md: 0 2px 6px rgba(0,0,0,0.12);
+  --skeleton: #e2e8f0;
+  --skeleton-shine: #f8fafc;
+  --focus-ring: rgba(26,155,150,0.4);
+  --row-hover: rgba(26, 155, 150, 0.04);
+  --row-selected: rgba(26, 155, 150, 0.1);
+}
+
+/* ═══ Theme: Slate — 深色专注 ═══ */
+[data-theme="slate"] {
+  --theme-name: "Slate";
+  --sea-deep: #0d1117;
+  --sea-mid: #161b22;
+  --foam: #0d1117;
+  --bg: #0d1117;
+  --ink: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --accent-soft: #79b8ff;
+  --accent-hover: #79b8ff;
+  --accent-bg: rgba(88, 166, 255, 0.1);
+  --accent-bg-strong: rgba(88, 166, 255, 0.18);
+  --surface: #161b22;
+  --border: #30363d;
+  --border-light: #21262d;
+  --danger: #f85149;
+  --ok: #3fb950;
+  --warn: #d29922;
+  --chrome-bg: #161b22;
+  --chrome-border: #30363d;
+  --toolbar-bg: #21262d;
+  --panel-header-bg: #21262d;
+  --btn-bg: linear-gradient(180deg, #21262d, #161b22);
+  --btn-hover: linear-gradient(180deg, #30363d, #21262d);
+  --btn-primary-bg: linear-gradient(180deg, var(--accent-soft), var(--accent));
+  --btn-primary-hover: var(--accent-hover);
+  --topbar-bg: linear-gradient(180deg, #21262d, #161b22);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 2px 6px rgba(0,0,0,0.4);
+  --skeleton: #21262d;
+  --skeleton-shine: #30363d;
+  --focus-ring: rgba(88, 166, 255, 0.5);
+  --row-hover: rgba(88, 166, 255, 0.06);
+  --row-selected: rgba(88, 166, 255, 0.12);
+  color-scheme: dark;
+}
+
+/* ═══ Theme: Indigo — 现代蓝紫 ═══ */
+[data-theme="indigo"] {
+  --theme-name: "Indigo";
+  --sea-deep: #1e1b4b;
+  --sea-mid: #312e81;
+  --foam: #f5f3ff;
+  --bg: #faf9ff;
+  --ink: #1e1b4b;
+  --muted: #6b7280;
+  --accent: #6366f1;
+  --accent-soft: #818cf8;
+  --accent-hover: #4f46e5;
+  --accent-bg: rgba(99, 102, 241, 0.08);
+  --accent-bg-strong: rgba(99, 102, 241, 0.15);
+  --surface: #ffffff;
+  --border: #d1d5db;
+  --border-light: #e5e7eb;
+  --danger: #dc2626;
+  --ok: #16a34a;
+  --warn: #d97706;
+  --chrome-bg: #eef2ff;
+  --chrome-border: #c7d2fe;
+  --toolbar-bg: #f5f3ff;
+  --panel-header-bg: #eef2ff;
+  --btn-bg: linear-gradient(180deg, #faf9ff, #eef2ff);
+  --btn-hover: linear-gradient(180deg, #f5f3ff, #e0e7ff);
+  --btn-primary-bg: linear-gradient(180deg, var(--accent-soft), var(--accent));
+  --btn-primary-hover: var(--accent-hover);
+  --topbar-bg: linear-gradient(180deg, #f5f3ff, #eef2ff);
+  --shadow-sm: 0 1px 2px rgba(99, 102, 241, 0.1);
+  --shadow-md: 0 2px 8px rgba(99, 102, 241, 0.15);
+  --skeleton: #e5e7eb;
+  --skeleton-shine: #f5f3ff;
+  --focus-ring: rgba(99, 102, 241, 0.4);
+  --row-hover: rgba(99, 102, 241, 0.05);
+  --row-selected: rgba(99, 102, 241, 0.12);
+}
+
+/* ── Theme Picker UI ── */
+.theme-picker-wrap {
+  position: relative;
+}
+.theme-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  height: var(--control-h);
+  padding: 0 var(--gap-sm);
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: var(--font-label);
+}
+.theme-picker-btn:hover {
+  background: var(--toolbar-bg);
+}
+.theme-preview-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.3);
+  flex-shrink: 0;
+}
+.theme-preview-name {
+  font-weight: 600;
+}
+.theme-picker-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 100;
+  min-width: 200px;
+  background: var(--surface);
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--gap-xs);
+}
+.theme-picker-item {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  width: 100%;
+  padding: var(--gap-sm) var(--gap-md);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: var(--font-ui);
+  text-align: left;
+}
+.theme-picker-item:hover {
+  background: var(--accent-bg);
+}
+.theme-picker-item.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.theme-picker-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+}
+.theme-picker-label strong {
+  font-size: var(--font-ui);
+}
+.theme-picker-label small {
+  font-size: var(--font-label);
+  color: var(--muted);
+}
+.theme-preview-strip {
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  flex-shrink: 0;
+}
+.theme-picker-check {
+  color: var(--accent);
+  font-weight: 700;
+}

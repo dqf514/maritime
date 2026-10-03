@@ -8,6 +8,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput } from "@/components/DateInput";
+import { PageHeader } from "@/components/PageHeader";
 import { PartyPicker } from "@/components/DataPicker";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -45,6 +46,26 @@ type Charter = {
   delivery_at: string | null;
   redelivery_at: string | null;
   ets_responsibility: string | null;
+  charter_direction: string | null;
+  master_contract_id: string | null;
+  fixture_type: string | null;
+  exposure_amount: number | null;
+  pricing_basis: string | null;
+  rebill_settings: Record<string, unknown> | null;
+  planning_periods: Record<string, unknown> | null;
+  rev_exp: Record<string, unknown> | null;
+  properties: Record<string, unknown> | null;
+};
+
+type MasterContractOpt = { id: string; contract_no: string; title: string; contract_type: string; status: string };
+
+type BrokerRule = {
+  id: string;
+  charter_id: string;
+  broker_party_id: string;
+  commission_type: string;
+  commission_pct: number | null;
+  applies_to: string;
 };
 
 type HireSummary = {
@@ -292,8 +313,21 @@ export function CharterEditor({ charterId }: { charterId: string }) {
     freight_rate: "",
     cargo_qty: "",
     notes: "",
+    fixture_type: "voyage_fixture",
+    charter_direction: "out",
+    master_contract_id: "",
+    exposure_amount: "",
+    pricing_basis: "",
+    rebill_json: "{}",
+    planning_json: "{}",
+    revexp_json: "{}",
+    properties_json: "{}",
     ...EMPTY_TERMS,
   });
+  const [tab, setTab] = useState("general");
+  const [masters, setMasters] = useState<MasterContractOpt[]>([]);
+  const [brokerRules, setBrokerRules] = useState<BrokerRule[]>([]);
+  const [brForm, setBrForm] = useState({ broker_party_id: "", commission_type: "brokerage", commission_pct: "", applies_to: "all" });
   const [hireSummary, setHireSummary] = useState<HireSummary | null>(null);
   const [hireErr, setHireErr] = useState("");
   const [amendments, setAmendments] = useState<Amendment[]>([]);
@@ -341,22 +375,35 @@ export function CharterEditor({ charterId }: { charterId: string }) {
       delivery_at: r.delivery_at || "",
       redelivery_at: r.redelivery_at || "",
       ets_responsibility: r.ets_responsibility || "",
+      fixture_type: r.fixture_type || "voyage_fixture",
+      charter_direction: r.charter_direction || "out",
+      master_contract_id: r.master_contract_id || "",
+      exposure_amount: numStr(r.exposure_amount),
+      pricing_basis: r.pricing_basis || "",
+      rebill_json: JSON.stringify(r.rebill_settings ?? {}, null, 2),
+      planning_json: JSON.stringify(r.planning_periods ?? {}, null, 2),
+      revexp_json: JSON.stringify(r.rev_exp ?? {}, null, 2),
+      properties_json: JSON.stringify(r.properties ?? {}, null, 2),
     });
   }, [charterId]);
 
   const loadSide = useCallback(async () => {
-    const [v, p, voy, ams, cls] = await Promise.all([
+    const [v, p, voy, ams, cls, mcs, brs] = await Promise.all([
       apiGet("/api/v1/masterdata/vessels"),
       apiGet("/api/v1/masterdata/counterparties"),
       apiGet("/api/v1/voyages").catch(() => []),
       apiGet(`/api/v1/charters/${charterId}/amendments`).catch(() => []),
       apiGet("/api/v1/clauses").catch(() => ({ items: [] })),
+      apiGet("/api/v1/master-contracts").catch(() => []),
+      apiGet(`/api/v1/charters/${charterId}/broker-rules`).catch(() => []),
     ]);
     setVessels(v);
     setParties(p);
     setVoyages(voy);
     setAmendments(Array.isArray(ams) ? ams : []);
     setClauseCatalog(Array.isArray(cls?.items) ? cls.items : []);
+    setMasters(Array.isArray(mcs) ? mcs : (mcs?.items ?? []));
+    setBrokerRules(Array.isArray(brs) ? brs : (brs?.items ?? []));
   }, [charterId]);
 
   useEffect(() => {
@@ -394,8 +441,16 @@ export function CharterEditor({ charterId }: { charterId: string }) {
         freight_terms.cargo_qty = Number(edit.cargo_qty);
         freight_terms.cargo = `Bulk ${edit.cargo_qty} mt`;
       }
+      const jsonField = (s: string): Record<string, unknown> | null => {
+        const trimmed = s.trim();
+        if (!trimmed) return null;
+        return JSON.parse(trimmed);
+      };
       await apiPatch(`/api/v1/charters/${charter.id}`, {
         charter_type: edit.charter_type,
+        fixture_type: edit.fixture_type,
+        charter_direction: edit.charter_direction,
+        master_contract_id: edit.master_contract_id || null,
         vessel_id: edit.vessel_id || null,
         counterparty_id: edit.counterparty_id || null,
         clear_vessel: !edit.vessel_id,
@@ -403,6 +458,12 @@ export function CharterEditor({ charterId }: { charterId: string }) {
         laycan_from: edit.laycan_from || null,
         laycan_to: edit.laycan_to || null,
         commission_pct: edit.commission_pct === "" ? null : Number(edit.commission_pct),
+        exposure_amount: edit.exposure_amount === "" ? null : Number(edit.exposure_amount),
+        pricing_basis: edit.pricing_basis || null,
+        rebill_settings: jsonField(edit.rebill_json),
+        planning_periods: jsonField(edit.planning_json),
+        rev_exp: jsonField(edit.revexp_json),
+        properties: jsonField(edit.properties_json),
         freight_terms,
         ...charterTermsPayload(edit.freight_rate, edit.cargo_qty, edit),
         clauses: {
@@ -414,7 +475,9 @@ export function CharterEditor({ charterId }: { charterId: string }) {
       toast.success(t("common.saved", "已保存"));
       await loadCharter();
     } catch (ex: any) {
-      if (ex?.status === 409 && ex?.detail?.code === "AMENDMENT_REQUIRED") {
+      if (ex instanceof SyntaxError) {
+        setErr(t("page.charters.invalid_json", "JSON 格式有误，请检查 Rebill / Exposure / Rev-Exp / Properties 选项卡"));
+      } else if (ex?.status === 409 && ex?.detail?.code === "AMENDMENT_REQUIRED") {
         setErr(t("page.charters.amendment_required", "租约已生效，关键条款请通过变更单修改（见下方变更单区块）。"));
       } else {
         setErr(String(ex));
@@ -476,6 +539,45 @@ export function CharterEditor({ charterId }: { charterId: string }) {
       toast.success(t("page.charters.lifting_ok", "Lifting added: {period}", { period: res.period_label }));
       const rows: Lifting[] = await apiGet(`/api/v1/charters/${charter.id}/liftings`).catch(() => []);
       setLiftings(Array.isArray(rows) ? rows : []);
+    } catch (ex) {
+      setErr(String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addBrokerRule() {
+    if (!charter) return;
+    if (!brForm.broker_party_id) {
+      setErr(t("page.charters.need_broker", "请选择经纪方"));
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await apiPost(`/api/v1/charters/${charter.id}/broker-rules`, {
+        broker_party_id: brForm.broker_party_id,
+        commission_type: brForm.commission_type,
+        commission_pct: Number(brForm.commission_pct) || 0,
+        applies_to: brForm.applies_to,
+      });
+      toast.success(t("page.charters.broker_added", "Broker rule added"));
+      setBrForm({ broker_party_id: "", commission_type: "brokerage", commission_pct: "", applies_to: "all" });
+      const rows: BrokerRule[] = await apiGet(`/api/v1/charters/${charter.id}/broker-rules`).catch(() => []);
+      setBrokerRules(Array.isArray(rows) ? rows : []);
+    } catch (ex) {
+      setErr(String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeBrokerRule(ruleId: string) {
+    setBusy(true);
+    setErr("");
+    try {
+      await apiDelete(`/api/v1/broker-rules/${ruleId}`);
+      setBrokerRules((prev) => prev.filter((r) => r.id !== ruleId));
     } catch (ex) {
       setErr(String(ex));
     } finally {
@@ -587,114 +689,304 @@ export function CharterEditor({ charterId }: { charterId: string }) {
 
   return (
     <>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>
+      <PageHeader
+        title={
+          <>
             {charter?.charter_no || "…"}
-            {charter ? (
-              <span className="badge badge-warn" style={{ marginLeft: "0.6rem" }}>
-                {charter.status}
-              </span>
-            ) : null}
+            {charter ? <span className="badge badge-warn">{charter.status}</span> : null}
             {charter?.sanctions_blocked ? (
-              <span className="badge badge-fail" style={{ marginLeft: "0.4rem" }}>
-                {t("page.charters.blocked", "BLOCKED")}
-              </span>
+              <span className="badge badge-fail">{t("page.charters.blocked", "BLOCKED")}</span>
             ) : null}
-          </h1>
-          <p className="page-sub">{t("page.charters.edit", "编辑租约")}</p>
-        </div>
-        <div className="desk-toolbar" style={{ margin: 0 }}>
-          <Link href="/charters" className="btn btn-ghost">
-            {t("common.back", "返回")}
-          </Link>
-          <button className="btn btn-sm" type="button" disabled={busy || saving} onClick={() => window.print()}>
-            {t("common.print", "打印 / PDF")}
-          </button>
-        </div>
-      </div>
+          </>
+        }
+        subtitle={t("page.charters.edit", "编辑租约")}
+        actions={
+          <>
+            <Link href="/charters" className="btn btn-ghost">
+              {t("common.back", "返回")}
+            </Link>
+            <button className="btn btn-sm" type="button" disabled={busy || saving} onClick={() => window.print()}>
+              {t("common.print", "打印 / PDF")}
+            </button>
+          </>
+        }
+      />
 
       {err ? <p className="flash-err">{err}</p> : null}
 
       <div className="panel">
+        <div className="desk-tabs" style={{ marginBottom: "0.75rem" }}>
+          {[
+            { id: "general", label: t("page.charters.tab_general", "General") },
+            { id: "cargoes", label: t("page.charters.tab_cargoes", "Cargoes") },
+            { id: "pricing", label: t("page.charters.tab_pricing", "Pricing") },
+            { id: "rebill", label: t("page.charters.tab_rebill", "Rebill Settings") },
+            { id: "exposure", label: t("page.charters.tab_exposure", "Exposure") },
+            { id: "revexp", label: t("page.charters.tab_revexp", "Rev/Exp") },
+            { id: "properties", label: t("page.charters.tab_properties", "Properties") },
+          ].map((tb) => (
+            <button
+              key={tb.id}
+              type="button"
+              className={`desk-tab${tab === tb.id ? " active" : ""}`}
+              onClick={() => setTab(tb.id)}
+            >
+              {tb.label}
+            </button>
+          ))}
+        </div>
         <div className="form-grid">
-          <label>
-            {t("page.charters.type", "类型")}
-            <select value={edit.charter_type} onChange={(e) => setEdit({ ...edit, charter_type: e.target.value })}>
-              <option value="voyage">voyage</option>
-              <option value="time">time</option>
-              <option value="tct">tct</option>
-              <option value="coa">coa</option>
-              <option value="bb">bb</option>
-            </select>
-          </label>
-          <label>
-            {t("page.estimates.vessel", "船舶")}
-            <select value={edit.vessel_id} onChange={(e) => setEdit({ ...edit, vessel_id: e.target.value })}>
-              <option value="">—</option>
-              {vessels.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t("page.estimates.counterparty", "对手方")}
-            <PartyPicker value={edit.counterparty_id} onChange={(id) => setEdit({ ...edit, counterparty_id: id })} />
-          </label>
-          <label>
-            {t("page.charters.laycan_from", "Laycan from")}
-            <DateInput value={edit.laycan_from} onChange={(v) => setEdit({ ...edit, laycan_from: v })} />
-          </label>
-          <label>
-            {t("page.charters.laycan_to", "Laycan to")}
-            <DateInput value={edit.laycan_to} onChange={(v) => setEdit({ ...edit, laycan_to: v })} />
-          </label>
-          <label>
-            {t("page.estimates.commission", "佣金 %")}
-            <input value={edit.commission_pct} onChange={(e) => setEdit({ ...edit, commission_pct: e.target.value })} />
-          </label>
-          <label>
-            {t("page.estimates.freight_rate", "运价")}
-            <input value={edit.freight_rate} onChange={(e) => setEdit({ ...edit, freight_rate: e.target.value })} />
-          </label>
-          <label>
-            {t("page.estimates.cargo_qty", "货量")}
-            <input value={edit.cargo_qty} onChange={(e) => setEdit({ ...edit, cargo_qty: e.target.value })} />
-          </label>
-          <TermInputs value={edit} onChange={(k, v) => setEdit({ ...edit, [k]: v })} showTc={isTc(edit.charter_type)} />
-          <label style={{ gridColumn: "1 / -1" }}>
-            {t("page.charters.notes", "条款备注")}
-            <input value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} />
-          </label>
-          {/* D1 条款库：勾选条款，params 直接驱动 laytime/索赔计算输入 */}
-          {clauseCatalog.length ? (
-            <div style={{ gridColumn: "1 / -1" }}>
-              <div className="muted" style={{ marginBottom: "0.35rem" }}>
-                {t("page.charters.clause_library", "条款库（勾选后参数随租约生效）")}
+          {tab === "general" ? (
+            <>
+              <label>
+                {t("page.charters.type", "类型")}
+                <select value={edit.charter_type} onChange={(e) => setEdit({ ...edit, charter_type: e.target.value })}>
+                  <option value="voyage">voyage</option>
+                  <option value="time">time</option>
+                  <option value="tct">tct</option>
+                  <option value="coa">coa</option>
+                  <option value="bb">bb</option>
+                </select>
+              </label>
+              <label>
+                {t("page.charters.contract_type", "Contract type")}
+                <select value={edit.fixture_type} onChange={(e) => setEdit({ ...edit, fixture_type: e.target.value })}>
+                  <option value="voyage_fixture">{t("page.charters.fixture_voyage", "Voyage Fixture")}</option>
+                  <option value="head">{t("page.charters.fixture_head", "Head Fixture")}</option>
+                  <option value="relet">{t("page.charters.fixture_relet", "Relet Fixture")}</option>
+                </select>
+              </label>
+              <label>
+                {t("page.charters.direction", "Direction")}
+                <select value={edit.charter_direction} onChange={(e) => setEdit({ ...edit, charter_direction: e.target.value })}>
+                  <option value="out">out</option>
+                  <option value="in">in</option>
+                </select>
+              </label>
+              <label>
+                {t("page.charters.master_contract", "Master Contract")}
+                <select value={edit.master_contract_id} onChange={(e) => setEdit({ ...edit, master_contract_id: e.target.value })}>
+                  <option value="">{t("common.none", "None")}</option>
+                  {masters.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.contract_no} — {m.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t("page.estimates.vessel", "船舶")}
+                <select value={edit.vessel_id} onChange={(e) => setEdit({ ...edit, vessel_id: e.target.value })}>
+                  <option value="">—</option>
+                  {vessels.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t("page.estimates.counterparty", "对手方")}
+                <PartyPicker value={edit.counterparty_id} onChange={(id) => setEdit({ ...edit, counterparty_id: id })} />
+              </label>
+              <label>
+                {t("page.charters.laycan_from", "Laycan from")}
+                <DateInput value={edit.laycan_from} onChange={(v) => setEdit({ ...edit, laycan_from: v })} />
+              </label>
+              <label>
+                {t("page.charters.laycan_to", "Laycan to")}
+                <DateInput value={edit.laycan_to} onChange={(v) => setEdit({ ...edit, laycan_to: v })} />
+              </label>
+              <label>
+                {t("page.estimates.commission", "佣金 %")}
+                <input value={edit.commission_pct} onChange={(e) => setEdit({ ...edit, commission_pct: e.target.value })} />
+              </label>
+              <label style={{ gridColumn: "1 / -1" }}>
+                {t("page.charters.notes", "条款备注")}
+                <input value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} />
+              </label>
+              {/* D1 条款库：勾选条款，params 直接驱动 laytime/索赔计算输入 */}
+              {clauseCatalog.length ? (
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div className="muted" style={{ marginBottom: "0.35rem" }}>
+                    {t("page.charters.clause_library", "条款库（勾选后参数随租约生效）")}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "0.35rem" }}>
+                    {clauseCatalog.map((c) => {
+                      const title = locale.startsWith("zh") ? c.title_zh || c.title_en : c.title_en;
+                      return (
+                        <label key={c.id} style={{ display: "flex", gap: "0.45rem", alignItems: "baseline", margin: 0 }}>
+                          <input
+                            type="checkbox"
+                            checked={clauseCodes.includes(c.code)}
+                            onChange={(e) =>
+                              setClauseCodes((prev) => (e.target.checked ? [...prev, c.code] : prev.filter((x) => x !== c.code)))
+                            }
+                          />
+                          <span>
+                            {title}
+                            <span className="muted" style={{ marginLeft: "0.35rem", fontSize: "0.75rem" }}>{c.code}</span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          {tab === "cargoes" ? (
+            <>
+              <label>
+                {t("page.estimates.cargo_qty", "货量")}
+                <input value={edit.cargo_qty} onChange={(e) => setEdit({ ...edit, cargo_qty: e.target.value })} />
+              </label>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div className="muted" style={{ marginBottom: "0.35rem" }}>
+                  {t("page.charters.broker_rules", "Cargo broker rules")}
+                </div>
+                {brokerRules.length ? (
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>{t("page.estimates.counterparty", "对手方")}</th>
+                        <th>{t("page.charters.commission_type", "Commission type")}</th>
+                        <th>{t("page.estimates.commission", "佣金 %")}</th>
+                        <th>{t("page.charters.applies_to", "Applies to")}</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {brokerRules.map((r) => (
+                        <tr key={r.id}>
+                          <td>{parties.find((p) => p.id === r.broker_party_id)?.name || r.broker_party_id.slice(0, 8)}</td>
+                          <td>{r.commission_type}</td>
+                          <td>{r.commission_pct ?? "—"}</td>
+                          <td>{r.applies_to}</td>
+                          <td>
+                            <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => removeBrokerRule(r.id)}>
+                              {t("common.delete", "删除")}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="muted" style={{ margin: "0 0 0.5rem" }}>{t("page.charters.no_broker_rules", "暂无经纪规则")}</p>
+                )}
+                <div className="form-grid">
+                  <label>
+                    {t("page.charters.broker_party", "Broker")}
+                    <select value={brForm.broker_party_id} onChange={(e) => setBrForm({ ...brForm, broker_party_id: e.target.value })}>
+                      <option value="">{t("common.select", "Select…")}</option>
+                      {parties.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    {t("page.charters.commission_type", "Commission type")}
+                    <select value={brForm.commission_type} onChange={(e) => setBrForm({ ...brForm, commission_type: e.target.value })}>
+                      <option value="brokerage">brokerage</option>
+                      <option value="address">address</option>
+                    </select>
+                  </label>
+                  <label>
+                    {t("page.estimates.commission", "佣金 %")}
+                    <input type="number" step="any" value={brForm.commission_pct} onChange={(e) => setBrForm({ ...brForm, commission_pct: e.target.value })} />
+                  </label>
+                  <label>
+                    {t("page.charters.applies_to", "Applies to")}
+                    <select value={brForm.applies_to} onChange={(e) => setBrForm({ ...brForm, applies_to: e.target.value })}>
+                      <option value="all">all</option>
+                      <option value="freight">freight</option>
+                      <option value="demurrage">demurrage</option>
+                    </select>
+                  </label>
+                  <div style={{ display: "flex", alignItems: "end" }}>
+                    <button className="btn btn-sm" type="button" disabled={busy} onClick={addBrokerRule}>
+                      {t("common.add", "添加")}
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "0.35rem" }}>
-                {clauseCatalog.map((c) => {
-                  const title = locale.startsWith("zh") ? c.title_zh || c.title_en : c.title_en;
-                  return (
-                    <label key={c.id} style={{ display: "flex", gap: "0.45rem", alignItems: "baseline", margin: 0 }}>
-                      <input
-                        type="checkbox"
-                        checked={clauseCodes.includes(c.code)}
-                        onChange={(e) =>
-                          setClauseCodes((prev) => (e.target.checked ? [...prev, c.code] : prev.filter((x) => x !== c.code)))
-                        }
-                      />
-                      <span>
-                        {title}
-                        <span className="muted" style={{ marginLeft: "0.35rem", fontSize: "0.75rem" }}>{c.code}</span>
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
+            </>
+          ) : null}
+          {tab === "pricing" ? (
+            <>
+              <label>
+                {t("page.estimates.freight_rate", "运价")}
+                <input value={edit.freight_rate} onChange={(e) => setEdit({ ...edit, freight_rate: e.target.value })} />
+              </label>
+              <label>
+                {t("page.charters.pricing_basis", "Pricing basis")}
+                <select value={edit.pricing_basis} onChange={(e) => setEdit({ ...edit, pricing_basis: e.target.value })}>
+                  <option value="">—</option>
+                  <option value="worldscale">worldscale</option>
+                  <option value="per_mt">per_mt</option>
+                  <option value="lumpsum">lumpsum</option>
+                  <option value="afra">afra</option>
+                </select>
+              </label>
+              <TermInputs value={edit} onChange={(k, v) => setEdit({ ...edit, [k]: v })} showTc={isTc(edit.charter_type)} />
+            </>
+          ) : null}
+          {tab === "rebill" ? (
+            <label style={{ gridColumn: "1 / -1" }}>
+              {t("page.charters.rebill_settings", "Rebill settings (JSON)")}
+              <textarea
+                rows={8}
+                spellCheck={false}
+                value={edit.rebill_json}
+                onChange={(e) => setEdit({ ...edit, rebill_json: e.target.value })}
+                placeholder='{"enabled": true, "markup_pct": 2.5}'
+              />
+            </label>
+          ) : null}
+          {tab === "exposure" ? (
+            <>
+              <label>
+                {t("page.charters.exposure_amount", "Exposure amount")}
+                <input type="number" step="any" value={edit.exposure_amount} onChange={(e) => setEdit({ ...edit, exposure_amount: e.target.value })} />
+              </label>
+              <label style={{ gridColumn: "1 / -1" }}>
+                {t("page.charters.planning_periods", "Planning periods (JSON)")}
+                <textarea
+                  rows={8}
+                  spellCheck={false}
+                  value={edit.planning_json}
+                  onChange={(e) => setEdit({ ...edit, planning_json: e.target.value })}
+                  placeholder='{"periods": ["2026-Q1", "2026-Q2"]}'
+                />
+              </label>
+            </>
+          ) : null}
+          {tab === "revexp" ? (
+            <label style={{ gridColumn: "1 / -1" }}>
+              {t("page.charters.rev_exp", "Revenue / expense (JSON)")}
+              <textarea
+                rows={8}
+                spellCheck={false}
+                value={edit.revexp_json}
+                onChange={(e) => setEdit({ ...edit, revexp_json: e.target.value })}
+                placeholder='{"revenue": 200000, "expense": 150000}'
+              />
+            </label>
+          ) : null}
+          {tab === "properties" ? (
+            <label style={{ gridColumn: "1 / -1" }}>
+              {t("page.charters.properties", "Properties (JSON)")}
+              <textarea
+                rows={8}
+                spellCheck={false}
+                value={edit.properties_json}
+                onChange={(e) => setEdit({ ...edit, properties_json: e.target.value })}
+                placeholder='{"key": "value"}'
+              />
+            </label>
           ) : null}
         </div>
         <div className="desk-toolbar">
