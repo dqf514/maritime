@@ -25,6 +25,68 @@
   box-shadow: 0 0 0 1px rgba(26, 155, 150, 0.2);
 }
 
+/* KV grid — dense label/input grid used by admin & settings forms */
+.kv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--gap-xs) var(--gap-md);
+}
+.kv-grid label input,
+.kv-grid label select { width: 100%; }
+dl.kv-grid > div { min-width: 0; }
+
+/* Company logo upload — preview + actions row */
+.company-logo-row {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+  padding-bottom: var(--gap-sm);
+  margin-bottom: var(--gap-sm);
+  border-bottom: 1px solid var(--border-light);
+}
+.company-logo-preview {
+  width: 120px;
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--chrome-border);
+  border-radius: var(--radius-sm);
+  background: var(--toolbar-bg);
+  overflow: hidden;
+}
+.company-logo-preview img {
+  max-width: 112px;
+  max-height: 34px;
+  object-fit: contain;
+}
+.company-logo-placeholder {
+  color: var(--muted);
+  font-size: var(--font-ui);
+  font-weight: 700;
+}
+.company-logo-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.company-logo-label {
+  font-size: var(--font-label);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.company-logo-btns {
+  display: flex;
+  gap: var(--gap-xs);
+}
+.company-logo-hint {
+  font-size: var(--font-label);
+  color: var(--muted);
+}
+
 /* Form Panel — multi-column dense layout */
 .form-panel {
   display: flex;

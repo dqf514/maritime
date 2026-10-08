@@ -765,6 +765,49 @@ def put_company_profile(body: CompanyProfileIn, auth: AuthContext = Depends(requ
     return {"ok": True}
 
 
+@router.post("/admin/company-profile/logo")
+async def upload_company_logo(
+    file: UploadFile = File(...),
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    """Upload tenant company logo; stored under uploads/branding/{tenant_id}/ and URL written to profile."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, detail={"code": "EMPTY_FILE"})
+    if len(raw) > 2_500_000:
+        raise HTTPException(400, detail={"code": "FILE_TOO_LARGE", "max_bytes": 2_500_000})
+    name = (file.filename or "logo").lower()
+    ext = Path(name).suffix.lower()
+    # Raster formats only — SVG is scriptable markup and must never be served as an image
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(400, detail={"code": "UNSUPPORTED_TYPE", "ext": ext})
+    sniffed = _sniff_image_type(raw)
+    expected = "jpg" if ext == ".jpeg" else ext.lstrip(".")
+    if sniffed != expected:
+        raise HTTPException(
+            400, detail={"code": "INVALID_CONTENT", "message": "File content does not match an allowed image type"}
+        )
+    upload_dir = Path(__file__).resolve().parent.parent.parent / "uploads" / "branding" / str(auth.tenant_id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest = upload_dir / f"logo{ext}"
+    dest.write_bytes(raw)
+    # Cache-bust so shell picks up new file immediately
+    stamp = int(datetime.now(timezone.utc).timestamp())
+    from app.config import get_settings
+
+    base = get_settings().api_public_base.rstrip("/")
+    url = f"{base}/uploads/branding/{auth.tenant_id}/logo{ext}?v={stamp}"
+    row = db.scalar(select(TenantCompanyProfile).where(TenantCompanyProfile.tenant_id == auth.tenant_id))
+    if not row:
+        row = TenantCompanyProfile(tenant_id=auth.tenant_id)
+        db.add(row)
+    row.logo_url = url
+    row.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"logo_url": url}
+
+
 class OrgUnitIn(BaseModel):
     code: str
     name: str
