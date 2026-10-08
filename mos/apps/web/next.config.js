@@ -6,7 +6,8 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  // 允许加载 API 域下的图片（上传的公司 Logo、branding 资源等托管在 API 源）
+  `img-src 'self' data: blob: ${apiOrigin}`,
   "font-src 'self' data:",
   `connect-src 'self' ${apiOrigin}`,
   "frame-ancestors 'none'",

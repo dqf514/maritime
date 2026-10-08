@@ -278,8 +278,8 @@ def _apply_wording_patches() -> None:
     stmts = (
         "UPDATE ui_messages SET text = REPLACE(REPLACE(REPLACE(text, '实时大屏', '数据看板'), '数据大屏', '数据看板'), '大屏', '数据看板') WHERE text LIKE '%大屏%'",
         # 修复 tab 标题误显示 key 后缀（如 "tab fleet" → "Fleet"）
-        "UPDATE ui_messages SET text = 'Fleet' WHERE key = 'page.ship.tab_fleet' AND (text LIKE '%tab%' OR text = '')",
-        "UPDATE ui_messages SET text = 'Certificate overview' WHERE key = 'page.ship.tab_certs' AND (text LIKE '%tab%' OR text = '')",
+        "UPDATE ui_messages SET text = 'Fleet' WHERE msg_key = 'page.ship.tab_fleet' AND (text LIKE '%tab%' OR text = '')",
+        "UPDATE ui_messages SET text = 'Certificate overview' WHERE msg_key = 'page.ship.tab_certs' AND (text LIKE '%tab%' OR text = '')",
     )
     with engine.connect() as conn:
         for stmt in stmts:

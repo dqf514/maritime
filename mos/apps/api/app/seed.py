@@ -462,7 +462,7 @@ def seed_saas_catalog(db: Session) -> None:
                     tenant_id=demo.id,
                     legal_name="Demo Shipping Pte Ltd",
                     display_name="Demo Shipping",
-                    logo_url="/branding/demo-logo.svg",
+                    logo_url="/branding/logo.svg",
                     website="https://demo.marios.local",
                     tax_no="SG-DEMO-001",
                     address="1 Harbourfront Ave, Singapore",
