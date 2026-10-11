@@ -1,6 +1,6 @@
 """Vessel detail extension models — 船舶管理补充表.
 
-Covers the IMOS vessel-card gaps: contacts, preferred routes, port tugs,
+Covers the vessel-card gaps: contacts, preferred routes, port tugs,
 bunker tanks, L/D performance, TCE targets, vetting records and loadline
 zones. All rows are tenant-scoped and hung off ``vessels.id``; use
 ``app.services.tenant_guard`` for access (see ``routers/vessel_detail.py``).

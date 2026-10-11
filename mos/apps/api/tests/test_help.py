@@ -12,7 +12,7 @@ def test_help_catalog_and_article(client):
     assert any(a["slug"] == "microsoft-365" for a in body["articles"])
     # Customer copy should not leak internal planning language
     blob = " ".join(a["title"] + " " + a["summary"] for a in body["articles"]).lower()
-    for banned in ("veson", "对标", "不得弱于", "必须补齐", "gap todo"):
+    for banned in ("platform", "对标", "不得弱于", "必须补齐", "gap todo"):
         assert banned not in blob
 
     art = client.get("/api/v1/help/articles/welcome?locale=zh-CN")

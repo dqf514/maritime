@@ -1,7 +1,7 @@
 """Excel-compatible CSV exports — UTF-8 BOM, bilingual headers, tenant-scoped.
 
 Also hosts the XML API surface (task D):
-- GET /invoices/{id}/export-xml   发票 XML 导出（iMOS 风格）
+- GET /invoices/{id}/export-xml   发票 XML 导出（模块化）
 - POST /forms/submit              表单 XML 提交（校验 + 导入 ShipReport）
 """
 
@@ -232,7 +232,7 @@ def export_invoice_xml(
     auth: AuthContext = Depends(require_module("finance")),
     db: Session = Depends(get_db),
 ):
-    """Export invoice as iMOS-style XML (header + counterparty + payments)."""
+    """Export invoice as modular XML (header + counterparty + payments)."""
     inv = scoped_get(db, Invoice, invoice_id, auth.tenant_id)
     if not inv:
         raise HTTPException(404, detail={"code": "INVOICE_NOT_FOUND", "message": "Invoice not found"})

@@ -53,6 +53,6 @@ $env:LICENSE_DEV_UNLOCK="all"
 | 8 | Twin L4 what-if / SelfCheck gold / domain schema checks |
 | 9 | MariLink 船岸通信 / 燃油区域 / MariAI Agent / Webhook / 报表引擎 / 碳合规 |
 | 10 | UI 组件体系（Toast / Skeleton / ErrorBoundary / DataTable / Dark mode / 面包屑） |
-| 11 | 导航模块化（iMOS 风格分区）/ 对手方增强（自定义类型 + 多联系人）/ Workbench 密度回调 |
+| 11 | 导航模块化（模块化分区）/ 对手方增强（自定义类型 + 多联系人）/ Workbench 密度回调 |
 
 API version: `0.9.0-full`

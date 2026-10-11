@@ -1,7 +1,7 @@
 """付款域路由 — 付款批次（payment batches）+ 付款条件/方式/银行账户 + 预收预付。
 
 批次链路：选应付发票 → 建批次（一发票一 Payment 行）→ 审批（入账 paid_amount）
-→ 冲正（回滚）→ 导出银行付款指令 XML（iMOS SimplePayment 兼容）。
+→ 冲正（回滚）→ 导出银行付款指令 XML（standard payment 兼容）。
 """
 
 from __future__ import annotations

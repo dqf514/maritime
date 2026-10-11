@@ -232,7 +232,7 @@ class UdfValue(Base):
     )
 
 
-# ── 预置配置键目录（iMOS 风格功能开关 + 基础口径键）─────────────────────
+# ── 预置配置键目录（模块化功能开关 + 基础口径键）─────────────────────
 # 每项: key / description / type（bool|number|string）/ default（Python 值，可省略）
 # 种子写入 platform 域（scope_key="platform"），租户/用户域按需覆盖。
 

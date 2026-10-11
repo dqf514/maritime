@@ -1,6 +1,6 @@
 "use client";
 
-// U-VESSEL 船舶管理卡片：完整明细页（IMOS vessel card 对齐）。
+// U-VESSEL 船舶管理卡片：完整明细页（标准船舶卡片对齐）。
 // Tabs: Summary · DWT/Draft · Contacts · Routes · Tugs · Bunker Tanks ·
 // L/D Performance · TCE Targets · Vetting · Loadline Zones · Certificates · PMS.
 

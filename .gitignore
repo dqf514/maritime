@@ -29,3 +29,15 @@ mos/docs/internal/
 /VoyageOS-更新总结-*.md
 /mos/VoyageOS 完整开发规格说明书*.md
 /MariOS-更新总结-*.md
+
+# 竞品研究资料（仅本地）
+*imos*
+*IMOS*
+*veson*
+*Veson*
+/screenshots/
+/screenshot*.py
+/save_screenshot.py
+imos-system-guide.html
+veson_*
+*COUNTERPARTY_ENHANCEMENT*

@@ -1,6 +1,6 @@
 """Role-based navigation, workspaces and home widgets (DDS §2–3).
 
-Sidenav is organised into functional modules (iMOS-style):
+Sidenav is organised into functional modules (modular):
   Workbench → Chartering → Operations → Finance → Technical → Analytics
   → Master data → Administration → Platform
 
@@ -86,7 +86,7 @@ NAV_PLATFORM: list[dict[str, Any]] = [
     {"id": "plat_health", "label": "Estate health", "href": "/platform/health", "roles": ["platform_admin"]},
 ]
 
-# ── Module definitions (iMOS-style functional grouping) ──────────────
+# ── Module definitions (modular functional grouping) ──────────────
 
 MODULES: list[dict[str, Any]] = [
     {

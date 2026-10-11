@@ -4,7 +4,7 @@ Supports:
 - Auto-selecting payable invoices by due date / counterparty / currency
 - Batch creation with sequential numbering (PB-YYYY-NNNNN)
 - Bank charge allocation modes (shared / sender / receiver)
-- Payment instruction XML export (iMOS SimplePayment compatible)
+- Payment instruction XML export (standard payment compatible)
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ def reverse_batch(db: Session, batch: PaymentBatch) -> PaymentBatch:
 
 
 def export_payment_xml(batch: PaymentBatch, payments: list[Payment]) -> str:
-    """Generate iMOS SimplePayment-compatible XML for bank instruction."""
+    """Generate standard payment-compatible XML for bank instruction."""
     root = ET.Element("PaymentInstructions")
     root.set("batchNumber", batch.batch_number)
     root.set("batchDate", batch.batch_date.isoformat())

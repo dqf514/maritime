@@ -1,7 +1,7 @@
 """Vessel detail extension — DWT/draft spec columns + 8 vessel-card tables.
 
 Merges the two concurrent heads (bunker/laytime depth + finance depth) and
-extends ``vessels`` with the IMOS vessel-card spec block, then creates the
+extends ``vessels`` with the vessel-card spec block, then creates the
 detail tables: contacts / routes / tugs / tanks / performance / tce targets /
 vettings / loadline zones.
 

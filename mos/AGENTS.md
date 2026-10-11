@@ -24,7 +24,7 @@ mos/
 ├── office/         # M365 插件清单（excel/outlook manifest.xml、teams manifest.json）
 ├── docs/           # 客户可见文档；docs/internal/ 为内部规划
 ├── index.html      # 产品介绍页（浏览器直接打开）
-└── imos.txt        # iMOS 参考资料
+└── notes.txt        # MariOS 参考资料
 ```
 
 ## 技术栈
@@ -92,7 +92,7 @@ $env:LICENSE_DEV_UNLOCK="all"
 - **认证与安全**（`app/security.py`）：双轨会话——JWT 既在响应体返回，又写入 HttpOnly Cookie `marios_token`（旧名 `voyageos_token` 仍兼容）；也支持 Bearer / API Key。CSRF 姿态为 SameSite=Lax + 严格 CORS allow_credentials（理由记录在 `security.py` 注释中，改动 Cookie/CORS 时保留该推理）。模块许可证经 `require_module()` 校验，未授权返回 403 `MODULE_NOT_LICENSED`；开发用 `LICENSE_DEV_UNLOCK=all` 绕过。
 - **启动种子**（`main.py` lifespan）：目录类数据总是播种（SaaS catalog、i18n、ops catalog、reference catalog）；demo 租户/用户仅当 `SEED_DEMO=true` 时播种。
 - **Schema 管理**：启动时执行 `Base.metadata.create_all`，另在 `main.py` 保留针对旧 SQLite dev 库的存量 `ALTER TABLE` 补丁。**新的 schema 变更一律走 Alembic**（`alembic revision --autogenerate`），不要再往 ALTER 补丁列表加列。存量库先 `alembic stamp head` 再 `alembic upgrade head`，详见 `apps/api/alembic/README.md`（SQLite 下启用 `render_as_batch`）。
-- **导航**：角色驱动的服务端导航，定义在 `services/shell_nav.py`（iMOS 风格分区：Workbench → Chartering → Operations → Finance → Technical → Analytics → Master data → Administration → Platform），被搜索 ACL 与 Web AppShell 消费——导航改动放在服务端，不要在前端硬编码。
+- **导航**：角色驱动的服务端导航，定义在 `services/shell_nav.py`（模块化分区：Workbench → Chartering → Operations → Finance → Technical → Analytics → Master data → Administration → Platform），被搜索 ACL 与 Web AppShell 消费——导航改动放在服务端，不要在前端硬编码。
 - **SelfCheck**（`apps/api/checks/registry.py`）：应用内健康/计算金样检查，须与 pytest 同步保持全绿。
 - **LLM**：平台默认配置在 `app/config.py`（Anthropic/OpenAI），租户级 `AiProvider` 行可覆盖；`MARIOS_LLM_OFF=1` 为运行时熔断开关（`llm_client` 抛 `LLMNotConfigured`，调用方回退规则引擎）。
 

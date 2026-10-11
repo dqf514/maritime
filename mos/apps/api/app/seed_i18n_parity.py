@@ -1,4 +1,4 @@
-"""Parity UI messages for IMOS modules / reference / recycle — merged into seed.
+"""Parity UI messages for core modules / reference / recycle — merged into seed.
 
 Force-upserted on every seed so EN/ZH stay aligned with product copy.
 """

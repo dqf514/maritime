@@ -1,6 +1,6 @@
 """Vessel detail APIs — 船舶管理明细（DWT/吃水、联系人、航线、拖轮、油舱、装卸、TCE、检验、载重线）.
 
-Closes the vessel-module gap vs IMOS: every tab of the vessel card gets a
+Closes the vessel-module gap vs benchmark: every tab of the vessel card gets a
 tenant-scoped CRUD resource under ``/vessels/{vessel_id}/…`` plus two derived
 views (max-lift calculation, full summary). Access goes through
 ``app.services.tenant_guard`` — foreign tenant ids always 404.
