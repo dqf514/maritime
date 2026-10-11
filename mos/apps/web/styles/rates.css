@@ -44,9 +44,9 @@
   font-size: var(--font-ui);
   color: var(--ink);
 }
-.rates-side-item:hover { background: rgba(26, 155, 150, 0.05); }
+.rates-side-item:hover { background: var(--row-hover); }
 .rates-side-item.active {
-  background: rgba(26, 155, 150, 0.1);
+  background: var(--accent-bg);
   border-left-color: var(--accent);
 }
 .rates-side-item .rates-side-name {
@@ -108,7 +108,7 @@
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button:hover { background: var(--foam); color: var(--ink); }
 .seg button.active {
-  background: rgba(26, 155, 150, 0.14);
+  background: var(--accent-bg-strong);
   color: var(--ink);
   font-weight: 600;
 }

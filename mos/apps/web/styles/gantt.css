@@ -48,7 +48,7 @@
   background: var(--accent);
   color: #fff;
 }
-.gantt-zoom button:not(.active):hover { background: rgba(26, 155, 150, 0.08); color: var(--ink); }
+.gantt-zoom button:not(.active):hover { background: var(--accent-bg); color: var(--ink); }
 
 /* board grid: single scroll container, labels sticky-left (zero-JS scroll sync) */
 .gantt-board-grid {
@@ -105,7 +105,7 @@
 }
 .gantt-axis-tick.month-start {
   border-left-color: var(--sea-mid);
-  background: rgba(26, 155, 150, 0.06);
+  background: var(--accent-bg);
 }
 .gantt-today-line {
   position: absolute;
@@ -169,8 +169,8 @@
   border-left-color: rgba(15, 28, 40, 0.14);
 }
 .gantt-gridline.month {
-  border-left-color: rgba(26, 155, 150, 0.35);
-  background: rgba(26, 155, 150, 0.035);
+  border-left-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--row-hover);
 }
 .gantt-weekend {
   position: absolute;
@@ -299,7 +299,7 @@
 }
 .sched-seg button:last-child { border-right: none; }
 .sched-seg button.active { background: var(--sea-mid); color: #fff; }
-.sched-seg button:not(.active):hover { background: rgba(26, 155, 150, 0.08); color: var(--ink); }
+.sched-seg button:not(.active):hover { background: var(--accent-bg); color: var(--ink); }
 .sched-range {
   display: flex;
   align-items: center;

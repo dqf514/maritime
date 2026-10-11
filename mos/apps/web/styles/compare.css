@@ -97,7 +97,7 @@
   justify-content: center;
   width: 14px;
   height: 14px;
-  background: rgba(26, 155, 150, 0.15);
+  background: var(--accent-bg-strong);
   color: var(--accent);
   border-radius: 50%;
   font-size: 9px;
@@ -122,10 +122,10 @@
 }
 .compare-variant-header.dragging {
   opacity: 0.5;
-  background: rgba(26, 155, 150, 0.1);
+  background: var(--accent-bg);
 }
 .compare-variant-header.drag-over {
-  background: rgba(26, 155, 150, 0.15);
+  background: var(--accent-bg-strong);
   border-left: 3px solid var(--accent);
 }
 .compare-variant-drag {
@@ -155,7 +155,7 @@
   min-width: 120px;
 }
 .compare-value-cell.is-best {
-  background: rgba(26, 155, 150, 0.1);
+  background: var(--accent-bg);
   color: var(--accent);
   font-weight: 700;
 }
@@ -171,7 +171,7 @@
   opacity: 0.65;
 }
 .compare-row:hover {
-  background: rgba(26, 155, 150, 0.04);
+  background: var(--row-hover);
 }
 .compare-row:hover.is-same {
   opacity: 0.85;

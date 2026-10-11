@@ -64,11 +64,11 @@
   padding: 0;
   border: 1px solid rgba(255,255,255,0.18);
   border-radius: 999px;
-  background: rgba(43, 181, 176, 0.35);
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
   cursor: pointer;
   color: #fff;
 }
-.user-avatar-btn:hover { background: rgba(43, 181, 176, 0.5); }
+.user-avatar-btn:hover { background: color-mix(in srgb, var(--accent) 50%, transparent); }
 .user-avatar {
   font-size: 0.72rem;
   font-weight: 700;
@@ -79,8 +79,8 @@
   right: 0;
   top: calc(100% + 8px);
   min-width: 220px;
-  background: #fff;
-  color: var(--ink, #0f1c28);
+  background: var(--surface);
+  color: var(--ink);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 12px 28px rgba(15, 28, 40, 0.18);
@@ -116,8 +116,8 @@
   text-decoration: none;
 }
 .user-menu-pop a:hover,
-.user-menu-pop button:hover { background: rgba(26, 155, 150, 0.08); }
-.user-menu-danger { color: #b42318 !important; }
+.user-menu-pop button:hover { background: var(--accent-bg); }
+.user-menu-danger { color: var(--danger) !important; }
 
 .top-user {
   display: flex;
@@ -137,17 +137,17 @@
 .ws-tab {
   background: transparent;
   border: 1px solid transparent;
-  color: #9eb6c4;
+  color: var(--muted);
   border-radius: 6px;
   padding: 0.3rem 0.55rem;
   cursor: pointer;
   font-size: 0.78rem;
 }
-.ws-tab:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.ws-tab:hover { color: var(--ink); background: var(--nav-topbar-icon-bg); }
 .ws-tab.active {
-  color: #fff;
-  border-color: rgba(43,181,176,0.45);
-  background: rgba(43,181,176,0.18);
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-bg);
 }
 
 .icon-btn {
@@ -157,8 +157,8 @@
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.12);
+  background: var(--nav-topbar-icon-bg);
+  border: 1px solid var(--nav-topbar-icon-border);
 }
 
 .nav-toggle {
@@ -166,39 +166,39 @@
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(255,255,255,0.08);
-  color: #e8f1f5;
+  border: 1px solid var(--nav-topbar-border);
+  background: var(--nav-topbar-icon-bg);
+  color: var(--nav-topbar-text);
   cursor: pointer;
   font-size: 0.95rem;
   line-height: 1;
 }
-.nav-toggle:hover { background: rgba(255,255,255,0.14); }
+.nav-toggle:hover { background: var(--nav-topbar-icon-hover); }
 
 .workspace-select-wrap { margin-left: 0.25rem; }
 .workspace-select {
   min-height: 36px;
   max-width: 180px;
   border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(255,255,255,0.08);
-  color: #e8f1f5;
+  border: 1px solid var(--nav-topbar-border);
+  background: var(--nav-topbar-icon-bg);
+  color: var(--nav-topbar-text);
   padding: 0.35rem 0.55rem;
   font-size: 0.85rem;
 }
-.workspace-select option { color: #0f1c28; }
+.workspace-select option { color: var(--ink); }
 
 .top-help {
-  color: #c5d5df;
+  color: var(--dash-text-heading);
   font-size: 0.85rem;
   padding: 0.35rem 0.55rem;
   border-radius: 8px;
   white-space: nowrap;
 }
-.top-help:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.top-help:hover { color: var(--ink); background: var(--nav-topbar-icon-bg); }
 
 .sidenav {
-  background: linear-gradient(180deg, #f7fafb 0%, #eef3f6 100%);
+  background: var(--nav-bg);
   border-right: 1px solid var(--border);
   padding: 0.55rem 0.45rem 0.75rem;
   overflow-y: auto;
@@ -237,7 +237,7 @@
 }
 .sidenav-foot a:hover, .sidenav-foot a.active,
 .sidenav-foot .nav-collapse-btn:hover {
-  background: #dff3f2;
+  background: var(--nav-active-bg);
   color: var(--sea-deep);
   font-weight: 600;
 }
@@ -251,7 +251,7 @@
   font-size: 0.68rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #7a8f9d;
+  color: var(--nav-label);
   padding: 0.35rem 0.55rem;
   font-weight: 700;
   background: transparent;
@@ -263,7 +263,7 @@
 }
 .nav-section-icon {
   display: none;
-  color: #7a8f9d;
+  color: var(--nav-label);
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
@@ -307,7 +307,7 @@
   color: var(--accent);
 }
 .sidenav a:hover, .sidenav a.active {
-  background: #dff3f2;
+  background: var(--nav-active-bg);
   color: var(--sea-deep);
   font-weight: 600;
 }
@@ -341,8 +341,8 @@
 .nav-float-hint {
   position: fixed;
   transform: translateY(-50%);
-  background: #0b1f2a;
-  color: #eef3f6;
+  background: var(--nav-float-bg);
+  color: var(--nav-float-text);
   font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0;
@@ -362,7 +362,7 @@
   align-items: center;
   padding: 0 1.25rem;
   border-top: 1px solid var(--border);
-  background: #f3f7f9;
+  background: var(--nav-statusbar-bg);
   color: var(--muted);
   font-size: 0.75rem;
   flex: 0 0 auto;
@@ -425,15 +425,15 @@
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: #d7e8ef;
+  background: var(--nav-topbar-icon-bg);
+  border: 1px solid var(--nav-topbar-icon-border);
+  color: var(--dash-text-heading);
   cursor: pointer;
   font-size: 1.1rem;
   transition: background 0.15s;
 }
 .theme-toggle:hover {
-  background: rgba(255,255,255,0.14);
+  background: var(--nav-topbar-icon-hover);
 }
 
 @media (max-width: 900px) {
@@ -450,14 +450,14 @@
   flex: 0 0 auto;
   margin: 0;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--nav-topbar-border);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #f4f8fb;
+  background: var(--nav-topbar-icon-bg);
+  color: var(--nav-topbar-text);
   cursor: pointer;
 }
 .nav-hamburger:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--nav-topbar-icon-hover);
 }
 .nav-hamburger-box {
   display: grid;
@@ -599,7 +599,7 @@
   transition: background 0.1s;
 }
 .nav-popup-btn:hover {
-  background: rgba(26, 155, 150, 0.08);
+  background: var(--accent-bg);
 }
 .nav-popup-btn.open {
   background: var(--accent);
@@ -705,10 +705,10 @@
   transition: background 0.08s;
 }
 .nav-popup-item:hover {
-  background: rgba(26, 155, 150, 0.1);
+  background: var(--accent-bg);
 }
 .nav-popup-item.active {
-  background: rgba(26, 155, 150, 0.15);
+  background: var(--accent-bg-strong);
   color: var(--accent);
   font-weight: 700;
 }

@@ -78,9 +78,9 @@
   font: inherit;
   cursor: pointer;
 }
-.notify-item:hover { background: rgba(26, 155, 150, 0.08); }
-.notify-item.unread { background: rgba(26, 155, 150, 0.12); }
-.notify-item.unread:hover { background: rgba(26, 155, 150, 0.18); }
+.notify-item:hover { background: var(--accent-bg); }
+.notify-item.unread { background: var(--row-selected); }
+.notify-item.unread:hover { background: var(--accent-bg-strong); }
 .notify-dot {
   width: 8px;
   height: 8px;

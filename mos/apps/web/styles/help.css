@@ -7,7 +7,7 @@
   grid-template-rows: var(--topbar) minmax(0, 1fr) var(--statusbar);
   overflow: hidden;
   background:
-    radial-gradient(ellipse 70% 40% at 100% 0%, rgba(26, 155, 150, 0.12), transparent 55%),
+    radial-gradient(ellipse 70% 40% at 100% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 55%),
     linear-gradient(180deg, #f4f8fa 0%, var(--foam) 40%);
 }
 .help-top {
@@ -85,7 +85,7 @@
   border: 1px solid var(--border);
   border-radius: 12px;
 }
-.help-ask-panel.focus { box-shadow: 0 0 0 3px rgba(26,155,150,0.18); }
+.help-ask-panel.focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .help-ask-panel h2 { margin: 0 0 0.35rem; font-size: 1.1rem; }
 .help-ask-panel .muted { color: var(--muted); margin: 0 0 0.75rem; font-size: 0.9rem; }
 .help-ask-form { display: flex; gap: 0.5rem; flex-wrap: wrap; }
@@ -153,7 +153,7 @@
   font-size: 0.75rem;
   padding: 0.2rem 0.5rem;
   border-radius: 6px;
-  background: rgba(26,155,150,0.12);
+  background: var(--row-selected);
   color: var(--sea-mid);
 }
 .help-body p { margin: 0 0 1rem; line-height: 1.65; max-width: 46em; }

@@ -40,6 +40,43 @@
   --focus-ring: rgba(26,155,150,0.4);
   --row-hover: rgba(26, 155, 150, 0.04);
   --row-selected: rgba(26, 155, 150, 0.1);
+
+  /* Dashboard dark-surface tokens */
+  --dash-bg: linear-gradient(160deg, #061018 0%, #0a1a2a 40%, #10263a 100%);
+  --dash-bg-accent: rgba(43,181,176,0.18);
+  --dash-surface: rgba(255,255,255,0.04);
+  --dash-border: rgba(255,255,255,0.08);
+  --dash-text: #e8f0f4;
+  --dash-text-muted: #93a8b5;
+  --dash-text-dim: #8ea3b0;
+  --dash-hover: rgba(255,255,255,0.08);
+  --dash-accent-bg: rgba(43,181,176,0.18);
+  --dash-accent-hover: rgba(43,181,176,0.25);
+  --dash-menu-bg: rgba(10,22,32,0.96);
+  --dash-menu-border: rgba(255,255,255,0.14);
+  --dash-ok: #7dcea0;
+  --dash-warn: #f0c674;
+  --dash-danger: #ff8f7a;
+  --dash-good: #34c759;
+  --dash-amber: #f0a020;
+  --dash-text-heading: #c5d5df;
+  --dash-border-subtle: rgba(255,255,255,0.06);
+  --dash-btn-bg: rgba(255,255,255,0.06);
+  --dash-btn-hover: rgba(255,255,255,0.12);
+  --dash-btn-border: rgba(255,255,255,0.18);
+
+  /* Navigation chrome tokens */
+  --nav-bg: linear-gradient(180deg, #f7fafb 0%, #eef3f6 100%);
+  --nav-active-bg: #dff3f2;
+  --nav-label: #7a8f9d;
+  --nav-float-bg: #0b1f2a;
+  --nav-float-text: #eef3f6;
+  --nav-statusbar-bg: #f3f7f9;
+  --nav-topbar-text: #e8f1f5;
+  --nav-topbar-icon-bg: rgba(255,255,255,0.08);
+  --nav-topbar-icon-border: rgba(255,255,255,0.12);
+  --nav-topbar-icon-hover: rgba(255,255,255,0.14);
+  --nav-topbar-border: rgba(255,255,255,0.14);
 }
 
 /* ═══ Theme: Slate — 深色专注 ═══ */
@@ -79,6 +116,43 @@
   --row-hover: rgba(88, 166, 255, 0.06);
   --row-selected: rgba(88, 166, 255, 0.12);
   color-scheme: dark;
+
+  /* Dashboard dark-surface tokens */
+  --dash-bg: linear-gradient(160deg, #0d1117 0%, #161b22 40%, #1c2128 100%);
+  --dash-bg-accent: rgba(88,166,255,0.15);
+  --dash-surface: rgba(255,255,255,0.04);
+  --dash-border: rgba(255,255,255,0.08);
+  --dash-text: #e6edf3;
+  --dash-text-muted: #8b949e;
+  --dash-text-dim: #7d8590;
+  --dash-hover: rgba(255,255,255,0.06);
+  --dash-accent-bg: rgba(88,166,255,0.15);
+  --dash-accent-hover: rgba(88,166,255,0.25);
+  --dash-menu-bg: rgba(22,27,34,0.96);
+  --dash-menu-border: rgba(255,255,255,0.12);
+  --dash-ok: #3fb950;
+  --dash-warn: #d29922;
+  --dash-danger: #f85149;
+  --dash-good: #3fb950;
+  --dash-amber: #d29922;
+  --dash-text-heading: #c9d1d9;
+  --dash-border-subtle: rgba(255,255,255,0.06);
+  --dash-btn-bg: rgba(255,255,255,0.06);
+  --dash-btn-hover: rgba(255,255,255,0.10);
+  --dash-btn-border: rgba(255,255,255,0.16);
+
+  /* Navigation chrome tokens */
+  --nav-bg: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
+  --nav-active-bg: rgba(88,166,255,0.15);
+  --nav-label: #8b949e;
+  --nav-float-bg: #161b22;
+  --nav-float-text: #e6edf3;
+  --nav-statusbar-bg: #161b22;
+  --nav-topbar-text: #e6edf3;
+  --nav-topbar-icon-bg: rgba(255,255,255,0.06);
+  --nav-topbar-icon-border: rgba(255,255,255,0.10);
+  --nav-topbar-icon-hover: rgba(255,255,255,0.10);
+  --nav-topbar-border: rgba(255,255,255,0.12);
 }
 
 /* ═══ Theme: Indigo — 现代蓝紫 ═══ */
@@ -117,6 +191,45 @@
   --focus-ring: rgba(99, 102, 241, 0.4);
   --row-hover: rgba(99, 102, 241, 0.05);
   --row-selected: rgba(99, 102, 241, 0.12);
+}
+
+/* ═══ Dashboard dark-surface tokens (Indigo) ═══ */
+[data-theme="indigo"] {
+  --dash-bg: linear-gradient(160deg, #0f0b2e 0%, #1a1545 40%, #241e5c 100%);
+  --dash-bg-accent: rgba(99,102,241,0.18);
+  --dash-surface: rgba(255,255,255,0.04);
+  --dash-border: rgba(255,255,255,0.08);
+  --dash-text: #eef0ff;
+  --dash-text-muted: #9b9ec0;
+  --dash-text-dim: #8588b0;
+  --dash-hover: rgba(255,255,255,0.06);
+  --dash-accent-bg: rgba(99,102,241,0.18);
+  --dash-accent-hover: rgba(99,102,241,0.28);
+  --dash-menu-bg: rgba(26,21,69,0.96);
+  --dash-menu-border: rgba(255,255,255,0.12);
+  --dash-ok: #4ade80;
+  --dash-warn: #fbbf24;
+  --dash-danger: #f87171;
+  --dash-good: #4ade80;
+  --dash-amber: #fbbf24;
+  --dash-text-heading: #c7c5e0;
+  --dash-border-subtle: rgba(255,255,255,0.06);
+  --dash-btn-bg: rgba(255,255,255,0.06);
+  --dash-btn-hover: rgba(255,255,255,0.10);
+  --dash-btn-border: rgba(255,255,255,0.16);
+
+  /* Navigation chrome tokens */
+  --nav-bg: linear-gradient(180deg, #f5f3ff 0%, #eef2ff 100%);
+  --nav-active-bg: rgba(99,102,241,0.10);
+  --nav-label: #6b7280;
+  --nav-float-bg: #1e1b4b;
+  --nav-float-text: #eef2ff;
+  --nav-statusbar-bg: #f5f3ff;
+  --nav-topbar-text: #eef2ff;
+  --nav-topbar-icon-bg: rgba(255,255,255,0.08);
+  --nav-topbar-icon-border: rgba(255,255,255,0.12);
+  --nav-topbar-icon-hover: rgba(255,255,255,0.14);
+  --nav-topbar-border: rgba(255,255,255,0.14);
 }
 
 /* ── Theme Picker UI ── */

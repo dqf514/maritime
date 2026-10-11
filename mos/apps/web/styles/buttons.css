@@ -44,12 +44,12 @@
 }
 
 .btn-danger {
-  background: linear-gradient(180deg, #fde8e6, #f5c4be);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--danger) 10%, white), color-mix(in srgb, var(--danger) 20%, white));
   color: var(--danger);
-  border-color: #e8a9a2;
+  border-color: color-mix(in srgb, var(--danger) 30%, white);
 }
 .btn-danger:hover:not(:disabled) {
-  background: #f5c4be;
+  background: color-mix(in srgb, var(--danger) 20%, white);
   border-color: var(--danger);
 }
 
@@ -59,7 +59,7 @@
   box-shadow: none;
 }
 .btn-ghost:hover:not(:disabled) {
-  background: rgba(26, 155, 150, 0.08);
+  background: var(--accent-bg);
   border-color: transparent;
   box-shadow: none;
 }
@@ -86,7 +86,7 @@
   padding: 0;
 }
 .icon-btn:hover {
-  background: rgba(26, 155, 150, 0.08);
+  background: var(--accent-bg);
   color: var(--ink);
 }
 

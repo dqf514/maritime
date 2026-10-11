@@ -52,14 +52,19 @@
 .wb-stat-danger { color: var(--danger); }
 .wb-stat-danger strong { color: var(--danger); }
 .wb-quick-btn {
-  padding: 0.3rem 0.65rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 0.82rem;
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h);
+  padding: 0 var(--gap-md);
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-label);
+  font-weight: 600;
   color: var(--ink);
   text-decoration: none;
+  background: var(--btn-bg);
 }
-.wb-quick-btn:hover { border-color: var(--accent); color: var(--accent); }
+.wb-quick-btn:hover { border-color: var(--accent); background: var(--btn-hover); }
 
 /* KPI strip — inline horizontal */
 .wb-kpi-strip {

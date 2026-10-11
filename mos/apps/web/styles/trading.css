@@ -34,21 +34,24 @@
   margin-bottom: var(--gap-md);
 }
 .trading-tab {
-  height: var(--control-h);
+  height: 28px;
   padding: 0 var(--gap-md);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
+  border: none;
+  background: transparent;
   color: var(--muted);
   font-size: var(--font-ui);
   font-weight: 600;
   cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
-.trading-tab:hover { background: var(--foam); color: var(--ink); }
+.trading-tab:hover { color: var(--ink); background: var(--foam); }
 .trading-tab.active {
-  background: rgba(26, 155, 150, 0.14);
-  border-color: #9fd4d1;
-  color: var(--ink);
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
 }
 
 /* 交易簿/持仓网格容器 */

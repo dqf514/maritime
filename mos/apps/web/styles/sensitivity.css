@@ -18,13 +18,13 @@
   font-size: 0.875rem;
   font-weight: 500;
   text-align: right;
-  color: var(--text);
+  color: var(--ink);
 }
 
 .tornado-track {
   position: relative;
   height: 32px;
-  background: var(--bg-muted);
+  background: var(--chrome-bg);
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
@@ -39,17 +39,17 @@
 }
 
 .tornado-fill.positive {
-  background: linear-gradient(90deg, var(--ok), var(--ok-light));
+  background: linear-gradient(90deg, var(--ok), color-mix(in srgb, var(--ok) 40%, white));
 }
 
 .tornado-fill.negative {
-  background: linear-gradient(90deg, var(--danger), var(--danger-light));
+  background: linear-gradient(90deg, var(--danger), color-mix(in srgb, var(--danger) 40%, white));
 }
 
 .tornado-value {
   font-size: 0.875rem;
   font-weight: 600;
-  color: var(--text);
+  color: var(--ink);
   text-align: left;
 }
 
@@ -90,12 +90,12 @@
 .btn-group label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .kpi-sub {
   font-size: 0.75rem;
-  color: var(--text-muted);
+  color: var(--muted);
   margin-top: 0.25rem;
 }
 
@@ -116,10 +116,10 @@
 
 .skeleton-row {
   height: 60px;
-  background: linear-gradient(90deg, var(--bg-muted) 25%, var(--bg-subtle) 50%, var(--bg-muted) 75%);
+  background: linear-gradient(90deg, var(--chrome-bg) 25%, var(--foam) 50%, var(--chrome-bg) 75%);
   background-size: 200% 100%;
   animation: skeleton-pulse 1.5s ease-in-out infinite;
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
 }
 
 @keyframes skeleton-pulse {

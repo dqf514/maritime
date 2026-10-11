@@ -28,7 +28,7 @@
   height: 22px;
 }
 .table tbody tr.row-openable { cursor: pointer; }
-.table tbody tr.row-openable:hover td { background: rgba(26, 155, 150, 0.05); }
+.table tbody tr.row-openable:hover td { background: var(--row-hover); }
 
 .data-table {
   width: 100%;
@@ -43,8 +43,8 @@
   height: var(--row-h);
 }
 .data-table tr { cursor: pointer; }
-.data-table tr:hover,
-.data-table tr.active { background: rgba(26, 155, 150, 0.06); }
+.data-table tr:hover { background: var(--row-hover); }
+.data-table tr.active { background: var(--row-selected); }
 
 /* DataTable component */
 .dt-wrapper {
@@ -94,7 +94,7 @@
 }
 .dt-sort-th:hover {
   color: var(--ink);
-  background: rgba(26, 155, 150, 0.08);
+  background: var(--accent-bg);
 }
 .dt-th-inner {
   display: inline-flex;
@@ -115,9 +115,9 @@
 .dt-align-right { text-align: right; }
 .dt-align-center { text-align: center; }
 .dt-table tbody tr { transition: background 0.08s; }
-.dt-table tbody tr:hover { background: rgba(26, 155, 150, 0.04); }
+.dt-table tbody tr:hover { background: var(--row-hover); }
 .dt-row-clickable { cursor: pointer; }
-.dt-row-selected { background: rgba(26, 155, 150, 0.08) !important; }
+.dt-row-selected { background: var(--row-selected) !important; }
 .dt-row-focused {
   outline: 1px solid var(--focus-ring);
   outline-offset: -1px;
@@ -319,9 +319,9 @@
   align-items: center;
 }
 .data-picker-item:hover,
-.data-picker-item.active { background: rgba(26, 155, 150, 0.08); }
+.data-picker-item.active { background: var(--accent-bg); }
 .data-picker-item.kbd-active {
-  background: rgba(26, 155, 150, 0.12);
+  background: var(--row-selected);
   outline: 1px solid var(--accent);
 }
 

@@ -53,15 +53,15 @@
   height: 20px;
 }
 .grid-table thead th:hover {
-  background: rgba(26, 155, 150, 0.08);
+  background: var(--accent-bg);
 }
 
 .grid-row:hover td {
-  background: rgba(26, 155, 150, 0.03);
+  background: var(--row-hover);
 }
 
 .cell-selected {
-  background: rgba(26, 155, 150, 0.1) !important;
+  background: var(--row-selected) !important;
 }
 .cell-focus {
   outline: 2px solid var(--accent);
@@ -91,7 +91,7 @@
   height: 20px;
 }
 .grid-group-header:hover td {
-  background: rgba(26, 155, 150, 0.06);
+  background: var(--accent-bg);
 }
 .grid-group-toggle {
   display: inline-block;

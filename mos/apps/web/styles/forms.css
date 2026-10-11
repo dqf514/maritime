@@ -22,7 +22,7 @@
 .panel select:focus {
   border-color: var(--accent);
   outline: none;
-  box-shadow: 0 0 0 1px rgba(26, 155, 150, 0.2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* KV grid — dense label/input grid used by admin & settings forms */
@@ -209,7 +209,7 @@ dl.kv-grid > div { min-width: 0; }
   padding: 0;
 }
 .locale-date-trigger:hover:not(:disabled) {
-  background: rgba(26, 155, 150, 0.1);
+  background: var(--accent-bg);
   color: var(--ink);
 }
 .record-modal-body .locale-date-field > input[type="text"],
@@ -233,7 +233,7 @@ dl.kv-grid > div { min-width: 0; }
   padding: 0;
 }
 .density-toggle:hover {
-  background: rgba(26, 155, 150, 0.08);
+  background: var(--accent-bg);
   color: var(--ink);
 }
 

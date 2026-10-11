@@ -162,7 +162,7 @@
   align-items: center;
 }
 .palette li:hover,
-.palette li.active { background: rgba(26, 155, 150, 0.1); }
+.palette li.active { background: var(--accent-bg); }
 .palette .meta { color: var(--muted); font-size: var(--font-label); }
 
 /* Confirm dialog */

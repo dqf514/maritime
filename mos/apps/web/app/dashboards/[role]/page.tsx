@@ -211,7 +211,7 @@ export default function RoleDashboardPage() {
   }, [snap, t]);
 
   const wall = (
-    <div ref={rootRef} className={`dash-wall ${fullscreen ? "is-fs" : ""}`} style={{ ["--dash-accent" as string]: accent }}>
+    <div ref={rootRef} className={`dash-wall ${fullscreen ? "is-fs" : ""}`}>
       <header className="dash-top">
         <div>
           <p className="dash-eyebrow">MariOS · {role}</p>

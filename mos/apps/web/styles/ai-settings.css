@@ -19,7 +19,7 @@
 }
 
 .ai-tab {
-  height: 30px;
+  height: 28px;
   padding: 0 12px;
   border: none;
   background: transparent;
@@ -292,12 +292,15 @@
 }
 
 .ai-actions button {
-  height: 20px;
-  padding: 0 8px;
-  font-size: var(--font-label);
-  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--gap-sm);
+  font-size: 9.5px;
+  font-weight: 600;
+  border: 1px solid var(--chrome-border);
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: var(--btn-bg);
   color: var(--ink);
   cursor: pointer;
   white-space: nowrap;
@@ -305,7 +308,7 @@
 
 .ai-actions button:hover {
   border-color: var(--accent);
-  color: var(--accent);
+  background: var(--btn-hover);
 }
 
 .ai-actions button.danger:hover {

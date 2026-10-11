@@ -37,7 +37,7 @@
   flex: 1 1 auto;
   min-width: 0;
 }
-a.lc-step-link:hover { background: rgba(26, 155, 150, 0.08); }
+a.lc-step-link:hover { background: var(--accent-bg); }
 .lc-dot {
   flex: 0 0 auto;
   width: 30px;
@@ -64,8 +64,8 @@ a.lc-step-link:hover { background: rgba(26, 155, 150, 0.08); }
 .lc-text strong { font-size: 0.86rem; }
 .lc-text small { color: var(--muted); font-size: 0.74rem; }
 @keyframes lc-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(26, 155, 150, 0.45); }
-  50% { box-shadow: 0 0 0 7px rgba(26, 155, 150, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+  50% { box-shadow: 0 0 0 7px transparent; }
 }
 
 .pnl-summary .kv-box { min-width: 9rem; }
