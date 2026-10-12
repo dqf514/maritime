@@ -20,6 +20,7 @@ export default function DashboardsIndexPage() {
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.dashboards", "Live dashboards") }]}
         title={t("page.dashboards.title", "Live dashboards")}
         subtitle={t(
           "page.dashboards.sub",

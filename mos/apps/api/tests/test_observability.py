@@ -153,5 +153,5 @@ def test_alembic_baseline_revision_exists():
     api_root = Path(__file__).resolve().parent.parent
     versions = list((api_root / "alembic" / "versions").glob("*.py"))
     assert versions, "no alembic revisions found"
-    baseline = versions[0].read_text(encoding="utf-8")
-    assert "down_revision = None" in baseline
+    # glob 顺序不稳定（新增 revision 会打乱 versions[0]）——基线只要存在即可
+    assert any("down_revision = None" in v.read_text(encoding="utf-8") for v in versions)

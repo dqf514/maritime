@@ -1,3 +1,5 @@
+import { apiError } from "./errors";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
 // Rebrand (VoyageOS -> MariOS): localStorage keys moved from voyageos_* to
@@ -84,10 +86,7 @@ export async function apiLogin(email: string, password: string, tenant_code = "d
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const err: any = new Error("Login failed");
-    err.detail = body?.detail;
-    err.code = body?.detail?.code;
-    throw err;
+    throw apiError("POST", "/api/v1/auth/login", res.status, body);
   }
   // access_token is still returned for backward compatibility; callers must
   // NOT persist it — the cookie is the session.
@@ -201,10 +200,7 @@ export async function apiGet(path: string) {
   if (!res.ok) {
     handleUnauthorized(res);
     const body = await res.json().catch(() => ({}));
-    const err: any = new Error(typeof body?.detail === "string" ? body.detail : body?.detail?.message || `GET ${path} failed`);
-    err.status = res.status;
-    err.detail = body?.detail;
-    throw err;
+    throw apiError("GET", path, res.status, body);
   }
   return res.json();
 }
@@ -239,10 +235,7 @@ export async function apiPost(path: string, body?: unknown) {
   if (!res.ok) {
     handleUnauthorized(res);
     const data = await res.json().catch(() => ({}));
-    const err: any = new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.message || `POST ${path} failed`);
-    err.status = res.status;
-    err.detail = data?.detail;
-    throw err;
+    throw apiError("POST", path, res.status, data);
   }
   return res.json();
 }
@@ -257,10 +250,7 @@ export async function apiPut(path: string, body?: unknown) {
   if (!res.ok) {
     handleUnauthorized(res);
     const data = await res.json().catch(() => ({}));
-    const err: any = new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.message || `PUT ${path} failed`);
-    err.status = res.status;
-    err.detail = data?.detail;
-    throw err;
+    throw apiError("PUT", path, res.status, data);
   }
   return res.json();
 }
@@ -275,10 +265,7 @@ export async function apiPatch(path: string, body?: unknown) {
   if (!res.ok) {
     handleUnauthorized(res);
     const data = await res.json().catch(() => ({}));
-    const err: any = new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.message || `PATCH ${path} failed`);
-    err.status = res.status;
-    err.detail = data?.detail;
-    throw err;
+    throw apiError("PATCH", path, res.status, data);
   }
   return res.json();
 }
@@ -292,10 +279,7 @@ export async function apiDelete(path: string) {
   if (!res.ok) {
     handleUnauthorized(res);
     const data = await res.json().catch(() => ({}));
-    const err: any = new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.message || `DELETE ${path} failed`);
-    err.status = res.status;
-    err.detail = data?.detail;
-    throw err;
+    throw apiError("DELETE", path, res.status, data);
   }
   return res.json().catch(() => ({ ok: true }));
 }
@@ -314,10 +298,7 @@ export async function apiUpload(path: string, form: FormData) {
   if (!res.ok) {
     handleUnauthorized(res);
     const data = await res.json().catch(() => ({}));
-    const err: any = new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.message || data?.detail?.code || `POST ${path} failed`);
-    err.status = res.status;
-    err.detail = data?.detail;
-    throw err;
+    throw apiError("POST", path, res.status, data);
   }
   return res.json();
 }

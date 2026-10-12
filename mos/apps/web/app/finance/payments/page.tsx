@@ -3,17 +3,26 @@
 // 付款批次工作台：批次列表 + 新建批次（勾选应付发票）+ 审批/冲正 + 导出银行 XML。
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { DateInput } from "@/components/DateInput";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
 import { StateView } from "@/components/StateView";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { useToast } from "@/components/ToastProvider";
 import { API_BASE, apiGet, apiPost, readStorage, TOKEN_STORAGE_KEY } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { fmt } from "@/lib/fmt";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 
 type Batch = {
   id: string;
@@ -25,6 +34,7 @@ type Batch = {
   payment_count: number;
   bank_charge_mode: string | null;
   approved_at: string | null;
+  updated_at?: string | null;
   payments?: PaymentRow[];
 };
 
@@ -54,6 +64,10 @@ const money = (v: number | null | undefined) => (v == null ? "—" : fmt(v));
 function PaymentsPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  // U1 列表协议：筛选进 URL
+  const { query, setQuery } = useListQuery();
+  const statusFilter = typeof query.status === "string" ? query.status : "";
 
   const [rows, setRows] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,6 +83,19 @@ function PaymentsPage() {
 
   // 批次详情
   const [detail, setDetail] = useState<Batch | null>(null);
+
+  // R4 行右键菜单
+  const batchCtx = useContextMenu<Batch>();
+
+  // B6 列表热键：按 N 新建付款批次
+  useListHotkeys(() => {
+    void openCreate();
+  });
+
+  const filteredRows = useMemo(
+    () => (statusFilter ? rows.filter((r) => r.status === statusFilter) : rows),
+    [rows, statusFilter],
+  );
 
   const loadBatches = useCallback(async () => {
     setLoading(true);
@@ -189,10 +216,31 @@ function PaymentsPage() {
       { key: "batch_number", title: t("page.payments.batch_no", "Batch no"), sticky: true },
       { key: "batch_date", title: t("page.payments.batch_date", "Date") },
       { key: "status", title: t("common.status", "Status") },
-      { key: "payment_count", title: t("page.payments.count", "Payments"), align: "right", agg: "sum" },
-      { key: "total_amount", title: t("common.amount", "Amount"), align: "right", agg: "sum", render: (v) => money(v as number) },
+      {
+        key: "payment_count",
+        title: t("page.payments.count", "Payments"),
+        align: "right",
+        agg: "sum",
+        value: (r) => r.payment_count,
+        render: (v) => <Num v={v as number} digits={0} />,
+      },
+      {
+        key: "total_amount",
+        title: t("common.amount", "Amount"),
+        align: "right",
+        agg: "sum",
+        value: (r) => r.total_amount,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
       { key: "currency", title: t("common.currency", "Currency") },
       { key: "bank_charge_mode", title: t("page.payments.charge_mode", "Bank charges"), render: (v) => (v ? String(v) : "—") },
+      {
+        key: "updated_at",
+        title: t("list.last_modified", "Last modified"),
+        width: 135,
+        value: (r) => r.updated_at ?? null,
+        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
     ],
     [t],
   );
@@ -213,7 +261,14 @@ function PaymentsPage() {
       },
       { key: "invoice_no", title: t("page.finance.no", "No") },
       { key: "invoice_type", title: t("common.type", "Type") },
-      { key: "outstanding", title: t("page.payments.outstanding", "Outstanding"), align: "right", agg: "sum", render: (v) => money(v as number) },
+      {
+        key: "outstanding",
+        title: t("page.payments.outstanding", "Outstanding"),
+        align: "right",
+        agg: "sum",
+        value: (r) => r.outstanding,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
       { key: "currency", title: t("common.currency", "Currency") },
       { key: "due_date", title: t("page.payments.due", "Due"), render: (v) => (v ? String(v) : "—") },
     ],
@@ -223,32 +278,85 @@ function PaymentsPage() {
   const paymentCols = useMemo<ColumnDef<PaymentRow>[]>(
     () => [
       { key: "invoice_id", title: t("page.finance.invoice", "Invoice"), render: (v) => String(v).slice(0, 8) },
-      { key: "amount", title: t("common.amount", "Amount"), align: "right", agg: "sum", render: (v) => money(v as number) },
+      {
+        key: "amount",
+        title: t("common.amount", "Amount"),
+        align: "right",
+        agg: "sum",
+        value: (r) => r.amount,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
       { key: "currency", title: t("common.currency", "Currency") },
       { key: "reference", title: t("common.reference", "Reference"), render: (v) => (v ? String(v) : "—") },
     ],
     [t],
   );
 
+  function exportBatches(rows: Batch[]) {
+    downloadCsv(
+      "payment-batches",
+      ["id", "batch_number", "batch_date", "status", "payment_count", "total_amount", "currency", "bank_charge_mode"],
+      rows.map((r) => [r.id, r.batch_number, r.batch_date ?? "", r.status, r.payment_count, r.total_amount, r.currency, r.bank_charge_mode ?? ""]),
+    );
+  }
+
+  const batchMenuItems = (row: Batch): ContextMenuItem[] => [
+    { key: "open", label: t("common.open", "Open"), onClick: () => openDetail(row.id) },
+    { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(row.id) },
+    { key: "export", label: t("page.finance.export_selected", "导出所选 CSV"), onClick: () => exportBatches([row]) },
+    { key: "div", divider: true, label: "" },
+    ...(row.status === "draft"
+      ? [{ key: "approve", label: t("page.payments.approve", "Approve"), onClick: () => approve(row.id) } as ContextMenuItem]
+      : []),
+    ...(row.status === "completed" || row.status === "processing"
+      ? [{ key: "reverse", label: t("page.payments.reverse", "Reverse"), onClick: () => reverse(row.id) } as ContextMenuItem]
+      : []),
+    { key: "xml", label: t("page.payments.export_xml", "Export XML"), onClick: () => exportXml(row.id) },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.finance", "Finance"), href: "/finance" },
+          { label: t("page.payments.title", "Payment batches") },
+        ]}
         title={t("page.payments.title", "Payment batches")}
         subtitle={t("page.payments.sub", "Batch invoice payments, approve, reverse and export bank XML.")}
-        actions={
-          <button className="btn btn-primary" type="button" onClick={openCreate}>
-            {t("page.payments.new_batch", "New batch")}
-          </button>
-        }
+        actions={<SavedViews storageKey="finance_payments" onApply={(q) => router.replace(`/finance/payments${q}`)} />}
       />
 
       <div className="panel">
-        <StateView loading={loading} error={err ?? undefined} empty={!rows.length} onRetry={() => loadBatches()}>
+        <Toolbar
+          filterCount={statusFilter ? 1 : 0}
+          onClearFilters={() => setQuery({ status: null }, { resetPage: true })}
+          right={
+            <select
+              className="input input-sm"
+              value={statusFilter}
+              onChange={(e) => setQuery({ status: e.target.value || null }, { resetPage: true })}
+              aria-label={t("common.status", "Status")}
+            >
+              <option value="">{t("page.payments.all_status", "All statuses")}</option>
+              <option value="draft">draft</option>
+              <option value="processing">processing</option>
+              <option value="completed">completed</option>
+              <option value="reversed">reversed</option>
+            </select>
+          }
+        >
+          <button className="btn btn-primary btn-sm" type="button" onClick={openCreate}>
+            {t("page.payments.new_batch", "New batch")}
+          </button>
+          <StatusLegend statuses={["draft", "processing", "completed", "reversed"]} />
+        </Toolbar>
+        <StateView loading={loading} error={err ?? undefined} empty={!filteredRows.length} onRetry={() => loadBatches()}>
           <DataGrid<Batch>
             columns={cols}
-            data={rows}
+            data={filteredRows}
             rowKey={(r) => r.id}
             onRowClick={(r) => openDetail(r.id)}
+            onRowContextMenu={(row, _i, e) => batchCtx.open(row)(e)}
             storageKey="payments.batches"
             emptyText={t("common.empty", "No records")}
           />
@@ -337,6 +445,8 @@ function PaymentsPage() {
           </>
         ) : null}
       </RecordModal>
+
+      <ContextMenu controller={batchCtx} items={batchMenuItems} />
     </AppShell>
   );
 }

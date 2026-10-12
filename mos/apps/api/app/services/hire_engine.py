@@ -115,6 +115,23 @@ def calculate_hire_statement(
 
     net_hire = (gross_hire - off_hire_deduction).quantize(_CENT, ROUND_HALF_UP)
 
+    # 指数联动定价 — index-linked hire components (additive; absent → no-op).
+    # Each component resolves to an extra hire line; the total lands in
+    # other_adjustments and is added to net_hire.
+    unpriced_total = _ZERO
+    unpriced_rows: list[dict] = []
+    if getattr(contract, "hire_components", None):
+        from app.services.unpriced_components import evaluate_unpriced_components
+
+        unpriced_total, unpriced_rows = evaluate_unpriced_components(
+            contract.hire_components,
+            days=billable_days,
+            db=db,
+            tenant_id=contract.tenant_id,
+            default_pricing_date=period_end,
+        )
+        net_hire = (net_hire + unpriced_total).quantize(_CENT, ROUND_HALF_UP)
+
     breakdown_lines: list[dict] = []
     breakdown_lines.append({
         "label": "Gross Hire",
@@ -139,6 +156,17 @@ def calculate_hire_statement(
             "amount": f"-{_f(ev.hire_deduction)}",
         })
 
+    for row in unpriced_rows:
+        line = {
+            "label": row["name"],
+            "amount": str(_f(row["amount"]).quantize(_CENT, ROUND_HALF_UP)),
+        }
+        if row.get("rate") is not None:
+            line["rate"] = str(row["rate"])
+        if row.get("basis") == "per_day":
+            line["days"] = str(billable_days)
+        breakdown_lines.append(line)
+
     breakdown_lines.append({
         "label": "Net Hire",
         "amount": str(net_hire),
@@ -152,7 +180,7 @@ def calculate_hire_statement(
         "gross_hire": (gross_hire + off_hire_deduction).quantize(_CENT, ROUND_HALF_UP),
         "off_hire_deduction": off_hire_deduction.quantize(_CENT, ROUND_HALF_UP),
         "bunker_adjustment": _ZERO,
-        "other_adjustments": _ZERO,
+        "other_adjustments": unpriced_total,
         "net_hire": net_hire,
         "currency": contract.hire_currency,
         "breakdown": {"lines": breakdown_lines},

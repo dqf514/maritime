@@ -430,6 +430,7 @@ export function resolveIconId(hrefOrId: string): string {
 
   // Prefer longest path match so /settings/ai wins over /settings
   const table: [string, string][] = [
+    ["/settings/flags", "settings_hub"],
     ["/settings/dataops/migrate", "migrate"],
     ["/settings/dataops/backup", "backup"],
     ["/settings/selfcheck", "selfcheck"],

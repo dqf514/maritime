@@ -10,6 +10,8 @@ import { AppShell } from "@/components/AppShell";
 import { PageGuide } from "@/components/PageGuide";
 import { PageHeader } from "@/components/PageHeader";
 import { SavedViews } from "@/components/SavedViews";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Tabs, type TabItem } from "@/components/Tabs";
 import { AccrualsPanel } from "@/components/finance/AccrualsPanel";
 import { ClaimsPanel } from "@/components/finance/ClaimsPanel";
 import { InvoicesPanel } from "@/components/finance/InvoicesPanel";
@@ -31,19 +33,31 @@ function FinanceHubPage() {
   const tab: Tab = TAB_IDS.includes(query.tab ?? "") ? (query.tab as Tab) : "invoices";
   const setTab = (id: Tab) => setQuery({ tab: id === "invoices" ? null : id, page: null });
 
-  const tabs: Array<{ id: Tab; label: string }> = [
-    { id: "invoices", label: t("page.finance.invoices", "Invoices") },
-    { id: "laytime", label: t("page.finance.laytime", "Laytime") },
-    { id: "pnl", label: t("page.finance.pnl", "Dynamic P&L") },
-    { id: "claims", label: t("page.finance.claims", "Claims") },
-    { id: "accruals", label: t("page.finance.accruals", "Voyage accruals") },
-    { id: "pda", label: t("page.finance.pda", "Port PDA/FDA") },
-    { id: "risk", label: t("page.finance.risk", "Risk limits") },
+  const tabs: TabItem[] = [
+    { key: "invoices", label: t("page.finance.invoices", "Invoices") },
+    { key: "laytime", label: t("page.finance.laytime", "Laytime") },
+    { key: "pnl", label: t("page.finance.pnl", "Dynamic P&L") },
+    { key: "claims", label: t("page.finance.claims", "Claims") },
+    { key: "accruals", label: t("page.finance.accruals", "Voyage accruals") },
+    { key: "pda", label: t("page.finance.pda", "Port PDA/FDA") },
+    { key: "risk", label: t("page.finance.risk", "Risk limits") },
   ];
+
+  // 各 tab 实际出现的状态集合（状态色图例）
+  const legendStatuses: Record<Tab, string[]> = {
+    invoices: ["draft", "pending_approval", "issued", "partially_paid", "paid", "void"],
+    laytime: ["draft", "calculated", "finalized", "cancelled"],
+    pnl: [],
+    claims: ["open", "negotiating", "settled", "withdrawn"],
+    accruals: ["draft", "posted", "reversed"],
+    pda: ["draft", "submitted", "approved", "fda", "closed", "cancelled"],
+    risk: [],
+  };
 
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.finance", "Finance") }]}
         title={t("page.finance.title", "Finance / laytime / P&L")}
         subtitle={t("page.finance.sub", "Invoices, laytime, claims, accruals and PDA/FDA. Open a row to edit or delete.")}
         actions={
@@ -57,18 +71,9 @@ function FinanceHubPage() {
         }
       />
 
-      <div className="desk-tabs">
-        {tabs.map((tb) => (
-          <button
-            key={tb.id}
-            type="button"
-            className={`desk-tab${tab === tb.id ? " active" : ""}`}
-            onClick={() => setTab(tb.id)}
-          >
-            {tb.label}
-          </button>
-        ))}
-      </div>
+      <Tabs items={tabs} value={tab} onChange={(k) => setTab(k as Tab)} variant="line" />
+
+      <StatusLegend statuses={legendStatuses[tab] ?? []} />
 
       {tab === "invoices" ? <InvoicesPanel /> : null}
       {tab === "laytime" ? <LaytimePanel /> : null}

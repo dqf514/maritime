@@ -1,10 +1,18 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type Subscription = {
@@ -36,13 +44,18 @@ const EVENT_OPTIONS = [
   "certificate.*",
 ];
 
-export default function WebhooksPage() {
+function WebhooksPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
+  const filterStatus = query.status ?? "";
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
 
-  // Create form
+  // Create form (RecordModal)
+  const [creating, setCreating] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
@@ -56,6 +69,19 @@ export default function WebhooksPage() {
     load().catch(() => {});
   }, []);
 
+  function openCreate() {
+    setName("");
+    setUrl("");
+    setSelectedEvents([]);
+    setCreating(true);
+  }
+
+  useListHotkeys(openCreate);
+
+  function closeCreate() {
+    setCreating(false);
+  }
+
   function toggleEvent(ev: string) {
     setSelectedEvents((prev) =>
       prev.includes(ev) ? prev.filter((e) => e !== ev) : [...prev, ev]
@@ -65,169 +91,239 @@ export default function WebhooksPage() {
   async function onCreate(e: FormEvent) {
     e.preventDefault();
     if (!name || !url || selectedEvents.length === 0) return;
-    await apiPost("/api/v1/webhooks/subscriptions", { name, url, events: selectedEvents });
-    setName("");
-    setUrl("");
-    setSelectedEvents([]);
-    toast.success(t("webhooks.created", "Subscription created"));
-    await load();
+    setSaving(true);
+    try {
+      await apiPost("/api/v1/webhooks/subscriptions", { name, url, events: selectedEvents });
+      toast.success(t("webhooks.created", "Subscription created"));
+      setCreating(false);
+      await load();
+    } catch (err) {
+      toast.error(t("webhooks.create_fail", "Failed to create subscription: {err}", { err: String(err) }));
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function toggleActive(sub: Subscription) {
     const newActive = sub.status !== "active";
-    await apiPatch(`/api/v1/webhooks/subscriptions/${sub.id}`, { is_active: newActive });
-    await load();
+    try {
+      await apiPatch(`/api/v1/webhooks/subscriptions/${sub.id}`, { is_active: newActive });
+      await load();
+    } catch (err) {
+      toast.error(t("webhooks.toggle_fail", "Failed to update subscription: {err}", { err: String(err) }));
+    }
   }
 
   async function removeSub(id: string) {
-    await apiDelete(`/api/v1/webhooks/subscriptions/${id}`);
-    await load();
+    try {
+      await apiDelete(`/api/v1/webhooks/subscriptions/${id}`);
+      await load();
+    } catch (err) {
+      toast.error(t("webhooks.delete_fail", "Failed to delete subscription: {err}", { err: String(err) }));
+    }
   }
 
   async function rotateSecret(id: string) {
-    const result = await apiPost(`/api/v1/webhooks/subscriptions/${id}/rotate-secret`, {});
-    toast.success(`New secret: ${result.secret}`);
+    try {
+      const result = await apiPost(`/api/v1/webhooks/subscriptions/${id}/rotate-secret`, {});
+      toast.success(t("webhooks.new_secret", "New secret: {secret}", { secret: result.secret }));
+    } catch (err) {
+      toast.error(t("webhooks.rotate_fail", "Failed to rotate secret: {err}", { err: String(err) }));
+    }
   }
+
+  const filteredSubs = filterStatus ? subs.filter((s) => s.status === filterStatus) : subs;
+
+  const subColumns: ColumnDef<Subscription>[] = [
+    { key: "name", title: t("webhooks.name", "Name"), minWidth: 140, value: (r) => r.name },
+    {
+      key: "url",
+      title: t("webhooks.url", "URL"),
+      minWidth: 180,
+      value: (r) => r.url,
+      render: (v) => <span title={String(v)}>{String(v)}</span>,
+    },
+    {
+      key: "events",
+      title: t("webhooks.events", "Events"),
+      minWidth: 180,
+      value: (r) => (r.events || []).join(", "),
+      render: (_v, s) => (
+        <span>
+          {(s.events || []).slice(0, 3).map((ev) => (
+            <span key={ev} className="badge badge-info">{ev}</span>
+          ))}
+          {(s.events || []).length > 3 && <span className="muted">+{s.events.length - 3}</span>}
+        </span>
+      ),
+    },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 100,
+      value: (r) => r.status,
+    },
+    {
+      key: "_actions",
+      title: t("common.actions", "Actions"),
+      width: 220,
+      align: "right",
+      render: (_v, s) => (
+        <span>
+          <button type="button" className="btn btn-sm" onClick={() => toggleActive(s)}>
+            {s.status === "active" ? t("common.disable", "Disable") : t("common.enable", "Enable")}
+          </button>{" "}
+          <button type="button" className="btn btn-sm" onClick={() => rotateSecret(s.id)}>
+            {t("webhooks.rotate", "Rotate secret")}
+          </button>{" "}
+          <button type="button" className="btn btn-sm btn-danger" onClick={() => removeSub(s.id)}>
+            {t("common.delete", "Delete")}
+          </button>
+        </span>
+      ),
+    },
+  ];
+
+  const deliveryColumns: ColumnDef<Delivery>[] = [
+    {
+      key: "event",
+      title: t("webhooks.event", "Event"),
+      minWidth: 160,
+      value: (r) => r.event,
+      render: (v) => <code>{String(v)}</code>,
+    },
+    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "attempts",
+      title: t("webhooks.attempts", "Attempts"),
+      width: 90,
+      align: "right",
+      value: (r) => r.attempts,
+    },
+    {
+      key: "response_code",
+      title: t("webhooks.response", "Response"),
+      width: 100,
+      value: (r) => r.response_code ?? "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+    {
+      key: "created_at",
+      title: t("common.time", "Time"),
+      width: 170,
+      value: (r) => r.created_at,
+      render: (v) => new Date(String(v)).toLocaleString(),
+    },
+  ];
 
   return (
     <AppShell>
-      <PageHeader title={t("page.webhooks.title", "Webhooks")} />
+      <PageHeader
+        breadcrumb={[
+          { label: t("nav.settings_hub", "System settings"), href: "/settings" },
+          { label: t("page.webhooks.title", "Webhooks") },
+        ]}
+        title={t("page.webhooks.title", "Webhooks")}
+        actions={
+          <SavedViews
+            storageKey="settings_webhooks"
+            onApply={(qs) => router.replace(`/settings/webhooks${qs}`)}
+          />
+        }
+      />
+      <Toolbar
+        filterCount={filterStatus ? 1 : 0}
+        onClearFilters={() => setQuery({ status: null }, { resetPage: true })}
+        right={
+          <select
+            className="input input-sm"
+            value={filterStatus}
+            onChange={(e) => setQuery({ status: e.target.value || null }, { resetPage: true })}
+            aria-label={t("common.status", "Status")}
+          >
+            <option value="">{t("common.all", "All")}</option>
+            <option value="active">{t("common.active", "Active")}</option>
+            <option value="disabled">{t("common.disabled", "Disabled")}</option>
+          </select>
+        }
+      >
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
+          {t("webhooks.new_btn", "+ New webhook")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
       <div className="space-y-6">
 
-        {/* Create subscription */}
-        <div className="rounded-lg border bg-white p-4">
-          <h3 className="mb-3 font-semibold">{t("webhooks.new", "New subscription")}</h3>
-          <form onSubmit={onCreate} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="mb-1 block text-sm text-gray-600">{t("webhooks.name", "Name")}</label>
-                <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded border px-3 py-2 text-sm" placeholder="My integration" />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm text-gray-600">{t("webhooks.url", "URL")}</label>
-                <input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full rounded border px-3 py-2 text-sm" placeholder="https://example.com/webhook" />
-              </div>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-gray-600">{t("webhooks.events", "Events")}</label>
-              <div className="flex flex-wrap gap-2">
-                {EVENT_OPTIONS.map((ev) => (
-                  <button
-                    key={ev}
-                    type="button"
-                    onClick={() => toggleEvent(ev)}
-                    className={`rounded px-2 py-1 text-xs ${
-                      selectedEvents.includes(ev) ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                    }`}
-                  >
-                    {ev}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <button type="submit" className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">
-              {t("webhooks.create", "Create subscription")}
-            </button>
-          </form>
-        </div>
-
         {/* Subscriptions list */}
-        <div className="rounded-lg border bg-white">
-          <div className="border-b p-4">
-            <h3 className="font-semibold">{t("webhooks.subscriptions", "Subscriptions")}</h3>
-          </div>
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-xs text-gray-500">
-              <tr>
-                <th className="px-4 py-2">{t("webhooks.name", "Name")}</th>
-                <th className="px-4 py-2">{t("webhooks.url", "URL")}</th>
-                <th className="px-4 py-2">{t("webhooks.events", "Events")}</th>
-                <th className="px-4 py-2">{t("common.status", "Status")}</th>
-                <th className="px-4 py-2">{t("common.actions", "Actions")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {subs.map((s) => (
-                <tr key={s.id} className="border-t">
-                  <td className="px-4 py-2 font-medium">{s.name}</td>
-                  <td className="px-4 py-2 max-w-xs truncate text-gray-600">{s.url}</td>
-                  <td className="px-4 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {(s.events || []).slice(0, 3).map((ev) => (
-                        <span key={ev} className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px]">{ev}</span>
-                      ))}
-                      {(s.events || []).length > 3 && (
-                        <span className="text-[10px] text-gray-400">+{s.events.length - 3}</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-2">
-                    <span className={`rounded px-2 py-0.5 text-xs ${s.status === "active" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                      {s.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2">
-                    <div className="flex gap-2">
-                      <button onClick={() => toggleActive(s)} className="text-xs text-blue-600 hover:underline">
-                        {s.status === "active" ? t("common.disable", "Disable") : t("common.enable", "Enable")}
-                      </button>
-                      <button onClick={() => rotateSecret(s.id)} className="text-xs text-amber-600 hover:underline">
-                        {t("webhooks.rotate", "Rotate secret")}
-                      </button>
-                      <button onClick={() => removeSub(s.id)} className="text-xs text-red-600 hover:underline">
-                        {t("common.delete", "Delete")}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {subs.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">{t("webhooks.none", "No subscriptions")}</td></tr>
-              )}
-            </tbody>
-          </table>
+        <div className="panel">
+          <h3>{t("webhooks.subscriptions", "Subscriptions")}</h3>
+          <DataGrid<Subscription>
+            columns={subColumns}
+            data={filteredSubs}
+            rowKey={(r) => r.id}
+            storageKey="settings_webhooks_subs_grid"
+            emptyText={t("webhooks.none", "No subscriptions")}
+          />
         </div>
 
         {/* Recent deliveries */}
-        <div className="rounded-lg border bg-white">
-          <div className="border-b p-4">
-            <h3 className="font-semibold">{t("webhooks.deliveries", "Recent deliveries")}</h3>
-          </div>
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-xs text-gray-500">
-              <tr>
-                <th className="px-4 py-2">{t("webhooks.event", "Event")}</th>
-                <th className="px-4 py-2">{t("common.status", "Status")}</th>
-                <th className="px-4 py-2">{t("webhooks.attempts", "Attempts")}</th>
-                <th className="px-4 py-2">{t("webhooks.response", "Response")}</th>
-                <th className="px-4 py-2">{t("common.time", "Time")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {deliveries.map((d) => (
-                <tr key={d.id} className="border-t">
-                  <td className="px-4 py-2 font-mono text-xs">{d.event}</td>
-                  <td className="px-4 py-2">
-                    <span className={`rounded px-2 py-0.5 text-xs ${
-                      d.status === "delivered" ? "bg-green-100 text-green-700" :
-                      d.status === "failed" ? "bg-red-100 text-red-700" :
-                      "bg-yellow-100 text-yellow-700"
-                    }`}>
-                      {d.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2">{d.attempts}</td>
-                  <td className="px-4 py-2">{d.response_code || "—"}</td>
-                  <td className="px-4 py-2 text-gray-500">{new Date(d.created_at).toLocaleString()}</td>
-                </tr>
-              ))}
-              {deliveries.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">{t("webhooks.no_deliveries", "No deliveries yet")}</td></tr>
-              )}
-            </tbody>
-          </table>
+        <div className="panel">
+          <h3>{t("webhooks.deliveries", "Recent deliveries")}</h3>
+          <DataGrid<Delivery>
+            columns={deliveryColumns}
+            data={deliveries}
+            rowKey={(r) => r.id}
+            storageKey="settings_webhooks_deliveries_grid"
+            emptyText={t("webhooks.no_deliveries", "No deliveries yet")}
+          />
         </div>
       </div>
+
+      <RecordModal
+        open={creating}
+        title={t("webhooks.new", "New subscription")}
+        onClose={closeCreate}
+        onSave={onCreate}
+        saving={saving}
+        canDelete={false}
+      >
+        <div className="form-grid">
+          <label>
+            {t("webhooks.name", "Name")}
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My integration" required />
+          </label>
+          <label>
+            {t("webhooks.url", "URL")}
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/webhook" required />
+          </label>
+        </div>
+        <label>
+          {t("webhooks.events", "Events")}
+          <span>
+            {EVENT_OPTIONS.map((ev) => (
+              <button
+                key={ev}
+                type="button"
+                onClick={() => toggleEvent(ev)}
+                className={selectedEvents.includes(ev) ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}
+              >
+                {ev}
+              </button>
+            ))}
+          </span>
+        </label>
+      </RecordModal>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <WebhooksPage />
+    </Suspense>
   );
 }

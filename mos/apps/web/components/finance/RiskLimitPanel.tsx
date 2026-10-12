@@ -5,6 +5,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { DataTable, type ColumnDef } from "@/components/DataTable";
 import { LookupSelect } from "@/components/LookupSelect";
+import { Num } from "@/components/Num";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -93,7 +94,7 @@ export function RiskLimitPanel() {
           const cols: ColumnDef<(typeof limits)[number]>[] = [
             { key: "scope", title: t("page.finance.scope", "Scope") },
             { key: "limit_type", title: t("common.type", "Type") },
-            { key: "amount", title: t("common.amount", "Amount"), align: "right", render: (v) => fmt(v as number) },
+            { key: "amount", title: t("common.amount", "Amount"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
             { key: "currency", title: t("page.finance.currency", "Currency") },
           ];
           return (

@@ -14,7 +14,13 @@ def test_role_nav_differs(client):
     def hrefs(payload):
         out = []
         for sec in payload["navigation"]:
-            out.extend(i["href"] for i in sec["items"])
+            out.extend(i["href"] for i in sec["items"] if not i.get("locked"))
+        return set(out)
+
+    def locked_hrefs(payload):
+        out = []
+        for sec in payload["navigation"]:
+            out.extend(i["href"] for i in sec["items"] if i.get("locked"))
         return set(out)
 
     ch, oh, ah = hrefs(charter), hrefs(ops), hrefs(admin)
@@ -29,6 +35,15 @@ def test_role_nav_differs(client):
     assert "/estimates" in charter.get("allowed_paths", [])
     assert "/operations/voyages" not in charter.get("allowed_paths", [])
     assert "/platform" not in charter.get("allowed_paths", [])
+
+    # B1：无权条目保留入口但标记 locked（点击进 /denied 解释页），
+    # allowed_paths 仍不放行 → 路由层照旧拒绝。
+    ch_locked, oh_locked = locked_hrefs(charter), locked_hrefs(ops)
+    assert "/operations/voyages" in ch_locked
+    assert "/settings" in ch_locked
+    assert "/estimates" in oh_locked
+    assert "/operations/voyages" not in oh_locked
+    assert "/operations/voyages" not in charter.get("allowed_paths", [])
 
 
 def test_omni_search_respects_roles(client):

@@ -66,6 +66,8 @@ export type DataGridProps<T = any> = {
   onRowDoubleClick?: (row: T, index: number) => void;
   /** 行点击 */
   onRowClick?: (row: T, index: number) => void;
+  /** 行右键（ContextMenu 一等交互；e 已 preventDefault） */
+  onRowContextMenu?: (row: T, index: number, e: React.MouseEvent) => void;
   /** 选择变化 */
   onSelectionChange?: (sel: GridSelection) => void;
   /** 服务端排序 */

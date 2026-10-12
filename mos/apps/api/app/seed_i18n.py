@@ -56,8 +56,6 @@ UI_MESSAGES: list[tuple[str, str, str, str]] = [
     ("nav.plat_ops", "nav", "Data & deployment", "数据与部署"),
     ("section.work", "nav", "Work", "工作"),
     ("section.master", "nav", "Master data", "主数据"),
-    ("section.admin", "nav", "Tenant admin", "租户管理"),
-    ("section.platform", "nav", "Platform ops", "平台运维"),
     ("ws.chartering_day", "nav", "Chartering Day", "租船日班"),
     ("ws.ops_night", "nav", "Ops Night", "操作夜班"),
     ("ws.finance_desk", "nav", "Finance Desk", "财务台"),

@@ -1,15 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { PartyPicker } from "@/components/DataPicker";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { EstimateCompare, type CompareFieldDef } from "@/components/EstimateCompare";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { Num } from "@/components/Num";
+import { StatusLegend } from "@/components/StatusLegend";
+import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { PageGuide } from "@/components/PageGuide";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
+
+type SensitivityRow = { delta_pct: number; tce: number };
 
 type RefItem = { id: string; name: string };
 type EstResults = {
@@ -133,6 +148,8 @@ const EMPTY_INPUTS: InputFields = {
 
 const BUNKER_GRADES = ["VLSFO", "HSFO", "MGO", "LNG"];
 
+const ESTIMATE_STATUSES = ["draft", "calculated", "confirmed", "converted", "cancelled"];
+
 type LegRow = {
   from_port: string;
   to_port: string;
@@ -244,13 +261,18 @@ function fmt(n: number | string | undefined | null) {
   return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
-export default function EstimatesPage() {
+function EstimatesPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  // U1 列表协议：选中项 / 搜索 / 状态进 URL，视图可分享、后退不丢状态
+  const { query, setQuery } = useListQuery();
+  const searchQ = typeof query.q === "string" ? query.q : "";
+  const statusFilter = typeof query.status === "string" ? query.status : "";
   const [rows, setRows] = useState<Estimate[]>([]);
   const [vessels, setVessels] = useState<RefItem[]>([]);
   const [parties, setParties] = useState<RefItem[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(typeof query.id === "string" ? query.id : null);
   const [title, setTitle] = useState("New voyage estimate");
   const [mode, setMode] = useState<"voyage" | "tct">("voyage");
   const [vesselId, setVesselId] = useState("");
@@ -264,12 +286,18 @@ export default function EstimatesPage() {
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareRows, setCompareRows] = useState<Array<{ id: string; title: string; version: number; tce?: number }>>([]);
   const [compareVariants, setCompareVariants] = useState<Array<{ id: string; name: string; subtitle?: string; values: Record<string, unknown> }>>([]);
-  const [sensitivity, setSensitivity] = useState<Array<{ delta_pct: number; tce: number }>>([]);
+  const [sensitivity, setSensitivity] = useState<SensitivityRow[]>([]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  const rowCtx = useContextMenu<Estimate>();
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) || null, [rows, selectedId]);
+
+  // B6 列表热键：按 N 新建估算
+  useListHotkeys(() => {
+    void createDraft();
+  });
 
   const loadMaster = useCallback(async () => {
     const [v, p] = await Promise.all([
@@ -289,16 +317,30 @@ export default function EstimatesPage() {
   }, []);
 
   useEffect(() => {
+    const urlId = typeof query.id === "string" ? query.id : null;
     Promise.all([loadMaster(), load()])
       .then(([, data]) => {
-        if (data[0] && !selectedId) selectEstimate(data[0]);
+        const preferred = (urlId && data.find((r) => r.id === urlId)) || data[0];
+        if (preferred) selectEstimate(preferred);
       })
       .catch(() => setErr(t("common.failed", "Failed")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const filteredRows = useMemo(() => {
+    const q = searchQ.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (statusFilter && r.status !== statusFilter) return false;
+      if (q && !`${r.title} ${r.status} ${r.id}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [rows, searchQ, statusFilter]);
+
+  const filterCount = (searchQ.trim() ? 1 : 0) + (statusFilter ? 1 : 0);
+
   function selectEstimate(est: Estimate) {
     setSelectedId(est.id);
+    setQuery({ id: est.id });
     setTitle(est.title);
     setMode((est.mode as "voyage" | "tct") || "voyage");
     setVesselId(est.vessel_id || "");
@@ -427,11 +469,12 @@ export default function EstimatesPage() {
     }
   }
 
-  async function clone() {
-    if (!selectedId) return;
+  async function clone(id?: string) {
+    const target = id || selectedId;
+    if (!target) return;
     setBusy(true);
     try {
-      const est: Estimate = await apiPost(`/api/v1/estimates/${selectedId}/clone`);
+      const est: Estimate = await apiPost(`/api/v1/estimates/${target}/clone`);
       toast.success(t("page.estimates.cloned", "Cloned to {title}", { title: est.title }));
       const data = await load();
       const fresh = data.find((r) => r.id === est.id) || est;
@@ -443,23 +486,121 @@ export default function EstimatesPage() {
     }
   }
 
-  function runSensitivity() {
-    if (!selectedId) return;
-    window.location.href = `/estimates/${selectedId}/sensitivity`;
+  function runSensitivity(id?: string) {
+    const target = id || selectedId;
+    if (!target) return;
+    window.location.href = `/estimates/${target}/sensitivity`;
   }
 
-  async function compare() {
-    if (compareIds.length < 2) {
+  function exportEstimates(list: Estimate[]) {
+    const rows = list.length ? list : selected ? [selected] : [];
+    downloadCsv(
+      "estimates",
+      ["id", "title", "mode", "status", "version", "tce", "cargo_qty", "freight_rate"],
+      rows.map((r) => [
+        r.id,
+        r.title,
+        r.mode,
+        r.status,
+        r.version,
+        r.results?.tce ?? "",
+        r.inputs?.cargo_qty ?? "",
+        r.inputs?.freight_rate ?? "",
+      ]),
+      { emptyGuard: t("page.estimates.export_empty", "No rows selected — export nothing?") },
+    );
+  }
+
+  /** Frontend-only estimate checks — rules limited to fields actually on this form. */
+  function validateEstimate(): ValidateIssue[] {
+    const issues: ValidateIssue[] = [];
+    const cargoQty = num(fields.cargo_qty);
+    const legCargo = legRows.some((l) => (num(l.cargo_qty) ?? 0) > 0);
+    const hasLump = num(fields.lump_sum_freight) !== undefined || num(fields.ws_flat) !== undefined;
+    if ((cargoQty === undefined || cargoQty <= 0) && !legCargo && !hasLump) {
+      issues.push({ level: "error", message: t("validate.est.no_cargo", "Cargo quantity is missing") });
+    }
+    const nonNeg: Array<keyof InputFields> = [
+      "cargo_qty",
+      "freight_rate",
+      "bunker_price",
+      "port_costs",
+      "canal_costs",
+      "other_costs",
+      "sea_days",
+      "port_days",
+      "bunker_sea_tpd",
+      "bunker_port_tpd",
+      "hire_per_day",
+    ];
+    for (const k of nonNeg) {
+      const v = num(fields[k]);
+      if (v !== undefined && v < 0) {
+        issues.push({
+          level: "error",
+          message: t("validate.est.neg", "{field} must not be negative", { field: k }),
+        });
+      }
+    }
+    if (results.tce !== undefined && results.tce < 0) {
+      issues.push({ level: "warn", message: t("validate.est.tce_neg", "TCE is below zero") });
+    }
+    const hasDist = legRows.some((l) => (num(l.distance_nm) ?? 0) > 0);
+    if (legRows.length === 0) {
+      issues.push({
+        level: "warn",
+        message: t("validate.est.no_distance", "No distance data — using manual sea/port days"),
+      });
+    } else if (!hasDist) {
+      issues.push({
+        level: "warn",
+        message: t("validate.est.leg_no_dist", "Legs have no distance — sea days may be wrong"),
+      });
+    }
+    if (num(fields.bunker_price) === undefined && priceRows.length === 0) {
+      issues.push({ level: "warn", message: t("validate.est.no_bunker", "Bunker price is not set") });
+    }
+    return issues;
+  }
+
+  function rowMenuItems(target: Estimate): ContextMenuItem[] {
+    return [
+      { key: "open", label: t("common.open", "Open"), onClick: () => selectEstimate(target) },
+      { key: "duplicate", label: t("page.estimates.clone", "Clone"), onClick: () => void clone(target.id) },
+      { key: "d1", label: "", divider: true },
+      {
+        key: "compare",
+        label: t("page.estimates.compare", "对比"),
+        onClick: () => {
+          const next = compareIds.includes(target.id) ? compareIds : [...compareIds, target.id];
+          setCompareIds(next);
+          if (next.length >= 2) void compare(next);
+          else setErr(t("page.estimates.compare_need", "Select at least 2 estimates to compare"));
+        },
+      },
+      { key: "sensitivity", label: t("page.estimates.sensitivity", "Sensitivity"), onClick: () => runSensitivity(target.id) },
+      { key: "d2", label: "", divider: true },
+      {
+        key: "export",
+        label: t("common.export", "Export"),
+        onClick: () => exportEstimates(compareIds.length ? rows.filter((r) => compareIds.includes(r.id)) : [target]),
+      },
+    ];
+  }
+
+  async function compare(ids?: string[]) {
+    const targetIds = ids ?? compareIds;
+    if (targetIds.length < 2) {
       setErr(t("page.estimates.compare_need", "Select at least 2 estimates to compare"));
       return;
     }
     setBusy(true);
     try {
-      const data = await apiPost("/api/v1/estimates/compare", compareIds);
+      const data = await apiPost("/api/v1/estimates/compare", targetIds);
       setCompareRows(data);
       // Fetch full details for comparison matrix
       const variants = await Promise.all(
-        compareIds.map(async (id, i) => {
+        targetIds.map(async (id, i) => {
           try {
             const full = await apiGet(`/api/v1/estimates/${id}`);
             const inputs = full.inputs || {};
@@ -564,44 +705,90 @@ export default function EstimatesPage() {
     { key: "other_income", label: t("page.estimates.other_income", "Other income") },
   ];
 
+  const sensitivityColumns: ColumnDef<SensitivityRow>[] = [
+    {
+      key: "delta_pct",
+      title: t("page.estimates.delta", "Delta %"),
+      width: 120,
+      value: (s) => s.delta_pct,
+      render: (v) => `${(Number(v) * 100).toFixed(1)}%`,
+    },
+    {
+      key: "tce",
+      title: "TCE",
+      width: 130,
+      align: "right",
+      value: (s) => s.tce,
+      render: (v) => <Num v={Number(v)} digits={2} />,
+    },
+  ];
+
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.estimates.title", "Estimate Desk")}</h1>
-          <p className="page-sub">
-            {t("page.estimates.sub", "Build voyage / TCT estimates, calculate TCE, compare and convert to CP.")}
-          </p>
-        </div>
-        <div className="quick-row">
-          <PageGuide pageKey="estimates" />
-          <Link href="/settings/recycle" className="btn btn-ghost">
-            {t("nav.recycle", "回收站")}
-          </Link>
-          <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => createDraft(DRY_BULK, "Dry bulk sample")}>
-            {t("page.estimates.tpl_dry", "Template: dry bulk")}
-          </button>
-          <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => createDraft(TANKER, "Tanker WS sample")}>
-            {t("page.estimates.tpl_tanker", "Template: tanker")}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        breadcrumb={[{ label: t("nav.estimates", "Estimates") }]}
+        title={t("page.estimates.title", "Estimate Desk")}
+        subtitle={t("page.estimates.sub", "Build voyage / TCT estimates, calculate TCE, compare and convert to CP.")}
+        actions={
+          <div className="quick-row">
+            <PageGuide pageKey="estimates" />
+            <SavedViews storageKey="estimates_list" onApply={(q) => router.replace(`/estimates${q}`)} />
+            <Link href="/settings/recycle" className="btn btn-ghost">
+              {t("nav.recycle", "回收站")}
+            </Link>
+            <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => createDraft(DRY_BULK, "Dry bulk sample")}>
+              {t("page.estimates.tpl_dry", "Template: dry bulk")}
+            </button>
+            <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => createDraft(TANKER, "Tanker WS sample")}>
+              {t("page.estimates.tpl_tanker", "Template: tanker")}
+            </button>
+          </div>
+        }
+      />
 
       {err ? <p className="flash-err">{err}</p> : null}
 
       <div className="desk-split">
         <div className="panel desk-list">
-          <div className="desk-toolbar">
+          <Toolbar
+            filterCount={filterCount}
+            onClearFilters={() => setQuery({ q: null, status: null }, { resetPage: true })}
+            right={
+              <>
+                <input
+                  className="input input-sm"
+                  placeholder={t("page.estimates.search", "Search estimates…")}
+                  value={searchQ}
+                  onChange={(e) => setQuery({ q: e.target.value || null }, { resetPage: true })}
+                  aria-label={t("page.estimates.search", "Search estimates…")}
+                />
+                <select
+                  className="input input-sm"
+                  value={statusFilter}
+                  onChange={(e) => setQuery({ status: e.target.value || null }, { resetPage: true })}
+                  aria-label={t("common.status", "Status")}
+                >
+                  <option value="">{t("page.estimates.all_status", "All statuses")}</option>
+                  <option value="draft">draft</option>
+                  <option value="calculated">calculated</option>
+                  <option value="confirmed">confirmed</option>
+                  <option value="converted">converted</option>
+                  <option value="cancelled">cancelled</option>
+                </select>
+              </>
+            }
+          >
             <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => createDraft()}>
               {t("page.estimates.new", "新建")}
             </button>
-            <button className="btn btn-sm" type="button" disabled={busy || compareIds.length < 2} onClick={compare}>
+            <button className="btn btn-sm" type="button" disabled={busy || compareIds.length < 2} onClick={() => void compare()}>
               {t("page.estimates.compare", "对比")}
             </button>
-          </div>
+          </Toolbar>
+          <StatusLegend statuses={ESTIMATE_STATUSES} />
           <ul className="desk-item-list">
-            {rows.map((r) => (
-              <li key={r.id} className={r.id === selectedId ? "selected" : ""}>
+            {filteredRows.map((r) => (
+              <li key={r.id} className={r.id === selectedId ? "selected" : ""} onContextMenu={rowCtx.open(r)}>
                 <label className="desk-item-check" onClick={(e) => e.stopPropagation()} title={t("page.estimates.compare", "对比")}>
                   <input type="checkbox" checked={compareIds.includes(r.id)} onChange={() => toggleCompare(r.id)} />
                 </label>
@@ -609,14 +796,17 @@ export default function EstimatesPage() {
                   <span className="desk-item-title">{r.title}</span>
                   <span className="desk-item-meta">
                     <span>{r.status}</span>
-                    <span>TCE {fmt(r.results?.tce)}</span>
+                    <span>
+                      TCE <Num v={r.results?.tce} digits={2} />
+                    </span>
                     <span>v{r.version}</span>
                   </span>
                 </button>
               </li>
             ))}
-            {!rows.length ? <li className="desk-item-empty muted">{t("common.empty", "暂无记录")}</li> : null}
+            {!filteredRows.length ? <li className="desk-item-empty muted">{t("common.empty", "暂无记录")}</li> : null}
           </ul>
+          <ContextMenu controller={rowCtx} items={rowMenuItems} />
         </div>
 
         <div className="panel">
@@ -627,15 +817,16 @@ export default function EstimatesPage() {
             <button className="btn btn-sm" type="button" disabled={busy || !selectedId} onClick={calculate}>
               {t("page.estimates.calculate", "Calculate")}
             </button>
-            <button className="btn btn-sm" type="button" disabled={busy || !selectedId} onClick={clone}>
+            <button className="btn btn-sm" type="button" disabled={busy || !selectedId} onClick={() => void clone()}>
               {t("page.estimates.clone", "Clone")}
             </button>
-            <button className="btn btn-sm" type="button" disabled={busy || !selectedId} onClick={runSensitivity}>
+            <button className="btn btn-sm" type="button" disabled={busy || !selectedId} onClick={() => runSensitivity()}>
               {t("page.estimates.sensitivity", "Sensitivity")}
             </button>
             <button className="btn btn-sm" type="button" disabled={busy || !selectedId} onClick={toCp}>
               {t("page.estimates.to_cp", "To CP")}
             </button>
+            <ValidateButton onValidate={validateEstimate} disabled={!selectedId} />
             <button className="btn btn-danger btn-sm" type="button" disabled={busy || !selectedId} onClick={() => setConfirmDel(true)}>
               {t("common.delete", "删除")}
             </button>
@@ -902,22 +1093,15 @@ export default function EstimatesPage() {
           {sensitivity.length ? (
             <div className="desk-section">
               <h3>{t("page.estimates.sensitivity_table", "Sensitivity (freight_rate)")}</h3>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>{t("page.estimates.delta", "Delta %")}</th>
-                    <th>TCE</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sensitivity.map((s, i) => (
-                    <tr key={i}>
-                      <td>{(s.delta_pct * 100).toFixed(1)}%</td>
-                      <td>{fmt(s.tce)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <DataGrid<SensitivityRow>
+                columns={sensitivityColumns}
+                data={sensitivity}
+                rowKey={(_s, i) => String(i)}
+                storageKey="estimates_sensitivity_grid"
+                showFooter={false}
+                showColumnMenu={false}
+                emptyText={t("common.empty", "No records")}
+              />
             </div>
           ) : null}
 
@@ -945,5 +1129,14 @@ export default function EstimatesPage() {
         onCancel={() => setConfirmDel(false)}
       />
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <EstimatesPage />
+    </Suspense>
   );
 }

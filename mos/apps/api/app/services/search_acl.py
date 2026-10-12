@@ -356,6 +356,8 @@ def path_is_allowed(db: Session, *, tenant_id, roles: list[str], path: str) -> b
     # Also include navigation hrefs (same set usually)
     for sec in build_navigation(roles):
         for it in sec.get("items") or []:
+            if it.get("locked"):
+                continue  # B1：无权条目可见但不可达（点击进 /denied）
             if it.get("href"):
                 allowed_hrefs.add(it["href"])
 

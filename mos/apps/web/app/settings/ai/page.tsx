@@ -6,16 +6,22 @@
 // Tab3 Skill Bindings: skill → primary/fallback provider
 // Tab4 Usage: token 用量看板（by agent / conversation / day）
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
+import { Tabs, type TabItem } from "@/components/Tabs";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
 import { apiGet, apiPost, apiPatch, apiDelete, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type Provider = {
@@ -118,11 +124,13 @@ function fmtNum(v: unknown, digits = 0): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: 0 });
 }
 
-export default function AiSettingsPage() {
+function AiSettingsPage() {
   const { t } = useI18n();
   const toast = useToast();
-
-  const [tab, setTab] = useState<Tab>("providers");
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
+  const tab = (query.tab as Tab) || "providers";
+  const setTab = (k: Tab) => setQuery({ tab: k === "providers" ? null : k }, { resetPage: true });
 
   // —— providers ——
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -184,6 +192,8 @@ export default function AiSettingsPage() {
     setForm(EMPTY_FORM);
     setFormOpen(true);
   }
+
+  useListHotkeys(tab === "providers" ? openCreate : undefined);
 
   function openEdit(p: Provider) {
     setEditing(p);
@@ -708,56 +718,55 @@ export default function AiSettingsPage() {
 
   // ============================== render ==============================
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "providers", label: t("ai.tab.providers", { en: "Providers", zh: "供应商" }) },
-    { id: "models", label: t("ai.tab.models", { en: "Model Settings", zh: "模型设置" }) },
-    { id: "skills", label: t("ai.tab.skills", { en: "Skill Bindings", zh: "技能绑定" }) },
-    { id: "usage", label: t("ai.tab.usage", { en: "Usage", zh: "用量" }) },
+  const tabs: TabItem[] = [
+    { key: "providers", label: t("ai.tab.providers", { en: "Providers", zh: "供应商" }) },
+    { key: "models", label: t("ai.tab.models", { en: "Model Settings", zh: "模型设置" }) },
+    { key: "skills", label: t("ai.tab.skills", { en: "Skill Bindings", zh: "技能绑定" }) },
+    { key: "usage", label: t("ai.tab.usage", { en: "Usage", zh: "用量" }) },
   ];
 
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.settings_hub", "System settings"), href: "/settings" },
+          { label: t("page.ai.title", "AI Hub") },
+        ]}
         title={t("page.ai.title", { en: "AI Settings", zh: "AI 设置" })}
         subtitle={t("page.ai.sub", {
           en: "Providers, model defaults, skill bindings and token usage.",
           zh: "供应商、模型默认值、技能绑定与 token 用量。",
         })}
+        actions={
+          <SavedViews
+            storageKey="settings_ai"
+            onApply={(qs) => router.replace(`/settings/ai${qs}`)}
+          />
+        }
       />
       <div className="ai-shell">
-        <div className="ai-tabs" role="tablist">
-          {tabs.map((x) => (
-            <button
-              key={x.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === x.id}
-              className={`ai-tab${tab === x.id ? " active" : ""}`}
-              onClick={() => setTab(x.id)}
-            >
-              {x.label}
-            </button>
-          ))}
-        </div>
+        <Tabs items={tabs} value={tab} onChange={(k) => setTab(k as Tab)} variant="line" />
 
         {/* ————————————— Tab 1: Providers ————————————— */}
         {tab === "providers" && (
           <div>
-            <div className="ai-toolbar">
+            <Toolbar
+              right={
+                <span className="hint">
+                  {t("ai.provider.hint", {
+                    en: "Double-click a row to edit. Test shows latency and available models.",
+                    zh: "双击行可编辑。测试将显示延迟与可用模型。",
+                  })}
+                </span>
+              }
+            >
               <button type="button" className="btn btn-primary btn-sm" onClick={openCreate}>
                 {t("ai.provider.add", { en: "Add provider", zh: "新增供应商" })}
               </button>
               <button type="button" className="btn btn-sm" onClick={() => loadProviders()}>
                 {t("common.refresh", "Refresh")}
               </button>
-              <span className="spacer" />
-              <span className="hint">
-                {t("ai.provider.hint", {
-                  en: "Double-click a row to edit. Test shows latency and available models.",
-                  zh: "双击行可编辑。测试将显示延迟与可用模型。",
-                })}
-              </span>
-            </div>
+            </Toolbar>
 
             {testResult && (
               <div className={`ai-test-result${testResult.ok ? "" : " fail"}`}>
@@ -1288,5 +1297,14 @@ export default function AiSettingsPage() {
         onCancel={() => setConfirmDeleteId(null)}
       />
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <AiSettingsPage />
+    </Suspense>
   );
 }

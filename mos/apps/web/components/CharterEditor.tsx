@@ -4,12 +4,21 @@
 // 自包含：拉取租约 + 船舶/对手方/航次引用，承载编辑/状态推进/变更单/
 // hire 汇总/COA liftings 全功能，供 /charters/[id] 详情页挂载。
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { DateInput } from "@/components/DateInput";
-import { PageHeader } from "@/components/PageHeader";
+import { DetailHeader } from "@/components/DetailHeader";
+import { Num } from "@/components/Num";
+import { RecordModal } from "@/components/RecordModal";
+import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Tabs } from "@/components/Tabs";
 import { PartyPicker } from "@/components/DataPicker";
+import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
+import { useStateActions } from "@/components/useTransitions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -37,6 +46,9 @@ type Charter = {
   freight_rate: number | null;
   freight_basis: string | null;
   cargo_qty: number | null;
+  bill_by: string | null;
+  tolerance_pct: number | null;
+  overage_pct: number | null;
   load_rate_pd: number | null;
   disch_rate_pd: number | null;
   address_comm_pct: number | null;
@@ -122,6 +134,9 @@ type TermFields = {
   despatch_rate: string;
   laytime_terms: string;
   cp_form: string;
+  bill_by: string;
+  tolerance_pct: string;
+  overage_pct: string;
   load_rate_pd: string;
   disch_rate_pd: string;
   address_comm_pct: string;
@@ -139,6 +154,9 @@ const EMPTY_TERMS: TermFields = {
   despatch_rate: "",
   laytime_terms: "",
   cp_form: "",
+  bill_by: "",
+  tolerance_pct: "",
+  overage_pct: "",
   load_rate_pd: "",
   disch_rate_pd: "",
   address_comm_pct: "",
@@ -170,13 +188,19 @@ function numStr(v: number | null | undefined) {
 }
 
 function charterTermsPayload(freightRate: string, cargoQty: string, tm: TermFields) {
-  const out: Record<string, number | string> = {};
+  const out: Record<string, number | string | null> = {};
   if (freightRate !== "") out.freight_rate = Number(freightRate);
   if (cargoQty !== "") out.cargo_qty = Number(cargoQty);
   TERM_NUM_KEYS.forEach((k) => {
     if (tm[k] !== "") out[k] = Number(tm[k]);
   });
   if (tm.freight_basis) out.freight_basis = tm.freight_basis;
+  // C1-P1 cargo CP terms — send null when cleared so PATCH can unset them
+  out.bill_by = tm.bill_by || null;
+  if (tm.tolerance_pct !== "") out.tolerance_pct = Number(tm.tolerance_pct);
+  else out.tolerance_pct = null;
+  if (tm.overage_pct !== "") out.overage_pct = Number(tm.overage_pct);
+  else out.overage_pct = null;
   if (tm.laytime_terms) out.laytime_terms = tm.laytime_terms.toUpperCase();
   if (tm.cp_form) out.cp_form = tm.cp_form.toUpperCase();
   if (tm.delivery_at) out.delivery_at = tm.delivery_at;
@@ -206,6 +230,38 @@ function TermInputs({
           <option value="lumpsum">lumpsum</option>
           <option value="worldscale">worldscale</option>
         </select>
+      </label>
+      {/* C1-P1 货物 CP 条款：计费量基准 / MOL 公差 / 超量加价 */}
+      <label>
+        {t("page.charters.bill_by", "Bill by")}
+        <select value={value.bill_by} onChange={(e) => onChange("bill_by", e.target.value)}>
+          <option value="">—</option>
+          <option value="weight">weight</option>
+          <option value="measure">measure</option>
+          <option value="volume">volume</option>
+        </select>
+      </label>
+      <label>
+        {t("page.charters.tolerance_pct", "Tolerance % (0–50)")}
+        <input
+          type="number"
+          step="any"
+          min={0}
+          max={50}
+          value={value.tolerance_pct}
+          onChange={(e) => onChange("tolerance_pct", e.target.value)}
+        />
+      </label>
+      <label>
+        {t("page.charters.overage_pct", "Overage % (0–100)")}
+        <input
+          type="number"
+          step="any"
+          min={0}
+          max={100}
+          value={value.overage_pct}
+          onChange={(e) => onChange("overage_pct", e.target.value)}
+        />
       </label>
       <label>
         {t("page.charters.demurrage_rate", "Demurrage rate")}
@@ -294,7 +350,7 @@ type ClauseOpt = {
   is_system: boolean;
 };
 
-export function CharterEditor({ charterId }: { charterId: string }) {
+export function CharterEditor({ charterId, breadcrumb }: { charterId: string; breadcrumb?: { label: string; href?: string }[] }) {
   const { t, locale } = useI18n();
   const toast = useToast();
   const [charter, setCharter] = useState<Charter | null>(null);
@@ -340,11 +396,51 @@ export function CharterEditor({ charterId }: { charterId: string }) {
   const [doneQty, setDoneQty] = useState("");
   const [liftPeriod, setLiftPeriod] = useState("2026-Q4");
   const [liftQty, setLiftQty] = useState("50000");
+  const [brModalOpen, setBrModalOpen] = useState(false);
+  const [liftModalOpen, setLiftModalOpen] = useState(false);
+  const [amendModalOpen, setAmendModalOpen] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [confirm, setConfirm] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
+
+  // 状态机动作可见性：只渲染当前状态可执行的转移
+  const nextStatuses = useStateActions("charter", charter?.status);
+
+  function validateCharter(): ValidateIssue[] {
+    const issues: ValidateIssue[] = [];
+    if (!edit.counterparty_id) {
+      issues.push({ level: "error", message: t("validate.charter.no_counterparty", "Counterparty is required") });
+    }
+    if (edit.laycan_from && edit.laycan_to && edit.laycan_from > edit.laycan_to) {
+      issues.push({ level: "error", message: t("validate.charter.laycan", "Laycan from is after laycan to") });
+    }
+    if (isTc(edit.charter_type) && (edit.hire_per_day === "" || Number(edit.hire_per_day) <= 0)) {
+      issues.push({ level: "error", message: t("validate.charter.no_hire", "Hire rate is required for time charters") });
+    }
+    const comm = Number(edit.commission_pct);
+    if (edit.commission_pct !== "" && Number.isFinite(comm) && comm > 100) {
+      issues.push({ level: "error", message: t("validate.charter.comm", "Commission exceeds 100%") });
+    }
+    const addr = Number(edit.address_comm_pct);
+    if (edit.address_comm_pct !== "" && Number.isFinite(addr) && addr > 100) {
+      issues.push({ level: "error", message: t("validate.charter.addr_comm", "Address commission exceeds 100%") });
+    }
+    const brok = Number(edit.brokerage_pct);
+    if (edit.brokerage_pct !== "" && Number.isFinite(brok) && brok > 100) {
+      issues.push({ level: "error", message: t("validate.charter.brokerage", "Brokerage exceeds 100%") });
+    }
+    const tol = Number(edit.tolerance_pct);
+    if (edit.tolerance_pct !== "" && (!Number.isFinite(tol) || tol < 0 || tol > 50)) {
+      issues.push({ level: "error", message: t("validate.charter.tolerance", "Tolerance must be between 0 and 50") });
+    }
+    const over = Number(edit.overage_pct);
+    if (edit.overage_pct !== "" && (!Number.isFinite(over) || over < 0 || over > 100)) {
+      issues.push({ level: "error", message: t("validate.charter.overage", "Overage must be between 0 and 100") });
+    }
+    return issues;
+  }
 
   const loadCharter = useCallback(async () => {
     const r: Charter = await apiGet(`/api/v1/charters/${charterId}`);
@@ -364,6 +460,9 @@ export function CharterEditor({ charterId }: { charterId: string }) {
       freight_basis: r.freight_basis || "",
       demurrage_rate: numStr(r.demurrage_rate),
       despatch_rate: numStr(r.despatch_rate),
+      bill_by: r.bill_by || "",
+      tolerance_pct: numStr(r.tolerance_pct),
+      overage_pct: numStr(r.overage_pct),
       laytime_terms: r.laytime_terms || "",
       cp_form: r.cp_form || "",
       load_rate_pd: numStr(r.load_rate_pd),
@@ -479,6 +578,10 @@ export function CharterEditor({ charterId }: { charterId: string }) {
         setErr(t("page.charters.invalid_json", "JSON 格式有误，请检查 Rebill / Exposure / Rev-Exp / Properties 选项卡"));
       } else if (ex?.status === 409 && ex?.detail?.code === "AMENDMENT_REQUIRED") {
         setErr(t("page.charters.amendment_required", "租约已生效，关键条款请通过变更单修改（见下方变更单区块）。"));
+      } else if (ex?.status === 422) {
+        const msg = ex?.message || t("page.charters.cp_terms_invalid", "Cargo CP terms invalid — check bill by / tolerance / overage");
+        toast.error(msg);
+        setErr(msg);
       } else {
         setErr(String(ex));
       }
@@ -537,6 +640,7 @@ export function CharterEditor({ charterId }: { charterId: string }) {
       });
       const res = await apiPost(`/api/v1/charters/${charter.id}/liftings?${q.toString()}`);
       toast.success(t("page.charters.lifting_ok", "Lifting added: {period}", { period: res.period_label }));
+      setLiftModalOpen(false);
       const rows: Lifting[] = await apiGet(`/api/v1/charters/${charter.id}/liftings`).catch(() => []);
       setLiftings(Array.isArray(rows) ? rows : []);
     } catch (ex) {
@@ -563,6 +667,7 @@ export function CharterEditor({ charterId }: { charterId: string }) {
       });
       toast.success(t("page.charters.broker_added", "Broker rule added"));
       setBrForm({ broker_party_id: "", commission_type: "brokerage", commission_pct: "", applies_to: "all" });
+      setBrModalOpen(false);
       const rows: BrokerRule[] = await apiGet(`/api/v1/charters/${charter.id}/broker-rules`).catch(() => []);
       setBrokerRules(Array.isArray(rows) ? rows : []);
     } catch (ex) {
@@ -604,6 +709,7 @@ export function CharterEditor({ charterId }: { charterId: string }) {
       await apiPost(`/api/v1/charters/${charter.id}/amendments`, { changes, reason: amendForm.reason || null });
       toast.success(t("page.charters.amend_ok", "变更单已提交，待批准"));
       setAmendForm(EMPTY_AMEND);
+      setAmendModalOpen(false);
       const rows: Amendment[] = await apiGet(`/api/v1/charters/${charter.id}/amendments`).catch(() => []);
       setAmendments(Array.isArray(rows) ? rows : []);
     } catch (ex) {
@@ -649,7 +755,7 @@ export function CharterEditor({ charterId }: { charterId: string }) {
           setBusy(false);
           return;
         }
-        body = { laycan_from: `${nomFrom}T00:00:00`, laycan_to: `${nomTo}T00:00:00` };
+        body = { laycan_from: `${nomFrom}T00:00:00`, laycan_to: `${nomTo}T23:59:59` };
       } else if (liftAction.kind === "fix") {
         if (!fixVoyage) {
           setErr(t("page.charters.need_voyage", "请选择航次"));
@@ -687,54 +793,171 @@ export function CharterEditor({ charterId }: { charterId: string }) {
     );
   }
 
+  const brokerRuleColumns: ColumnDef<BrokerRule>[] = [
+    {
+      key: "broker_party_id",
+      title: t("page.estimates.counterparty", "对手方"),
+      minWidth: 130,
+      value: (r) => parties.find((p) => p.id === r.broker_party_id)?.name || r.broker_party_id.slice(0, 8),
+    },
+    { key: "commission_type", title: t("page.charters.commission_type", "Commission type"), width: 130, value: (r) => r.commission_type },
+    {
+      key: "commission_pct",
+      title: t("page.estimates.commission", "佣金 %"),
+      width: 90,
+      align: "right",
+      value: (r) => r.commission_pct ?? null,
+      render: (_v, r) => <Num v={r.commission_pct} digits={2} />,
+    },
+    { key: "applies_to", title: t("page.charters.applies_to", "Applies to"), width: 100, value: (r) => r.applies_to },
+    {
+      key: "actions",
+      title: "",
+      width: 90,
+      render: (_v, r) => (
+        <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => removeBrokerRule(r.id)}>
+          {t("common.delete", "删除")}
+        </button>
+      ),
+    },
+  ];
+
+  const liftingColumns: ColumnDef<Lifting>[] = [
+    { key: "period_label", title: t("page.charters.period", "Period"), minWidth: 110, value: (r) => r.period_label },
+    {
+      key: "planned_qty",
+      title: t("page.charters.planned_qty", "Planned qty"),
+      width: 110,
+      align: "right",
+      value: (r) => r.planned_qty ?? null,
+      render: (_v, r) => <Num v={r.planned_qty} digits={2} />,
+    },
+    {
+      key: "status",
+      title: t("common.status", "状态"),
+      width: 100,
+      value: (r) => r.status || "planned",
+    },
+    {
+      key: "actions",
+      title: "",
+      width: 130,
+      render: (_v, l) => (
+        <div className="desk-toolbar" style={{ margin: 0 }}>
+          {!l.status || l.status === "planned" ? (
+            <button className="btn btn-sm" type="button" disabled={busy} onClick={() => startLiftAction(l.id, "nominate")}>
+              {t("page.charters.nominate", "Nominate")}
+            </button>
+          ) : null}
+          {l.status === "nominated" ? (
+            <button className="btn btn-sm" type="button" disabled={busy} onClick={() => startLiftAction(l.id, "fix")}>
+              {t("page.charters.fix", "Fix")}
+            </button>
+          ) : null}
+          {l.status === "fixed" ? (
+            <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => startLiftAction(l.id, "complete")}>
+              {t("page.charters.complete", "完成")}
+            </button>
+          ) : null}
+        </div>
+      ),
+    },
+  ];
+
+  const amendmentColumns: ColumnDef<Amendment>[] = [
+    { key: "seq", title: "#", width: 50, value: (r) => r.seq },
+    { key: "status", title: t("common.status", "状态"), width: 100, value: (r) => r.status },
+    {
+      key: "reason",
+      title: t("page.finance.reason", "Reason"),
+      minWidth: 120,
+      value: (r) => r.reason || "",
+      render: (_v, r) => r.reason || "—",
+    },
+    {
+      key: "changes",
+      title: t("page.charters.amend_changes", "变更内容"),
+      minWidth: 160,
+      value: (r) => Object.entries(r.changes || {}).map(([k, v]) => `${k}=${v}`).join(", "),
+      render: (v) => String(v) || "—",
+    },
+    {
+      key: "created_at",
+      title: t("common.created_at", "创建时间"),
+      width: 110,
+      value: (r) => r.created_at || "",
+      render: (_v, r) => (r.created_at ? new Date(r.created_at).toLocaleDateString() : "—"),
+    },
+    {
+      key: "actions",
+      title: "",
+      width: 150,
+      render: (_v, a) =>
+        a.status === "proposed" ? (
+          <div className="desk-toolbar" style={{ margin: 0 }}>
+            <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => amendTransition(a.id, "approve")}>
+              {t("common.approve", "批准")}
+            </button>
+            <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => amendTransition(a.id, "reject")}>
+              {t("common.reject", "驳回")}
+            </button>
+          </div>
+        ) : null,
+    },
+  ];
+
   return (
     <>
-      <PageHeader
-        title={
-          <>
-            {charter?.charter_no || "…"}
-            {charter ? <span className="badge badge-warn">{charter.status}</span> : null}
-            {charter?.sanctions_blocked ? (
-              <span className="badge badge-fail">{t("page.charters.blocked", "BLOCKED")}</span>
-            ) : null}
-          </>
-        }
+      <DetailHeader
+        breadcrumb={breadcrumb}
+        title={charter?.charter_no || "…"}
+        status={charter?.status}
         subtitle={t("page.charters.edit", "编辑租约")}
-        actions={
-          <>
-            <Link href="/charters" className="btn btn-ghost">
-              {t("common.back", "返回")}
-            </Link>
-            <button className="btn btn-sm" type="button" disabled={busy || saving} onClick={() => window.print()}>
-              {t("common.print", "打印 / PDF")}
-            </button>
-          </>
+        badges={
+          charter?.sanctions_blocked ? (
+            <span className="badge badge-fail">{t("page.charters.blocked", "BLOCKED")}</span>
+          ) : null
         }
+        actions={[
+          ...nextStatuses.map((s) => ({
+            key: `go-${s}`,
+            label: t(`page.charters.go_${s}`, s.replace(/_/g, " ")),
+            variant: s === "cancelled" ? ("danger" as const) : s === "active" || s === "completed" ? ("primary" as const) : ("default" as const),
+            disabled: busy || saving,
+            onClick: () => void move(s),
+          })),
+          {
+            key: "back",
+            label: t("common.back", "返回"),
+            onClick: () => window.location.href = "/charters",
+          },
+          {
+            key: "print",
+            label: t("common.print", "打印 / PDF"),
+            disabled: busy || saving,
+            onClick: () => window.print(),
+          },
+        ]}
       />
+      <StatusLegend statuses={["draft", "pending_approval", "active", "completed", "cancelled"]} />
 
       {err ? <p className="flash-err">{err}</p> : null}
 
       <div className="panel">
-        <div className="desk-tabs" style={{ marginBottom: "0.75rem" }}>
-          {[
-            { id: "general", label: t("page.charters.tab_general", "General") },
-            { id: "cargoes", label: t("page.charters.tab_cargoes", "Cargoes") },
-            { id: "pricing", label: t("page.charters.tab_pricing", "Pricing") },
-            { id: "rebill", label: t("page.charters.tab_rebill", "Rebill Settings") },
-            { id: "exposure", label: t("page.charters.tab_exposure", "Exposure") },
-            { id: "revexp", label: t("page.charters.tab_revexp", "Rev/Exp") },
-            { id: "properties", label: t("page.charters.tab_properties", "Properties") },
-          ].map((tb) => (
-            <button
-              key={tb.id}
-              type="button"
-              className={`desk-tab${tab === tb.id ? " active" : ""}`}
-              onClick={() => setTab(tb.id)}
-            >
-              {tb.label}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          className="charters-editor-tabs"
+          value={tab}
+          onChange={setTab}
+          items={[
+            { key: "general", label: t("page.charters.tab_general", "General") },
+            { key: "cargoes", label: t("page.charters.tab_cargoes", "Cargoes") },
+            { key: "pricing", label: t("page.charters.tab_pricing", "Pricing") },
+            { key: "rebill", label: t("page.charters.tab_rebill", "Rebill Settings") },
+            { key: "exposure", label: t("page.charters.tab_exposure", "Exposure") },
+            { key: "revexp", label: t("page.charters.tab_revexp", "Rev/Exp") },
+            { key: "properties", label: t("page.charters.tab_properties", "Properties") },
+          ]}
+        />
         <div className="form-grid">
           {tab === "general" ? (
             <>
@@ -842,76 +1065,25 @@ export function CharterEditor({ charterId }: { charterId: string }) {
                 <input value={edit.cargo_qty} onChange={(e) => setEdit({ ...edit, cargo_qty: e.target.value })} />
               </label>
               <div style={{ gridColumn: "1 / -1" }}>
-                <div className="muted" style={{ marginBottom: "0.35rem" }}>
-                  {t("page.charters.broker_rules", "Cargo broker rules")}
+                <div className="desk-toolbar" style={{ margin: "0 0 0.35rem" }}>
+                  <span className="muted">{t("page.charters.broker_rules", "Cargo broker rules")}</span>
+                  <button className="btn btn-sm" type="button" disabled={busy} onClick={() => setBrModalOpen(true)}>
+                    + {t("common.add", "添加")}
+                  </button>
                 </div>
                 {brokerRules.length ? (
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>{t("page.estimates.counterparty", "对手方")}</th>
-                        <th>{t("page.charters.commission_type", "Commission type")}</th>
-                        <th>{t("page.estimates.commission", "佣金 %")}</th>
-                        <th>{t("page.charters.applies_to", "Applies to")}</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {brokerRules.map((r) => (
-                        <tr key={r.id}>
-                          <td>{parties.find((p) => p.id === r.broker_party_id)?.name || r.broker_party_id.slice(0, 8)}</td>
-                          <td>{r.commission_type}</td>
-                          <td>{r.commission_pct ?? "—"}</td>
-                          <td>{r.applies_to}</td>
-                          <td>
-                            <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => removeBrokerRule(r.id)}>
-                              {t("common.delete", "删除")}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <DataGrid<BrokerRule>
+                    columns={brokerRuleColumns}
+                    data={brokerRules}
+                    rowKey={(r) => r.id}
+                    storageKey="charters_broker_rules_grid"
+                    showFooter={false}
+                    showColumnMenu={false}
+                    emptyText={t("page.charters.no_broker_rules", "No broker rules")}
+                  />
                 ) : (
                   <p className="muted" style={{ margin: "0 0 0.5rem" }}>{t("page.charters.no_broker_rules", "暂无经纪规则")}</p>
                 )}
-                <div className="form-grid">
-                  <label>
-                    {t("page.charters.broker_party", "Broker")}
-                    <select value={brForm.broker_party_id} onChange={(e) => setBrForm({ ...brForm, broker_party_id: e.target.value })}>
-                      <option value="">{t("common.select", "Select…")}</option>
-                      {parties.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    {t("page.charters.commission_type", "Commission type")}
-                    <select value={brForm.commission_type} onChange={(e) => setBrForm({ ...brForm, commission_type: e.target.value })}>
-                      <option value="brokerage">brokerage</option>
-                      <option value="address">address</option>
-                    </select>
-                  </label>
-                  <label>
-                    {t("page.estimates.commission", "佣金 %")}
-                    <input type="number" step="any" value={brForm.commission_pct} onChange={(e) => setBrForm({ ...brForm, commission_pct: e.target.value })} />
-                  </label>
-                  <label>
-                    {t("page.charters.applies_to", "Applies to")}
-                    <select value={brForm.applies_to} onChange={(e) => setBrForm({ ...brForm, applies_to: e.target.value })}>
-                      <option value="all">all</option>
-                      <option value="freight">freight</option>
-                      <option value="demurrage">demurrage</option>
-                    </select>
-                  </label>
-                  <div style={{ display: "flex", alignItems: "end" }}>
-                    <button className="btn btn-sm" type="button" disabled={busy} onClick={addBrokerRule}>
-                      {t("common.add", "添加")}
-                    </button>
-                  </div>
-                </div>
               </div>
             </>
           ) : null}
@@ -993,21 +1165,7 @@ export function CharterEditor({ charterId }: { charterId: string }) {
           <button className="btn btn-primary" type="button" disabled={saving || busy} onClick={save}>
             {t("common.save", "保存")}
           </button>
-          {charter?.status === "draft" ? (
-            <button className="btn btn-sm" type="button" disabled={busy} onClick={() => move("pending_approval")}>
-              {t("common.submit", "提交审批")}
-            </button>
-          ) : null}
-          {charter?.status === "pending_approval" ? (
-            <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => move("active")}>
-              {t("common.activate", "激活")}
-            </button>
-          ) : null}
-          {charter?.status === "active" ? (
-            <button className="btn btn-sm" type="button" disabled={busy} onClick={() => move("completed")}>
-              {t("page.charters.complete", "完成")}
-            </button>
-          ) : null}
+          <ValidateButton onValidate={validateCharter} />
           <button
             className="btn btn-danger btn-sm"
             type="button"
@@ -1051,46 +1209,22 @@ export function CharterEditor({ charterId }: { charterId: string }) {
 
       {charter?.charter_type === "coa" ? (
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>{t("page.charters.liftings", "COA liftings")}</h3>
+          <div className="desk-toolbar" style={{ marginTop: 0 }}>
+            <h3 style={{ margin: 0 }}>{t("page.charters.liftings", "COA liftings")}</h3>
+            <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => setLiftModalOpen(true)}>
+              + {t("page.charters.add_lifting", "添加 lifting")}
+            </button>
+          </div>
           {liftings.length ? (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>{t("page.charters.period", "Period")}</th>
-                  <th>{t("page.charters.planned_qty", "Planned qty")}</th>
-                  <th>{t("common.status", "状态")}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {liftings.map((l) => (
-                  <tr key={l.id}>
-                    <td>{l.period_label}</td>
-                    <td>{l.planned_qty ?? "—"}</td>
-                    <td>{l.status || "planned"}</td>
-                    <td>
-                      <div className="desk-toolbar" style={{ margin: 0 }}>
-                        {!l.status || l.status === "planned" ? (
-                          <button className="btn btn-sm" type="button" disabled={busy} onClick={() => startLiftAction(l.id, "nominate")}>
-                            {t("page.charters.nominate", "Nominate")}
-                          </button>
-                        ) : null}
-                        {l.status === "nominated" ? (
-                          <button className="btn btn-sm" type="button" disabled={busy} onClick={() => startLiftAction(l.id, "fix")}>
-                            {t("page.charters.fix", "Fix")}
-                          </button>
-                        ) : null}
-                        {l.status === "fixed" ? (
-                          <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => startLiftAction(l.id, "complete")}>
-                            {t("page.charters.complete", "完成")}
-                          </button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataGrid<Lifting>
+              columns={liftingColumns}
+              data={liftings}
+              rowKey={(r) => r.id}
+              storageKey="charters_liftings_grid"
+              showFooter={false}
+              showColumnMenu={false}
+              emptyText={t("page.charters.no_liftings", "No liftings")}
+            />
           ) : (
             <p className="muted" style={{ margin: 0 }}>{t("page.charters.no_liftings", "暂无 lifting")}</p>
           )}
@@ -1137,105 +1271,129 @@ export function CharterEditor({ charterId }: { charterId: string }) {
               </div>
             </div>
           ) : null}
-          <div className="form-grid" style={{ marginTop: "0.75rem" }}>
-            <label>
-              {t("page.charters.period", "Period label")}
-              <input value={liftPeriod} onChange={(e) => setLiftPeriod(e.target.value)} />
-            </label>
-            <label>
-              {t("page.charters.planned_qty", "Planned qty")}
-              <input type="number" step="any" value={liftQty} onChange={(e) => setLiftQty(e.target.value)} />
-            </label>
-            <div style={{ display: "flex", alignItems: "end" }}>
-              <button className="btn btn-sm" type="button" disabled={busy} onClick={addLifting}>
-                {t("page.charters.add_lifting", "添加 lifting")}
-              </button>
-            </div>
-          </div>
         </div>
       ) : null}
 
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>{t("page.charters.amendments", "变更单 Amendments")}</h3>
+        <div className="desk-toolbar" style={{ marginTop: 0 }}>
+          <h3 style={{ margin: 0 }}>{t("page.charters.amendments", "变更单 Amendments")}</h3>
+          <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => setAmendModalOpen(true)}>
+            + {t("page.charters.new_amendment", "新建变更单")}
+          </button>
+        </div>
         {amendments.length ? (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>{t("common.status", "状态")}</th>
-                <th>{t("page.finance.reason", "Reason")}</th>
-                <th>{t("page.charters.amend_changes", "变更内容")}</th>
-                <th>{t("common.created_at", "创建时间")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {amendments.map((a) => (
-                <tr key={a.id}>
-                  <td>{a.seq}</td>
-                  <td>{a.status}</td>
-                  <td>{a.reason || "—"}</td>
-                  <td>
-                    {Object.entries(a.changes || {})
-                      .map(([k, v]) => `${k}=${v}`)
-                      .join(", ") || "—"}
-                  </td>
-                  <td>{a.created_at ? new Date(a.created_at).toLocaleDateString() : "—"}</td>
-                  <td>
-                    {a.status === "proposed" ? (
-                      <div className="desk-toolbar" style={{ margin: 0 }}>
-                        <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => amendTransition(a.id, "approve")}>
-                          {t("common.approve", "批准")}
-                        </button>
-                        <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => amendTransition(a.id, "reject")}>
-                          {t("common.reject", "驳回")}
-                        </button>
-                      </div>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataGrid<Amendment>
+            columns={amendmentColumns}
+            data={amendments}
+            rowKey={(r) => r.id}
+            storageKey="charters_amendments_grid"
+            showFooter={false}
+            showColumnMenu={false}
+            emptyText={t("page.charters.no_amendments", "No amendments")}
+          />
         ) : (
           <p className="muted" style={{ margin: 0 }}>{t("page.charters.no_amendments", "暂无变更单")}</p>
         )}
-        <div className="form-grid" style={{ marginTop: "0.5rem" }}>
-          <label>
-            {t("page.estimates.freight_rate", "运价")}
-            <input type="number" step="any" value={amendForm.freight_rate} onChange={(e) => setAmendForm({ ...amendForm, freight_rate: e.target.value })} />
-          </label>
-          <label>
-            {t("page.charters.demurrage_rate", "Demurrage rate")}
-            <input type="number" step="any" value={amendForm.demurrage_rate} onChange={(e) => setAmendForm({ ...amendForm, demurrage_rate: e.target.value })} />
-          </label>
-          <label>
-            {t("page.estimates.cargo_qty", "货量")}
-            <input type="number" step="any" value={amendForm.cargo_qty} onChange={(e) => setAmendForm({ ...amendForm, cargo_qty: e.target.value })} />
-          </label>
-          <label>
-            {t("page.charters.hire_per_day", "Hire / day")}
-            <input type="number" step="any" value={amendForm.hire_per_day} onChange={(e) => setAmendForm({ ...amendForm, hire_per_day: e.target.value })} />
-          </label>
-          <label>
-            {t("page.charters.laycan_from", "Laycan from")}
-            <DateInput value={amendForm.laycan_from} onChange={(v) => setAmendForm({ ...amendForm, laycan_from: v })} />
-          </label>
-          <label>
-            {t("page.charters.laycan_to", "Laycan to")}
-            <DateInput value={amendForm.laycan_to} onChange={(v) => setAmendForm({ ...amendForm, laycan_to: v })} />
-          </label>
-          <label style={{ gridColumn: "1 / -1" }}>
-            {t("page.finance.reason", "Reason")}
-            <input value={amendForm.reason} onChange={(e) => setAmendForm({ ...amendForm, reason: e.target.value })} />
-          </label>
-        </div>
-        <div className="desk-toolbar" style={{ marginTop: "0.5rem" }}>
-          <button className="btn btn-sm" type="button" disabled={busy} onClick={createAmendment}>
-            {t("page.charters.new_amendment", "新建变更单")}
-          </button>
-        </div>
       </div>
+
+      {charter ? <RevisionsPanel entityType="charter" entityId={charter.id} /> : null}
+
+      <RecordModal
+        open={brModalOpen}
+        title={t("page.charters.broker_rules", "Cargo broker rules")}
+        onClose={() => setBrModalOpen(false)}
+        onSave={addBrokerRule}
+        canDelete={false}
+        saving={busy}
+      >
+        <label>
+          {t("page.charters.broker_party", "Broker")}
+          <select value={brForm.broker_party_id} onChange={(e) => setBrForm({ ...brForm, broker_party_id: e.target.value })}>
+            <option value="">{t("common.select", "Select…")}</option>
+            {parties.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t("page.charters.commission_type", "Commission type")}
+          <select value={brForm.commission_type} onChange={(e) => setBrForm({ ...brForm, commission_type: e.target.value })}>
+            <option value="brokerage">brokerage</option>
+            <option value="address">address</option>
+          </select>
+        </label>
+        <label>
+          {t("page.estimates.commission", "佣金 %")}
+          <input type="number" step="any" value={brForm.commission_pct} onChange={(e) => setBrForm({ ...brForm, commission_pct: e.target.value })} />
+        </label>
+        <label>
+          {t("page.charters.applies_to", "Applies to")}
+          <select value={brForm.applies_to} onChange={(e) => setBrForm({ ...brForm, applies_to: e.target.value })}>
+            <option value="all">all</option>
+            <option value="freight">freight</option>
+            <option value="demurrage">demurrage</option>
+          </select>
+        </label>
+      </RecordModal>
+
+      <RecordModal
+        open={liftModalOpen}
+        title={t("page.charters.add_lifting", "添加 lifting")}
+        onClose={() => setLiftModalOpen(false)}
+        onSave={addLifting}
+        canDelete={false}
+        saving={busy}
+      >
+        <label>
+          {t("page.charters.period", "Period label")}
+          <input value={liftPeriod} onChange={(e) => setLiftPeriod(e.target.value)} />
+        </label>
+        <label>
+          {t("page.charters.planned_qty", "Planned qty")}
+          <input type="number" step="any" value={liftQty} onChange={(e) => setLiftQty(e.target.value)} />
+        </label>
+      </RecordModal>
+
+      <RecordModal
+        open={amendModalOpen}
+        title={t("page.charters.new_amendment", "新建变更单")}
+        onClose={() => setAmendModalOpen(false)}
+        onSave={createAmendment}
+        canDelete={false}
+        saving={busy}
+        size="lg"
+      >
+        <label>
+          {t("page.estimates.freight_rate", "运价")}
+          <input type="number" step="any" value={amendForm.freight_rate} onChange={(e) => setAmendForm({ ...amendForm, freight_rate: e.target.value })} />
+        </label>
+        <label>
+          {t("page.charters.demurrage_rate", "Demurrage rate")}
+          <input type="number" step="any" value={amendForm.demurrage_rate} onChange={(e) => setAmendForm({ ...amendForm, demurrage_rate: e.target.value })} />
+        </label>
+        <label>
+          {t("page.estimates.cargo_qty", "货量")}
+          <input type="number" step="any" value={amendForm.cargo_qty} onChange={(e) => setAmendForm({ ...amendForm, cargo_qty: e.target.value })} />
+        </label>
+        <label>
+          {t("page.charters.hire_per_day", "Hire / day")}
+          <input type="number" step="any" value={amendForm.hire_per_day} onChange={(e) => setAmendForm({ ...amendForm, hire_per_day: e.target.value })} />
+        </label>
+        <label>
+          {t("page.charters.laycan_from", "Laycan from")}
+          <DateInput value={amendForm.laycan_from} onChange={(v) => setAmendForm({ ...amendForm, laycan_from: v })} />
+        </label>
+        <label>
+          {t("page.charters.laycan_to", "Laycan to")}
+          <DateInput value={amendForm.laycan_to} onChange={(v) => setAmendForm({ ...amendForm, laycan_to: v })} />
+        </label>
+        <label style={{ gridColumn: "1 / -1" }}>
+          {t("page.finance.reason", "Reason")}
+          <input value={amendForm.reason} onChange={(e) => setAmendForm({ ...amendForm, reason: e.target.value })} />
+        </label>
+      </RecordModal>
 
       <ConfirmDialog
         open={Boolean(confirm)}

@@ -1,10 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -28,9 +32,8 @@ export default function OrgStructurePage() {
   const toast = useToast();
   const [rows, setRows] = useState<Unit[]>([]);
   const [users, setUsers] = useState<UserRow[]>([]);
-  const [code, setCode] = useState("");
-  const [name, setName] = useState("");
   const [open, setOpen] = useState<Unit | null>(null);
+  const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({
     code: "",
     name: "",
@@ -48,24 +51,32 @@ export default function OrgStructurePage() {
     setUsers(us);
   }
   useEffect(() => {
-    load().catch(() => toast.success(t("page.org.admin_required", "需要租户管理员")));
+    load().catch(() => toast.error(t("page.org.admin_required", "需要租户管理员")));
   }, [t]);
 
-  async function create(e: FormEvent) {
-    e.preventDefault();
-    await apiPost("/api/v1/admin/org-units", {
-      code,
-      name,
+  function openCreate() {
+    setCreating(true);
+    setOpen(null);
+    setMembers([]);
+    setEdit({
+      code: "",
+      name: "",
       unit_type: "dept",
-      parent_id: rows.find((r) => r.unit_type === "company")?.id || null,
+      status: "active",
+      parent_id: rows.find((r) => r.unit_type === "company")?.id || "",
+      manager_user_id: "",
     });
-    setCode("");
-    setName("");
-    toast.success(t("common.created", "已创建"));
-    await load();
+  }
+
+  useListHotkeys(openCreate);
+
+  function closeModal() {
+    setOpen(null);
+    setCreating(false);
   }
 
   async function openRow(r: Unit) {
+    setCreating(false);
     setOpen(r);
     setEdit({
       code: r.code,
@@ -83,20 +94,32 @@ export default function OrgStructurePage() {
   }
 
   async function save() {
-    if (!open) return;
     setSaving(true);
     try {
-      await apiPatch(`/api/v1/admin/org-units/${open.id}`, {
-        code: edit.code,
-        name: edit.name,
-        unit_type: edit.unit_type,
-        status: edit.status,
-        parent_id: edit.parent_id || null,
-        manager_user_id: edit.manager_user_id || null,
-      });
-      toast.success(t("common.saved", "已保存"));
-      setOpen(null);
+      if (creating || !open) {
+        await apiPost("/api/v1/admin/org-units", {
+          code: edit.code,
+          name: edit.name,
+          unit_type: edit.unit_type,
+          parent_id: edit.parent_id || null,
+          manager_user_id: edit.manager_user_id || null,
+        });
+        toast.success(t("common.created", "已创建"));
+      } else {
+        await apiPatch(`/api/v1/admin/org-units/${open.id}`, {
+          code: edit.code,
+          name: edit.name,
+          unit_type: edit.unit_type,
+          status: edit.status,
+          parent_id: edit.parent_id || null,
+          manager_user_id: edit.manager_user_id || null,
+        });
+        toast.success(t("common.saved", "已保存"));
+      }
+      closeModal();
       await load();
+    } catch {
+      toast.error(t("common.failed", "失败"));
     } finally {
       setSaving(false);
     }
@@ -108,7 +131,7 @@ export default function OrgStructurePage() {
     try {
       await apiDelete(`/api/v1/admin/org-units/${open.id}`);
       toast.success(t("common.recycled", "已移入回收站"));
-      setOpen(null);
+      closeModal();
       await load();
     } finally {
       setSaving(false);
@@ -121,9 +144,36 @@ export default function OrgStructurePage() {
     return p ? `${p.code} · ${p.name}` : id.slice(0, 8);
   }
 
+  const columns: ColumnDef<Unit>[] = [
+    { key: "code", title: t("common.code", "编码"), width: 120, value: (r) => r.code },
+    { key: "name", title: t("common.name", "名称"), minWidth: 160, value: (r) => r.name },
+    { key: "unit_type", title: t("common.type", "类型"), width: 100, value: (r) => r.unit_type },
+    {
+      key: "parent",
+      title: t("page.org.parent", "上级"),
+      minWidth: 180,
+      value: (r) => parentLabel(r.parent_id),
+    },
+    {
+      key: "manager",
+      title: t("page.org.manager", "负责人"),
+      width: 140,
+      value: (r) => r.manager_name || "",
+      render: (_v, r) => <span>{r.manager_name || "—"}</span>,
+    },
+    {
+      key: "member_count",
+      title: t("page.org.members", "成员数"),
+      width: 90,
+      align: "right",
+      value: (r) => r.member_count ?? 0,
+    },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.admin", "Administration") }]}
         title={t("page.org.title", "组织架构")}
         subtitle={
           <>
@@ -137,54 +187,34 @@ export default function OrgStructurePage() {
           </Link>
         }
       />
-      <form className="panel" onSubmit={(e) => create(e).catch(() => toast.success(t("common.failed", "失败")))}>
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
-          <label>
-            {t("common.code", "编码")}
-            <input value={code} onChange={(e) => setCode(e.target.value)} required />
-          </label>
-          <label>
-            {t("common.name", "名称")}
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </label>
-          <button className="btn btn-primary" type="submit">
-            {t("page.org.add_dept", "新建部门")}
-          </button>
-        </div>
-      </form>
+      <Toolbar>
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
+          {t("page.org.add_dept", "新建部门")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
       <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.code", "编码")}</th>
-              <th>{t("common.name", "名称")}</th>
-              <th>{t("common.type", "类型")}</th>
-              <th>{t("page.org.parent", "上级")}</th>
-              <th>{t("page.org.manager", "负责人")}</th>
-              <th>{t("page.org.members", "成员数")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="row-openable" onClick={() => openRow(r)}>
-                <td>{r.code}</td>
-                <td>{r.name}</td>
-                <td>{r.unit_type}</td>
-                <td>{parentLabel(r.parent_id)}</td>
-                <td>{r.manager_name || "—"}</td>
-                <td>{r.member_count ?? 0}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataGrid<Unit>
+          columns={columns}
+          data={rows}
+          rowKey={(r) => r.id}
+          storageKey="admin_org_units_grid"
+          emptyText={t("common.none", "无")}
+          showFooter={false}
+          onRowClick={(r) => openRow(r)}
+          onRowDoubleClick={(r) => openRow(r)}
+        />
       </div>
 
       <RecordModal
-        open={Boolean(open)}
-        title={t("page.org.edit", "编辑组织单元")}
-        onClose={() => setOpen(null)}
+        open={creating || Boolean(open)}
+        title={creating ? t("page.org.add_dept", "新建部门") : t("page.org.edit", "编辑组织单元")}
+        onClose={closeModal}
         onSave={save}
-        onDelete={remove}
+        onDelete={creating ? undefined : remove}
+        canDelete={!creating}
         saving={saving}
       >
         <label>
@@ -230,27 +260,31 @@ export default function OrgStructurePage() {
             ))}
           </select>
         </label>
-        <label>
-          {t("common.status", "状态")}
-          <select value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>
-            <option value="active">active</option>
-            <option value="disabled">disabled</option>
-          </select>
-        </label>
-        <div>
-          <div className="muted" style={{ marginBottom: "0.35rem" }}>
-            {t("page.org.members", "部门成员")} ({members.length})
+        {!creating ? (
+          <label>
+            {t("common.status", "状态")}
+            <select value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>
+              <option value="active">active</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </label>
+        ) : null}
+        {!creating ? (
+          <div>
+            <div className="muted" style={{ marginBottom: "0.35rem" }}>
+              {t("page.org.members", "部门成员")} ({members.length})
+            </div>
+            <ul className="compact-list">
+              {members.map((m) => (
+                <li key={m.id}>
+                  {m.full_name || m.email}
+                  {m.is_manager ? ` · ${t("page.org.manager", "负责人")}` : ""}
+                </li>
+              ))}
+              {!members.length ? <li className="muted">{t("page.org.no_members", "暂无成员 — 请在用户管理中分配部门")}</li> : null}
+            </ul>
           </div>
-          <ul className="compact-list">
-            {members.map((m) => (
-              <li key={m.id}>
-                {m.full_name || m.email}
-                {m.is_manager ? ` · ${t("page.org.manager", "负责人")}` : ""}
-              </li>
-            ))}
-            {!members.length ? <li className="muted">{t("page.org.no_members", "暂无成员 — 请在用户管理中分配部门")}</li> : null}
-          </ul>
-        </div>
+        ) : null}
       </RecordModal>
     </AppShell>
   );

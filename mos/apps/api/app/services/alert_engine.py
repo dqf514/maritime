@@ -11,8 +11,29 @@ from uuid import UUID
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
+from fastapi import HTTPException
+
 from app.models_config import ConfigAlertRule, TaskRule
 from app.services.rule_engine import evaluate_condition
+
+# 阻断保存的严重度档（alert_priority 实际取值 low|normal|high|urgent，
+# 对应 ALERT ERROR/critical 的高危档）；低档 severity 只提醒不阻断。
+BLOCKING_PRIORITIES: frozenset[str] = frozenset({"high", "urgent"})
+
+
+class AlertBlocked(HTTPException):
+    """409 ALERT_BLOCKED — 命中 blocking 高优先级告警规则，拒绝保存（shape 对齐 InvalidState）。"""
+
+    def __init__(self, rules: list[str]):
+        names = ", ".join(rules)
+        super().__init__(
+            status_code=409,
+            detail={
+                "code": "ALERT_BLOCKED",
+                "message": f"save blocked by alert rules: {names}",
+                "rules": rules,
+            },
+        )
 
 
 def get_alert_rules(
@@ -30,6 +51,58 @@ def get_alert_rules(
     if entity_type:
         stmt = stmt.where(ConfigAlertRule.entity_type == entity_type)
     return list(db.scalars(stmt).all())
+
+
+def find_triggered_alerts(
+    db: Session,
+    tenant_id: UUID,
+    entity_type: str,
+    context: dict,
+) -> list[dict]:
+    """评估规则命中情况（无副作用：不写 last_triggered_at、不 commit）。
+
+    不做 frequency 节流——阻断保存的规则不能因节流被跳过；
+    evaluate_alerts（通知路径）保留原有节流行为。
+    """
+    rules = get_alert_rules(db, tenant_id, entity_type)
+    hits: list[dict] = []
+    for rule in rules:
+        condition = rule.condition_json or {}
+        if not evaluate_condition(condition, context):
+            continue
+        hits.append(
+            {
+                "rule_id": str(rule.id),
+                "rule_name": rule.rule_name,
+                "message": rule.alert_message,
+                "priority": rule.alert_priority,
+                "entity_type": entity_type,
+                "blocking": bool(getattr(rule, "blocking", False)),
+            }
+        )
+    return hits
+
+
+def assert_no_blocking_alerts(
+    db: Session,
+    tenant_id: UUID,
+    entity_type: str,
+    context: dict,
+) -> list[dict]:
+    """写入前钩子：命中 blocking 且 severity ∈ BLOCKING_PRIORITIES 的规则 → 409 ALERT_BLOCKED。
+
+    非 blocking 或低档 severity 只评估不阻断（保持现有 evaluate-only 行为）。
+    返回全部命中列表（含非阻断项），供调用方观察。
+    """
+    hits = find_triggered_alerts(db, tenant_id, entity_type, context)
+    blocked = [
+        h["rule_name"]
+        for h in hits
+        if h["blocking"] and h["priority"] in BLOCKING_PRIORITIES
+    ]
+    if blocked:
+        raise AlertBlocked(blocked)
+    return hits
 
 
 def evaluate_alerts(
@@ -60,6 +133,7 @@ def evaluate_alerts(
                 "message": rule.alert_message,
                 "priority": rule.alert_priority,
                 "entity_type": entity_type,
+                "blocking": bool(getattr(rule, "blocking", False)),
             })
 
             # Update last triggered
@@ -130,6 +204,7 @@ def create_alert_rule(
     alert_message: str,
     alert_priority: str = "normal",
     frequency_days: int | None = None,
+    blocking: bool = False,
     created_by: UUID | None = None,
 ) -> ConfigAlertRule:
     """Create a new alert rule."""
@@ -141,6 +216,7 @@ def create_alert_rule(
         alert_message=alert_message,
         alert_priority=alert_priority,
         frequency_days=frequency_days,
+        blocking=blocking,
         created_by=created_by,
     )
     db.add(rule)

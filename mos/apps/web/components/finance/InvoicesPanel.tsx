@@ -4,10 +4,14 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { DataTable, type ColumnDef } from "@/components/DataTable";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { CurrencyField } from "@/components/CurrencyField";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef as GridColumnDef } from "@/components/grid";
 import { PartyPicker } from "@/components/DataPicker";
 import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
+import { Num } from "@/components/Num";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiList, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
@@ -29,6 +33,7 @@ type Invoice = {
   paid_amount?: number;
   invoice_type?: string;
   base_amount?: number | null;
+  updated_at?: string | null;
 };
 
 export function InvoicesPanel() {
@@ -53,6 +58,7 @@ export function InvoicesPanel() {
   const [hsCharter, setHsCharter] = useState("");
   const [hsStart, setHsStart] = useState("");
   const [hsEnd, setHsEnd] = useState("");
+  const invCtx = useContextMenu<Invoice>();
 
   const loadRefs = useCallback(async () => {
     const [v, p, ch] = await Promise.all([
@@ -84,7 +90,7 @@ export function InvoicesPanel() {
     e.preventDefault();
     setBusy(true);
     const amount = Number(invAmount);
-    if (!invAmount.trim() || Number.isNaN(amount)) {
+    if (!invAmount.trim() || Number.isNaN(amount) || amount < 0) {
       toast.error(t("page.finance.bad_amount", "金额必须是有效数字"));
       setBusy(false);
       return;
@@ -129,12 +135,55 @@ export function InvoicesPanel() {
     }
   }
 
-  const cols: ColumnDef<Invoice>[] = [
+  const cols: GridColumnDef<Invoice>[] = [
     { key: "invoice_no", title: t("page.finance.no", "编号") },
     { key: "status", title: t("common.status", "Status") },
-    { key: "amount", title: t("common.amount", "Amount"), align: "right", render: (v) => fmt(v as number) },
-    { key: "base_amount", title: t("page.finance.base_amount", "Base"), align: "right", render: (v) => (v != null ? fmt(v as number) : "—") },
-    { key: "paid_amount", title: t("page.finance.paid_col", "已付"), align: "right", render: (v) => fmt(v as number) },
+    {
+      key: "amount",
+      title: t("common.amount", "Amount"),
+      align: "right",
+      value: (r) => r.amount,
+      render: (v) => <Num v={v as number} digits={2} />,
+    },
+    {
+      key: "base_amount",
+      title: t("page.finance.base_amount", "Base"),
+      align: "right",
+      value: (r) => r.base_amount ?? null,
+      render: (v) => (v != null ? <Num v={v as number} digits={2} /> : "—"),
+    },
+    {
+      key: "paid_amount",
+      title: t("page.finance.paid_col", "已付"),
+      align: "right",
+      value: (r) => r.paid_amount ?? 0,
+      render: (v) => <Num v={v as number} digits={2} />,
+    },
+    {
+      key: "updated_at",
+      title: t("list.last_modified", "Last modified"),
+      width: 135,
+      value: (r) => r.updated_at ?? null,
+      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+    },
+  ];
+
+  function exportRows(rows: Invoice[]) {
+    downloadCsv(
+      "invoices-selected",
+      ["invoice_no", "status", "type", "amount", "base_amount", "paid_amount"],
+      rows.map((r) => [r.invoice_no, r.status, r.invoice_type || "", r.amount, r.base_amount ?? "", r.paid_amount ?? ""]),
+    );
+  }
+
+  const invMenuItems = (row: Invoice): ContextMenuItem[] => [
+    { key: "open", label: t("common.open", "Open"), onClick: () => router.push(`/finance/invoices/${row.id}`) },
+    { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(row.id) },
+    {
+      key: "export",
+      label: t("page.finance.export_selected", "导出所选 CSV"),
+      onClick: () => exportRows(sel.has(row.id) ? rows.filter((r) => sel.has(r.id)) : [row]),
+    },
   ];
 
   return (
@@ -152,14 +201,18 @@ export function InvoicesPanel() {
               ))}
             </select>
           </label>
-          <label>
-            {t("common.amount", "Amount")}
-            <input type="number" step="any" value={invAmount} onChange={(e) => setInvAmount(e.target.value)} />
-          </label>
-          <label>
-            {t("page.finance.fx_rate", "FX rate")}
-            <input type="number" step="any" value={invFx} onChange={(e) => setInvFx(e.target.value)} placeholder={t("common.optional", "Optional")} />
-          </label>
+          <CurrencyField
+            amount={invAmount}
+            currency="USD"
+            baseAmount={
+              invAmount.trim() && !Number.isNaN(Number(invAmount))
+                ? Number(invAmount) * (invFx === "" ? 1 : Number(invFx) || 1)
+                : null
+            }
+            fxRate={invFx === "" ? 1 : invFx}
+            onAmountChange={setInvAmount}
+            onFxRateChange={setInvFx}
+          />
           <label>
             {t("page.voyages.list", "Voyages")}
             <select value={invVoyage} onChange={(e) => setInvVoyage(e.target.value)}>
@@ -219,34 +272,42 @@ export function InvoicesPanel() {
             className="btn btn-sm btn-ghost"
             type="button"
             disabled={!sel.size}
-            onClick={() => {
-              const picked = rows.filter((r) => sel.has(r.id));
-              downloadCsv(
-                "invoices-selected",
-                ["invoice_no", "status", "type", "amount", "base_amount", "paid_amount"],
-                picked.map((r) => [r.invoice_no, r.status, r.invoice_type || "", r.amount, r.base_amount ?? "", r.paid_amount ?? ""]),
-              );
-            }}
+            onClick={() => exportRows(rows.filter((r) => sel.has(r.id)))}
           >
             {t("page.finance.export_selected", "导出所选 CSV")} {sel.size ? `(${sel.size})` : ""}
           </button>
           <ExportButton entity="invoices" />
+          <button
+            className="btn btn-sm btn-ghost"
+            type="button"
+            disabled={page <= 1}
+            onClick={() => setQuery({ page: page > 2 ? page - 1 : null }, { resetPage: false })}
+          >
+            ←
+          </button>
+          <span className="muted">
+            {page} / {Math.max(1, Math.ceil(total / limit))}
+          </span>
+          <button
+            className="btn btn-sm btn-ghost"
+            type="button"
+            disabled={page * limit >= total}
+            onClick={() => setQuery({ page: page + 1 }, { resetPage: false })}
+          >
+            →
+          </button>
         </div>
-        <DataTable<Invoice>
+        <DataGrid<Invoice>
           data={rows}
           columns={cols}
-          paginatable
-          selectable
-          selectedIds={sel}
-          onSelectionChange={setSel}
+          rowKey={(r) => r.id}
           storageKey="finance.invoices"
-          total={total}
-          page={page}
-          onPageChange={(p, l) => setQuery({ page: p > 1 ? p : null, limit: l === 50 ? null : l })}
           emptyText={t("common.empty", "No records")}
           onRowClick={(r) => router.push(`/finance/invoices/${r.id}`)}
+          onRowContextMenu={(row, _i, e) => invCtx.open(row)(e)}
         />
       </div>
+      <ContextMenu controller={invCtx} items={invMenuItems} />
     </>
   );
 }

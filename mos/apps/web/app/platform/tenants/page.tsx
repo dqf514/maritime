@@ -1,11 +1,20 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { RecordModal } from "@/components/RecordModal";
 import { LookupSelect } from "@/components/LookupSelect";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost, apiPut, generateTempPassword } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type Tenant = {
@@ -32,14 +41,22 @@ type OfficeCfg = {
   has_secret: boolean;
 };
 
-export default function PlatformTenantsPage() {
+function PlatformTenantsPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const pathname = usePathname();
+  const { query, setQuery } = useListQuery();
+  const filterStatus = query.status ?? "";
+  const filterQ = query.q ?? "";
   const [rows, setRows] = useState<Tenant[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [createSaving, setCreateSaving] = useState(false);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [selected, setSelected] = useState<Tenant | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
   const [edit, setEdit] = useState({ name: "", profile_tier: "M", default_locale: "en", default_timezone: "Asia/Shanghai" });
   const [licenses, setLicenses] = useState<LicRow[]>([]);
   const [busy, setBusy] = useState(false);
@@ -56,12 +73,11 @@ export default function PlatformTenantsPage() {
   }
 
   useEffect(() => {
-    load().catch(() => toast.success(t("page.tenants.admin_required", "需要平台管理员（租户 sys）")));
+    load().catch(() => toast.error(t("page.tenants.admin_required", "需要平台管理员（租户 sys）")));
   }, [t]);
 
   async function openTenant(row: Tenant) {
     setBusy(true);
-    toast.success("");
     try {
       const detail = await apiGet(`/api/v1/platform/tenants/${row.id}`);
       setSelected(detail);
@@ -83,34 +99,48 @@ export default function PlatformTenantsPage() {
       setOclear(false);
       setOtest(null);
     } catch {
-      toast.success(t("common.failed", "加载失败"));
+      toast.error(t("common.failed", "加载失败"));
     } finally {
       setBusy(false);
     }
   }
 
-  async function create(e: FormEvent) {
-    e.preventDefault();
-    const adminPassword = generateTempPassword();
-    const res = await apiPost("/api/v1/platform/tenants", {
-      name,
-      code,
-      profile_tier: "M",
-      admin_email: adminEmail,
-      admin_name: "Tenant Admin",
-      admin_password: adminPassword,
-    });
-    setInitialPw(adminPassword);
-    toast.success(
-      t("page.tenants.created", "已创建租户 {code}；管理员 {email}。初始密码已生成，请通过安全渠道传达。", {
-        code: res.code,
-        email: res.admin_email,
-      }),
-    );
+  function openCreate() {
     setName("");
     setCode("");
     setAdminEmail("");
-    await load();
+    setCreating(true);
+  }
+
+  useListHotkeys(openCreate);
+
+  async function create(e: FormEvent) {
+    e.preventDefault();
+    setCreateSaving(true);
+    try {
+      const adminPassword = generateTempPassword();
+      const res = await apiPost("/api/v1/platform/tenants", {
+        name,
+        code,
+        profile_tier: "M",
+        admin_email: adminEmail,
+        admin_name: "Tenant Admin",
+        admin_password: adminPassword,
+      });
+      setInitialPw(adminPassword);
+      toast.success(
+        t("page.tenants.created", "已创建租户 {code}；管理员 {email}。初始密码已生成，请通过安全渠道传达。", {
+          code: res.code,
+          email: res.admin_email,
+        }),
+      );
+      setCreating(false);
+      await load();
+    } catch (err) {
+      toast.error(t("page.tenants.create_fail", "创建失败: {err}", { err: String(err) }));
+    } finally {
+      setCreateSaving(false);
+    }
   }
 
   async function copyInitialPw() {
@@ -127,7 +157,7 @@ export default function PlatformTenantsPage() {
       setConfirm({
         message: t("page.tenants.confirm_suspend", "暂停租户后，该租户全部用户将立即无法登录（数据保留）。确认暂停？"),
         danger: true,
-        action: () => applyStatus(id, status).catch(() => toast.success(t("common.failed", "失败"))),
+        action: () => applyStatus(id, status).catch(() => toast.error(t("common.failed", "失败"))),
       });
       return;
     }
@@ -143,10 +173,15 @@ export default function PlatformTenantsPage() {
   async function saveEdit(e: FormEvent) {
     e.preventDefault();
     if (!selected) return;
-    await apiPut(`/api/v1/platform/tenants/${selected.id}`, edit);
-    toast.success(t("page.tenants.saved", "租户资料已保存"));
-    await load();
-    await openTenant(selected);
+    try {
+      await apiPut(`/api/v1/platform/tenants/${selected.id}`, edit);
+      toast.success(t("page.tenants.saved", "租户资料已保存"));
+      setEditOpen(false);
+      await load();
+      await openTenant(selected);
+    } catch (err) {
+      toast.error(t("page.tenants.save_fail", "保存失败: {err}", { err: String(err) }));
+    }
   }
 
   async function toggleLicense(mod: LicRow) {
@@ -160,7 +195,7 @@ export default function PlatformTenantsPage() {
           { mod: mod.module_code },
         ),
         danger: true,
-        action: () => applyLicense(mod, next).catch(() => toast.success(t("common.failed", "失败"))),
+        action: () => applyLicense(mod, next).catch(() => toast.error(t("common.failed", "失败"))),
       });
       return;
     }
@@ -232,88 +267,178 @@ export default function PlatformTenantsPage() {
     }
   }
 
+  const filtered = rows.filter((r) => {
+    if (filterStatus && r.status !== filterStatus) return false;
+    if (filterQ) {
+      const needle = filterQ.toLowerCase();
+      if (!r.code.toLowerCase().includes(needle) && !r.name.toLowerCase().includes(needle)) return false;
+    }
+    return true;
+  });
+
+  const tenantColumns: ColumnDef<Tenant>[] = [
+    {
+      key: "code",
+      title: t("common.code", "代码"),
+      width: 110,
+      value: (r) => r.code,
+      render: (v, r) => (
+        <button type="button" className="linklike" onClick={(e) => { e.stopPropagation(); openTenant(r).catch(() => undefined); }}>
+          {String(v)}
+        </button>
+      ),
+    },
+    { key: "name", title: t("common.name", "名称"), minWidth: 150, value: (r) => r.name },
+    { key: "profile_tier", title: t("common.tier", "档位"), width: 80, value: (r) => r.profile_tier },
+    { key: "user_count", title: t("common.users", "用户"), width: 80, align: "right", value: (r) => r.user_count },
+    { key: "license_count", title: t("page.tenants.licenses", "许可证"), width: 90, align: "right", value: (r) => r.license_count },
+    {
+      key: "status",
+      title: t("common.status", "状态"),
+      width: 100,
+      value: (r) => r.status,
+      render: (v) => (
+        <span className={v === "active" ? "badge badge-pass" : "badge badge-fail"}>{String(v)}</span>
+      ),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 100,
+      align: "right",
+      render: (_v, r) =>
+        r.status === "active" ? (
+          <button
+            className="btn"
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setStatus(r.id, "suspended").catch(() => toast.error(t("common.failed", "失败"))); }}
+          >
+            {t("common.suspend", "暂停")}
+          </button>
+        ) : (
+          <button
+            className="btn btn-primary"
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setStatus(r.id, "active").catch(() => toast.error(t("common.failed", "失败"))); }}
+          >
+            {t("common.activate", "启用")}
+          </button>
+        ),
+    },
+  ];
+
+  const licColumns: ColumnDef<LicRow>[] = [
+    {
+      key: "module_code",
+      title: t("page.licenses.module", "模块"),
+      width: 140,
+      value: (r) => r.module_code,
+      render: (v) => <code>{String(v)}</code>,
+    },
+    { key: "name", title: t("common.name", "名称"), minWidth: 150, value: (r) => r.name },
+    {
+      key: "is_core",
+      title: t("page.licenses.core", "核心"),
+      width: 80,
+      value: (r) => r.is_core,
+      render: (v) => (v ? t("page.licenses.yes", "是") : t("page.licenses.no", "否")),
+    },
+    {
+      key: "status",
+      title: t("common.status", "状态"),
+      width: 100,
+      value: (r) => r.status,
+      render: (v) => (
+        <span className={v === "active" ? "badge badge-pass" : "badge badge-warn"}>{String(v)}</span>
+      ),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 100,
+      align: "right",
+      render: (_v, lic) =>
+        lic.is_core ? (
+          <span className="muted">—</span>
+        ) : (
+          <button
+            className="btn"
+            type="button"
+            onClick={() => toggleLicense(lic).catch(() => toast.error(t("common.failed", "失败")))}
+          >
+            {lic.status === "active" ? t("page.tenants.disable_mod", "停用") : t("page.tenants.enable_mod", "启用")}
+          </button>
+        ),
+    },
+  ];
+
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.tenants.title", "租户与模块许可证")}</h1>
-      <p className="page-sub">
-        {t(
+      <PageHeader
+        title={t("page.tenants.title", "Tenants & licenses")}
+        subtitle={t(
           "page.tenants.sub",
-          "开通 / 暂停租户，编辑档位与时区，并按模块开关许可证。点选表格行进入编辑。",
+          "Provision / suspend tenants, edit tier & timezone, and toggle module licenses. Click a row to edit.",
         )}
-      </p>
+        breadcrumb={[{ label: t("page.platform.title", "Platform"), href: "/platform" }, { label: t("page.tenants.title", "Tenants & licenses") }]}
+        actions={<SavedViews storageKey="platform_tenants" onApply={(qs) => router.replace(`${pathname}${qs}`)} />}
+      />
       {initialPw ? (
         <p className="flash">
-          {t("page.tenants.pw_ready", "初始密码已生成（仅此一次，复制后即不再显示）。")}{" "}
+          {t("page.tenants.pw_ready", "Initial password generated (shown once — copy it now).")}{" "}
           <button type="button" className="btn btn-ghost" onClick={() => copyInitialPw().catch(() => setInitialPw(""))}>
-            {t("page.tenants.copy_pw", "复制初始密码")}
+            {t("page.tenants.copy_pw", "Copy initial password")}
           </button>
         </p>
       ) : null}
 
-      <form className="panel" onSubmit={(e) => create(e).catch(() => toast.success(t("page.tenants.create_fail", "创建失败")))}>
-        <h2 style={{ marginTop: 0 }}>{t("page.tenants.provision", "开通租户")}</h2>
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
-          <label>
-            {t("common.name", "名称")}
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </label>
-          <label>
-            {t("common.code", "代码")}
-            <input value={code} onChange={(e) => setCode(e.target.value)} required />
-          </label>
-          <label>
-            {t("page.tenants.admin_email", "管理员邮箱")}
-            <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} required />
-          </label>
-          <button className="btn btn-primary" type="submit">
-            {t("page.tenants.provision", "开通租户")}
-          </button>
-        </div>
-      </form>
+      <Toolbar
+        filterCount={(filterStatus ? 1 : 0) + (filterQ ? 1 : 0)}
+        onClearFilters={() => setQuery({ status: null, q: null }, { resetPage: true })}
+        right={
+          <>
+            <input
+              className="input input-sm"
+              value={filterQ}
+              onChange={(e) => setQuery({ q: e.target.value || null }, { resetPage: true })}
+              placeholder={t("page.tenants.search", "Search code or name")}
+              aria-label={t("page.tenants.search", "Search code or name")}
+            />
+            <select
+              className="input input-sm"
+              value={filterStatus}
+              onChange={(e) => setQuery({ status: e.target.value || null }, { resetPage: true })}
+              aria-label={t("page.tenants.filter_status", "Filter by status")}
+            >
+              <option value="">{t("common.all", "All")}</option>
+              <option value="active">{t("common.active", "Active")}</option>
+              <option value="suspended">{t("common.suspended", "Suspended")}</option>
+            </select>
+          </>
+        }
+      >
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
+          {t("page.tenants.provision", "Provision tenant")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
 
       <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.code", "代码")}</th>
-              <th>{t("common.name", "名称")}</th>
-              <th>{t("common.tier", "档位")}</th>
-              <th>{t("common.users", "用户")}</th>
-              <th>{t("page.tenants.licenses", "许可证")}</th>
-              <th>{t("common.status", "状态")}</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr
-                key={row.id}
-                style={{ cursor: "pointer", background: selected?.id === row.id ? "rgba(26,155,150,0.08)" : undefined }}
-                onClick={() => openTenant(row).catch(() => undefined)}
-              >
-                <td>{row.code}</td>
-                <td>{row.name}</td>
-                <td>{row.profile_tier}</td>
-                <td>{row.user_count}</td>
-                <td>{row.license_count}</td>
-                <td>
-                  <span className={row.status === "active" ? "badge badge-pass" : "badge badge-fail"}>{row.status}</span>
-                </td>
-                <td onClick={(e) => e.stopPropagation()}>
-                  {row.status === "active" ? (
-                    <button className="btn" type="button" onClick={() => setStatus(row.id, "suspended").catch(() => toast.success(t("common.failed", "失败")))}>
-                      {t("common.suspend", "暂停")}
-                    </button>
-                  ) : (
-                    <button className="btn btn-primary" type="button" onClick={() => setStatus(row.id, "active").catch(() => toast.success(t("common.failed", "失败")))}>
-                      {t("common.activate", "启用")}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataGrid<Tenant>
+          columns={tenantColumns}
+          data={filtered}
+          rowKey={(r) => r.id}
+          storageKey="platform_tenants_grid"
+          onRowClick={(r) => openTenant(r).catch(() => undefined)}
+          onRowDoubleClick={(r) => {
+            openTenant(r)
+              .then(() => setEditOpen(true))
+              .catch(() => undefined);
+          }}
+          emptyText={t("common.no_data", "No data")}
+        />
       </div>
 
       {selected ? (
@@ -322,80 +447,19 @@ export default function PlatformTenantsPage() {
             {t("page.tenants.edit", "编辑租户")} · {selected.code}
             {busy ? <span className="muted"> …</span> : null}
           </h2>
-          <form onSubmit={(e) => saveEdit(e).catch(() => toast.success(t("common.failed", "保存失败")))}>
-            <div className="form-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: "0.75rem" }}>
-              <label>
-                {t("common.name", "名称")}
-                <input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} required />
-              </label>
-              <label>
-                {t("common.tier", "档位")}
-                <select value={edit.profile_tier} onChange={(e) => setEdit({ ...edit, profile_tier: e.target.value })}>
-                  {["S", "M", "L", "XL"].map((x) => (
-                    <option key={x} value={x}>
-                      {x}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                {t("page.tenants.locale", "默认语言")}
-                <select value={edit.default_locale} onChange={(e) => setEdit({ ...edit, default_locale: e.target.value })}>
-                  <option value="en">en</option>
-                  <option value="zh-CN">zh-CN</option>
-                </select>
-              </label>
-              <label>
-                {t("page.tenants.tz", "默认时区")}
-                <LookupSelect
-                  dataset="timezones"
-                  value={edit.default_timezone}
-                  onChange={(v) => setEdit({ ...edit, default_timezone: v })}
-                  allowEmpty={false}
-                />
-              </label>
-            </div>
-            <button className="btn btn-primary" type="submit" style={{ marginTop: "0.85rem" }}>
-              {t("common.save", "保存资料")}
-            </button>
-          </form>
+          <button type="button" className="btn btn-ghost" onClick={() => setEditOpen(true)}>
+            {t("page.tenants.edit_profile", "编辑资料")}
+          </button>
 
           <h3 style={{ marginTop: "1.5rem" }}>{t("page.tenants.license_matrix", "模块许可证")}</h3>
           <p className="muted">{t("page.tenants.license_hint", "核心模块始终开通；业务模块可在此启停。")}</p>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>{t("page.licenses.module", "模块")}</th>
-                <th>{t("common.name", "名称")}</th>
-                <th>{t("page.licenses.core", "核心")}</th>
-                <th>{t("common.status", "状态")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {licenses.map((lic) => (
-                <tr key={lic.module_code}>
-                  <td>
-                    <code>{lic.module_code}</code>
-                  </td>
-                  <td>{lic.name}</td>
-                  <td>{lic.is_core ? t("page.licenses.yes", "是") : t("page.licenses.no", "否")}</td>
-                  <td>
-                    <span className={lic.status === "active" ? "badge badge-pass" : "badge badge-warn"}>{lic.status}</span>
-                  </td>
-                  <td>
-                    {lic.is_core ? (
-                      <span className="muted">—</span>
-                    ) : (
-                      <button className="btn" type="button" onClick={() => toggleLicense(lic).catch(() => toast.success(t("common.failed", "失败")))}>
-                        {lic.status === "active" ? t("page.tenants.disable_mod", "停用") : t("page.tenants.enable_mod", "启用")}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataGrid<LicRow>
+            columns={licColumns}
+            data={licenses}
+            rowKey={(r) => r.module_code}
+            storageKey="platform_tenants_licenses_grid"
+            emptyText={t("common.no_data", "No data")}
+          />
 
           <h3 style={{ marginTop: "1.5rem" }}>{t("platform.officecfg.title", "Microsoft 365 集成")}</h3>
           <p className="muted">
@@ -462,7 +526,7 @@ export default function PlatformTenantsPage() {
                 <button
                   className="btn btn-primary"
                   type="button"
-                  onClick={() => saveOffice().catch(() => toast.success(t("common.failed", "保存失败")))}
+                  onClick={() => saveOffice().catch(() => toast.error(t("common.failed", "保存失败")))}
                 >
                   {t("platform.officecfg.save", "保存 Microsoft 365 配置")}
                 </button>
@@ -494,9 +558,76 @@ export default function PlatformTenantsPage() {
       ) : (
         <p className="muted">{t("page.tenants.pick", "请选择上方租户行，以编辑资料与许可证。")}</p>
       )}
+
+      <RecordModal
+        open={creating}
+        title={t("page.tenants.provision", "开通租户")}
+        onClose={() => setCreating(false)}
+        onSave={create}
+        saving={createSaving}
+        canDelete={false}
+      >
+        <div className="form-grid">
+          <label>
+            {t("common.name", "名称")}
+            <input value={name} onChange={(e) => setName(e.target.value)} required />
+          </label>
+          <label>
+            {t("common.code", "代码")}
+            <input value={code} onChange={(e) => setCode(e.target.value)} required />
+          </label>
+          <label>
+            {t("page.tenants.admin_email", "管理员邮箱")}
+            <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} required />
+          </label>
+        </div>
+      </RecordModal>
+
+      <RecordModal
+        open={editOpen && Boolean(selected)}
+        title={t("page.tenants.edit", "编辑租户") + (selected ? ` · ${selected.code}` : "")}
+        onClose={() => setEditOpen(false)}
+        onSave={saveEdit}
+        saving={busy}
+        canDelete={false}
+      >
+        <div className="form-grid">
+          <label>
+            {t("common.name", "名称")}
+            <input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} required />
+          </label>
+          <label>
+            {t("common.tier", "档位")}
+            <select value={edit.profile_tier} onChange={(e) => setEdit({ ...edit, profile_tier: e.target.value })}>
+              {["S", "M", "L", "XL"].map((x) => (
+                <option key={x} value={x}>
+                  {x}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            {t("page.tenants.locale", "默认语言")}
+            <select value={edit.default_locale} onChange={(e) => setEdit({ ...edit, default_locale: e.target.value })}>
+              <option value="en">en</option>
+              <option value="zh-CN">zh-CN</option>
+            </select>
+          </label>
+          <label>
+            {t("page.tenants.tz", "默认时区")}
+            <LookupSelect
+              dataset="timezones"
+              value={edit.default_timezone}
+              onChange={(v) => setEdit({ ...edit, default_timezone: v })}
+              allowEmpty={false}
+            />
+          </label>
+        </div>
+      </RecordModal>
+
       <ConfirmDialog
         open={Boolean(confirm)}
-        title={t("common.confirm", "确认操作")}
+        title={t("common.confirm", "Confirm")}
         message={confirm?.message || ""}
         danger={confirm?.danger}
         onConfirm={() => {
@@ -507,5 +638,14 @@ export default function PlatformTenantsPage() {
         onCancel={() => setConfirm(null)}
       />
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <PlatformTenantsPage />
+    </Suspense>
   );
 }

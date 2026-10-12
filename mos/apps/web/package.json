@@ -5,7 +5,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint . && node scripts/lint-consistency.mjs",
+    "lint:consistency": "node scripts/lint-consistency.mjs"
   },
   "dependencies": {
     "next": "16.3.5",

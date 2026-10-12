@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -15,30 +16,31 @@ export default function PlatformHealthPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.health.title", "Platform health")}</h1>
-      <p className="page-sub">{t("page.health.sub", "Cross-tenant probes and estate status.")}</p>
+      <PageHeader
+        title={t("page.health.title", "Platform health")}
+        subtitle={t("page.health.sub", "Cross-tenant probes and estate status.")}
+        breadcrumb={[{ label: t("page.platform.title", "Platform"), href: "/platform" }, { label: t("page.health.title", "Platform health") }]}
+      />
       <div className="panel">
         {!health ? (
           <p className="muted">{t("common.loading", "加载中…")}</p>
         ) : (
-          <table className="table">
-            <tbody>
-              {Object.entries(health).map(([key, val]) => (
-                <tr key={key}>
-                  <td>
-                    <code>{key}</code>
-                  </td>
-                  <td>
-                    {val === null || typeof val !== "object" ? (
-                      String(val)
-                    ) : (
-                      <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{JSON.stringify(val, null, 2)}</pre>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <dl className="kv-grid">
+            {Object.entries(health).map(([key, val]) => (
+              <div key={key}>
+                <dt>
+                  <code>{key}</code>
+                </dt>
+                <dd>
+                  {val === null || typeof val !== "object" ? (
+                    String(val)
+                  ) : (
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{JSON.stringify(val, null, 2)}</pre>
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
         )}
       </div>
     </AppShell>

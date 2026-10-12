@@ -1,13 +1,20 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { SavedViews } from "@/components/SavedViews";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Tabs, type TabItem } from "@/components/Tabs";
+import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { StateView } from "@/components/StateView";
-import { apiGet, apiList } from "@/lib/api";
-import { fmt } from "@/lib/fmt";
+import { apiList } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 
@@ -33,12 +40,51 @@ const STATUS_OPTIONS = ["booked", "loading", "loaded", "in_transit", "discharged
 
 function CargoBookWorkspace() {
   const { t } = useI18n();
+  const router = useRouter();
   const { query, setQuery } = useListQuery();
   const statusFilter = typeof query.status === "string" ? query.status : "";
 
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
   const [rows, setRows] = useState<CargoBookRow[]>([]);
+  const rowCtx = useContextMenu<CargoBookRow>();
+
+  function exportRows(selected: CargoBookRow[]) {
+    downloadCsv(
+      "cargo-book",
+      ["id", "cargo_ref", "status", "cargo_type", "cargo_qty", "load_port", "discharge_port", "vessel_name", "laycan_from", "laycan_to", "etd", "eta", "counterparty"],
+      selected.map((r) => [
+        r.id,
+        r.cargo_ref,
+        r.status,
+        r.cargo_type,
+        r.cargo_qty,
+        r.load_port,
+        r.discharge_port,
+        r.vessel_name ?? "",
+        r.laycan_from ?? "",
+        r.laycan_to ?? "",
+        r.etd ?? "",
+        r.eta ?? "",
+        r.counterparty ?? "",
+      ]),
+    );
+  }
+
+  function rowMenuItems(target: CargoBookRow): ContextMenuItem[] {
+    return [
+      {
+        key: "open",
+        label: t("common.open", "Open"),
+        onClick: () => {
+          if (target.voyage_id) router.push(`/operations/voyages/${target.voyage_id}/workspace`);
+          else if (target.charter_id) router.push(`/charters/${target.charter_id}`);
+        },
+      },
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.id) },
+      { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportRows([target]) },
+    ];
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,7 +148,7 @@ function CargoBookWorkspace() {
       { key: "cargo_type", title: t("page.cargo.type", "Cargo"), width: 90, sortable: true },
       {
         key: "cargo_qty", title: t("page.cargo.qty", "Qty (mt)"), width: 100, align: "right", sortable: true, agg: "sum",
-        value: (r) => r.cargo_qty, render: (v) => fmt(Number(v)),
+        value: (r) => r.cargo_qty, render: (v) => <Num v={v as number} digits={2} />,
       },
       { key: "load_port", title: t("page.cargo.load_port", "Load port"), width: 110, sortable: true },
       { key: "discharge_port", title: t("page.cargo.disch_port", "Disch port"), width: 110, sortable: true },
@@ -119,13 +165,13 @@ function CargoBookWorkspace() {
     [t],
   );
 
-  const tabs = useMemo(() => {
-    const items: Array<{ id: string; label: string; count: number }> = [
-      { id: "", label: t("common.all", "All"), count: rows.length },
+  const tabs = useMemo<TabItem[]>(() => {
+    const items: TabItem[] = [
+      { key: "", label: t("common.all", "All"), badge: rows.length },
     ];
     for (const s of STATUS_OPTIONS) {
       const c = statusCounts.get(s) ?? 0;
-      if (c > 0) items.push({ id: s, label: s.replace("_", " "), count: c });
+      if (c > 0) items.push({ key: s, label: s.replace("_", " "), badge: c });
     }
     return items;
   }, [rows.length, statusCounts, t]);
@@ -133,27 +179,26 @@ function CargoBookWorkspace() {
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.cargo-book", "Cargo Book") }]}
         title={t("page.cargo.title", "Cargo Book")}
         subtitle={t("page.cargo.sub", "All cargo allocations, shipments and delivery status.")}
         actions={
-          <button type="button" className="btn btn-sm" onClick={load}>
-            {t("common.refresh", "Refresh")}
-          </button>
+          <SavedViews storageKey="cargo_list" onApply={(q) => router.replace(`/cargo${q}`)} />
         }
       />
+      <Toolbar
+        filterCount={statusFilter ? 1 : 0}
+        onClearFilters={() => setStatus("")}
+        right={<span className="hint">{t("page.cargo.count", "{n} rows", { n: rows.length })}</span>}
+      >
+        <button type="button" className="btn btn-sm" onClick={load} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
 
-      <div className="trading-tabs">
-        {tabs.map((tb) => (
-          <button
-            key={tb.id}
-            type="button"
-            className={`trading-tab${statusFilter === tb.id ? " active" : ""}`}
-            onClick={() => setStatus(tb.id)}
-          >
-            {tb.label} ({tb.count})
-          </button>
-        ))}
-      </div>
+      <Tabs items={tabs} value={statusFilter} onChange={setStatus} variant="pill" />
+
+      <StatusLegend statuses={[...STATUS_OPTIONS]} />
 
       <StateView loading={loading} error={loadErr} empty={!loading && !loadErr && rows.length === 0} onRetry={load}>
         <div className="trading-grid-wrap">
@@ -161,11 +206,17 @@ function CargoBookWorkspace() {
             columns={cols}
             data={rows}
             rowKey={(r) => r.id}
+            onRowClick={(r) => {
+              if (r.voyage_id) router.push(`/operations/voyages/${r.voyage_id}/workspace`);
+            }}
+            onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
             storageKey="cargo_book"
             emptyText={t("common.empty", "No records")}
           />
         </div>
       </StateView>
+
+      <ContextMenu controller={rowCtx} items={rowMenuItems} />
     </AppShell>
   );
 }

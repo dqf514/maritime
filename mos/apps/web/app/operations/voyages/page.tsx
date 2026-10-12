@@ -1,18 +1,24 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { DateTimeInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
 import { PageGuide } from "@/components/PageGuide";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordModal } from "@/components/RecordModal";
+import { Toolbar } from "@/components/Toolbar";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type RefItem = { id: string; name: string; unlocode?: string };
-type Voyage = { id: string; voyage_no: string; status: string; cargo: string | null; vessel_id: string | null };
+type Voyage = { id: string; voyage_no: string; status: string; cargo: string | null; vessel_id: string | null; updated_at?: string | null };
 type PortCall = {
   id: string;
   voyage_id: string;
@@ -83,23 +89,31 @@ function fromLocalInput(v: string) {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-export default function VoyagesPage() {
+function VoyagesPageInner() {
   const { t } = useI18n();
   const toast = useToast();
+  const { query, setQuery } = useListQuery();
   const [rows, setRows] = useState<Voyage[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [ports, setPorts] = useState<RefItem[]>([]);
   const [agents, setAgents] = useState<RefItem[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedId = typeof query.v === "string" && query.v ? query.v : null;
+  const setSelectedId = (id: string | null) => setQuery({ v: id });
   const [portCalls, setPortCalls] = useState<PortCall[]>([]);
   const [selectedPc, setSelectedPc] = useState<string>("");
   const [sofEvents, setSofEvents] = useState<Array<{ id: string; event_code: string; event_at: string | null; port_call_id: string }>>([]);
   const [twin, setTwin] = useState<Twin | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [reassignOperator, setReassignOperator] = useState("");
 
   const [newVoyageNo, setNewVoyageNo] = useState("");
   const [newCargo, setNewCargo] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  useListHotkeys(() => setCreating(true));
 
   const [pcPurpose, setPcPurpose] = useState("load");
   const [pcSeq, setPcSeq] = useState("1");
@@ -221,7 +235,6 @@ export default function VoyagesPage() {
   async function createVoyage(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    setErr("");
     try {
       const vno = newVoyageNo.trim() || `V-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-MAN`;
       const created = await apiPost("/api/v1/voyages", {
@@ -231,6 +244,7 @@ export default function VoyagesPage() {
       toast.success(t("page.voyages.created", "Voyage {no} created", { no: created.voyage_no }));
       setNewVoyageNo("");
       setNewCargo("");
+      setCreating(false);
       const list = await load();
       if (created.id) {
         setSelectedId(created.id);
@@ -239,7 +253,7 @@ export default function VoyagesPage() {
         setSelectedId(list[0].id);
       }
     } catch (ex: any) {
-      setErr(ex?.message || String(ex));
+      toast.error(ex?.message || String(ex));
     } finally {
       setBusy(false);
     }
@@ -266,7 +280,7 @@ export default function VoyagesPage() {
         voyage_no: selected.voyage_no,
         cargo: selected.cargo,
       });
-      toast.success(t("common.saved", "已保存"));
+      toast.success(t("common.saved", "Saved"));
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -282,7 +296,7 @@ export default function VoyagesPage() {
     try {
       await apiDelete(`/api/v1/voyages/${selected.id}`);
       setSelectedId(null);
-      toast.success(t("common.recycled", "已移入回收站"));
+      toast.success(t("common.recycled", "Moved to recycle bin"));
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -295,7 +309,7 @@ export default function VoyagesPage() {
     e.preventDefault();
     if (!selectedId) return;
     if ((pcEta && !fromLocalInput(pcEta)) || (pcEtd && !fromLocalInput(pcEtd))) {
-      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      setErr(t("page.voyages.bad_date", "Invalid date/time format. Please reselect."));
       return;
     }
     setBusy(true);
@@ -327,7 +341,7 @@ export default function VoyagesPage() {
       return;
     }
     if (sofAt && !fromLocalInput(sofAt)) {
-      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      setErr(t("page.voyages.bad_date", "Invalid date/time format. Please reselect."));
       return;
     }
     setBusy(true);
@@ -350,7 +364,7 @@ export default function VoyagesPage() {
     e.preventDefault();
     if (!selectedId) return;
     if (!ohStart || !fromLocalInput(ohStart)) {
-      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      setErr(t("page.voyages.bad_date", "Invalid date/time format. Please reselect."));
       return;
     }
     setBusy(true);
@@ -375,7 +389,7 @@ export default function VoyagesPage() {
   async function closeOffHire(id: string) {
     if (!selectedId) return;
     if (!ohCloseAt || !fromLocalInput(ohCloseAt)) {
-      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      setErr(t("page.voyages.bad_date", "Invalid date/time format. Please reselect."));
       return;
     }
     setBusy(true);
@@ -396,7 +410,7 @@ export default function VoyagesPage() {
     e.preventDefault();
     if (!selectedId) return;
     if (noonEta && !fromLocalInput(noonEta)) {
-      setErr(t("page.voyages.bad_date", "日期时间格式无效，请重新选择"));
+      setErr(t("page.voyages.bad_date", "Invalid date/time format. Please reselect."));
       return;
     }
     setBusy(true);
@@ -436,83 +450,402 @@ export default function VoyagesPage() {
     return p ? `${p.name}${p.unlocode ? ` (${p.unlocode})` : ""}` : id.slice(0, 8);
   }
 
+  function togglePick(id: string) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function togglePickAll() {
+    setPicked((prev) => (prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
+  }
+
+  async function runBatch(action: "close" | "assign", operator?: string) {
+    if (!picked.size) return;
+    setBusy(true);
+    try {
+      const body: Record<string, unknown> = { action, voyage_ids: [...picked] };
+      if (operator) body.operator = operator;
+      const res = await apiPost("/api/v1/voyages/batch", body);
+      const okN: number = res?.ok?.length ?? 0;
+      const failN: number = res?.failed?.length ?? 0;
+      if (failN > 0) {
+        toast.error(
+          t("page.voyages.batch_partial", "Batch {action}: {ok} ok, {failed} failed", {
+            action,
+            ok: okN,
+            failed: failN,
+          }),
+        );
+      } else {
+        toast.success(
+          t("page.voyages.batch_ok", "Batch {action}: {n} voyages updated", { action, n: okN }),
+        );
+      }
+      setPicked(new Set());
+      setReassignOpen(false);
+      setReassignOperator("");
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyItinerary() {
+    if (picked.size !== 1) return;
+    const srcId = [...picked][0];
+    setBusy(true);
+    try {
+      const created = await apiPost(`/api/v1/voyages/${srcId}/copy-itinerary`);
+      toast.success(
+        t("page.voyages.copy_ok", "Itinerary copied to {no}", { no: created?.voyage_no || "" }),
+      );
+      setPicked(new Set());
+      await load();
+      if (created?.id) {
+        setSelectedId(created.id);
+        await loadPortCalls(created.id);
+      }
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const selected = rows.find((r) => r.id === selectedId) || null;
   const conflicts = schedules.filter((s) => s.hard_conflict);
+
+  const voyageColumns: ColumnDef<Voyage>[] = [
+    {
+      key: "_pick",
+      title: "☑",
+      width: 36,
+      align: "center",
+      value: (r) => picked.has(r.id),
+      render: (_v, r) => (
+        <input
+          type="checkbox"
+          checked={picked.has(r.id)}
+          onChange={() => togglePick(r.id)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={t("page.voyages.batch_pick", "Select voyage")}
+        />
+      ),
+    },
+    {
+      key: "voyage_no",
+      title: t("page.voyages.no", "No"),
+      minWidth: 120,
+      value: (r) => r.voyage_no,
+    },
+    {
+      key: "cargo",
+      title: t("page.voyages.cargo", "Cargo"),
+      minWidth: 110,
+      value: (r) => r.cargo || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "updated_at",
+      title: t("list.last_modified", "Last modified"),
+      width: 135,
+      value: (r) => r.updated_at ?? null,
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 110,
+      align: "right",
+      render: (_v, r) => (
+        <Link
+          href={`/operations/voyages/${r.id}/workspace`}
+          className="btn btn-ghost btn-sm"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {t("page.voyages.view360", "360° view")}
+        </Link>
+      ),
+    },
+  ];
+
+  const portCallColumns: ColumnDef<PortCall>[] = [
+    { key: "seq", title: "#", width: 48, align: "right", value: (r) => r.seq },
+    {
+      key: "port",
+      title: t("page.voyages.port", "Port"),
+      minWidth: 150,
+      value: (r) => portLabel(r.port_id),
+    },
+    { key: "purpose", title: t("page.voyages.purpose", "Purpose"), width: 90, value: (r) => r.purpose },
+    {
+      key: "eta",
+      title: "ETA",
+      width: 130,
+      value: (r) => r.eta || "",
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+    },
+    {
+      key: "etd",
+      title: "ETD",
+      width: 130,
+      value: (r) => r.etd || "",
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+    },
+    {
+      key: "nor_at",
+      title: "NOR",
+      width: 130,
+      value: (r) => r.nor_at || "",
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+    },
+    {
+      key: "eosp_at",
+      title: "EOSP",
+      width: 130,
+      value: (r) => r.eosp_at || "",
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+    },
+    {
+      key: "bl_date",
+      title: "B/L",
+      width: 110,
+      value: (r) => r.bl_date || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+    {
+      key: "agent",
+      title: t("page.voyages.agent", "Agent"),
+      minWidth: 110,
+      value: (r) => r.agent || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+  ];
+
+  const sofColumns: ColumnDef<(typeof sofEvents)[number]>[] = [
+    { key: "event_code", title: t("page.voyages.event", "Event"), width: 130, value: (r) => r.event_code },
+    {
+      key: "event_at",
+      title: t("page.voyages.event_at", "Event at"),
+      minWidth: 160,
+      value: (r) => r.event_at || "",
+      render: (v) => (v ? new Date(v as string).toLocaleString() : "—"),
+    },
+    {
+      key: "port_call_id",
+      title: t("page.voyages.port_call", "Port call"),
+      width: 110,
+      value: (r) => r.port_call_id.slice(0, 8),
+    },
+  ];
+
+  const offHireColumns: ColumnDef<OffHire>[] = [
+    {
+      key: "start_at",
+      title: t("page.voyages.oh_start", "Start at"),
+      width: 130,
+      value: (r) => r.start_at || "",
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+    },
+    {
+      key: "end_at",
+      title: t("page.voyages.oh_end", "End at"),
+      width: 130,
+      value: (r) => r.end_at || "",
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+    },
+    {
+      key: "reason",
+      title: t("page.voyages.oh_reason", "Reason"),
+      minWidth: 120,
+      value: (r) => r.reason || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+    {
+      key: "deducted_days",
+      title: t("page.voyages.oh_deducted", "Deducted days"),
+      width: 110,
+      align: "right",
+      value: (r) => r.deducted_days ?? "",
+      render: (v) => (v === "" || v == null ? "—" : String(v)),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 220,
+      align: "right",
+      render: (_v, oh) =>
+        !oh.end_at ? (
+          <span
+            className="desk-toolbar"
+            style={{ margin: 0, justifyContent: "flex-end" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <DateTimeInput value={ohCloseAt} onChange={setOhCloseAt} />
+            <button className="btn btn-sm" type="button" disabled={busy} onClick={() => closeOffHire(oh.id)}>
+              {t("common.close", "Close")}
+            </button>
+          </span>
+        ) : null,
+    },
+  ];
+
+  type NoonPoint = { at: string; lat: number | null; lon: number | null; key: string };
+  const noonTrackColumns: ColumnDef<NoonPoint>[] = [
+    {
+      key: "at",
+      title: t("page.voyages.at", "At"),
+      minWidth: 140,
+      value: (r) => r.at || "",
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+    },
+    {
+      key: "lat",
+      title: "Lat",
+      width: 90,
+      align: "right",
+      value: (r) => r.lat,
+      render: (v) => (v == null ? "—" : String(v)),
+    },
+    {
+      key: "lon",
+      title: "Lon",
+      width: 90,
+      align: "right",
+      value: (r) => r.lon,
+      render: (v) => (v == null ? "—" : String(v)),
+    },
+  ];
+
+  const scheduleColumns: ColumnDef<Schedule>[] = [
+    { key: "title", title: t("common.title", "Title"), minWidth: 150, value: (r) => r.title },
+    { key: "block_type", title: t("page.voyages.block_type", "Type"), width: 100, value: (r) => r.block_type },
+    {
+      key: "start_at",
+      title: t("page.voyages.start_at", "Start"),
+      width: 130,
+      value: (r) => r.start_at,
+      render: (v) => toLocalInput(v as string).replace("T", " "),
+    },
+    {
+      key: "end_at",
+      title: t("page.voyages.end_at", "End"),
+      width: 130,
+      value: (r) => r.end_at,
+      render: (v) => toLocalInput(v as string).replace("T", " "),
+    },
+    {
+      key: "hard_conflict",
+      title: t("page.voyages.conflict", "Conflict"),
+      width: 90,
+      value: (r) => r.hard_conflict,
+      render: (v) =>
+        v ? (
+          <span className="badge badge-fail">{t("page.voyages.hard", "HARD")}</span>
+        ) : (
+          <span className="badge badge-pass">{t("page.voyages.ok", "ok")}</span>
+        ),
+    },
+  ];
 
   return (
     <AppShell>
       <PageHeader
-        title={t("page.voyages.title", "营运工作台")}
-        subtitle={t("page.voyages.sub", "航次、港序、SOF、正午报与冲突。选中航次后可在右侧编辑或删除。")}
+        breadcrumb={[{ label: t("nav.ops", "Voyages") }]}
+        title={t("page.voyages.title", "Operations & Schedule")}
+        subtitle={t("page.voyages.sub", "Voyages, port calls and schedule blocks.")}
         actions={
           <>
             <ExportButton entity="voyages" />
             <PageGuide pageKey="voyages" />
             <Link href="/settings/recycle" className="btn btn-ghost">
-              {t("nav.recycle", "回收站")}
+              {t("nav.recycle", "Recycle bin")}
             </Link>
           </>
         }
       />
+
+      <Toolbar
+        right={
+          <>
+            {picked.size > 0 ? (
+              <span className="badge badge-info">
+                {t("page.voyages.batch_selected", "{n} selected", { n: picked.size })}
+              </span>
+            ) : null}
+            <span className="hint">{t("page.voyages.count", "{n} voyages", { n: rows.length })}</span>
+          </>
+        }
+      >
+        <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => setCreating(true)}>
+          + {t("page.voyages.create", "New voyage")}
+        </button>
+        <button
+          className="btn btn-sm"
+          type="button"
+          disabled={busy || !rows.length}
+          onClick={togglePickAll}
+          title={t("page.voyages.batch_select_all", "Select all / clear")}
+        >
+          ☑
+        </button>
+        <button
+          className="btn btn-sm"
+          type="button"
+          disabled={busy || !picked.size}
+          onClick={() => runBatch("close")}
+        >
+          {t("page.voyages.batch_close", "Batch close")}
+        </button>
+        <button
+          className="btn btn-sm"
+          type="button"
+          disabled={busy || !picked.size}
+          onClick={() => {
+            setReassignOperator("");
+            setReassignOpen(true);
+          }}
+        >
+          {t("page.voyages.batch_reassign", "Reassign")}
+        </button>
+        <button
+          className="btn btn-sm"
+          type="button"
+          disabled={busy || picked.size !== 1}
+          onClick={copyItinerary}
+          title={t("page.voyages.copy_hint", "Copy port-call itinerary to a new voyage")}
+        >
+          {t("page.voyages.copy_itinerary", "Copy itinerary")}
+        </button>
+        <button className="btn btn-sm" type="button" disabled={busy} onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
 
       {err ? <p className="flash-err">{err}</p> : null}
 
       <div className="desk-split">
         <div className="panel desk-list">
           <h3 style={{ margin: "0.85rem 1rem 0.35rem", fontSize: "0.95rem" }}>{t("page.voyages.list", "Voyages")}</h3>
-          <form className="form-grid" style={{ padding: "0 1rem 0.75rem" }} onSubmit={createVoyage}>
-            <label>
-              {t("page.voyages.no", "No")}
-              <input value={newVoyageNo} onChange={(e) => setNewVoyageNo(e.target.value)} placeholder="V-…" />
-            </label>
-            <label>
-              {t("page.voyages.cargo", "Cargo")}
-              <input value={newCargo} onChange={(e) => setNewCargo(e.target.value)} />
-            </label>
-            <div style={{ display: "flex", alignItems: "end" }}>
-              <button className="btn btn-primary btn-sm" type="submit" disabled={busy}>
-                {t("page.voyages.create", "New voyage")}
-              </button>
-            </div>
-          </form>
           <p className="muted" style={{ padding: "0 1rem", marginTop: 0, fontSize: "0.8rem" }}>
             {t("page.voyages.create_hint", "Or activate a charter to auto-create a voyage + schedule block.")}
           </p>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>{t("page.voyages.no", "No")}</th>
-                <th>{t("page.voyages.cargo", "Cargo")}</th>
-                <th>{t("common.status", "Status")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className={r.id === selectedId ? "selected" : ""} onClick={() => selectVoyage(r.id)}>
-                  <td>{r.voyage_no}</td>
-                  <td>{r.cargo || "—"}</td>
-                  <td>{r.status}</td>
-                  <td>
-                    <Link
-                      href={`/operations/voyages/${r.id}`}
-                      className="btn btn-ghost btn-sm"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {t("page.voyages.view360", "360 视图")}
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-              {!rows.length ? (
-                <tr>
-                  <td colSpan={4} className="muted">
-                    {t("common.empty", "No records")}
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+          <DataGrid<Voyage>
+            columns={voyageColumns}
+            data={rows}
+            rowKey={(r) => r.id}
+            storageKey="voyages_list_grid"
+            showFooter={false}
+            emptyText={t("common.empty", "No records")}
+            onRowClick={(r) => selectVoyage(r.id)}
+          />
         </div>
 
         <div>
@@ -524,7 +857,7 @@ export default function VoyagesPage() {
                     {selected.voyage_no} · {selected.status}
                   </h3>
                   <label style={{ display: "block", marginTop: "0.5rem" }}>
-                    {t("page.voyages.cargo", "货物")}
+                    {t("page.voyages.cargo", "Cargo")}
                     <input
                       value={selected.cargo || ""}
                       onChange={(e) =>
@@ -535,68 +868,35 @@ export default function VoyagesPage() {
                 </div>
                 <div className="desk-toolbar" style={{ margin: 0 }}>
                   <button className="btn btn-sm" type="button" disabled={busy} onClick={saveSelectedVoyage}>
-                    {t("common.save", "保存")}
+                    {t("common.save", "Save")}
                   </button>
                   {selected.status === "planned" ? (
                     <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => move(selected.id, "in_progress")}>
-                      {t("page.voyages.start", "开工")}
+                      {t("page.voyages.start", "Start")}
                     </button>
                   ) : null}
                   {selected.status === "in_progress" ? (
                     <button className="btn btn-sm" type="button" disabled={busy} onClick={() => move(selected.id, "completed")}>
-                      {t("page.voyages.complete", "完成")}
+                      {t("page.voyages.complete", "Complete")}
                     </button>
                   ) : null}
                   <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={removeVoyage}>
-                    {t("common.delete", "删除")}
+                    {t("common.delete", "Delete")}
                   </button>
                 </div>
               </div>
 
               <div className="desk-section">
                 <h3>{t("page.voyages.port_calls", "Port calls")}</h3>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>{t("page.voyages.port", "Port")}</th>
-                      <th>{t("page.voyages.purpose", "Purpose")}</th>
-                      <th>ETA</th>
-                      <th>ETD</th>
-                      <th>NOR</th>
-                      <th>EOSP</th>
-                      <th>B/L</th>
-                      <th>{t("page.voyages.agent", "Agent")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {portCalls.map((pc) => (
-                      <tr
-                        key={pc.id}
-                        className={pc.id === selectedPc ? "selected" : ""}
-                        style={{ cursor: "pointer" }}
-                        onClick={() => setSelectedPc(pc.id)}
-                      >
-                        <td>{pc.seq}</td>
-                        <td>{portLabel(pc.port_id)}</td>
-                        <td>{pc.purpose}</td>
-                        <td>{pc.eta ? toLocalInput(pc.eta).replace("T", " ") : "—"}</td>
-                        <td>{pc.etd ? toLocalInput(pc.etd).replace("T", " ") : "—"}</td>
-                        <td>{pc.nor_at ? toLocalInput(pc.nor_at).replace("T", " ") : "—"}</td>
-                        <td>{pc.eosp_at ? toLocalInput(pc.eosp_at).replace("T", " ") : "—"}</td>
-                        <td>{pc.bl_date || "—"}</td>
-                        <td>{pc.agent || "—"}</td>
-                      </tr>
-                    ))}
-                    {!portCalls.length ? (
-                      <tr>
-                        <td colSpan={9} className="muted">
-                          {t("common.empty", "No records")}
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
+                <DataGrid<PortCall>
+                  columns={portCallColumns}
+                  data={portCalls}
+                  rowKey={(r) => r.id}
+                  storageKey="voyages_portcalls_grid"
+                  showFooter={false}
+                  emptyText={t("common.empty", "No records")}
+                  onRowClick={(pc) => setSelectedPc(pc.id)}
+                />
 
                 <form className="form-grid" onSubmit={addPortCall} style={{ marginTop: "0.75rem" }}>
                   <label>
@@ -631,9 +931,9 @@ export default function VoyagesPage() {
                     <DateTimeInput value={pcEtd} onChange={setPcEtd} />
                   </label>
                   <label>
-                    {t("page.voyages.agent", "代理")}
+                    {t("page.voyages.agent", "Agent")}
                     <select value={pcAgent} onChange={(e) => setPcAgent(e.target.value)}>
-                      <option value="">{t("common.select", "请选择")}</option>
+                      <option value="">{t("common.select", "Select…")}</option>
                       {agents.map((a) => (
                         <option key={a.id} value={a.name}>
                           {a.name}
@@ -683,31 +983,16 @@ export default function VoyagesPage() {
                     </button>
                   </div>
                 </form>
-                <table className="table" style={{ marginTop: "0.75rem" }}>
-                  <thead>
-                    <tr>
-                      <th>{t("page.voyages.event", "Event")}</th>
-                      <th>{t("page.voyages.event_at", "Event at")}</th>
-                      <th>{t("page.voyages.port_call", "Port call")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sofEvents.map((ev) => (
-                      <tr key={ev.id}>
-                        <td>{ev.event_code}</td>
-                        <td>{ev.event_at ? new Date(ev.event_at).toLocaleString() : "—"}</td>
-                        <td>{ev.port_call_id.slice(0, 8)}</td>
-                      </tr>
-                    ))}
-                    {!sofEvents.length ? (
-                      <tr>
-                        <td colSpan={3} className="muted">
-                          {t("common.no_data", "No data")}
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
+                <div style={{ marginTop: "0.75rem" }}>
+                  <DataGrid
+                    columns={sofColumns}
+                    data={sofEvents}
+                    rowKey={(r) => r.id}
+                    storageKey="voyages_sof_grid"
+                    showFooter={false}
+                    emptyText={t("common.no_data", "No data")}
+                  />
+                </div>
                 {selectedPc && sofSummary?.pc === selectedPc && sofSummary.data ? (
                   <div className="desk-results" style={{ marginTop: "0.75rem" }}>
                     <div className="kv-box">
@@ -743,44 +1028,16 @@ export default function VoyagesPage() {
                     </button>
                   </div>
                 </form>
-                <table className="table" style={{ marginTop: "0.75rem" }}>
-                  <thead>
-                    <tr>
-                      <th>{t("page.voyages.oh_start", "Start at")}</th>
-                      <th>{t("page.voyages.oh_end", "End at")}</th>
-                      <th>{t("page.voyages.oh_reason", "Reason")}</th>
-                      <th>{t("page.voyages.oh_deducted", "Deducted days")}</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {offHires.map((oh) => (
-                      <tr key={oh.id}>
-                        <td>{oh.start_at ? toLocalInput(oh.start_at).replace("T", " ") : "—"}</td>
-                        <td>{oh.end_at ? toLocalInput(oh.end_at).replace("T", " ") : "—"}</td>
-                        <td>{oh.reason || "—"}</td>
-                        <td>{oh.deducted_days ?? "—"}</td>
-                        <td>
-                          {!oh.end_at ? (
-                            <div className="desk-toolbar" style={{ margin: 0 }}>
-                              <DateTimeInput value={ohCloseAt} onChange={setOhCloseAt} />
-                              <button className="btn btn-sm" type="button" disabled={busy} onClick={() => closeOffHire(oh.id)}>
-                                {t("common.close", "Close")}
-                              </button>
-                            </div>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ))}
-                    {!offHires.length ? (
-                      <tr>
-                        <td colSpan={5} className="muted">
-                          {t("common.no_data", "No data")}
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
+                <div style={{ marginTop: "0.75rem" }}>
+                  <DataGrid<OffHire>
+                    columns={offHireColumns}
+                    data={offHires}
+                    rowKey={(r) => r.id}
+                    storageKey="voyages_offhire_grid"
+                    showFooter={false}
+                    emptyText={t("common.no_data", "No data")}
+                  />
+                </div>
               </div>
 
               <div className="desk-section">
@@ -868,31 +1125,14 @@ export default function VoyagesPage() {
                     <p className="muted">
                       L{twin.level} · {twin.noon_track?.length || 0} noon points · {twin.port_calls?.length || 0} port calls
                     </p>
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>{t("page.voyages.at", "At")}</th>
-                          <th>Lat</th>
-                          <th>Lon</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(twin.noon_track || []).map((n, i) => (
-                          <tr key={i}>
-                            <td>{n.at ? toLocalInput(n.at).replace("T", " ") : "—"}</td>
-                            <td>{n.lat ?? "—"}</td>
-                            <td>{n.lon ?? "—"}</td>
-                          </tr>
-                        ))}
-                        {!twin.noon_track?.length ? (
-                          <tr>
-                            <td colSpan={3} className="muted">
-                              {t("page.voyages.no_track", "No noon track yet")}
-                            </td>
-                          </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
+                    <DataGrid<NoonPoint>
+                      columns={noonTrackColumns}
+                      data={(twin.noon_track || []).map((n, i) => ({ ...n, key: `noon-${i}` }))}
+                      rowKey={(r) => r.key}
+                      storageKey="voyages_noon_track_grid"
+                      showFooter={false}
+                      emptyText={t("page.voyages.no_track", "No noon track yet")}
+                    />
                   </>
                 ) : (
                   <p className="muted">{t("page.voyages.twin_na", "Twin data unavailable (module or empty).")}</p>
@@ -916,42 +1156,77 @@ export default function VoyagesPage() {
         ) : (
           <p className="muted">{t("page.voyages.no_conflicts", "No hard conflicts")}</p>
         )}
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.title", "Title")}</th>
-              <th>{t("page.voyages.block_type", "Type")}</th>
-              <th>{t("page.voyages.start_at", "Start")}</th>
-              <th>{t("page.voyages.end_at", "End")}</th>
-              <th>{t("page.voyages.conflict", "Conflict")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {schedules.map((s) => (
-              <tr key={s.id}>
-                <td>{s.title}</td>
-                <td>{s.block_type}</td>
-                <td>{toLocalInput(s.start_at).replace("T", " ")}</td>
-                <td>{toLocalInput(s.end_at).replace("T", " ")}</td>
-                <td>
-                  {s.hard_conflict ? (
-                    <span className="badge badge-fail">{t("page.voyages.hard", "HARD")}</span>
-                  ) : (
-                    <span className="badge badge-pass">{t("page.voyages.ok", "ok")}</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {!schedules.length ? (
-              <tr>
-                <td colSpan={5} className="muted">
-                  {t("common.empty", "No records")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+        <DataGrid<Schedule>
+          columns={scheduleColumns}
+          data={schedules}
+          rowKey={(r) => r.id}
+          storageKey="voyages_schedule_grid"
+          showFooter={false}
+          emptyText={t("common.empty", "No records")}
+        />
       </div>
+
+      <RecordModal
+        open={creating}
+        title={t("page.voyages.create_title", "New voyage")}
+        onClose={() => setCreating(false)}
+        onSave={createVoyage}
+        canDelete={false}
+        saving={busy}
+        size="md"
+      >
+        <div className="form-grid">
+          <label className="field">
+            <span>{t("page.voyages.no", "No")}</span>
+            <input
+              className="input"
+              value={newVoyageNo}
+              onChange={(e) => setNewVoyageNo(e.target.value)}
+              placeholder="V-…"
+            />
+          </label>
+          <label className="field">
+            <span>{t("page.voyages.cargo", "Cargo")}</span>
+            <input className="input" value={newCargo} onChange={(e) => setNewCargo(e.target.value)} />
+          </label>
+        </div>
+      </RecordModal>
+
+      <RecordModal
+        open={reassignOpen}
+        title={t("page.voyages.batch_reassign_title", "Reassign operator")}
+        onClose={() => setReassignOpen(false)}
+        onSave={(e) => {
+          e.preventDefault();
+          return runBatch("assign", reassignOperator);
+        }}
+        canDelete={false}
+        saving={busy}
+        size="md"
+      >
+        <div className="form-grid">
+          <label className="field">
+            <span>{t("page.voyages.batch_operator", "Operator")}</span>
+            <input
+              className="input"
+              value={reassignOperator}
+              onChange={(e) => setReassignOperator(e.target.value)}
+              placeholder={t("page.voyages.batch_operator_ph", "Operator name")}
+            />
+          </label>
+        </div>
+        <p className="muted">
+          {t("page.voyages.batch_reassign_hint", "{n} voyages will be reassigned.", { n: picked.size })}
+        </p>
+      </RecordModal>
     </AppShell>
+  );
+}
+
+export default function VoyagesPage() {
+  return (
+    <Suspense fallback={null}>
+      <VoyagesPageInner />
+    </Suspense>
   );
 }

@@ -9,6 +9,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { Tabs } from "@/components/Tabs";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { VesselCertificates } from "@/components/ShipCertificates";
 import { VesselCrudGrid } from "@/components/ship/VesselCrudGrid";
 import { useI18n } from "@/lib/i18n";
@@ -198,18 +201,173 @@ export default function VesselDetailPage() {
     return rows.length ? rows[0] : null;
   }, [summary]);
 
+  const routeColumns = useMemo<ColumnDef<any>[]>(
+    () => [
+      {
+        key: "route_name",
+        title: t("page.vessel.route_name", "Route"),
+        width: 160,
+        value: (r: any) => r.route_name,
+        render: (v) => fmt(v),
+      },
+      {
+        key: "from_area",
+        title: t("page.vessel.route_from", "From"),
+        width: 130,
+        value: (r: any) => r.from_area,
+        render: (v) => fmt(v),
+      },
+      {
+        key: "to_area",
+        title: t("page.vessel.route_to", "To"),
+        width: 130,
+        value: (r: any) => r.to_area,
+        render: (v) => fmt(v),
+      },
+      {
+        key: "typical_speed",
+        title: t("page.vessel.route_speed", "Speed"),
+        width: 90,
+        align: "right",
+        value: (r: any) => r.typical_speed,
+        render: (v) => fmt(v),
+      },
+      {
+        key: "distance_nm",
+        title: t("page.vessel.route_dist", "Distance (nm)"),
+        width: 110,
+        align: "right",
+        value: (r: any) => r.distance_nm,
+        render: (v) => fmt(v),
+      },
+    ],
+    [t],
+  );
+
+  const scaleColumns = useMemo<ColumnDef<ScalePoint>[]>(
+    () => [
+      {
+        key: "draft_m",
+        title: t("page.vessel.scale_draft", "Draft (m)"),
+        width: 160,
+        editor: { type: "number", step: 0.01 },
+        value: (r) => r.draft_m,
+      },
+      {
+        key: "deadweight_mt",
+        title: t("page.vessel.scale_dwt", "Deadweight (MT)"),
+        width: 180,
+        editor: { type: "number" },
+        value: (r) => r.deadweight_mt,
+      },
+      {
+        key: "actions",
+        title: "",
+        width: 90,
+        align: "right",
+        value: () => "",
+        render: (_v, _r, i) => (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            style={{ color: "var(--danger)", fontSize: "0.75rem" }}
+            onClick={() => setScale((prev) => prev.filter((_, j) => j !== i))}
+          >
+            {t("common.delete", "Delete")}
+          </button>
+        ),
+      },
+    ],
+    [t],
+  );
+
+  const workOrderColumns = useMemo<ColumnDef<any>[]>(
+    () => [
+      {
+        key: "wo_no",
+        title: t("page.ship.wo_no", "WO no."),
+        width: 120,
+        value: (r: any) => r.wo_no,
+        render: (v) => fmt(v),
+      },
+      {
+        key: "title",
+        title: t("page.ship.wo_title", "Title"),
+        width: 220,
+        value: (r: any) => r.title,
+        render: (v) => fmt(v),
+      },
+      {
+        key: "status",
+        title: t("common.status", "Status"),
+        width: 110,
+        value: (r: any) => r.status,
+        render: (_v, r: any) => (
+          <span className={`pill ${r.status === "done" || r.status === "closed" ? "valid" : r.status === "blocked" ? "danger" : "warn"}`}>
+            {fmt(r.status)}
+          </span>
+        ),
+      },
+      {
+        key: "priority",
+        title: t("common.priority", "Priority"),
+        width: 90,
+        value: (r: any) => r.priority,
+        render: (v) => fmt(v),
+      },
+      {
+        key: "due_on",
+        title: t("common.due", "Due"),
+        width: 110,
+        value: (r: any) => r.due_on,
+        render: (v) => fmt(v),
+      },
+    ],
+    [t],
+  );
+
+  const defectColumns = useMemo<ColumnDef<any>[]>(
+    () => [
+      {
+        key: "title",
+        title: t("common.title", "Title"),
+        width: 240,
+        value: (r: any) => r.title,
+        render: (v) => fmt(v),
+      },
+      {
+        key: "status",
+        title: t("common.status", "Status"),
+        width: 110,
+        value: (r: any) => r.status,
+        render: (_v, r: any) => (
+          <span className={`pill ${r.status === "closed" ? "valid" : "warn"}`}>{fmt(r.status)}</span>
+        ),
+      },
+      {
+        key: "severity",
+        title: t("common.severity", "Severity"),
+        width: 100,
+        value: (r: any) => r.severity,
+        render: (v) => fmt(v),
+      },
+    ],
+    [t],
+  );
+
   return (
-    <AppShell
-      breadcrumbs={[
-        { label: t("page.ship.title", "Ship management"), href: "/ship" },
-        { label: vessel?.name || t("page.vessel.card", "Vessel card") },
-      ]}
-    >
+    <AppShell>
       <PageHeader
         title={vessel?.name || t("page.vessel.card", "Vessel card")}
         subtitle={`${vessel?.imo ? `IMO ${vessel.imo}` : "—"} · ${fmt(vessel?.flag)} · ${fmt(vessel?.vessel_type)} · ${
           vessel?.dwt ? `${vessel.dwt} DWT` : "—"
         }`}
+        breadcrumb={[
+          { label: t("page.ship.title", "Ship management"), href: "/ship" },
+          // A5：第二项返回主数据船舶列表（list masterdata / detail shipyard）
+          { label: t("nav.vessels", "Vessels"), href: "/masterdata/vessels" },
+          { label: vessel?.name ? `${vessel.name} #${vesselId}` : t("page.vessels.detail", "Vessel") + " #" + vesselId },
+        ]}
         actions={
           <>
             <Link href={`/masterdata/vessels`} className="btn btn-ghost">
@@ -222,20 +380,13 @@ export default function VesselDetailPage() {
         }
       />
 
-      <div className="page-tabs" role="tablist">
-        {TABS.map((tb) => (
-          <button
-            key={tb.key}
-            type="button"
-            role="tab"
-            aria-selected={tab === tb.key}
-            className={`page-tab ${tab === tb.key ? "active" : ""}`}
-            onClick={() => setTab(tb.key)}
-          >
-            {t(tb.labelKey, tb.label)}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        items={TABS.map((tb) => ({ key: tb.key, label: t(tb.labelKey, tb.label) }))}
+        value={tab}
+        onChange={(k) => setTab(k as Tab)}
+        variant="line"
+
+      />
 
       {tab === "summary" ? (
         <>
@@ -278,75 +429,62 @@ export default function VesselDetailPage() {
 
           <div className="panel">
             <h2>{t("page.vessel.key_specs", "Key specifications")}</h2>
-            <table className="data-table">
-              <tbody>
-                <tr>
-                  <th>{t("page.vessel.build", "Built")}</th>
-                  <td>
-                    {fmt(spec?.vessel_type_detail?.build_year)} · {fmt(spec?.vessel_type_detail?.build_yard)}
-                  </td>
-                  <th>{t("page.vessel.hull", "Hull type")}</th>
-                  <td>{fmt(spec?.vessel_type_detail?.hull_type)}</td>
-                </tr>
-                <tr>
-                  <th>{t("page.vessel.flag_state", "Flag state")}</th>
-                  <td>{fmt(spec?.vessel_type_detail?.flag_state)}</td>
-                  <th>{t("page.vessel.ism", "ISM manager")}</th>
-                  <td>{fmt(spec?.vessel_type_detail?.ism_manager)}</td>
-                </tr>
-                <tr>
-                  <th>{t("page.vessel.lightship", "Lightship")}</th>
-                  <td>{fmt(spec?.dwt_draft?.lightship)}</td>
-                  <th>{t("page.vessel.stowage", "Stowage factor")}</th>
-                  <td>{fmt(spec?.capacity?.stowage_factor)}</td>
-                </tr>
-                <tr>
-                  <th>{t("page.vessel.consumption_sea", "Sea consumption")}</th>
-                  <td>{fmt(vessel?.consumption_sea)} MT/day</td>
-                  <th>{t("page.vessel.consumption_port", "Port consumption")}</th>
-                  <td>{fmt(vessel?.consumption_port)} MT/day</td>
-                </tr>
-                <tr>
-                  <th>{t("page.vessel.tank_total", "Tank capacity total")}</th>
-                  <td>{fmt(spec?.capacity?.tank_capacity_total)}</td>
-                  <th>{t("common.status", "Status")}</th>
-                  <td>{fmt(vessel?.status)}</td>
-                </tr>
-              </tbody>
-            </table>
+            <div className="kv-grid">
+              <div>
+                <label>{t("page.vessel.build", "Built")}</label>
+                <div className="kv">
+                  {fmt(spec?.vessel_type_detail?.build_year)} · {fmt(spec?.vessel_type_detail?.build_yard)}
+                </div>
+              </div>
+              <div>
+                <label>{t("page.vessel.hull", "Hull type")}</label>
+                <div className="kv">{fmt(spec?.vessel_type_detail?.hull_type)}</div>
+              </div>
+              <div>
+                <label>{t("page.vessel.flag_state", "Flag state")}</label>
+                <div className="kv">{fmt(spec?.vessel_type_detail?.flag_state)}</div>
+              </div>
+              <div>
+                <label>{t("page.vessel.ism", "ISM manager")}</label>
+                <div className="kv">{fmt(spec?.vessel_type_detail?.ism_manager)}</div>
+              </div>
+              <div>
+                <label>{t("page.vessel.lightship", "Lightship")}</label>
+                <div className="kv">{fmt(spec?.dwt_draft?.lightship)}</div>
+              </div>
+              <div>
+                <label>{t("page.vessel.stowage", "Stowage factor")}</label>
+                <div className="kv">{fmt(spec?.capacity?.stowage_factor)}</div>
+              </div>
+              <div>
+                <label>{t("page.vessel.consumption_sea", "Sea consumption")}</label>
+                <div className="kv">{fmt(vessel?.consumption_sea)} MT/day</div>
+              </div>
+              <div>
+                <label>{t("page.vessel.consumption_port", "Port consumption")}</label>
+                <div className="kv">{fmt(vessel?.consumption_port)} MT/day</div>
+              </div>
+              <div>
+                <label>{t("page.vessel.tank_total", "Tank capacity total")}</label>
+                <div className="kv">{fmt(spec?.capacity?.tank_capacity_total)}</div>
+              </div>
+              <div>
+                <label>{t("common.status", "Status")}</label>
+                <div className="kv">{fmt(vessel?.status)}</div>
+              </div>
+            </div>
           </div>
 
           <div className="panel">
             <h2>{t("page.vessel.routes_short", "Preferred routes")}</h2>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>{t("page.vessel.route_name", "Route")}</th>
-                  <th>{t("page.vessel.route_from", "From")}</th>
-                  <th>{t("page.vessel.route_to", "To")}</th>
-                  <th>{t("page.vessel.route_speed", "Speed")}</th>
-                  <th>{t("page.vessel.route_dist", "Distance (nm)")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(summary?.routes ?? []).map((r: any) => (
-                  <tr key={r.id}>
-                    <td>{fmt(r.route_name)}</td>
-                    <td>{fmt(r.from_area)}</td>
-                    <td>{fmt(r.to_area)}</td>
-                    <td>{fmt(r.typical_speed)}</td>
-                    <td>{fmt(r.distance_nm)}</td>
-                  </tr>
-                ))}
-                {!(summary?.routes ?? []).length ? (
-                  <tr>
-                    <td colSpan={5} className="muted">
-                      {t("common.empty", "No records")}
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+            <DataGrid
+              columns={routeColumns}
+              data={summary?.routes ?? []}
+              rowKey={(r: any, i: number) => String(r.id ?? i)}
+              storageKey="vessel_routes_summary"
+              emptyText={t("common.empty", "No records")}
+              showFooter={false}
+            />
           </div>
         </>
       ) : null}
@@ -380,53 +518,23 @@ export default function VesselDetailPage() {
             </div>
 
             <h3 style={{ marginTop: "1rem" }}>{t("page.vessel.deadweight_scale", "Deadweight scale (draft → DWT)")}</h3>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>{t("page.vessel.scale_draft", "Draft (m)")}</th>
-                  <th>{t("page.vessel.scale_dwt", "Deadweight (MT)")}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {scale.map((p, i) => (
-                  <tr key={i}>
-                    <td>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={String(p.draft_m)}
-                        onChange={(e) => setScale(scale.map((q, j) => (i === j ? { ...q, draft_m: e.target.value } : q)))}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="number"
-                        value={String(p.deadweight_mt)}
-                        onChange={(e) => setScale(scale.map((q, j) => (i === j ? { ...q, deadweight_mt: e.target.value } : q)))}
-                      />
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        style={{ color: "var(--danger)", fontSize: "0.75rem" }}
-                        onClick={() => setScale(scale.filter((_, j) => j !== i))}
-                      >
-                        {t("common.delete", "Delete")}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {!scale.length ? (
-                  <tr>
-                    <td colSpan={3} className="muted">
-                      {t("common.empty", "No records")}
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+            <DataGrid<ScalePoint>
+              columns={scaleColumns}
+              data={scale}
+              rowKey={(_r, i) => String(i)}
+              editable
+              onCellSave={(rk, colKey, value) => {
+                const idx = Number(rk);
+                setScale((prev) =>
+                  prev.map((p, j) =>
+                    j === idx ? { ...p, [colKey]: value === null || value === undefined ? "" : value } : p,
+                  ),
+                );
+              }}
+              storageKey="vessel_dwt_scale"
+              emptyText={t("common.empty", "No records")}
+              showFooter={false}
+            />
             <div className="desk-toolbar" style={{ justifyContent: "flex-end" }}>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setScale([...scale, { draft_m: "", deadweight_mt: "" }])}>
                 + {t("page.vessel.add_scale_point", "Add scale point")}
@@ -478,38 +586,42 @@ export default function VesselDetailPage() {
               </button>
             </div>
             {lift ? (
-              <table className="data-table" style={{ marginTop: "0.75rem" }}>
-                <tbody>
-                  <tr>
-                    <th>{t("page.vessel.res_avail_dwt", "Available deadweight")}</th>
-                    <td>{fmt(lift.available_deadweight_mt)} MT</td>
-                    <th>{t("page.vessel.res_draft_dwt", "Draft-limited DWT")}</th>
-                    <td>{fmt(lift.draft_limited_deadweight_mt)} MT</td>
-                  </tr>
-                  <tr>
-                    <th>{t("page.vessel.res_hold", "Hold volume limit")}</th>
-                    <td>{fmt(lift.hold_volume_limit_mt)} MT</td>
-                    <th>{t("page.vessel.res_gear", "Gear cap")}</th>
-                    <td>{fmt(lift.gear_limit_mt)} MT</td>
-                  </tr>
-                  <tr>
-                    <th>{t("page.vessel.res_max", "Max lift")}</th>
-                    <td>
-                      <strong>{fmt(lift.max_lift_mt)} MT</strong>
-                    </td>
-                    <th>{t("page.vessel.res_limiting", "Limiting factor")}</th>
-                    <td>
-                      <span className="pill warn">{fmt(lift.limiting_factor)}</span>
-                    </td>
-                  </tr>
-                  {lift.warnings?.length ? (
-                    <tr>
-                      <th>{t("page.vessel.res_warnings", "Warnings")}</th>
-                      <td colSpan={3}>{lift.warnings.join("; ")}</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
+              <div className="kv-grid" style={{ marginTop: "0.75rem" }}>
+                <div>
+                  <label>{t("page.vessel.res_avail_dwt", "Available deadweight")}</label>
+                  <div className="kv">{fmt(lift.available_deadweight_mt)} MT</div>
+                </div>
+                <div>
+                  <label>{t("page.vessel.res_draft_dwt", "Draft-limited DWT")}</label>
+                  <div className="kv">{fmt(lift.draft_limited_deadweight_mt)} MT</div>
+                </div>
+                <div>
+                  <label>{t("page.vessel.res_hold", "Hold volume limit")}</label>
+                  <div className="kv">{fmt(lift.hold_volume_limit_mt)} MT</div>
+                </div>
+                <div>
+                  <label>{t("page.vessel.res_gear", "Gear cap")}</label>
+                  <div className="kv">{fmt(lift.gear_limit_mt)} MT</div>
+                </div>
+                <div>
+                  <label>{t("page.vessel.res_max", "Max lift")}</label>
+                  <div className="kv">
+                    <strong>{fmt(lift.max_lift_mt)} MT</strong>
+                  </div>
+                </div>
+                <div>
+                  <label>{t("page.vessel.res_limiting", "Limiting factor")}</label>
+                  <div className="kv">
+                    <span className="pill warn">{fmt(lift.limiting_factor)}</span>
+                  </div>
+                </div>
+                {lift.warnings?.length ? (
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <label>{t("page.vessel.res_warnings", "Warnings")}</label>
+                    <div className="kv">{lift.warnings.join("; ")}</div>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
           </div>
         </>
@@ -787,67 +899,25 @@ export default function VesselDetailPage() {
           </div>
           <div className="panel">
             <h2>{t("page.vessel.work_orders", "Work orders")}</h2>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>{t("page.ship.wo_no", "WO no.")}</th>
-                  <th>{t("page.ship.wo_title", "Title")}</th>
-                  <th>{t("common.status", "Status")}</th>
-                  <th>{t("common.priority", "Priority")}</th>
-                  <th>{t("common.due", "Due")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(ship?.work_orders || []).map((w: any) => (
-                  <tr key={w.id}>
-                    <td>{fmt(w.wo_no)}</td>
-                    <td>{fmt(w.title)}</td>
-                    <td>
-                      <span className={`pill ${w.status === "done" || w.status === "closed" ? "valid" : w.status === "blocked" ? "danger" : "warn"}`}>{fmt(w.status)}</span>
-                    </td>
-                    <td>{fmt(w.priority)}</td>
-                    <td>{fmt(w.due_on)}</td>
-                  </tr>
-                ))}
-                {!(ship?.work_orders || []).length ? (
-                  <tr>
-                    <td colSpan={5} className="muted">
-                      {t("common.empty", "No records")}
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+            <DataGrid
+              columns={workOrderColumns}
+              data={ship?.work_orders || []}
+              rowKey={(r: any, i: number) => String(r.id ?? i)}
+              storageKey="vessel_work_orders"
+              emptyText={t("common.empty", "No records")}
+              showFooter={false}
+            />
           </div>
           <div className="panel">
             <h2>{t("page.ship.defects", "Defects")}</h2>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>{t("common.title", "Title")}</th>
-                  <th>{t("common.status", "Status")}</th>
-                  <th>{t("common.severity", "Severity")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(ship?.defects || []).map((d: any) => (
-                  <tr key={d.id}>
-                    <td>{fmt(d.title)}</td>
-                    <td>
-                      <span className={`pill ${d.status === "closed" ? "valid" : "warn"}`}>{fmt(d.status)}</span>
-                    </td>
-                    <td>{fmt(d.severity)}</td>
-                  </tr>
-                ))}
-                {!(ship?.defects || []).length ? (
-                  <tr>
-                    <td colSpan={3} className="muted">
-                      {t("common.empty", "No records")}
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+            <DataGrid
+              columns={defectColumns}
+              data={ship?.defects || []}
+              rowKey={(r: any, i: number) => String(r.id ?? i)}
+              storageKey="vessel_defects"
+              emptyText={t("common.empty", "No records")}
+              showFooter={false}
+            />
           </div>
         </>
       ) : null}

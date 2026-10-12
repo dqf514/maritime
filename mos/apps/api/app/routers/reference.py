@@ -523,6 +523,7 @@ class FuelZoneOut(BaseModel):
     is_active: bool
     effective_from: str | None
     effective_to: str | None
+    updated_at: str | None = None
 
 
 class FuelZoneIn(BaseModel):
@@ -557,6 +558,7 @@ def list_fuel_zones(
             is_active=z.is_active,
             effective_from=z.effective_from,
             effective_to=z.effective_to,
+            updated_at=z.updated_at.isoformat() if z.updated_at else None,
         )
         for z in zones
     ]
@@ -591,6 +593,7 @@ def create_fuel_zone(
         is_active=zone.is_active,
         effective_from=zone.effective_from,
         effective_to=zone.effective_to,
+        updated_at=zone.updated_at.isoformat() if zone.updated_at else None,
     )
 
 

@@ -1,12 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { PageHeader } from "@/components/PageHeader";
+import { DetailHeader, type DetailAction } from "@/components/DetailHeader";
 import { ContactPicker } from "@/components/DataPicker";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
+import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { useStateActions } from "@/components/useTransitions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -41,6 +45,7 @@ type ClaimActionRow = {
 function ClaimDetailPage() {
   const { t, locale } = useI18n();
   const toast = useToast();
+  const router = useRouter();
   const params = useParams<{ id: string }>();
   const id = params.id;
 
@@ -65,6 +70,33 @@ function ClaimDetailPage() {
   const [confirm, setConfirm] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
 
   const subtypeOpts = claimTypes.find((ct) => ct.code === editType)?.subtypes || [];
+  const nextStatuses = useStateActions("claim", claim?.status);
+
+  const actionCols = useMemo<ColumnDef<ClaimActionRow>[]>(
+    () => [
+      { key: "action_type", title: t("page.finance.action_type", "Action"), width: 120 },
+      {
+        key: "action_date",
+        title: t("common.date", "日期"),
+        width: 120,
+        value: (r) => r.action_date ?? "",
+        render: (v) => (v ? String(v) : "—"),
+      },
+      {
+        key: "notes",
+        title: t("page.finance.notes", "备注"),
+        value: (r) => r.notes ?? "",
+        render: (v) => (v ? String(v) : "—"),
+      },
+      {
+        key: "result",
+        title: t("page.finance.action_result", "Result"),
+        value: (r) => r.result ?? "",
+        render: (v) => (v ? String(v) : "—"),
+      },
+    ],
+    [t],
+  );
 
   const refresh = useCallback(async () => {
     const [data, acts] = await Promise.all([
@@ -176,8 +208,10 @@ function ClaimDetailPage() {
       await apiPost(`/api/v1/claims/${id}/transition?${q.toString()}`);
       toast.success(t("page.finance.claim_moved", "Claim → {target}", { target }));
       await refresh();
-    } catch (ex) {
-      setErr(String(ex));
+    } catch (ex: any) {
+      const msg = ex?.message || String(ex);
+      setErr(msg);
+      toast.error(msg);
     } finally {
       setBusy(false);
     }
@@ -201,6 +235,71 @@ function ClaimDetailPage() {
     }
   }
 
+  function transitionLabel(target: string): string {
+    switch (target) {
+      case "negotiating":
+        return t("page.finance.negotiate", "谈判");
+      case "settled":
+        return t("page.finance.settle", "结清");
+      case "withdrawn":
+        return t("page.finance.withdraw", "撤回");
+      case "open":
+        return t("page.finance.reopen", "Reopen");
+      default:
+        return target.replace(/_/g, " ");
+    }
+  }
+
+  const headerActions: DetailAction[] = [
+    {
+      key: "back",
+      label: t("common.back", "返回"),
+      onClick: () => router.push("/finance?tab=claims"),
+    },
+    {
+      key: "print",
+      label: t("common.print", "打印 / PDF"),
+      onClick: () => window.print(),
+      disabled: busy || saving,
+    },
+    ...nextStatuses.map((target) => ({
+      key: `tr-${target}`,
+      label: transitionLabel(target),
+      variant: (target === "settled" ? "primary" : target === "withdrawn" ? "default" : "default") as DetailAction["variant"],
+      disabled: busy,
+      onClick: () => transition(target),
+    })),
+  ];
+  if (claim?.status === "settled") {
+    headerActions.push({
+      key: "to-invoice",
+      label: t("page.finance.to_invoice", "生成发票"),
+      variant: "primary",
+      disabled: busy,
+      onClick: toInvoice,
+    });
+  }
+  headerActions.push(
+    {
+      key: "timebar",
+      label: t("page.finance.timebar_task", "Time-bar task"),
+      disabled: busy,
+      onClick: timeBarTask,
+    },
+    {
+      key: "delete",
+      label: t("common.delete", "删除"),
+      variant: "danger",
+      disabled: saving || busy,
+      onClick: () =>
+        setConfirm({
+          message: t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored."),
+          danger: true,
+          action: remove,
+        }),
+    },
+  );
+
   if (!claim && !notFound) {
     return (
       <AppShell>
@@ -223,30 +322,16 @@ function ClaimDetailPage() {
   }
 
   return (
-    <AppShell
-      breadcrumbs={[
-        { label: t("page.finance.title", "Finance / laytime / P&L"), href: "/finance" },
-        { label: claim?.claim_no || t("page.finance.no", "编号") },
-      ]}
-    >
-      <PageHeader
-        title={
-          <>
-            {claim?.claim_no || "…"}
-            {claim ? <span className="badge badge-warn">{claim.status}</span> : null}
-          </>
-        }
+    <AppShell>
+      <DetailHeader
+        breadcrumb={[
+          { label: t("nav.finance", "Finance"), href: "/finance?tab=claims" },
+          { label: claim?.claim_no ? `#${claim.claim_no}` : `#${id}` },
+        ]}
+        title={claim?.claim_no || "…"}
+        status={claim?.status}
         subtitle={t("page.finance.edit_claim", "编辑索赔")}
-        actions={
-          <>
-            <Link href="/finance?tab=claims" className="btn btn-ghost">
-              {t("common.back", "返回")}
-            </Link>
-            <button className="btn btn-sm" type="button" disabled={busy || saving} onClick={() => window.print()}>
-              {t("common.print", "打印 / PDF")}
-            </button>
-          </>
-        }
+        actions={headerActions}
       />
 
       {err ? <p className="err-text">{err}</p> : null}
@@ -308,69 +393,20 @@ function ClaimDetailPage() {
           <button className="btn btn-primary" type="button" disabled={saving || busy} onClick={save}>
             {t("common.save", "保存")}
           </button>
-          {claim?.status === "open" ? (
-            <button className="btn btn-sm" type="button" disabled={busy} onClick={() => transition("negotiating")}>
-              {t("page.finance.negotiate", "谈判")}
-            </button>
-          ) : null}
-          {claim && (claim.status === "open" || claim.status === "negotiating") ? (
-            <>
-              <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => transition("settled")}>
-                {t("page.finance.settle", "结清")}
-              </button>
-              <button className="btn btn-sm" type="button" disabled={busy} onClick={() => transition("withdrawn")}>
-                {t("page.finance.withdraw", "撤回")}
-              </button>
-            </>
-          ) : null}
-          {claim?.status === "settled" ? (
-            <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={toInvoice}>
-              {t("page.finance.to_invoice", "生成发票")}
-            </button>
-          ) : null}
-          <button className="btn btn-sm" type="button" disabled={busy} onClick={timeBarTask}>
-            {t("page.finance.timebar_task", "Time-bar task")}
-          </button>
-          <button
-            className="btn btn-danger btn-sm"
-            type="button"
-            disabled={saving || busy}
-            onClick={() =>
-              setConfirm({
-                message: t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored."),
-                danger: true,
-                action: remove,
-              })
-            }
-          >
-            {t("common.delete", "删除")}
-          </button>
         </div>
       </div>
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.finance.claim_actions", "Claim actions")}</h3>
         {claimActions.length ? (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>{t("page.finance.action_type", "Action")}</th>
-                <th>{t("common.date", "日期")}</th>
-                <th>{t("page.finance.notes", "备注")}</th>
-                <th>{t("page.finance.action_result", "Result")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {claimActions.map((a) => (
-                <tr key={a.id}>
-                  <td>{a.action_type}</td>
-                  <td>{a.action_date || "—"}</td>
-                  <td>{a.notes || "—"}</td>
-                  <td>{a.result || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataGrid<ClaimActionRow>
+            columns={actionCols}
+            data={claimActions}
+            rowKey={(r) => r.id}
+            storageKey="claim_actions_grid"
+            showFooter={false}
+            emptyText={t("page.finance.no_actions", "暂无处置动作")}
+          />
         ) : (
           <p className="muted" style={{ margin: "0 0 0.5rem" }}>{t("page.finance.no_actions", "暂无处置动作")}</p>
         )}
@@ -405,6 +441,8 @@ function ClaimDetailPage() {
           </div>
         </div>
       </div>
+
+      {id ? <RevisionsPanel entityType="claim" entityId={id} /> : null}
 
       <ConfirmDialog
         open={Boolean(confirm)}

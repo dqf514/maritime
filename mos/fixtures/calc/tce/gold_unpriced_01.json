@@ -1,0 +1,52 @@
+{
+  "id": "gold_unpriced_01",
+  "note": "Unpriced (index-linked) components on gold_01 economics. rolling_index: window_days=3 over (2026-01-07, 2026-01-10] includes 01-08/09/10 (1200+1400+1600)/3 = 1400 (the 01-07 quote 900 is exactly window_days back, excluded); floor 1000 / cap 1500 leave 1400; per_day x 40 days = 56000. offset: base 1000 + (-250) = 750, clamped up to floor 800; per_lump = 800. Total extra hire = 56800. Hire is excluded from voyage_cost/TCE, so tce stays 9953.13 and net_result = 901875 - 503750 - 56800 = 341325.",
+  "inputs": {
+    "cargo_qty": 50000,
+    "freight_rate": 18.5,
+    "commission_pct": 2.5,
+    "sea_days": 30,
+    "port_days": 10,
+    "bunker_sea_tpd": 28,
+    "bunker_port_tpd": 3.5,
+    "bunker_price": 450,
+    "port_costs": 80000,
+    "canal_costs": 20000,
+    "other_costs": 10000,
+    "currency": "USD",
+    "unpriced_components": [
+      {
+        "name": "BSI rolling 3d",
+        "formula": "rolling_index",
+        "index_name": "BSI",
+        "window_days": 3,
+        "pricing_date": "2026-01-10",
+        "floor": 1000,
+        "cap": 1500,
+        "basis": "per_day",
+        "observations": [
+          {"date": "2026-01-07", "value": 900},
+          {"date": "2026-01-08", "value": 1200},
+          {"date": "2026-01-09", "value": 1400},
+          {"date": "2026-01-10", "value": 1600}
+        ]
+      },
+      {
+        "name": "Baltic offset adj",
+        "formula": "offset",
+        "base_value": 1000,
+        "offset_value": -250,
+        "floor": 800,
+        "basis": "per_lump"
+      }
+    ]
+  },
+  "expect": {
+    "gross_freight": 925000.0,
+    "voyage_cost": 503750.0,
+    "tce": 9953.13,
+    "hire_cost": 56800.0,
+    "unpriced_components_total": 56800.0,
+    "net_result": 341325.0
+  }
+}

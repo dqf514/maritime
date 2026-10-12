@@ -20,10 +20,16 @@ from app.models_finance_ext import CreditNote, OffHireEvent
 from app.services.doc_numbering import next_doc_number
 from app.services.finance_workflow import assert_void_allowed, record_payment
 from app.services.hire_engine import create_hire_statement
+from app.services.audit import audit
 from app.services.recycle import soft_delete
 from app.services.state_machine import INVOICE_TRANSITIONS, transition
+from app.services.optimistic_lock import assert_fresh
 
-from app.routers._finance_common import INVOICE_TYPES, _alive, _as_utc_naive, _base_currency, _credited_amount, _resolve_fx_rate
+from app.routers._finance_common import _alive, _as_utc_naive, _base_currency, _credited_amount, _resolve_fx_rate
+from app.services.approval_limits import assert_within_limit
+from app.services.invoice_mirror import assert_mirror_writable
+from app.services.invoice_types import invalid_invoice_type_detail, is_valid_invoice_type
+from app.services.period_close import assert_period_open
 
 from app.models_wave1 import Counterparty
 from app.services.sanctions import assert_not_sanctioned
@@ -53,11 +59,15 @@ def get_invoice(
         "voyage_id": str(r.voyage_id) if r.voyage_id else None,
         "counterparty_id": str(r.counterparty_id) if r.counterparty_id else None,
         "currency": r.currency,
+        "base_amount": float(r.base_amount) if r.base_amount is not None else None,
+        "fx_rate": float(r.fx_rate) if r.fx_rate is not None else None,
+        "issued_at": r.issued_at.isoformat() if r.issued_at else None,
         "due_date": r.due_date.isoformat() if r.due_date else None,
         "gl_posted": bool(r.gl_posted),
         "mirror_of_id": str(r.mirror_of_id) if r.mirror_of_id else None,
         "bill_by": r.bill_by,
         "commission_basis": r.commission_basis,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
 
 
@@ -77,11 +87,8 @@ class InvoiceIn(BaseModel):
 
 @router.post("/invoices")
 def create_invoice(body: InvoiceIn, auth: AuthContext = Depends(require_module("finance")), db: Session = Depends(get_db)):
-    if body.invoice_type not in INVOICE_TYPES:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "INVALID_INVOICE_TYPE", "message": f"invoice_type must be one of {sorted(INVOICE_TYPES)}"},
-        )
+    if not is_valid_invoice_type(body.invoice_type):
+        raise HTTPException(status_code=422, detail=invalid_invoice_type_detail(body.invoice_type))
     if body.counterparty_id:
         party = db.get(Counterparty, body.counterparty_id)
         if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
@@ -102,7 +109,14 @@ def create_invoice(body: InvoiceIn, auth: AuthContext = Depends(require_module("
             raise HTTPException(422, detail={"code": "INVALID_FX_RATE", "message": "fx_rate must be > 0"})
         fx_rate = Decimal(str(body.fx_rate))
     else:
-        fx_rate = _resolve_fx_rate(db, auth.tenant_id, body.currency, _base_currency(db, auth.tenant_id))
+        fx_rate = _resolve_fx_rate(
+            db,
+            auth.tenant_id,
+            body.currency,
+            _base_currency(db, auth.tenant_id),
+            invoice_type=body.invoice_type,
+            context_date=date.today(),
+        )
     if fx_rate is not None:
         base_amount = (amount * fx_rate).quantize(Decimal("0.01"))
     row = Invoice(
@@ -172,6 +186,19 @@ def invoice_transition(invoice_id: UUID, target: str, auth: AuthContext = Depend
         # 红冲不变量（INV-VOID-CREDIT）集中在服务层；见 services/finance_workflow.py
         assert_void_allowed(db, row)
 
+    if target == "issued":
+        # 审批额度工作流：超出审批人额度 → 409 APPROVAL_LIMIT
+        # （approver 无额度行时默认放行 — 见 services/approval_limits.py）
+        approval_amount = Decimal(str(row.amount)) + Decimal(str(row.tax_amount or 0))
+        assert_within_limit(
+            db,
+            auth.tenant_id,
+            auth,
+            "invoice",
+            approval_amount,
+            row.currency or "USD",
+        )
+
     row.status = transition("invoice", row.status, target, INVOICE_TRANSITIONS)
     if target == "pending_approval" and has_wf:
         start_workflow(db, tenant_id=auth.tenant_id, entity_type="invoice", entity_id=row.id, started_by=auth.user_id)
@@ -188,6 +215,9 @@ class InvoiceUpdate(BaseModel):
     invoice_type: str | None = None
     bill_by: str | None = None
     commission_basis: str | None = None
+    # optimistic-lock token (D4/D8) — excluded from model_dump so it never
+    # reaches the ORM via field loops / audits
+    expected_updated_at: str | None = Field(default=None, exclude=True)
 
 
 @router.patch("/invoices/{invoice_id}")
@@ -200,11 +230,10 @@ def update_invoice(
     row = db.get(Invoice, invoice_id)
     if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Invoice not found")
-    if body.invoice_type is not None and body.invoice_type not in INVOICE_TYPES:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "INVALID_INVOICE_TYPE", "message": f"invoice_type must be one of {sorted(INVOICE_TYPES)}"},
-        )
+    assert_fresh(row, body.expected_updated_at)
+    assert_mirror_writable(row)  # 不可独立编辑: mirror follows source
+    if body.invoice_type is not None and not is_valid_invoice_type(body.invoice_type):
+        raise HTTPException(status_code=422, detail=invalid_invoice_type_detail(body.invoice_type))
     locked = row.status in {"issued", "partially_paid", "paid"} or row.gl_posted
     requested = {
         f
@@ -252,12 +281,22 @@ def update_invoice(
         row.bill_by = body.bill_by
     if body.commission_basis is not None:
         row.commission_basis = body.commission_basis
+    audit(
+        db,
+        action="invoice.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="invoice",
+        entity_id=str(row.id),
+        detail={"fields": sorted(set(body.model_fields_set) - {"expected_updated_at"})},
+    )
     db.commit()
     return {
         "id": str(row.id),
         "invoice_no": row.invoice_no,
         "status": row.status,
         "amount": float(row.amount),
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 
@@ -574,6 +613,7 @@ def list_invoices(
                 "mirror_of_id": str(r.mirror_of_id) if r.mirror_of_id else None,
                 "bill_by": r.bill_by,
                 "commission_basis": r.commission_basis,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }
             for r in rows
         ],
@@ -625,6 +665,7 @@ def list_accruals(auth: AuthContext = Depends(require_module("finance")), db: Se
 
 @router.post("/finance/accruals")
 def create_accrual(body: AccrualIn, auth: AuthContext = Depends(require_module("finance")), db: Session = Depends(get_db)):
+    assert_period_open(db, auth.tenant_id, body.period_ym)  # 关账期间禁止新增计提
     row = VoyageAccrual(
         tenant_id=auth.tenant_id,
         voyage_id=body.voyage_id,
@@ -647,6 +688,7 @@ def post_accrual(accrual_id: UUID, auth: AuthContext = Depends(require_module("f
         raise HTTPException(404, "Accrual not found")
     if row.status != "draft":
         raise HTTPException(409, detail={"code": "INVALID_STATE", "message": f"Cannot post from {row.status}"})
+    assert_period_open(db, auth.tenant_id, row.period_ym)  # 关账期间禁止过账计提
     row.status = "posted"
     db.commit()
     return {"id": str(row.id), "status": row.status}

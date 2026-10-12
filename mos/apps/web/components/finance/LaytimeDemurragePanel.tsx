@@ -5,6 +5,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { DataTable, type ColumnDef } from "@/components/DataTable";
+import { Num } from "@/components/Num";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -147,7 +148,7 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
   }
 
   const oaCols: ColumnDef<OnAccountRow>[] = [
-    { key: "amount", title: t("common.amount", "Amount"), align: "right", render: (v) => fmt(v as number) },
+    { key: "amount", title: t("common.amount", "Amount"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
     { key: "currency", title: t("page.finance.currency", "Currency") },
     { key: "payment_date", title: t("common.date", "Date") },
     { key: "status", title: t("common.status", "Status") },
@@ -157,9 +158,9 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
   const rcCols: ColumnDef<RootCauseRow>[] = [
     { key: "cause", title: t("page.finance.lt_cause", "Cause") },
     { key: "responsible_party", title: t("page.finance.lt_party", "Responsible") },
-    { key: "delay_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => fmt(v as number) },
-    { key: "share_pct", title: t("page.finance.lt_share", "Share %"), align: "right", render: (v) => fmt(v as number) },
-    { key: "allocated_amount", title: t("page.finance.lt_allocated", "Allocated"), align: "right", render: (v) => fmt(v as number) },
+    { key: "delay_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
+    { key: "share_pct", title: t("page.finance.lt_share", "Share %"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
+    { key: "allocated_amount", title: t("page.finance.lt_allocated", "Allocated"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
   ];
 
   const dCols: ColumnDef<DelayRow>[] = [
@@ -174,13 +175,13 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
       title: t("common.end", "End"),
       render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
     },
-    { key: "duration_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => fmt(v as number) },
+    { key: "duration_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
     {
       key: "excluded_from_laytime",
       title: t("page.finance.ev_excluded", "Excluded"),
       render: (v) => (v ? t("common.yes", "Yes") : t("common.no", "No")),
     },
-    { key: "cost_impact", title: t("page.finance.lt_cost", "Cost impact"), align: "right", render: (v) => fmt(v as number) },
+    { key: "cost_impact", title: t("page.finance.lt_cost", "Cost impact"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
   ];
 
   return (

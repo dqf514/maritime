@@ -132,7 +132,15 @@ def post_journal(
     description: str | None = None,
     user_id: UUID | None = None,
 ) -> PeriodJournal:
-    """Create a PeriodJournal row from pre-built entries and mark it posted."""
+    """Create a PeriodJournal row from pre-built entries and mark it posted.
+
+    Period-close guard (C3-P2): a closed accounting period rejects the posting
+    with 409 ``PERIOD_CLOSED`` (see ``services.period_close``).
+    """
+    from app.services.period_close import assert_period_open
+
+    assert_period_open(db, tenant_id, period)
+
     total_debit = sum(Decimal(e["debit"]) for e in entries)
     total_credit = sum(Decimal(e["credit"]) for e in entries)
 

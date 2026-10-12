@@ -1,12 +1,19 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost, generateTempPassword } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type UserRow = {
@@ -25,19 +32,19 @@ type OrgUnit = { id: string; code: string; name: string; unit_type: string };
 const BUSINESS_ROLES_HINT =
   "可同时勾选多个业务角色（如租船+营运），适合小型企业一人多岗；租户管理员可与业务角色并存。";
 
-export default function UsersAdminPage() {
+function UsersAdminPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
+  const filterOrg = query.dept ?? "";
   const [users, setUsers] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [orgs, setOrgs] = useState<OrgUnit[]>([]);
-  const [email, setEmail] = useState("");
-  const [fullName, setFullName] = useState("");
-  const [createRoles, setCreateRoles] = useState<string[]>(["viewer"]);
-  const [createOrg, setCreateOrg] = useState("");
-  const [filterOrg, setFilterOrg] = useState("");
   const [open, setOpen] = useState<UserRow | null>(null);
+  const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({
+    email: "",
     full_name: "",
     status: "active",
     role_codes: ["viewer"] as string[],
@@ -60,7 +67,7 @@ export default function UsersAdminPage() {
   }
 
   useEffect(() => {
-    load().catch(() => toast.success(t("page.users.admin_required", "需要租户管理员角色")));
+    load().catch(() => toast.error(t("page.users.admin_required", "需要租户管理员角色")));
   }, [t]);
 
   function toggleRole(list: string[], code: string): string[] {
@@ -71,23 +78,23 @@ export default function UsersAdminPage() {
     return [...list.filter((c) => c !== "viewer" || code === "viewer"), code];
   }
 
-  async function create(e: FormEvent) {
-    e.preventDefault();
-    const password = generateTempPassword();
-    await apiPost("/api/v1/admin/users", {
-      email,
-      full_name: fullName,
-      password,
-      role_codes: createRoles.length ? createRoles : ["viewer"],
-      org_unit_id: createOrg || null,
+  function openCreate() {
+    setCreating(true);
+    setOpen(null);
+    setEdit({
+      email: "",
+      full_name: "",
+      status: "active",
+      role_codes: ["viewer"],
+      org_unit_id: "",
     });
-    setEmail("");
-    setFullName("");
-    setCreateRoles(["viewer"]);
-    setCreateOrg("");
-    setInitialPw(password);
-    toast.success(t("page.users.created", "用户已创建；初始密码已生成，请通过安全渠道传达。"));
-    await load();
+  }
+
+  useListHotkeys(openCreate);
+
+  function closeModal() {
+    setOpen(null);
+    setCreating(false);
   }
 
   async function copyInitialPw() {
@@ -100,8 +107,10 @@ export default function UsersAdminPage() {
   }
 
   function openRow(u: UserRow) {
+    setCreating(false);
     setOpen(u);
     setEdit({
+      email: u.email,
       full_name: u.full_name || "",
       status: u.status,
       role_codes: u.roles.length ? u.roles : ["viewer"],
@@ -110,20 +119,34 @@ export default function UsersAdminPage() {
   }
 
   async function save() {
-    if (!open) return;
     setSaving(true);
     try {
-      const clearOrg = !edit.org_unit_id;
-      await apiPatch(`/api/v1/admin/users/${open.id}`, {
-        full_name: edit.full_name,
-        status: edit.status,
-        role_codes: edit.role_codes.length ? edit.role_codes : ["viewer"],
-        org_unit_id: edit.org_unit_id || null,
-        clear_org: clearOrg,
-      });
-      toast.success(t("common.saved", "已保存"));
-      setOpen(null);
+      if (creating || !open) {
+        const password = generateTempPassword();
+        await apiPost("/api/v1/admin/users", {
+          email: edit.email,
+          full_name: edit.full_name,
+          password,
+          role_codes: edit.role_codes.length ? edit.role_codes : ["viewer"],
+          org_unit_id: edit.org_unit_id || null,
+        });
+        setInitialPw(password);
+        toast.success(t("page.users.created", "用户已创建；初始密码已生成，请通过安全渠道传达。"));
+      } else {
+        const clearOrg = !edit.org_unit_id;
+        await apiPatch(`/api/v1/admin/users/${open.id}`, {
+          full_name: edit.full_name,
+          status: edit.status,
+          role_codes: edit.role_codes.length ? edit.role_codes : ["viewer"],
+          org_unit_id: edit.org_unit_id || null,
+          clear_org: clearOrg,
+        });
+        toast.success(t("common.saved", "已保存"));
+      }
+      closeModal();
       await load();
+    } catch {
+      toast.error(creating ? t("page.users.create_fail", "创建失败") : t("common.failed", "失败"));
     } finally {
       setSaving(false);
     }
@@ -135,10 +158,10 @@ export default function UsersAdminPage() {
     try {
       await apiDelete(`/api/v1/admin/users/${open.id}`);
       toast.success(t("common.recycled", "已移入回收站"));
-      setOpen(null);
+      closeModal();
       await load();
     } catch (err: any) {
-      toast.success(String(err?.detail?.code || err?.message || t("common.failed", "失败")));
+      toast.error(String(err?.detail?.code || err?.message || t("common.failed", "失败")));
     } finally {
       setSaving(false);
     }
@@ -170,9 +193,30 @@ export default function UsersAdminPage() {
 
   const filtered = filterOrg ? users.filter((u) => u.org_unit_id === filterOrg) : users;
 
+  const columns: ColumnDef<UserRow>[] = [
+    { key: "full_name", title: t("common.name", "姓名"), width: 160, value: (r) => r.full_name || "" },
+    { key: "email", title: t("common.email", "邮箱"), minWidth: 200, value: (r) => r.email },
+    {
+      key: "org_unit_name",
+      title: t("page.org.dept", "部门"),
+      width: 180,
+      value: (r) => r.org_unit_name || "",
+      render: (_v, r) => (r.org_unit_name ? `${r.org_unit_code} · ${r.org_unit_name}` : "—"),
+    },
+    {
+      key: "roles",
+      title: t("common.roles", "角色"),
+      minWidth: 160,
+      value: (r) => r.roles.join(", "),
+      render: (_v, r) => <span>{r.roles.join(", ")}</span>,
+    },
+    { key: "status", title: t("common.status", "状态"), width: 100, value: (r) => r.status },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.admin", "Administration") }]}
         title={t("page.users.title", "用户与角色")}
         subtitle={
           <>
@@ -183,9 +227,12 @@ export default function UsersAdminPage() {
           </>
         }
         actions={
-          <Link href="/settings/recycle" className="btn btn-ghost">
-            {t("nav.recycle", "回收站")}
-          </Link>
+          <>
+            <SavedViews storageKey="admin_users" onApply={(q) => router.replace(`/admin/users${q}`)} />
+            <Link href="/settings/recycle" className="btn btn-ghost">
+              {t("nav.recycle", "回收站")}
+            </Link>
+          </>
         }
       />
       {initialPw ? (
@@ -196,43 +243,17 @@ export default function UsersAdminPage() {
           </button>
         </p>
       ) : null}
-      <form className="panel" onSubmit={(e) => create(e).catch(() => toast.success(t("page.users.create_fail", "创建失败")))}>
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
-          <label>
-            {t("page.users.full_name", "姓名")}
-            <input value={fullName} onChange={(e) => setFullName(e.target.value)} required />
-          </label>
-          <label>
-            {t("common.email", "邮箱")}
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          </label>
-          <label>
-            {t("page.org.dept", "部门")}
-            <select value={createOrg} onChange={(e) => setCreateOrg(e.target.value)}>
-              <option value="">{t("page.org.unassigned", "未分配")}</option>
-              {orgs.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.code} · {o.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="btn btn-primary" type="submit">
-            {t("page.users.invite", "新建用户")}
-          </button>
-        </div>
-        <div style={{ marginTop: "0.75rem" }}>
-          <div className="muted" style={{ marginBottom: "0.4rem", fontSize: "0.85rem" }}>
-            {t("page.users.roles_multi", BUSINESS_ROLES_HINT)}
-          </div>
-          <RoleCheckboxes value={createRoles} onChange={setCreateRoles} />
-        </div>
-      </form>
-      <div className="panel">
-        <div style={{ marginBottom: "0.75rem" }}>
-          <label>
-            {t("page.users.filter_dept", "按部门筛选")}
-            <select value={filterOrg} onChange={(e) => setFilterOrg(e.target.value)}>
+      <Toolbar
+        filterCount={filterOrg ? 1 : 0}
+        onClearFilters={() => setQuery({ dept: null }, { resetPage: true })}
+        right={
+          <>
+            <select
+              className="input input-sm"
+              value={filterOrg}
+              onChange={(e) => setQuery({ dept: e.target.value || null }, { resetPage: true })}
+              aria-label={t("page.users.filter_dept", "按部门筛选")}
+            >
               <option value="">{t("common.all", "全部")}</option>
               {orgs.map((o) => (
                 <option key={o.id} value={o.id}>
@@ -240,44 +261,49 @@ export default function UsersAdminPage() {
                 </option>
               ))}
             </select>
-          </label>
-        </div>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.name", "姓名")}</th>
-              <th>{t("common.email", "邮箱")}</th>
-              <th>{t("page.org.dept", "部门")}</th>
-              <th>{t("common.roles", "角色")}</th>
-              <th>{t("common.status", "状态")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((u) => (
-              <tr key={u.id} className="row-openable" onClick={() => openRow(u)}>
-                <td>{u.full_name}</td>
-                <td>{u.email}</td>
-                <td>{u.org_unit_name ? `${u.org_unit_code} · ${u.org_unit_name}` : "—"}</td>
-                <td>{u.roles.join(", ")}</td>
-                <td>{u.status}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          </>
+        }
+      >
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
+          {t("page.users.invite", "新建用户")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
+      <div className="panel">
+        <DataGrid<UserRow>
+          columns={columns}
+          data={filtered}
+          rowKey={(u) => u.id}
+          storageKey="admin_users_grid"
+          emptyText={t("common.none", "无")}
+          showFooter={false}
+          onRowClick={(u) => openRow(u)}
+          onRowDoubleClick={(u) => openRow(u)}
+        />
       </div>
 
       <RecordModal
-        open={Boolean(open)}
-        title={t("page.users.edit", "编辑用户")}
-        onClose={() => setOpen(null)}
+        open={creating || Boolean(open)}
+        title={creating ? t("page.users.invite", "新建用户") : t("page.users.edit", "编辑用户")}
+        onClose={closeModal}
         onSave={save}
-        onDelete={remove}
+        onDelete={creating ? undefined : remove}
+        canDelete={!creating}
         saving={saving}
       >
-        <p className="muted">{open?.email}</p>
+        {creating ? (
+          <label>
+            {t("common.email", "邮箱")}
+            <input type="email" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} required />
+          </label>
+        ) : (
+          <p className="muted">{open?.email}</p>
+        )}
         <label>
           {t("page.users.full_name", "姓名")}
-          <input value={edit.full_name} onChange={(e) => setEdit({ ...edit, full_name: e.target.value })} />
+          <input value={edit.full_name} onChange={(e) => setEdit({ ...edit, full_name: e.target.value })} required />
         </label>
         <label>
           {t("page.org.dept", "部门")}
@@ -290,14 +316,16 @@ export default function UsersAdminPage() {
             ))}
           </select>
         </label>
-        <label>
-          {t("common.status", "状态")}
-          <select value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>
-            <option value="active">active</option>
-            <option value="disabled">disabled</option>
-            <option value="invited">invited</option>
-          </select>
-        </label>
+        {!creating ? (
+          <label>
+            {t("common.status", "状态")}
+            <select value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>
+              <option value="active">active</option>
+              <option value="disabled">disabled</option>
+              <option value="invited">invited</option>
+            </select>
+          </label>
+        ) : null}
         <div>
           <div className="muted" style={{ marginBottom: "0.4rem", fontSize: "0.85rem" }}>
             {t("page.users.roles_multi", BUSINESS_ROLES_HINT)}
@@ -309,5 +337,14 @@ export default function UsersAdminPage() {
         </div>
       </RecordModal>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <UsersAdminPage />
+    </Suspense>
   );
 }

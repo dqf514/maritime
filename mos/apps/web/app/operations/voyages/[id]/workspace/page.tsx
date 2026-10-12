@@ -10,15 +10,20 @@ import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { StatusBadge, type StatusTone } from "@/components/StatusBadge";
+import { useStateActions } from "@/components/useTransitions";
 import { StateView } from "@/components/StateView";
 import { useToast } from "@/components/ToastProvider";
+import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { DataGrid } from "@/components/grid/DataGrid";
 import type { ColumnDef as GridColumnDef } from "@/components/grid/types";
 import { Panel } from "@/components/workspace/Panel";
 import { PanelTabs } from "@/components/workspace/PanelTabs";
+import { PortTime } from "@/components/PortTime";
 import { VoyageTimeline, type TimelineEvent, type TimelinePortCall } from "@/components/workspace/VoyageTimeline";
 import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
-import { apiDelete, apiGet, apiPatch, apiPost, type VoyageOverview } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, type VoyageOverview, type VoyagePnlLine } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 // —— helpers ——
@@ -52,7 +57,20 @@ function varianceClass(n: number | null | undefined) {
   return n < 0 ? "neg" : "pos";
 }
 
-type PortRef = { id: string; name: string; latitude: number | null; longitude: number | null };
+type PortRef = { id: string; name: string; latitude: number | null; longitude: number | null; timezone?: string | null };
+
+type PortFunctionMeta = { code: string; label_en: string; label_zh: string; tone: string };
+
+type PcRow = TimelinePortCall & {
+  function_code?: string | null;
+  id?: string | null;
+  port_id?: string | null;
+  timezone?: string | null;
+};
+
+function fnTone(tone: string): StatusTone | null {
+  return tone === "ok" || tone === "warn" || tone === "danger" || tone === "info" || tone === "muted" ? tone : null;
+}
 
 type VoyageNote = {
   id: string;
@@ -158,8 +176,10 @@ export default function VoyageWorkspacePage() {
 
   const [data, setData] = useState<VoyageOverview | null>(null);
   const [ports, setPorts] = useState<PortRef[]>([]);
+  const [portFns, setPortFns] = useState<PortFunctionMeta[]>([]);
   const [sofEvents, setSofEvents] = useState<{ id: string; event_code: string; event_at: string | null }[]>([]);
   const [noonTrack, setNoonTrack] = useState<{ at: string; lat: number | null; lon: number | null }[]>([]);
+  const [laycan, setLaycan] = useState<{ from: string | null; to: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -175,30 +195,102 @@ export default function VoyageWorkspacePage() {
   const [noteTextDraft, setNoteTextDraft] = useState("");
   const [noteDate, setNoteDate] = useState("");
   const [savingNote, setSavingNote] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // port-call create (C2: function_code select)
+  const [pcModalOpen, setPcModalOpen] = useState(false);
+  const [pcSaving, setPcSaving] = useState(false);
+  const [pcForm, setPcForm] = useState({
+    port_id: "",
+    seq: "1",
+    purpose: "load",
+    function_code: "",
+    eta: "",
+    etd: "",
+    agent: "",
+  });
+
+  const openPortCallModal = useCallback(() => {
+    const lastSeq = (data?.port_calls || []).reduce((m, pc) => Math.max(m, pc.seq ?? 0), 0);
+    setPcForm({
+      port_id: "",
+      seq: String(lastSeq + 1),
+      purpose: "load",
+      function_code: "",
+      eta: "",
+      etd: "",
+      agent: "",
+    });
+    setPcModalOpen(true);
+  }, [data?.port_calls]);
 
   const load = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     setError("");
     try {
-      const [overview, portRows, sof, twin] = await Promise.all([
+      const [overview, portRows, sof, twin, fnRows] = await Promise.all([
         apiGet(`/api/v1/voyages/${id}/overview`),
         fetchList<PortRef>("/api/v1/ports").catch(() => [] as PortRef[]),
         fetchList<{ id: string; event_code: string; event_at: string | null }>(`/api/v1/sof-events?voyage_id=${id}`).catch(
           () => [],
         ),
         apiGet(`/api/v1/twin/voyages/${id}`).catch(() => null),
+        fetchList<PortFunctionMeta>("/api/v1/meta/port-functions").catch(() => [] as PortFunctionMeta[]),
       ]);
       setData(overview as VoyageOverview);
       setPorts(portRows);
+      setPortFns(fnRows);
       setSofEvents(sof);
       setNoonTrack(Array.isArray(twin?.noon_track) ? twin.noon_track : []);
+      const charterId = (overview as VoyageOverview)?.voyage?.charter_id;
+      if (charterId) {
+        try {
+          const ch = await apiGet(`/api/v1/charters/${charterId}`);
+          setLaycan({
+            from: ch?.laycan_from ? String(ch.laycan_from) : null,
+            to: ch?.laycan_to ? String(ch.laycan_to) : null,
+          });
+        } catch {
+          setLaycan(null);
+        }
+      } else {
+        setLaycan(null);
+      }
     } catch (e: any) {
-      setError(e?.message || t("common.failed", "加载失败"));
+      setError(e?.message || t("common.failed", "Failed"));
     } finally {
       setLoading(false);
     }
   }, [id, t]);
+
+  const savePortCall = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      if (!id) return;
+      setPcSaving(true);
+      try {
+        await apiPost("/api/v1/port-calls", {
+          voyage_id: id,
+          port_id: pcForm.port_id || null,
+          seq: Number(pcForm.seq) || 1,
+          purpose: pcForm.purpose || "load",
+          function_code: pcForm.function_code || null,
+          eta: pcForm.eta ? new Date(pcForm.eta).toISOString() : null,
+          etd: pcForm.etd ? new Date(pcForm.etd).toISOString() : null,
+          agent: pcForm.agent || null,
+        });
+        toast.success(t("ws.pc_created", "Port call added"));
+        setPcModalOpen(false);
+        await load();
+      } catch (ex: any) {
+        toast.error(ex?.message || t("common.failed", "Failed"));
+      } finally {
+        setPcSaving(false);
+      }
+    },
+    [id, pcForm, load, toast, t],
+  );
 
   const loadAux = useCallback(async () => {
     if (!id) return;
@@ -222,25 +314,109 @@ export default function VoyageWorkspacePage() {
   const currency = pnl?.currency || "USD";
   const title = voyage?.voyage_no || voyage?.vessel_name || id.slice(0, 8);
 
+  // 状态机动作可见性：只渲染当前状态可执行的转移（非法动作不出现）
+  const nextStatuses = useStateActions("voyage", voyage?.status);
+  async function goStatus(target: string) {
+    try {
+      await apiPost(`/api/v1/voyages/${id}/transition`, { target });
+      toast.success(t("ws.status_changed", "Status changed → {s}", { s: target }));
+      await load();
+    } catch (e: any) {
+      toast.error(e?.message || t("common.failed", "Operation failed"));
+    }
+  }
+
   const portById = useMemo(() => {
     const m = new Map<string, PortRef>();
     for (const p of ports) m.set(p.id, p);
     return m;
   }, [ports]);
 
-  const timelinePortCalls: TimelinePortCall[] = useMemo(
+  const timelinePortCalls: PcRow[] = useMemo(
     () =>
-      (data?.port_calls || []).map((pc, i) => ({
-        seq: pc.seq ?? i + 1,
-        port_name: pc.port_name || portById.get(pc.port_id || "")?.name || pc.port_id?.slice(0, 8) || "?",
-        eta: pc.eta,
-        etd: pc.etd,
-        ata: pc.ata,
-        atd: pc.atd,
-        purpose: pc.purpose,
-      })),
+      (data?.port_calls || []).map((pc, i) => {
+        const port = portById.get(pc.port_id || "");
+        const tz =
+          (pc as { timezone?: string | null }).timezone ??
+          (port as { timezone?: string | null } | undefined)?.timezone ??
+          null;
+        return {
+          id: pc.id,
+          seq: pc.seq ?? i + 1,
+          port_name: pc.port_name || port?.name || pc.port_id?.slice(0, 8) || "?",
+          port_id: pc.port_id ?? null,
+          eta: pc.eta,
+          etd: pc.etd,
+          ata: pc.ata,
+          atd: pc.atd,
+          purpose: pc.purpose,
+          function_code: (pc as { function_code?: string | null }).function_code ?? null,
+          timezone: tz,
+        };
+      }),
     [data?.port_calls, portById],
   );
+
+  const fnByCode = useMemo(() => {
+    const m = new Map<string, PortFunctionMeta>();
+    for (const fn of portFns) m.set(fn.code, fn);
+    return m;
+  }, [portFns]);
+
+  function fnLabel(fn: PortFunctionMeta) {
+    return locale.startsWith("zh") ? fn.label_zh || fn.label_en : fn.label_en;
+  }
+
+  function PortFnChip({ code }: { code?: string | null }) {
+    if (!code) return null;
+    const fn = fnByCode.get(code);
+    const label = fn ? fnLabel(fn) : code;
+    const tone = fn ? fnTone(fn.tone) : null;
+    if (!tone) {
+      return (
+        <span className="muted" title={label}>
+          {code}
+        </span>
+      );
+    }
+    return <StatusBadge status={code} tone={tone} label={code} title={`${code} · ${label}`} />;
+  }
+
+  function runValidate(): ValidateIssue[] {
+    const issues: ValidateIssue[] = [];
+    const pcs = data?.port_calls || [];
+    if (!pcs.length) {
+      issues.push({ level: "error", message: t("ws.val.no_ports", "Voyage has no port calls") });
+      return issues;
+    }
+    for (const pc of pcs) {
+      if (pc.atd && !pc.etd) {
+        issues.push({
+          level: "warn",
+          message: t("ws.val.missing_etd", "Departed port call missing ETD: {port}", {
+            port: pc.port_name || pc.port_id?.slice(0, 8) || "?",
+          }),
+        });
+      }
+    }
+    const fromTs = laycan?.from ? new Date(laycan.from).getTime() : null;
+    if (fromTs !== null) {
+      for (const pc of pcs) {
+        const eta = pc.eta ? new Date(pc.eta).getTime() : null;
+        if (eta === null) continue;
+        if (fromTs !== null && eta < fromTs) {
+          issues.push({
+            level: "warn",
+            message: t("ws.val.eta_before_laycan", "ETA before laycan: {port} {eta}", {
+              port: pc.port_name || pc.port_id?.slice(0, 8) || "?",
+              eta: fmtDay(pc.eta),
+            }),
+          });
+        }
+      }
+    }
+    return issues;
+  }
 
   const timelineEvents: TimelineEvent[] = useMemo(
     () =>
@@ -276,14 +452,14 @@ export default function VoyageWorkspacePage() {
     if (activity.length) return activity;
     const derived: ActivityItem[] = [];
     for (const pc of data?.port_calls || []) {
-      if (pc.ata) derived.push({ at: pc.ata, kind: "port", title: t("ws.act.arrive", "抵港 {port}", { port: pc.port_name || pc.port_id?.slice(0, 8) || "" }) });
-      if (pc.atd) derived.push({ at: pc.atd, kind: "port", title: t("ws.act.depart", "离港 {port}", { port: pc.port_name || pc.port_id?.slice(0, 8) || "" }) });
+      if (pc.ata) derived.push({ at: pc.ata, kind: "port", title: t("ws.act.arrive", "Arrived {port}", { port: pc.port_name || pc.port_id?.slice(0, 8) || "" }) });
+      if (pc.atd) derived.push({ at: pc.atd, kind: "port", title: t("ws.act.depart", "Departed {port}", { port: pc.port_name || pc.port_id?.slice(0, 8) || "" }) });
     }
     for (const ev of sofEvents) {
       if (ev.event_at) derived.push({ at: ev.event_at, kind: "sof", title: `${ev.event_code}` });
     }
     for (const oh of data?.off_hire || []) {
-      if (oh.start_at) derived.push({ at: oh.start_at, kind: "offhire", title: t("ws.act.offhire", "停租开始") });
+      if (oh.start_at) derived.push({ at: oh.start_at, kind: "offhire", title: t("ws.act.offhire", "Off-hire started") });
     }
     for (const inv of data?.invoices || []) {
       derived.push({ at: null, kind: "invoice", title: `${inv.invoice_no || inv.id.slice(0, 8)} · ${inv.status || ""}` });
@@ -312,12 +488,12 @@ export default function VoyageWorkspacePage() {
         } else {
           await apiPost(base, payload);
         }
-        toast.success(t("common.saved", "已保存"));
+        toast.success(t("common.saved", "Saved"));
         setNoteModal({ open: false, kind: "note", id: null });
         setNoteTextDraft("");
         await loadAux();
       } catch (ex: any) {
-        toast.error(ex?.message || t("common.failed", "保存失败"));
+        toast.error(ex?.message || t("common.failed", "Failed"));
       } finally {
         setSavingNote(false);
       }
@@ -330,10 +506,10 @@ export default function VoyageWorkspacePage() {
       const base = `/api/v1/voyages/${id}/${kind === "note" ? "notes" : "instructions"}`;
       try {
         await apiDelete(`${base}/${noteId}`);
-        toast.success(t("common.deleted", "已删除"));
+        toast.success(t("common.deleted", "Deleted"));
         await loadAux();
       } catch (ex: any) {
-        toast.error(ex?.message || t("common.failed", "删除失败"));
+        toast.error(ex?.message || t("common.failed", "Failed"));
       }
     },
     [id, loadAux, toast, t],
@@ -343,22 +519,22 @@ export default function VoyageWorkspacePage() {
 
   const summaryTab = (
     <div className="ws-grid-2">
-      <Panel title={t("ws.summary", "航次概要")}>
+      <Panel title={t("ws.summary", "Voyage summary")}>
         <div className="ws-kv-grid">
           <div className="ws-kv">
-            <span>{t("ws.vessel", "船舶")}</span>
+            <span>{t("ws.vessel", "Vessel")}</span>
             <strong>{voyage?.vessel_name || "—"}</strong>
           </div>
           <div className="ws-kv">
-            <span>{t("ws.charter_no", "租约号")}</span>
+            <span>{t("ws.charter_no", "Charter no.")}</span>
             <strong>{data?.charter?.charter_no || "—"}</strong>
           </div>
           <div className="ws-kv">
-            <span>{t("ws.charter_type", "租约类型")}</span>
+            <span>{t("ws.charter_type", "Charter type")}</span>
             <strong>{data?.charter?.charter_type || "—"}</strong>
           </div>
           <div className="ws-kv">
-            <span>{t("ws.counterparty", "对手方")}</span>
+            <span>{t("ws.counterparty", "Counterparty")}</span>
             <strong>{data?.charter?.counterparty_name || "—"}</strong>
           </div>
           <div className="ws-kv">
@@ -366,15 +542,15 @@ export default function VoyageWorkspacePage() {
             <strong>{fmtDay(voyage?.cp_date)}</strong>
           </div>
           <div className="ws-kv">
-            <span>{t("ws.started", "开始")}</span>
+            <span>{t("ws.started", "Started")}</span>
             <strong>{fmtDate(voyage?.started_at)}</strong>
           </div>
           <div className="ws-kv">
-            <span>{t("ws.completed", "完成")}</span>
+            <span>{t("ws.completed", "Completed")}</span>
             <strong>{fmtDate(voyage?.completed_at)}</strong>
           </div>
           <div className="ws-kv">
-            <span>{t("common.status", "状态")}</span>
+            <span>{t("common.status", "Status")}</span>
             <strong>{voyage?.status || "—"}</strong>
           </div>
           <div className="ws-kv">
@@ -382,21 +558,21 @@ export default function VoyageWorkspacePage() {
             <strong>{fmtMoney(data?.estimate?.results_summary?.tce ?? null, currency, locale)}</strong>
           </div>
           <div className="ws-kv">
-            <span>{t("ws.est_revenue", "预估收入")}</span>
+            <span>{t("ws.est_revenue", "Estimated revenue")}</span>
             <strong>{fmtMoney(data?.estimate?.results_summary?.total_revenue ?? null, currency, locale)}</strong>
           </div>
           <div className="ws-kv">
-            <span>{t("ws.est_cost", "预估航次成本")}</span>
+            <span>{t("ws.est_cost", "Estimated voyage cost")}</span>
             <strong>{fmtMoney(data?.estimate?.results_summary?.voyage_cost ?? null, currency, locale)}</strong>
           </div>
           <div className="ws-kv">
-            <span>{t("ws.noon_reports", "正午报")}</span>
+            <span>{t("ws.noon_reports", "Noon reports")}</span>
             <strong>{data?.noon_reports_count ?? 0}</strong>
           </div>
         </div>
       </Panel>
 
-      <Panel title={t("ws.lifecycle", "生命周期")}>
+      <Panel title={t("ws.lifecycle", "Lifecycle")}>
         {data?.lifecycle?.length ? (
           <ol className="lc-stepper" style={{ flexWrap: "wrap" }}>
             {data.lifecycle.map((step, i) => {
@@ -438,216 +614,272 @@ export default function VoyageWorkspacePage() {
     </div>
   );
 
+  const pnlColumns: GridColumnDef<VoyagePnlLine>[] = [
+    {
+      key: "category",
+      title: t("ws.pnl_category", "Cost category"),
+      minWidth: 140,
+      value: (r) => t(`ws.pnl.${r.key}`, r.key),
+    },
+    {
+      key: "estimated",
+      title: t("ws.pnl_estimated_col", "Estimated"),
+      width: 130,
+      align: "right",
+      value: (r) => r.estimated,
+      render: (v) => fmtMoney(v as number | null, currency, locale),
+    },
+    {
+      key: "actual",
+      title: t("ws.pnl_actual_col", "Actual"),
+      width: 130,
+      align: "right",
+      value: (r) => r.actual,
+      render: (v) => fmtMoney(v as number | null, currency, locale),
+    },
+    {
+      key: "variance",
+      title: t("ws.pnl_variance_col", "Variance"),
+      width: 130,
+      align: "right",
+      value: (r) => r.variance,
+      render: (v) => <span className={varianceClass(v as number | null)}>{fmtMoney(v as number | null, currency, locale)}</span>,
+    },
+  ];
+
   const pnlTab = pnl ? (
-    <Panel title={t("ws.pnl_title", "P&L 归因")}>
+    <Panel title={t("ws.pnl_title", "P&L attribution")}>
       <div className="desk-results pnl-summary">
         <div className="kv-box">
-          <span>{t("ws.pnl_estimated", "预估盈亏")}</span>
+          <span>{t("ws.pnl_estimated", "Estimated P&L")}</span>
           <strong>{fmtMoney(pnl.estimated_pnl, currency, locale)}</strong>
         </div>
         <div className="kv-box">
-          <span>{t("ws.pnl_actual", "实际盈亏")}</span>
+          <span>{t("ws.pnl_actual", "Actual P&L")}</span>
           <strong>{fmtMoney(pnl.actual_pnl, currency, locale)}</strong>
         </div>
         <div className="kv-box">
-          <span>{t("ws.pnl_variance", "差异")}</span>
+          <span>{t("ws.pnl_variance", "Variance")}</span>
           <strong className={varianceClass(pnl.variance_pnl)}>{fmtMoney(pnl.variance_pnl, currency, locale)}</strong>
         </div>
       </div>
-      <table className="table" style={{ marginTop: "0.65rem" }}>
-        <thead>
-          <tr>
-            <th>{t("ws.pnl_category", "费用类别")}</th>
-            <th className="num">{t("ws.pnl_estimated_col", "预估")}</th>
-            <th className="num">{t("ws.pnl_actual_col", "实际")}</th>
-            <th className="num">{t("ws.pnl_variance_col", "差异")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(pnl.lines || []).map((line) => (
-            <tr key={line.key}>
-              <td>{t(`ws.pnl.${line.key}`, line.key)}</td>
-              <td className="num">{fmtMoney(line.estimated, currency, locale)}</td>
-              <td className="num">{fmtMoney(line.actual, currency, locale)}</td>
-              <td className={`num ${varianceClass(line.variance)}`}>{fmtMoney(line.variance, currency, locale)}</td>
-            </tr>
-          ))}
-          {!pnl.lines?.length ? (
-            <tr>
-              <td colSpan={4} className="muted">
-                {t("common.no_data", "No data")}
-              </td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
+      <div style={{ marginTop: "0.65rem" }}>
+        <DataGrid<VoyagePnlLine>
+          columns={pnlColumns}
+          data={pnl.lines || []}
+          rowKey={(r) => r.key}
+          storageKey="voyage_ws_pnl_grid"
+          showFooter={false}
+          emptyText={t("common.no_data", "No data")}
+        />
+      </div>
     </Panel>
   ) : (
-    <Panel title={t("ws.pnl_title", "P&L 归因")}>
+    <Panel title={t("ws.pnl_title", "P&L attribution")}>
       <p className="muted">{t("common.no_data", "No data")}</p>
     </Panel>
   );
 
   const pcColumns: GridColumnDef<(typeof timelinePortCalls)[number]>[] = [
     { key: "seq", title: "#", width: 48, align: "right" },
-    { key: "port_name", title: t("ws.port", "港口"), width: 160 },
+    { key: "port_name", title: t("ws.port", "Port"), width: 160 },
     {
       key: "purpose",
-      title: t("ws.purpose", "用途"),
-      width: 90,
-      render: (v) => (v ? String(v) : "—"),
+      title: t("ws.purpose", "Purpose"),
+      width: 140,
+      render: (v, row) => (
+        <>
+          {v ? String(v) : "—"} <PortFnChip code={row.function_code} />
+        </>
+      ),
     },
     {
       key: "eta",
       title: "ETA",
-      width: 140,
-      render: (v) => fmtDate(v as string),
+      width: 150,
+      render: (v, row) => <PortTime value={v as string | null} tz={row.timezone} showTz />,
     },
     {
       key: "ata",
       title: "ATA",
-      width: 140,
+      width: 150,
       render: (v, row) => {
         const eta = row.eta ? new Date(row.eta).getTime() : null;
         const ata = row.ata ? new Date(row.ata).getTime() : null;
         const delayed = eta !== null && ata !== null && ata > eta;
         return (
           <span className={delayed ? "neg" : ""}>
-            {fmtDate(v as string)}
-            {delayed ? <span className="badge badge-fail" style={{ marginLeft: 6 }}>{t("ws.delayed", "延误")}</span> : null}
+            <PortTime value={v as string | null} tz={row.timezone} showTz />
+            {delayed ? <span className="badge badge-fail" style={{ marginLeft: 6 }}>{t("ws.delayed", "Delayed")}</span> : null}
           </span>
         );
       },
     },
-    { key: "etd", title: "ETD", width: 140, render: (v) => fmtDate(v as string) },
-    { key: "atd", title: "ATD", width: 140, render: (v) => fmtDate(v as string) },
+    { key: "etd", title: "ETD", width: 150, render: (v, row) => <PortTime value={v as string | null} tz={row.timezone} showTz /> },
+    { key: "atd", title: "ATD", width: 150, render: (v, row) => <PortTime value={v as string | null} tz={row.timezone} showTz /> },
   ];
 
   const portCallsTab = (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--gap-md)" }}>
-      <Panel title={t("ws.timeline", "航次时间轴")} collapsible>
+      <Panel title={t("ws.timeline", "Voyage timeline")} collapsible>
         <VoyageTimeline portCalls={timelinePortCalls} events={timelineEvents} />
       </Panel>
-      <Panel title={t("ws.port_calls", "港口挂靠")} flush>
+      <Panel
+        title={t("ws.port_calls", "Port calls")}
+        flush
+        actions={
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => openPortCallModal()}>
+            + {t("common.add", "Add")}
+          </button>
+        }
+      >
         <DataGrid
           columns={pcColumns}
           data={timelinePortCalls}
-          rowKey={(row) => `${row.seq}-${row.port_name}`}
+          rowKey={(row) => row.id || `${row.seq}-${row.port_name}`}
           emptyText={t("common.empty", "No records")}
         />
       </Panel>
     </div>
   );
 
+  type LaytimeRow = NonNullable<VoyageOverview["laytime"]>[number];
+  type ClaimRow = NonNullable<VoyageOverview["claims"]>[number];
+  type InvoiceRow = NonNullable<VoyageOverview["invoices"]>[number];
+  type OffHireRow = NonNullable<VoyageOverview["off_hire"]>[number];
+
+  const laytimeColumns: GridColumnDef<LaytimeRow>[] = [
+    {
+      key: "result_type",
+      title: t("ws.result_type", "Result"),
+      minWidth: 110,
+      value: (r) => r.result_type || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "amount",
+      title: t("common.amount", "Amount"),
+      width: 130,
+      align: "right",
+      value: (r) => r.amount,
+      render: (v, r) => fmtMoney(v as number | null, r.currency || currency, locale),
+    },
+  ];
+
+  const claimColumns: GridColumnDef<ClaimRow>[] = [
+    {
+      key: "claim_no",
+      title: t("ws.claim_no", "Claim no."),
+      minWidth: 130,
+      value: (r) => r.claim_no || r.id.slice(0, 8),
+    },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => r.status || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+    {
+      key: "amount",
+      title: t("common.amount", "Amount"),
+      width: 130,
+      align: "right",
+      value: (r) => r.amount,
+      render: (v, r) => fmtMoney(v as number | null, r.currency || currency, locale),
+    },
+  ];
+
+  const invoiceColumns: GridColumnDef<InvoiceRow>[] = [
+    {
+      key: "invoice_no",
+      title: t("ws.invoice_no", "Invoice no."),
+      minWidth: 130,
+      value: (r) => r.invoice_no || r.id.slice(0, 8),
+    },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => r.status || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+    {
+      key: "amount",
+      title: t("common.amount", "Amount"),
+      width: 130,
+      align: "right",
+      value: (r) => r.amount,
+      render: (v, r) => fmtMoney(v as number | null, r.currency || currency, locale),
+    },
+  ];
+
+  const offHireWsColumns: GridColumnDef<OffHireRow>[] = [
+    {
+      key: "start_at",
+      title: t("ws.start", "Start"),
+      width: 140,
+      value: (r) => r.start_at || "",
+      render: (v) => fmtDate(v as string | null),
+    },
+    {
+      key: "end_at",
+      title: t("ws.end", "End"),
+      width: 140,
+      value: (r) => r.end_at || "",
+      render: (v) => (v ? fmtDate(v as string) : t("ws.oh_open", "In progress")),
+    },
+    {
+      key: "reason",
+      title: t("ws.reason", "Reason"),
+      minWidth: 130,
+      value: (r) => r.reason || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+  ];
+
   const financeTab = (
     <div className="ws-grid-2">
-      <Panel title={t("ws.laytime", "滞期/速遣")} flush>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("ws.result_type", "结果")}</th>
-              <th>{t("common.status", "状态")}</th>
-              <th className="num">{t("common.amount", "金额")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.laytime || []).map((lt) => (
-              <tr key={lt.id}>
-                <td>{lt.result_type || "—"}</td>
-                <td>{lt.status}</td>
-                <td className="num">{fmtMoney(lt.amount, lt.currency || currency, locale)}</td>
-              </tr>
-            ))}
-            {!data?.laytime?.length ? (
-              <tr>
-                <td colSpan={3} className="muted">
-                  {t("common.no_data", "No data")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+      <Panel title={t("ws.laytime", "Laytime/despatch")} flush>
+        <DataGrid<LaytimeRow>
+          columns={laytimeColumns}
+          data={data?.laytime || []}
+          rowKey={(r) => r.id}
+          storageKey="voyage_ws_laytime_grid"
+          showFooter={false}
+          emptyText={t("common.no_data", "No data")}
+        />
       </Panel>
-      <Panel title={t("ws.claims", "索赔")} flush>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("ws.claim_no", "索赔号")}</th>
-              <th>{t("common.status", "状态")}</th>
-              <th className="num">{t("common.amount", "金额")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.claims || []).map((c) => (
-              <tr key={c.id}>
-                <td>{c.claim_no || c.id.slice(0, 8)}</td>
-                <td>{c.status || "—"}</td>
-                <td className="num">{fmtMoney(c.amount, c.currency || currency, locale)}</td>
-              </tr>
-            ))}
-            {!data?.claims?.length ? (
-              <tr>
-                <td colSpan={3} className="muted">
-                  {t("common.no_data", "No data")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+      <Panel title={t("ws.claims", "Claims")} flush>
+        <DataGrid<ClaimRow>
+          columns={claimColumns}
+          data={data?.claims || []}
+          rowKey={(r) => r.id}
+          storageKey="voyage_ws_claims_grid"
+          showFooter={false}
+          emptyText={t("common.no_data", "No data")}
+        />
       </Panel>
-      <Panel title={t("ws.invoices", "发票")} flush>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("ws.invoice_no", "发票号")}</th>
-              <th>{t("common.status", "状态")}</th>
-              <th className="num">{t("common.amount", "金额")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.invoices || []).map((inv) => (
-              <tr key={inv.id}>
-                <td>{inv.invoice_no || inv.id.slice(0, 8)}</td>
-                <td>{inv.status || "—"}</td>
-                <td className="num">{fmtMoney(inv.amount, inv.currency || currency, locale)}</td>
-              </tr>
-            ))}
-            {!data?.invoices?.length ? (
-              <tr>
-                <td colSpan={3} className="muted">
-                  {t("common.no_data", "No data")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+      <Panel title={t("ws.invoices", "Invoices")} flush>
+        <DataGrid<InvoiceRow>
+          columns={invoiceColumns}
+          data={data?.invoices || []}
+          rowKey={(r) => r.id}
+          storageKey="voyage_ws_invoices_grid"
+          showFooter={false}
+          emptyText={t("common.no_data", "No data")}
+        />
       </Panel>
-      <Panel title={t("ws.off_hire", "停租")} flush>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("ws.start", "开始")}</th>
-              <th>{t("ws.end", "结束")}</th>
-              <th>{t("ws.reason", "原因")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.off_hire || []).map((oh) => (
-              <tr key={oh.id}>
-                <td>{fmtDate(oh.start_at)}</td>
-                <td>{oh.end_at ? fmtDate(oh.end_at) : t("ws.oh_open", "进行中")}</td>
-                <td>{oh.reason || "—"}</td>
-              </tr>
-            ))}
-            {!data?.off_hire?.length ? (
-              <tr>
-                <td colSpan={3} className="muted">
-                  {t("common.no_data", "No data")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+      <Panel title={t("ws.off_hire", "Off-hire")} flush>
+        <DataGrid<OffHireRow>
+          columns={offHireWsColumns}
+          data={data?.off_hire || []}
+          rowKey={(r) => r.id}
+          storageKey="voyage_ws_offhire_grid"
+          showFooter={false}
+          emptyText={t("common.no_data", "No data")}
+        />
       </Panel>
     </div>
   );
@@ -659,11 +891,11 @@ export default function VoyageWorkspacePage() {
   const trackPath = greatCirclePath(mapModel.track, proj);
 
   const mapTab = (
-    <Panel title={t("ws.map", "航线图")} collapsible>
+    <Panel title={t("ws.map", "Route map")} collapsible>
       {mapModel.coords.length + mapModel.track.length > 0 ? (
         <>
           <div className="ws-map">
-            <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} role="img" aria-label={t("ws.map", "航线图")}>
+            <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} role="img" aria-label={t("ws.map", "Route map")}>
               <rect x={0} y={0} width={MAP_W} height={MAP_H} fill="transparent" />
               {Array.from({ length: 12 }, (_, i) => (
                 <line
@@ -712,28 +944,28 @@ export default function VoyageWorkspacePage() {
           <div className="ws-map-legend">
             <span>
               <i style={{ background: "#1A9B96" }} />
-              {t("ws.map_route", "计划航线（大圆）")}
+              {t("ws.map_route", "Planned route (great circle)")}
             </span>
             {trackPath ? (
               <span>
                 <i style={{ background: "#2f6fb0" }} />
-                {t("ws.map_track", "正午船位轨迹")}
+                {t("ws.map_track", "Noon position track")}
               </span>
             ) : null}
           </div>
         </>
       ) : (
-        <p className="muted">{t("ws.map_empty", "暂无港口坐标或船位数据")}</p>
+        <p className="muted">{t("ws.map_empty", "No port coordinates or position data")}</p>
       )}
     </Panel>
   );
 
   const renderNoteList = (kind: "note" | "instruction", rows: VoyageNote[]) => (
     <Panel
-      title={kind === "note" ? t("ws.notes", "航次备注") : t("ws.instructions", "航次指令")}
+      title={kind === "note" ? t("ws.notes", "Voyage notes") : t("ws.instructions", "Voyage instructions")}
       actions={
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => openNoteModal(kind)}>
-          + {t("common.add", "新增")}
+          + {t("common.add", "Add")}
         </button>
       }
     >
@@ -747,10 +979,10 @@ export default function VoyageWorkspacePage() {
                 </small>
                 <span style={{ display: "flex", gap: 4 }}>
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => openNoteModal(kind, n)}>
-                    {t("common.edit", "编辑")}
+                    {t("common.edit", "Edit")}
                   </button>
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => deleteNote(kind, n.id)}>
-                    {t("common.delete", "删除")}
+                    {t("common.delete", "Delete")}
                   </button>
                 </span>
               </div>
@@ -765,7 +997,7 @@ export default function VoyageWorkspacePage() {
   );
 
   const activityTab = (
-    <Panel title={t("ws.activity", "活动日志")}>
+    <Panel title={t("ws.activity", "Activity log")}>
       {activityView.length ? (
         <ul className="ws-activity">
           {activityView.map((a, i) => (
@@ -787,77 +1019,146 @@ export default function VoyageWorkspacePage() {
       <WorkspaceShell
         header={
           <PageHeader
-            left={
-              <div className="ws-crumb">
-                <Link href="/operations/voyages" className="muted">
-                  ← {t("ws.back", "返回航次列表")}
-                </Link>
-              </div>
-            }
+            breadcrumb={[
+              { label: t("nav.voyages", "Voyages"), href: "/operations/voyages" },
+              { label: `${t("common.voyage", "Voyage")} ${title}` },
+            ]}
             title={
               <>
-                {t("ws.title", "航次工作台")}
+                {t("ws.title", "Voyage workspace")}
                 <span>{title}</span>
-                {voyage ? (
-                  <span className={`pill ${voyage.status === "in_progress" ? "normal" : "good"}`}>{voyage.status}</span>
-                ) : null}
+                {voyage ? <StatusBadge status={voyage.status} /> : null}
               </>
             }
             subtitle={
               <>
                 {voyage?.vessel_name
-                  ? t("ws.sub_vessel", "船舶 {vessel}", { vessel: voyage.vessel_name })
-                  : t("ws.sub", "航次全生命周期工作台")}
+                  ? t("ws.sub_vessel", "Vessel {vessel}", { vessel: voyage.vessel_name })
+                  : t("ws.sub", "Full lifecycle voyage workspace")}
                 {data?.charter?.charter_no ? ` · ${data.charter.charter_no}` : ""}
                 {data?.charter?.counterparty_name ? ` · ${data.charter.counterparty_name}` : ""}
               </>
             }
             actions={
               <>
-                <Link href={`/operations/voyages/${id}`} className="btn btn-ghost btn-sm">
-                  {t("ws.open_detail", "航次 360")}
-                </Link>
+                <ValidateButton onValidate={runValidate} disabled={!data} />
+                {nextStatuses.map((s) => (
+                  <button key={s} type="button" className="btn btn-sm" onClick={() => goStatus(s)}>
+                    {t(`ws.go_${s}`, s.replace(/_/g, " "))}
+                  </button>
+                ))}
                 <Link href="/operations/schedule" className="btn btn-ghost btn-sm">
-                  {t("ws.open_schedule", "排程")}
+                  {t("ws.open_schedule", "Schedule")}
                 </Link>
                 <Link href="/finance" className="btn btn-ghost btn-sm">
-                  {t("ws.goto_finance", "财务")}
+                  {t("ws.goto_finance", "Finance")}
                 </Link>
               </>
             }
           />
         }
+        sidebar={id ? <RevisionsPanel entityType="voyage" entityId={id} /> : null}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((v) => !v)}
       >
         <StateView loading={loading && !data} error={error} empty={false} onRetry={load}>
           <PanelTabs
             tabs={[
-              { id: "summary", label: t("ws.tab_summary", "概要"), content: summaryTab },
+              { id: "summary", label: t("ws.tab_summary", "Summary"), content: summaryTab },
               { id: "pnl", label: t("ws.tab_pnl", "P&L"), content: pnlTab },
-              { id: "ports", label: t("ws.tab_ports", "港口动态"), content: portCallsTab },
-              { id: "finance", label: t("ws.tab_finance", "财务"), content: financeTab },
-              { id: "map", label: t("ws.tab_map", "航线图"), content: mapTab },
-              { id: "notes", label: t("ws.tab_notes", "备注"), content: renderNoteList("note", notes) },
+              { id: "ports", label: t("ws.tab_ports", "Port activity"), content: portCallsTab },
+              { id: "finance", label: t("ws.tab_finance", "Finance"), content: financeTab },
+              { id: "map", label: t("ws.tab_map", "Map"), content: mapTab },
+              { id: "notes", label: t("ws.tab_notes", "Notes"), content: renderNoteList("note", notes) },
               {
                 id: "instructions",
-                label: t("ws.tab_instructions", "指令"),
+                label: t("ws.tab_instructions", "Instructions"),
                 content: renderNoteList("instruction", instructions),
               },
-              { id: "activity", label: t("ws.tab_activity", "活动"), content: activityTab },
+              { id: "activity", label: t("ws.tab_activity", "Activity"), content: activityTab },
             ]}
           />
         </StateView>
       </WorkspaceShell>
 
       <RecordModal
+        open={pcModalOpen}
+        title={t("ws.add_port_call", "Add port call")}
+        onClose={() => setPcModalOpen(false)}
+        onSave={savePortCall}
+        canDelete={false}
+        saving={pcSaving}
+      >
+        <label>
+          {t("ws.port", "Port")}
+          <select value={pcForm.port_id} onChange={(e) => setPcForm({ ...pcForm, port_id: e.target.value })}>
+            <option value="">—</option>
+            {ports.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t("ws.purpose", "Purpose")}
+          <select value={pcForm.purpose} onChange={(e) => setPcForm({ ...pcForm, purpose: e.target.value })}>
+            <option value="load">load</option>
+            <option value="discharge">discharge</option>
+            <option value="bunker">bunker</option>
+            <option value="transit">transit</option>
+          </select>
+        </label>
+        <label>
+          {t("ws.function_code", "Function")}
+          <select
+            value={pcForm.function_code}
+            onChange={(e) => setPcForm({ ...pcForm, function_code: e.target.value })}
+          >
+            <option value="">{t("common.none", "None")}</option>
+            {portFns.map((fn) => (
+              <option key={fn.code} value={fn.code}>
+                {fn.code} · {fnLabel(fn)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t("ws.seq", "Seq")}
+          <input type="number" value={pcForm.seq} onChange={(e) => setPcForm({ ...pcForm, seq: e.target.value })} />
+        </label>
+        <label>
+          ETA
+          <input
+            type="datetime-local"
+            value={pcForm.eta}
+            onChange={(e) => setPcForm({ ...pcForm, eta: e.target.value })}
+          />
+        </label>
+        <label>
+          ETD
+          <input
+            type="datetime-local"
+            value={pcForm.etd}
+            onChange={(e) => setPcForm({ ...pcForm, etd: e.target.value })}
+          />
+        </label>
+        <label>
+          {t("ws.agent", "Agent")}
+          <input value={pcForm.agent} onChange={(e) => setPcForm({ ...pcForm, agent: e.target.value })} />
+        </label>
+      </RecordModal>
+
+      <RecordModal
         open={noteModal.open}
         title={
           noteModal.kind === "note"
             ? noteModal.id
-              ? t("ws.edit_note", "编辑备注")
-              : t("ws.add_note", "新增备注")
+              ? t("ws.edit_note", "Edit note")
+              : t("ws.add_note", "Add note")
             : noteModal.id
-              ? t("ws.edit_instruction", "编辑指令")
-              : t("ws.add_instruction", "新增指令")
+              ? t("ws.edit_instruction", "Edit instruction")
+              : t("ws.add_instruction", "Add instruction")
         }
         onClose={() => setNoteModal({ open: false, kind: "note", id: null })}
         onSave={saveNote}
@@ -873,16 +1174,16 @@ export default function VoyageWorkspacePage() {
         saving={savingNote}
       >
         <label>
-          {t("ws.note_date", "日期")}
+          {t("ws.note_date", "Date")}
           <DateInput value={noteDate} onChange={setNoteDate} />
         </label>
         <label>
-          {t("ws.note_content", "内容")}
+          {t("ws.note_content", "Content")}
           <textarea
             rows={6}
             value={noteTextDraft}
             onChange={(e) => setNoteTextDraft(e.target.value)}
-            placeholder={t("ws.note_placeholder", "输入内容…")}
+            placeholder={t("ws.note_placeholder", "Enter content…")}
           />
         </label>
       </RecordModal>

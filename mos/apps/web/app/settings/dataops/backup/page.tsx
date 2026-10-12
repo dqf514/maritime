@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { Toolbar } from "@/components/Toolbar";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiCreateBackup, apiListBackups } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -26,7 +29,7 @@ export default function BackupPage() {
   }
 
   useEffect(() => {
-    refresh().catch(() => toast.success(t("page.backup.load_fail", "Unable to load backups")));
+    refresh().catch(() => toast.error(t("page.backup.load_fail", "Unable to load backups")));
   }, [t]);
 
   async function backup() {
@@ -36,43 +39,53 @@ export default function BackupPage() {
       await refresh();
       toast.success(t("page.backup.done", "Backup completed (Wave 0 placeholder snapshot)."));
     } catch {
-      toast.success(t("page.backup.failed", "Backup failed"));
+      toast.error(t("page.backup.failed", "Backup failed"));
     }
   }
+
+  const columns: ColumnDef<Backup>[] = [
+    {
+      key: "created_at",
+      title: t("page.backup.when", "When"),
+      width: 180,
+      value: (r) => r.created_at,
+      render: (v) => new Date(String(v)).toLocaleString(),
+    },
+    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    { key: "trigger", title: t("page.backup.trigger", "Trigger"), width: 110, value: (r) => r.trigger },
+    {
+      key: "storage_path",
+      title: t("page.backup.path", "Path"),
+      minWidth: 200,
+      value: (r) => r.storage_path || "",
+    },
+  ];
 
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.settings_hub", "System settings"), href: "/settings" },
+          { label: t("page.backup.title", "Backup") },
+        ]}
         title={t("page.backup.title", "Backup")}
         subtitle={t("page.backup.sub", "One-click tenant backup and restore drills.")}
-        actions={
-          <button className="btn btn-primary" type="button" onClick={backup}>
-            {t("page.backup.now", "Backup now")}
-          </button>
-        }
       />
-      <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("page.backup.when", "When")}</th>
-              <th>{t("common.status", "Status")}</th>
-              <th>{t("page.backup.trigger", "Trigger")}</th>
-              <th>{t("page.backup.path", "Path")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>{new Date(r.created_at).toLocaleString()}</td>
-                <td>{r.status}</td>
-                <td>{r.trigger}</td>
-                <td>{r.storage_path}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Toolbar>
+        <button className="btn btn-primary" type="button" onClick={backup}>
+          {t("page.backup.now", "Backup now")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => refresh().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
+      <DataGrid<Backup>
+        columns={columns}
+        data={rows}
+        rowKey={(r) => r.id}
+        storageKey="settings_dataops_backup_grid"
+        emptyText={t("common.no_data", "No data")}
+      />
     </AppShell>
   );
 }

@@ -5,8 +5,15 @@
 // 新建成交走 RecordModal；金额表均用 DataGrid 聚合 footer。
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { SavedViews } from "@/components/SavedViews";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Tabs, type TabItem } from "@/components/Tabs";
+import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
@@ -15,9 +22,11 @@ import { DateInput } from "@/components/DateInput";
 import { PartyPicker } from "@/components/DataPicker";
 import { LookupSelect } from "@/components/LookupSelect";
 import { StateView } from "@/components/StateView";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { useToast } from "@/components/ToastProvider";
+import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { apiGet, apiList, apiPost } from "@/lib/api";
-import { fmt } from "@/lib/fmt";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 
@@ -39,6 +48,7 @@ type Trade = {
   status: string;
   trade_date: string;
   notes?: string | null;
+  updated_at?: string | null;
 };
 
 type PositionRow = {
@@ -90,9 +100,11 @@ function unwrapList(data: unknown): Record<string, unknown>[] {
 function TradingWorkspace() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
   const { query, setQuery } = useListQuery();
   const tab: Tab = TAB_IDS.includes(query.tab ?? "") ? (query.tab as Tab) : "blotter";
   const setTab = (id: Tab) => setQuery({ tab: id === "blotter" ? null : id });
+  useListHotkeys(() => setTradeModal(true));
 
   // —— shared ——
   const [loading, setLoading] = useState(true);
@@ -128,6 +140,11 @@ function TradingWorkspace() {
     counterparty_id: "",
     trade_date: today,
   });
+
+  const tradeCtx = useContextMenu<Trade>();
+  const posCtx = useContextMenu<PositionRow>();
+  const mtmCtx = useContextMenu<MtmRow>();
+  const expCtx = useContextMenu<ExposureRow>();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -201,7 +218,7 @@ function TradingWorkspace() {
     const qtyNum = Number(tradeForm.qty);
     const priceNum = Number(tradeForm.price);
     if (!Number.isFinite(qtyNum) || !Number.isFinite(priceNum)) {
-      toast.error(t("page.trading.bad_number", "数量与价格必须是有效数字"));
+      toast.error(t("page.trading.bad_number", "Quantity and price must be valid numbers"));
       return;
     }
     setTradeSaving(true);
@@ -228,6 +245,70 @@ function TradingWorkspace() {
       setTradeSaving(false);
     }
   }
+
+  function validateTrade(): ValidateIssue[] {
+    const issues: ValidateIssue[] = [];
+    const qtyNum = Number(tradeForm.qty);
+    const priceNum = Number(tradeForm.price);
+    if (!Number.isFinite(qtyNum)) issues.push({ level: "error", message: t("page.trading.err_qty", "Quantity must be a number") });
+    else if (qtyNum <= 0) issues.push({ level: "error", message: t("page.trading.err_qty_pos", "Quantity must be positive") });
+    if (!Number.isFinite(priceNum)) issues.push({ level: "error", message: t("page.trading.err_price", "Price must be a number") });
+    else if (priceNum < 0) issues.push({ level: "error", message: t("page.trading.err_price_neg", "Price must not be negative") });
+    if (tradeForm.period_from && tradeForm.period_to && tradeForm.period_from > tradeForm.period_to)
+      issues.push({ level: "error", message: t("page.trading.err_period", "Period from must be earlier than period to") });
+    if (!tradeForm.route.trim()) issues.push({ level: "warn", message: t("page.trading.warn_route", "Route is empty") });
+    return issues;
+  }
+
+  function copyText(value: string, label: string) {
+    void navigator.clipboard.writeText(value);
+    toast.success(label);
+  }
+
+  function exportTrades(list: Trade[]) {
+    downloadCsv(
+      "trades",
+      ["trade_no", "kind", "buy_sell", "route", "period_from", "period_to", "qty", "price", "status", "trade_date"],
+      list.map((r) => [r.trade_no, r.kind, r.buy_sell, r.route ?? "", r.period_from ?? "", r.period_to ?? "", r.qty, r.price, r.status, r.trade_date]),
+      { emptyGuard: t("export.empty_confirm", "No rows to export. Export anyway?") },
+    );
+  }
+
+  const tradeMenuItems = (r: Trade): ContextMenuItem[] => [
+    { key: "copy_no", label: t("ctx.copy_trade_no", "Copy trade no"), onClick: () => copyText(r.trade_no, t("ctx.copied_id", "ID copied")) },
+    { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyText(r.id, t("ctx.copied_id", "ID copied")) },
+    { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportTrades([r]) },
+  ];
+
+  const posMenuItems = (r: PositionRow): ContextMenuItem[] => [
+    { key: "copy", label: t("ctx.copy_route", "Copy route"), onClick: () => copyText(r.route ?? "", t("ctx.copied_id", "ID copied")) },
+    {
+      key: "export",
+      label: t("ctx.export_selected", "Export selected"),
+      onClick: () =>
+        downloadCsv("positions", ["route", "period", "paper_qty", "physical_qty", "net_qty"], [[r.route ?? "", r.period ?? "", r.paper_qty, r.physical_qty, r.net_qty]]),
+    },
+  ];
+
+  const mtmMenuItems = (r: MtmRow): ContextMenuItem[] => [
+    { key: "copy", label: t("ctx.copy_trade_no", "Copy trade no"), onClick: () => copyText(r.trade_no, t("ctx.copied_id", "ID copied")) },
+    {
+      key: "export",
+      label: t("ctx.export_selected", "Export selected"),
+      onClick: () =>
+        downloadCsv("mtm", ["trade_no", "book_price", "market_price", "unrealized_pnl", "realized_pnl"], [[r.trade_no, r.book_price, r.market_price, r.unrealized_pnl, r.realized_pnl ?? ""]]),
+    },
+  ];
+
+  const expMenuItems = (r: ExposureRow): ContextMenuItem[] => [
+    { key: "copy", label: t("ctx.copy_route", "Copy route"), onClick: () => copyText(r.route ?? "", t("ctx.copied_id", "ID copied")) },
+    {
+      key: "export",
+      label: t("ctx.export_selected", "Export selected"),
+      onClick: () =>
+        downloadCsv("exposure", ["route", "period", "net_exposure", "limit", "limit_breach"], [[r.route ?? "", r.period ?? "", r.net_exposure, r.limit ?? "", r.limit_breach ? "Y" : "N"]]),
+    },
+  ];
 
   // —— 列定义 ——
   const blotterCols = useMemo<ColumnDef<Trade>[]>(
@@ -261,7 +342,7 @@ function TradingWorkspace() {
         sortable: true,
         agg: "sum",
         value: (r) => r.qty,
-        render: (v) => fmt(num(v)),
+        render: (v) => <Num v={num(v)} digits={2} />,
       },
       {
         key: "price",
@@ -271,7 +352,7 @@ function TradingWorkspace() {
         sortable: true,
         agg: "avg",
         value: (r) => r.price,
-        render: (v) => fmt(num(v)),
+        render: (v) => <Num v={num(v)} digits={3} />,
       },
       { key: "index_symbol", title: t("page.trading.symbol", "Symbol"), width: 100, value: (r) => r.index_symbol ?? "" },
       {
@@ -289,6 +370,13 @@ function TradingWorkspace() {
         ),
       },
       { key: "trade_date", title: t("page.trading.trade_date", "Trade date"), width: 100, value: (r) => r.trade_date },
+      {
+        key: "updated_at",
+        title: t("list.last_modified", "Last modified"),
+        width: 135,
+        value: (r) => r.updated_at ?? null,
+        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
     ],
     [t],
   );
@@ -304,7 +392,7 @@ function TradingWorkspace() {
         align: "right",
         agg: "sum",
         value: (r) => r.paper_qty,
-        render: (v) => fmt(num(v)),
+        render: (v) => <Num v={num(v)} digits={2} />,
       },
       {
         key: "physical_qty",
@@ -313,7 +401,7 @@ function TradingWorkspace() {
         align: "right",
         agg: "sum",
         value: (r) => r.physical_qty,
-        render: (v) => fmt(num(v)),
+        render: (v) => <Num v={num(v)} digits={2} />,
       },
       {
         key: "net_qty",
@@ -324,7 +412,7 @@ function TradingWorkspace() {
         value: (r) => r.net_qty,
         render: (v) => {
           const n = num(v);
-          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}>{fmt(n)}</span>;
+          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}><Num v={n} digits={2} /></span>;
         },
       },
     ],
@@ -341,7 +429,7 @@ function TradingWorkspace() {
         align: "right",
         agg: "avg",
         value: (r) => r.book_price,
-        render: (v) => fmt(num(v)),
+        render: (v) => <Num v={num(v)} digits={3} />,
       },
       {
         key: "market_price",
@@ -350,7 +438,7 @@ function TradingWorkspace() {
         align: "right",
         agg: "avg",
         value: (r) => r.market_price,
-        render: (v) => fmt(num(v)),
+        render: (v) => <Num v={num(v)} digits={3} />,
       },
       {
         key: "unrealized_pnl",
@@ -361,7 +449,7 @@ function TradingWorkspace() {
         value: (r) => r.unrealized_pnl,
         render: (v) => {
           const n = num(v);
-          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}>{fmt(n)}</span>;
+          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}><Num v={n} digits={2} /></span>;
         },
       },
       {
@@ -373,7 +461,7 @@ function TradingWorkspace() {
         value: (r) => r.realized_pnl ?? 0,
         render: (v) => {
           const n = num(v);
-          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}>{fmt(n)}</span>;
+          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}><Num v={n} digits={2} /></span>;
         },
       },
     ],
@@ -393,7 +481,7 @@ function TradingWorkspace() {
         value: (r) => r.net_exposure,
         render: (v) => {
           const n = num(v);
-          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}>{fmt(n)}</span>;
+          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}><Num v={n} digits={2} /></span>;
         },
       },
       {
@@ -402,7 +490,7 @@ function TradingWorkspace() {
         width: 110,
         align: "right",
         value: (r) => r.limit ?? 0,
-        render: (_v, r) => (r.limit == null || r.limit === 0 ? "—" : fmt(r.limit)),
+        render: (_v, r) => (r.limit == null || r.limit === 0 ? "—" : <Num v={r.limit} digits={2} />),
       },
       {
         key: "limit_breach",
@@ -420,39 +508,55 @@ function TradingWorkspace() {
   );
 
   const breaches = exposure.filter((r) => r.limit_breach);
-  const tabs: Array<{ id: Tab; label: string }> = [
-    { id: "blotter", label: t("page.trading.tab_blotter", "Blotter") },
-    { id: "positions", label: t("page.trading.tab_positions", "Positions") },
-    { id: "mtm", label: t("page.trading.tab_mtm", "MtM P&L") },
-    { id: "exposure", label: t("page.trading.tab_exposure", "Exposure") },
+  const tabs: TabItem[] = [
+    { key: "blotter", label: t("page.trading.tab_blotter", "Blotter") },
+    { key: "positions", label: t("page.trading.tab_positions", "Positions") },
+    { key: "mtm", label: t("page.trading.tab_mtm", "MtM P&L") },
+    { key: "exposure", label: t("page.trading.tab_exposure", "Exposure") },
   ];
 
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.trading", "Trading & Risk") }]}
         title={t("page.trading.title", "Trading & risk")}
         subtitle={t("page.trading.sub", "Positions, market quotes and exposure limits.")}
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => setTradeModal(true)}>
-            {t("page.trading.new_trade", "New Trade")}
-          </button>
+          <SavedViews storageKey="trading_list" onApply={(q) => router.replace(`/trading${q}`)} />
         }
       />
 
-      <div className="trading-tabs">
-        {tabs.map((tb) => (
-          <button
-            key={tb.id}
-            type="button"
-            className={`trading-tab${tab === tb.id ? " active" : ""}`}
-            onClick={() => setTab(tb.id)}
-          >
-            {tb.label}
-          </button>
-        ))}
-      </div>
+      <Tabs items={tabs} value={tab} onChange={(k) => setTab(k as Tab)} variant="pill" />
+      {tab === "blotter" ? <StatusLegend statuses={["draft", "confirmed", "settled", "cancelled"]} /> : null}
 
-      <div className="trading-toolbar">
+      <Toolbar
+        filterCount={tab !== "blotter" ? 1 : 0}
+        onClearFilters={() => setTab("blotter")}
+        right={
+          tab === "mtm" && mtmRows.length ? (
+            <div className="mtm-tiles" style={{ margin: 0 }}>
+              <div className={`mtm-tile ${sum(mtmRows, "unrealized_pnl") >= 0 ? "pos" : "neg"}`}>
+                <span>{t("page.trading.total_unrealized", "Total unrealized")}</span>
+                <strong><Num v={sum(mtmRows, "unrealized_pnl")} digits={2} /></strong>
+              </div>
+              <div className={`mtm-tile ${sum(mtmRows, "realized_pnl") >= 0 ? "pos" : "neg"}`}>
+                <span>{t("page.trading.total_realized", "Total realized")}</span>
+                <strong><Num v={sum(mtmRows, "realized_pnl")} digits={2} /></strong>
+              </div>
+              <div className="mtm-tile">
+                <span>{t("page.trading.marked_trades", "Marked trades")}</span>
+                <strong>{mtmRows.length}</strong>
+              </div>
+            </div>
+          ) : null
+        }
+      >
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => setTradeModal(true)}>
+          {t("page.trading.new_trade", "New Trade")}
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={load} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
         {tab === "mtm" ? (
           <>
             <span className="field-inline">
@@ -462,44 +566,23 @@ function TradingWorkspace() {
             <button type="button" className="btn btn-primary btn-sm" disabled={mtmRunning} onClick={runMtm}>
               {mtmRunning ? "…" : t("page.trading.run_mtm", "Run MtM")}
             </button>
-            <div className="spacer" />
-            {mtmRows.length ? (
-              <div className="mtm-tiles" style={{ margin: 0 }}>
-                <div className={`mtm-tile ${sum(mtmRows, "unrealized_pnl") >= 0 ? "pos" : "neg"}`}>
-                  <span>{t("page.trading.total_unrealized", "Total unrealized")}</span>
-                  <strong>{fmt(sum(mtmRows, "unrealized_pnl"))}</strong>
-                </div>
-                <div className={`mtm-tile ${sum(mtmRows, "realized_pnl") >= 0 ? "pos" : "neg"}`}>
-                  <span>{t("page.trading.total_realized", "Total realized")}</span>
-                  <strong>{fmt(sum(mtmRows, "realized_pnl"))}</strong>
-                </div>
-                <div className="mtm-tile">
-                  <span>{t("page.trading.marked_trades", "Marked trades")}</span>
-                  <strong>{mtmRows.length}</strong>
-                </div>
-              </div>
-            ) : null}
           </>
         ) : (
           <span className="muted" style={{ fontSize: "var(--font-label)" }}>
             {tab === "blotter"
-              ? t("page.trading.blotter_hint", "全部成交簿；双击工具栏「New Trade」录入成交。")
+              ? t("page.trading.blotter_hint", "All trades on the blotter; use New Trade to book one.")
               : tab === "positions"
-                ? t("page.trading.positions_hint", "纸货 vs 实货净头寸，按航线/期间聚合。")
-                : t("page.trading.exposure_hint", "按航线/期间的风险敞口与限额监控。")}
+                ? t("page.trading.positions_hint", "Paper vs physical net position, aggregated by route/period.")
+                : t("page.trading.exposure_hint", "Risk exposure and limit monitoring by route/period.")}
           </span>
         )}
-        <div className="spacer" />
-        <button type="button" className="btn btn-ghost btn-sm" onClick={load}>
-          {t("common.refresh", "Refresh")}
-        </button>
-      </div>
+      </Toolbar>
 
       {tab === "exposure" && breaches.length ? (
         <div className="exposure-alert" role="alert">
           <span>⚠</span>
           <span>
-            {t("page.trading.breach_alert", "{n} 个敞口超出限额，请及时处理", { n: breaches.length })}
+            {t("page.trading.breach_alert", "{n} exposure(s) over limit. Take action.", { n: breaches.length })}
           </span>
           <div className="spacer" />
           <span>
@@ -511,37 +594,53 @@ function TradingWorkspace() {
       <StateView loading={loading} error={loadErr} empty={!loading && !loadErr && isEmpty(tab, trades, positions, mtmRows, exposure)} onRetry={load}>
         <div className="trading-grid-wrap">
           {tab === "blotter" ? (
-            <DataGrid<Trade>
-              columns={blotterCols}
-              data={trades}
-              rowKey={(r) => r.id}
-              storageKey="trading_blotter"
-              emptyText={t("common.empty", "No records")}
-            />
+            <>
+              <DataGrid<Trade>
+                columns={blotterCols}
+                data={trades}
+                rowKey={(r) => r.id}
+                onRowContextMenu={(r, _i, e) => tradeCtx.open(r)(e)}
+                storageKey="trading_blotter"
+                emptyText={t("common.empty", "No records")}
+              />
+              <ContextMenu controller={tradeCtx} items={tradeMenuItems} />
+            </>
           ) : tab === "positions" ? (
-            <DataGrid<PositionRow>
-              columns={positionCols}
-              data={positions}
-              rowKey={(r, i) => r.id ?? `pos-${i}`}
-              storageKey="trading_positions"
-              emptyText={t("common.empty", "No records")}
-            />
+            <>
+              <DataGrid<PositionRow>
+                columns={positionCols}
+                data={positions}
+                rowKey={(r, i) => r.id ?? `pos-${i}`}
+                onRowContextMenu={(r, _i, e) => posCtx.open(r)(e)}
+                storageKey="trading_positions"
+                emptyText={t("common.empty", "No records")}
+              />
+              <ContextMenu controller={posCtx} items={posMenuItems} />
+            </>
           ) : tab === "mtm" ? (
-            <DataGrid<MtmRow>
-              columns={mtmCols}
-              data={mtmRows}
-              rowKey={(r, i) => r.id ?? `mtm-${r.trade_no}-${i}`}
-              storageKey="trading_mtm"
-              emptyText={t("common.empty", "No records")}
-            />
+            <>
+              <DataGrid<MtmRow>
+                columns={mtmCols}
+                data={mtmRows}
+                rowKey={(r, i) => r.id ?? `mtm-${r.trade_no}-${i}`}
+                onRowContextMenu={(r, _i, e) => mtmCtx.open(r)(e)}
+                storageKey="trading_mtm"
+                emptyText={t("common.empty", "No records")}
+              />
+              <ContextMenu controller={mtmCtx} items={mtmMenuItems} />
+            </>
           ) : (
-            <DataGrid<ExposureRow>
-              columns={exposureCols}
-              data={exposure}
-              rowKey={(r, i) => r.id ?? `exp-${i}`}
-              storageKey="trading_exposure"
-              emptyText={t("common.empty", "No records")}
-            />
+            <>
+              <DataGrid<ExposureRow>
+                columns={exposureCols}
+                data={exposure}
+                rowKey={(r, i) => r.id ?? `exp-${i}`}
+                onRowContextMenu={(r, _i, e) => expCtx.open(r)(e)}
+                storageKey="trading_exposure"
+                emptyText={t("common.empty", "No records")}
+              />
+              <ContextMenu controller={expCtx} items={expMenuItems} />
+            </>
           )}
         </div>
       </StateView>
@@ -624,6 +723,9 @@ function TradingWorkspace() {
               <DateInput value={tradeForm.trade_date} onChange={(v) => setTradeForm({ ...tradeForm, trade_date: v })} required />
             </FieldRow>
           </FormSection>
+          <FieldRow label={t("validate.label", "Validate")} span={2}>
+            <ValidateButton onValidate={validateTrade} />
+          </FieldRow>
         </FormPanel>
       </RecordModal>
     </AppShell>

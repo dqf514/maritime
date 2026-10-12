@@ -10,13 +10,29 @@ export type WorkspaceShellProps = {
   /** 固定头部内容 — 统一传 <PageHeader … /> */
   header: ReactNode;
   children: ReactNode;
+  /** 可折叠右侧栏（Revisions / Tasks & Alerts 等 IMOS 侧板） */
+  sidebar?: ReactNode;
+  sidebarOpen?: boolean;
+  onToggleSidebar?: () => void;
 };
 
-export function WorkspaceShell({ header, children }: WorkspaceShellProps) {
+export function WorkspaceShell({ header, children, sidebar, sidebarOpen = true, onToggleSidebar }: WorkspaceShellProps) {
   return (
-    <div className="ws-shell">
+    <div className={`ws-shell${sidebar ? " has-sidebar" : ""}${sidebar && sidebarOpen ? " sidebar-open" : ""}`}>
       <header className="ws-header">{header}</header>
-      <div className="ws-body">{children}</div>
+      <div className="ws-body">
+        <div className="ws-main">{children}</div>
+        {sidebar ? (
+          <aside className="ws-sidebar" aria-label="Side panels">
+            <div className="ws-sidebar-head">
+              <button type="button" className="btn btn-sm" onClick={onToggleSidebar} aria-expanded={sidebarOpen}>
+                {sidebarOpen ? "▸" : "◂"}
+              </button>
+            </div>
+            {sidebarOpen ? <div className="ws-sidebar-body">{sidebar}</div> : null}
+          </aside>
+        ) : null}
+      </div>
     </div>
   );
 }

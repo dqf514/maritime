@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { HelpFrame } from "@/components/HelpFrame";
+import { PageHeader } from "@/components/PageHeader";
 import { useI18n } from "@/lib/i18n";
 
 import { API_BASE } from "@/lib/api";
@@ -37,15 +38,16 @@ export default function HelpArticlePage() {
 
   return (
     <HelpFrame>
-      <p className="help-crumb">
-        <Link href="/help">{t("help.centre", "Knowledge Centre")}</Link>
-        <span> / </span>
-        <span>{art?.title || slug}</span>
-      </p>
+      <PageHeader
+        breadcrumb={[
+          { label: t("help.centre", "Knowledge Centre"), href: "/help" },
+          { label: art?.title || slug },
+        ]}
+        title={art?.title || slug}
+      />
       {err ? <p className="flash-err">{err}</p> : null}
       {art ? (
         <article className="help-article">
-          <h1>{art.title}</h1>
           <p className="help-summary">{art.summary}</p>
           <div className="help-tags">
             {art.tags.map((tag) => (

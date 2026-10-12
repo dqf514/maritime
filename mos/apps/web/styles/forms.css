@@ -172,6 +172,15 @@ dl.kv-grid > div { min-width: 0; }
   font-size: var(--font-ui);
 }
 
+/* RecordModal 表单内的校验行（ValidateButton 容器） */
+.record-modal-validate {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+  width: 100%;
+  margin-top: var(--gap-xs);
+}
+
 /* Locale date field */
 .locale-date-field {
   position: relative;

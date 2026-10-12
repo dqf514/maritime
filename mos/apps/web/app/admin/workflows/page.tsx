@@ -1,10 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -51,7 +55,7 @@ export default function WorkflowsAdminPage() {
   }
 
   useEffect(() => {
-    load().catch(() => toast.success(t("page.wf.admin_required", "需要租户管理员")));
+    load().catch(() => toast.error(t("page.wf.admin_required", "需要租户管理员")));
   }, [t]);
 
   function openCreate() {
@@ -65,6 +69,8 @@ export default function WorkflowsAdminPage() {
       steps: [{ name: t("page.wf.step_review", "审核"), role_code: "management" }],
     });
   }
+
+  useListHotkeys(openCreate);
 
   function openRow(r: Wf) {
     setCreating(false);
@@ -113,23 +119,64 @@ export default function WorkflowsAdminPage() {
       setCreating(false);
       await load();
     } catch {
-      toast.success(t("common.failed", "保存失败"));
+      toast.error(t("common.failed", "保存失败"));
     } finally {
       setSaving(false);
     }
   }
 
-  async function toggleEnabled(r: Wf, enabled: boolean, e: React.MouseEvent) {
-    e.stopPropagation();
+  async function toggleEnabled(r: Wf, enabled: boolean, e?: React.MouseEvent) {
+    e?.stopPropagation();
     await apiPatch(`/api/v1/admin/workflows/${r.id}`, { enabled });
     await load();
   }
+
+  const columns: ColumnDef<Wf>[] = [
+    { key: "code", title: t("common.code", "编码"), width: 140, value: (r) => r.code },
+    { key: "name", title: t("common.name", "名称"), minWidth: 160, value: (r) => r.name },
+    { key: "entity_type", title: t("page.wf.entity", "业务对象"), width: 110, value: (r) => r.entity_type },
+    {
+      key: "steps",
+      title: t("page.wf.steps", "步骤"),
+      minWidth: 220,
+      value: (r) =>
+        normalizeSteps(r.steps)
+          .map((s, i) => `${i + 1}. ${s.name} → ${s.role_code}`)
+          .join(" | "),
+      render: (_v, r) => (
+        <span>
+          {normalizeSteps(r.steps).map((s, i) => (
+            <div key={i} className="muted">
+              {i + 1}. {s.name} → {s.role_code}
+            </div>
+          ))}
+        </span>
+      ),
+    },
+    {
+      key: "enabled",
+      title: t("page.wf.enabled", "启用"),
+      width: 80,
+      align: "center",
+      value: (r) => r.enabled,
+      render: (_v, r) => (
+        <span onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={r.enabled}
+            onChange={(e) => toggleEnabled(r, e.target.checked).catch(() => toast.error(t("common.failed", "失败")))}
+          />
+        </span>
+      ),
+    },
+  ];
 
   const modalOpen = creating || Boolean(open);
 
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.admin", "Administration") }]}
         title={t("page.wf.title", "企业工作流")}
         subtitle={
           <>
@@ -140,50 +187,26 @@ export default function WorkflowsAdminPage() {
             <Link href="/workflows/inbox">{t("nav.inbox", "审批待办")}</Link>
           </>
         }
-        actions={
-          <button type="button" className="btn btn-primary" onClick={openCreate}>
-            {t("page.wf.create", "新建工作流")}
-          </button>
-        }
       />
+      <Toolbar>
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
+          {t("page.wf.create", "新建工作流")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
       <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.code", "编码")}</th>
-              <th>{t("common.name", "名称")}</th>
-              <th>{t("page.wf.entity", "业务对象")}</th>
-              <th>{t("page.wf.steps", "步骤")}</th>
-              <th>{t("page.wf.enabled", "启用")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              const steps = normalizeSteps(r.steps);
-              return (
-                <tr key={r.id} className="row-openable" onClick={() => openRow(r)}>
-                  <td>{r.code}</td>
-                  <td>{r.name}</td>
-                  <td>{r.entity_type}</td>
-                  <td>
-                    {steps.map((s, i) => (
-                      <span key={i} className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
-                        {i + 1}. {s.name} → {s.role_code}
-                      </span>
-                    ))}
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={r.enabled}
-                      onChange={(e) => toggleEnabled(r, e.target.checked, e as any)}
-                    />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <DataGrid<Wf>
+          columns={columns}
+          data={rows}
+          rowKey={(r) => r.id}
+          storageKey="admin_workflows_grid"
+          emptyText={t("common.none", "无")}
+          showFooter={false}
+          onRowClick={(r) => openRow(r)}
+          onRowDoubleClick={(r) => openRow(r)}
+        />
       </div>
 
       <RecordModal

@@ -1,16 +1,23 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { ExportButton } from "@/components/ExportButton";
 import { LookupSelect } from "@/components/LookupSelect";
 import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
+import { useListQuery } from "@/lib/useListQuery";
 
 type Vessel = {
   id: string;
@@ -19,15 +26,19 @@ type Vessel = {
   flag: string | null;
   vessel_type: string | null;
   status: string;
+  updated_at?: string | null;
 };
 
-export default function VesselsPage() {
+function VesselsPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const pathname = usePathname();
+  const { query, setQuery } = useListQuery();
+  const q = query.q ?? "";
   const [rows, setRows] = useState<Vessel[]>([]);
-  const [name, setName] = useState("");
-  const [imo, setImo] = useState("");
   const [open, setOpen] = useState<Vessel | null>(null);
+  const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({ name: "", imo: "", flag: "", vessel_type: "", status: "active" });
   const [saving, setSaving] = useState(false);
 
@@ -39,17 +50,21 @@ export default function VesselsPage() {
     load().catch(() => setRows([]));
   }, []);
 
-  async function onCreate(e: FormEvent) {
-    e.preventDefault();
-    toast.success("");
-    await apiPost("/api/v1/masterdata/vessels", { name, imo: imo || null, status: "active" });
-    setName("");
-    setImo("");
-    toast.success(t("page.vessels.created", "Vessel created"));
-    await load();
+  function openCreate() {
+    setCreating(true);
+    setOpen(null);
+    setEdit({ name: "", imo: "", flag: "", vessel_type: "", status: "active" });
+  }
+
+  useListHotkeys(openCreate);
+
+  function closeModal() {
+    setOpen(null);
+    setCreating(false);
   }
 
   function openRow(r: Vessel) {
+    setCreating(false);
     setOpen(r);
     setEdit({
       name: r.name,
@@ -60,20 +75,30 @@ export default function VesselsPage() {
     });
   }
 
+  function payload() {
+    return {
+      name: edit.name,
+      imo: edit.imo || null,
+      flag: edit.flag || null,
+      vessel_type: edit.vessel_type || null,
+      status: edit.status,
+    };
+  }
+
   async function save() {
-    if (!open) return;
     setSaving(true);
     try {
-      await apiPatch(`/api/v1/masterdata/vessels/${open.id}`, {
-        name: edit.name,
-        imo: edit.imo || null,
-        flag: edit.flag || null,
-        vessel_type: edit.vessel_type || null,
-        status: edit.status,
-      });
-      toast.success(t("common.saved", "Saved"));
-      setOpen(null);
+      if (creating || !open) {
+        await apiPost("/api/v1/masterdata/vessels", payload());
+        toast.success(t("page.vessels.created", "Vessel created"));
+      } else {
+        await apiPatch(`/api/v1/masterdata/vessels/${open.id}`, payload());
+        toast.success(t("common.saved", "Saved"));
+      }
+      closeModal();
       await load();
+    } catch {
+      toast.error(creating ? t("page.vessels.create_fail", "Create failed") : t("common.failed", "Failed"));
     } finally {
       setSaving(false);
     }
@@ -85,18 +110,98 @@ export default function VesselsPage() {
     try {
       await apiDelete(`/api/v1/masterdata/vessels/${open.id}`);
       toast.success(t("common.recycled", "Moved to recycle bin"));
-      setOpen(null);
+      closeModal();
       await load();
     } finally {
       setSaving(false);
     }
   }
 
+  const filtered = q
+    ? rows.filter((r) => {
+        const needle = q.toLowerCase();
+        return (
+          r.name.toLowerCase().includes(needle) ||
+          (r.imo || "").toLowerCase().includes(needle) ||
+          (r.flag || "").toLowerCase().includes(needle) ||
+          (r.vessel_type || "").toLowerCase().includes(needle) ||
+          (r.status || "").toLowerCase().includes(needle)
+        );
+      })
+    : rows;
+
+  const columns: ColumnDef<Vessel>[] = [
+    {
+      key: "name",
+      title: t("common.name", "Name"),
+      minWidth: 150,
+      value: (r) => r.name,
+      // A5：列表行链接到船舶卡片 /ship/vessels/[id]（list masterdata / detail shipyard）
+      render: (_v, r) => (
+        <Link
+          href={`/ship/vessels/${r.id}`}
+          onClick={(e) => e.stopPropagation()}
+          style={{ color: "inherit", textDecoration: "none" }}
+        >
+          {r.name}
+        </Link>
+      ),
+    },
+    {
+      key: "imo",
+      title: t("page.vessels.imo", "IMO"),
+      width: 110,
+      value: (r) => r.imo || "",
+      render: (_v, r) => r.imo || "—",
+    },
+    {
+      key: "vessel_type",
+      title: t("common.type", "Type"),
+      width: 130,
+      value: (r) => r.vessel_type || "",
+      render: (_v, r) => r.vessel_type || "—",
+    },
+    {
+      key: "flag",
+      title: t("page.vessels.flag", "Flag"),
+      width: 120,
+      value: (r) => r.flag || "",
+      render: (_v, r) => r.flag || "—",
+    },
+    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "updated_at",
+      title: t("list.last_modified", "Last modified"),
+      width: 135,
+      value: (r) => r.updated_at ?? null,
+      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+    },
+    {
+      key: "actions",
+      title: "",
+      width: 90,
+      align: "right",
+      render: (_v, r) => (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={(e) => {
+            e.stopPropagation();
+            openRow(r);
+          }}
+        >
+          {t("common.edit", "Edit")}
+        </button>
+      ),
+    },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.master", "Master data") }]}
         title={t("page.vessels.title", "Vessels")}
-        subtitle={t("page.vessels.sub", "Fleet master data. Open a row to edit or delete.")}
+        subtitle={t("page.vessels.sub", "Fleet master data. Click a row to open the vessel card.")}
         actions={
           <>
             <ExportButton entity="vessels" />
@@ -107,56 +212,48 @@ export default function VesselsPage() {
           </>
         }
       />
-      <form
-        className="panel"
-        onSubmit={(e) => onCreate(e).catch(() => toast.success(t("page.vessels.create_fail", "Create failed")))}
-        style={{ marginBottom: "1rem" }}
+      <Toolbar
+        filterCount={q ? 1 : 0}
+        onClearFilters={() => setQuery({ q: null }, { resetPage: true })}
+        right={
+          <>
+            <input
+              className="input input-sm"
+              type="search"
+              value={q}
+              onChange={(e) => setQuery({ q: e.target.value || null }, { resetPage: true })}
+              placeholder={t("page.vessels.search", "Search name / IMO / flag / type…")}
+              aria-label={t("common.search", "Search")}
+            />
+            <SavedViews storageKey="md_vessels" onApply={(qs) => router.replace(`${pathname}${qs}`)} />
+          </>
+        }
       >
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
-          <label>
-            {t("common.name", "Name")}
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </label>
-          <label>
-            IMO
-            <input value={imo} onChange={(e) => setImo(e.target.value)} />
-          </label>
-          <button className="btn btn-primary" type="submit">
-            {t("page.vessels.add", "New vessel")}
-          </button>
-        </div>
-      </form>
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
+          {t("page.vessels.add", "New vessel")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
       <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.name", "Name")}</th>
-              <th>IMO</th>
-              <th>{t("common.type", "类型")}</th>
-              <th>{t("page.vessels.flag", "Flag")}</th>
-              <th>{t("common.status", "Status")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="row-openable" onClick={() => openRow(r)}>
-                <td>{r.name}</td>
-                <td>{r.imo || "—"}</td>
-                <td>{r.vessel_type || "—"}</td>
-                <td>{r.flag || "—"}</td>
-                <td>{r.status}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataGrid<Vessel>
+          columns={columns}
+          data={filtered}
+          rowKey={(r) => r.id}
+          onRowClick={(r) => router.push(`/ship/vessels/${r.id}`)}
+          storageKey="masterdata_vessels_grid"
+          emptyText={t("common.empty", "No records")}
+        />
       </div>
 
       <RecordModal
-        open={Boolean(open)}
-        title={t("page.vessels.edit", "Edit vessel")}
-        onClose={() => setOpen(null)}
+        open={creating || Boolean(open)}
+        title={creating ? t("page.vessels.add", "New vessel") : t("page.vessels.edit", "Edit vessel")}
+        onClose={closeModal}
         onSave={save}
-        onDelete={remove}
+        onDelete={creating ? undefined : remove}
+        canDelete={!creating}
         saving={saving}
       >
         <label>
@@ -164,11 +261,11 @@ export default function VesselsPage() {
           <input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} required />
         </label>
         <label>
-          IMO
+          {t("page.vessels.imo", "IMO")}
           <input value={edit.imo} onChange={(e) => setEdit({ ...edit, imo: e.target.value })} />
         </label>
         <label>
-          {t("common.type", "类型")}
+          {t("common.type", "Type")}
           <LookupSelect
             dataset="vessel_types"
             value={edit.vessel_type}
@@ -189,5 +286,14 @@ export default function VesselsPage() {
         </label>
       </RecordModal>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <VesselsPage />
+    </Suspense>
   );
 }

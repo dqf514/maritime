@@ -31,9 +31,20 @@ class VesselIn(BaseModel):
     status: str = "active"
 
 
+class VesselUpdate(VesselIn):
+    """PATCH body for vessels — carries the optimistic-lock token.
+
+    ``expected_updated_at`` is excluded from ``model_dump()`` (Field exclude)
+    so it can never land in the ORM via ``**body.model_dump()`` / setattr loops.
+    """
+
+    expected_updated_at: str | None = Field(default=None, exclude=True)
+
+
 class VesselOut(VesselIn):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
+    updated_at: datetime | None = None
 
 
 class PortIn(BaseModel):
@@ -74,9 +85,16 @@ class CounterpartyIn(BaseModel):
     notes: str | None = None
 
 
+class CounterpartyUpdate(CounterpartyIn):
+    """PATCH body for counterparties — carries the optimistic-lock token."""
+
+    expected_updated_at: str | None = Field(default=None, exclude=True)
+
+
 class CounterpartyOut(CounterpartyIn):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
+    updated_at: datetime | None = None
 
 
 class CounterpartyContactIn(BaseModel):

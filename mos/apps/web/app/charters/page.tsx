@@ -2,17 +2,28 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { DateInput } from "@/components/DateInput";
 import { PageGuide } from "@/components/PageGuide";
 import { PageHeader } from "@/components/PageHeader";
 import { PartyPicker } from "@/components/DataPicker";
+import { RecordModal } from "@/components/RecordModal";
+import { Tabs, type TabItem } from "@/components/Tabs";
+import { CoaListPanel } from "@/components/charters/CoaListPanel";
+import { TcListPanel } from "@/components/charters/TcListPanel";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
+import { useListQuery } from "@/lib/useListQuery";
 
 // U2：行点击直达单据详情页 /charters/{id}（编辑/变更单/hire/liftings 在详情页）。
+// A5 双重 UI 归并：本页为租约列表唯一入口。原 /charters/tc、/charters/coa 列表
+// 并入 ?type=tc|coa 页签（组件/charters/*Panel），旧路径保留为永久重定向。
+
+type ListType = "fixtures" | "tc" | "coa";
 
 type RefItem = { id: string; name: string };
 type Charter = {
@@ -25,6 +36,7 @@ type Charter = {
   estimate_id: string | null;
   fixture_type?: string | null;
   sanctions_blocked: boolean;
+  updated_at?: string | null;
 };
 type MasterContract = {
   id: string;
@@ -199,16 +211,21 @@ function charterTermsPayload(freightRate: string, cargoQty: string, tm: TermFiel
   return out;
 }
 
-export default function ChartersPage() {
+function ChartersPage() {
   const { t } = useI18n();
   const toast = useToast();
   const router = useRouter();
+  // A5：?type=tc|coa 驱动列表页签（fixtures 为默认，不进 URL）
+  const { query, setQuery } = useListQuery();
+  const listType: ListType = query.type === "tc" ? "tc" : query.type === "coa" ? "coa" : "fixtures";
+  const setListType = (k: ListType) => setQuery({ type: k === "fixtures" ? null : k, page: null });
   const [rows, setRows] = useState<Charter[]>([]);
   const [vessels, setVessels] = useState<RefItem[]>([]);
   const [parties, setParties] = useState<RefItem[]>([]);
   const [masters, setMasters] = useState<MasterContract[]>([]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
 
   const [docKind, setDocKind] = useState<DocKind>("voyage_fixture");
   const [charterType, setCharterType] = useState("voyage");
@@ -255,8 +272,7 @@ export default function ChartersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function create(e: FormEvent) {
-    e.preventDefault();
+  async function create() {
     setBusy(true);
     setErr("");
     try {
@@ -274,6 +290,7 @@ export default function ChartersPage() {
         setMcQty("");
         setMcFrom("");
         setMcTo("");
+        setFormOpen(false);
         await load();
         return;
       }
@@ -302,6 +319,7 @@ export default function ChartersPage() {
       setCargoQty("");
       setTerms(EMPTY_TERMS);
       setClausesNotes("");
+      setFormOpen(false);
       await load();
     } catch (ex) {
       setErr(String(ex));
@@ -320,6 +338,76 @@ export default function ChartersPage() {
     return parties.find((p) => p.id === id)?.name || id.slice(0, 8);
   }
 
+  const listColumns: ColumnDef<Charter>[] = [
+    { key: "charter_no", title: t("page.charters.no", "编号"), width: 130, value: (r) => r.charter_no },
+    {
+      key: "charter_type",
+      title: t("common.type", "类型"),
+      width: 130,
+      value: (r) => `${r.charter_type}${r.fixture_type && r.fixture_type !== "voyage_fixture" ? ` ${r.fixture_type}` : ""}`,
+      render: (_v, r) => (
+        <>
+          {r.charter_type}
+          {r.fixture_type && r.fixture_type !== "voyage_fixture" ? (
+            <span className="muted" style={{ marginLeft: "0.35rem", fontSize: "0.75rem" }}>{r.fixture_type}</span>
+          ) : null}
+        </>
+      ),
+    },
+    { key: "status", title: t("common.status", "状态"), width: 110, value: (r) => r.status },
+    {
+      key: "vessel",
+      title: t("page.estimates.vessel", "船舶"),
+      width: 130,
+      value: (r) => vesselName(r.vessel_id),
+    },
+    {
+      key: "counterparty",
+      title: t("page.estimates.counterparty", "对手方"),
+      minWidth: 130,
+      value: (r) => partyName(r.counterparty_id),
+    },
+    {
+      key: "sanctions_blocked",
+      title: t("page.charters.sanctions", "制裁"),
+      width: 100,
+      value: (r) => Boolean(r.sanctions_blocked),
+      render: (_v, r) =>
+        r.sanctions_blocked ? (
+          <span className="badge badge-fail">{t("page.charters.blocked", "BLOCKED")}</span>
+        ) : (
+          <span className="badge badge-pass">{t("page.charters.clear", "clear")}</span>
+        ),
+    },
+    {
+      key: "estimate_id",
+      title: t("page.charters.estimate", "估算"),
+      width: 110,
+      value: (r) => r.estimate_id || "",
+      render: (_v, r) =>
+        r.estimate_id ? (
+          <Link href="/estimates" onClick={(e) => e.stopPropagation()}>
+            {r.estimate_id.slice(0, 8)}
+          </Link>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      key: "updated_at",
+      title: t("list.last_modified", "Last modified"),
+      width: 135,
+      value: (r) => r.updated_at ?? null,
+      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+    },
+  ];
+
+  const tabs: TabItem[] = [
+    { key: "fixtures", label: t("page.charters.list", "Fixtures") },
+    { key: "tc", label: t("page.tc.title", "Time Charter") },
+    { key: "coa", label: t("page.coa.title", "COA") },
+  ];
+
   return (
     <AppShell>
       <PageHeader
@@ -327,6 +415,11 @@ export default function ChartersPage() {
         subtitle={t("page.charters.sub", "新建租约；点击行打开单据详情（可分享链接），编辑、变更与状态推进在详情页。")}
         actions={
           <>
+            {listType === "fixtures" ? (
+              <button type="button" className="btn btn-primary" onClick={() => setFormOpen(true)}>
+                + {t("page.charters.create", "New charter")}
+              </button>
+            ) : null}
             <PageGuide pageKey="charters" />
             <Link href="/settings/recycle" className="btn btn-ghost">
               {t("nav.recycle", "回收站")}
@@ -335,186 +428,158 @@ export default function ChartersPage() {
         }
       />
 
-      {err ? <p className="flash-err">{err}</p> : null}
+      <Tabs items={tabs} value={listType} onChange={(k) => setListType(k as ListType)} variant="line" />
 
-      <form className="panel" onSubmit={create}>
-        <h3 style={{ marginTop: 0 }}>{t("page.charters.create", "New charter")}</h3>
-        <div className="form-grid">
-          <label>
-            {t("page.charters.contract_type", "Contract type")}
-            <select value={docKind} onChange={(e) => setDocKind(e.target.value as DocKind)}>
-              <option value="voyage_fixture">{t("page.charters.fixture_voyage", "Voyage Fixture")}</option>
-              <option value="head">{t("page.charters.fixture_head", "Head Fixture")}</option>
-              <option value="relet">{t("page.charters.fixture_relet", "Relet Fixture")}</option>
-              <option value="master_contract">{t("page.charters.master_contract", "Master Contract")}</option>
-            </select>
-          </label>
-          {docKind !== "master_contract" ? (
-            <>
-              <label>
-                {t("page.charters.type", "Charter type")}
-                <select value={charterType} onChange={(e) => setCharterType(e.target.value)}>
-                  <option value="voyage">voyage</option>
-                  <option value="time">time</option>
-                  <option value="tct">tct</option>
-                  <option value="coa">coa</option>
-                  <option value="bb">bb</option>
-                </select>
-              </label>
-              <label>
-                {t("page.charters.direction", "Direction")}
-                <select value={direction} onChange={(e) => setDirection(e.target.value)}>
-                  <option value="out">out</option>
-                  <option value="in">in</option>
-                </select>
-              </label>
-              <label>
-                {t("page.charters.master_contract", "Master Contract")}
-                <select value={masterContractId} onChange={(e) => setMasterContractId(e.target.value)}>
-                  <option value="">{t("common.none", "None")}</option>
-                  {masters.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.contract_no} — {m.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </>
-          ) : (
-            <>
-              <label>
-                {t("page.charters.mc_title", "Contract title")}
-                <input value={mcTitle} onChange={(e) => setMcTitle(e.target.value)} placeholder="COA 2026 …" />
-              </label>
-              <label>
-                {t("page.charters.mc_contract_type", "Master contract type")}
-                <select value={mcType} onChange={(e) => setMcType(e.target.value)}>
-                  <option value="voyage_coa">voyage_coa</option>
-                  <option value="time_charter">time_charter</option>
-                  <option value="bareboat">bareboat</option>
-                </select>
-              </label>
-              <label>
-                {t("page.charters.mc_total_qty", "Total qty")}
-                <input type="number" step="any" value={mcQty} onChange={(e) => setMcQty(e.target.value)} />
-              </label>
-              <label>
-                {t("page.charters.mc_period_from", "Period from")}
-                <DateInput value={mcFrom} onChange={setMcFrom} />
-              </label>
-              <label>
-                {t("page.charters.mc_period_to", "Period to")}
-                <DateInput value={mcTo} onChange={setMcTo} />
-              </label>
-            </>
-          )}
-          <label>
-            {t("page.estimates.counterparty", "Counterparty")}
-            <PartyPicker value={partyId} onChange={setPartyId} />
-          </label>
-          {docKind !== "master_contract" ? (
-            <>
-              <label>
-                {t("page.estimates.vessel", "Vessel")}
-                <select value={vesselId} onChange={(e) => setVesselId(e.target.value)}>
-                  <option value="">{t("common.select", "Select…")}</option>
-                  {vessels.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                {t("page.charters.laycan_from", "Laycan from")}
-                <DateInput value={laycanFrom} onChange={setLaycanFrom} />
-              </label>
-              <label>
-                {t("page.charters.laycan_to", "Laycan to")}
-                <DateInput value={laycanTo} onChange={setLaycanTo} />
-              </label>
-              <label>
-                {t("page.estimates.commission", "Commission %")}
-                <input type="number" step="any" value={commission} onChange={(e) => setCommission(e.target.value)} />
-              </label>
-              <label>
-                {t("page.estimates.freight_rate", "Freight rate")}
-                <input type="number" step="any" value={freightRate} onChange={(e) => setFreightRate(e.target.value)} />
-              </label>
-              <label>
-                {t("page.estimates.cargo_qty", "Cargo qty")}
-                <input type="number" step="any" value={cargoQty} onChange={(e) => setCargoQty(e.target.value)} />
-              </label>
-              <TermInputs value={terms} onChange={setTerm} showTc={isTc(charterType)} />
-              <label style={{ gridColumn: "1 / -1" }}>
-                {t("page.charters.clauses", "Clauses / notes")}
-                <input value={clausesNotes} onChange={(e) => setClausesNotes(e.target.value)} placeholder="CP notes" />
-              </label>
-            </>
-          ) : null}
-        </div>
-        <div className="desk-toolbar">
-          <button className="btn btn-primary" type="submit" disabled={busy}>
-            {t("common.create", "Create")}
-          </button>
-        </div>
-      </form>
+      {listType === "fixtures" ? (
+        <>
+          {err ? <p className="flash-err">{err}</p> : null}
 
-      <div className="panel">
-        <h3 style={{ marginTop: 0 }}>{t("page.charters.list", "Fixtures")}</h3>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("page.charters.no", "编号")}</th>
-              <th>{t("common.type", "类型")}</th>
-              <th>{t("common.status", "状态")}</th>
-              <th>{t("page.estimates.vessel", "船舶")}</th>
-              <th>{t("page.estimates.counterparty", "对手方")}</th>
-              <th>{t("page.charters.sanctions", "制裁")}</th>
-              <th>{t("page.charters.estimate", "估算")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="row-openable" onClick={() => router.push(`/charters/${r.id}`)}>
-                <td>{r.charter_no}</td>
-                <td>
-                  {r.charter_type}
-                  {r.fixture_type && r.fixture_type !== "voyage_fixture" ? (
-                    <span className="muted" style={{ marginLeft: "0.35rem", fontSize: "0.75rem" }}>{r.fixture_type}</span>
-                  ) : null}
-                </td>
-                <td>{r.status}</td>
-                <td>{vesselName(r.vessel_id)}</td>
-                <td>{partyName(r.counterparty_id)}</td>
-                <td>
-                  {r.sanctions_blocked ? (
-                    <span className="badge badge-fail">{t("page.charters.blocked", "BLOCKED")}</span>
-                  ) : (
-                    <span className="badge badge-pass">{t("page.charters.clear", "clear")}</span>
-                  )}
-                </td>
-                <td>
-                  {r.estimate_id ? (
-                    <Link href="/estimates" onClick={(e) => e.stopPropagation()}>
-                      {r.estimate_id.slice(0, 8)}
-                    </Link>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-              </tr>
-            ))}
-            {!rows.length ? (
-              <tr>
-                <td colSpan={7} className="muted">
-                  {t("common.empty", "暂无记录")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+          <div className="panel">
+            <DataGrid<Charter>
+              columns={listColumns}
+              data={rows}
+              rowKey={(r) => r.id}
+              onRowClick={(r) => router.push(`/charters/${r.id}`)}
+              storageKey="charters_list_grid"
+              emptyText={t("common.empty", "No records")}
+            />
+          </div>
+        </>
+      ) : null}
+      {listType === "tc" ? <TcListPanel /> : null}
+      {listType === "coa" ? <CoaListPanel /> : null}
+
+      <RecordModal
+        open={formOpen}
+        title={t("page.charters.create", "New charter")}
+        onClose={() => setFormOpen(false)}
+        onSave={create}
+        canDelete={false}
+        saving={busy}
+        size="xl"
+      >
+        <label>
+          {t("page.charters.contract_type", "Contract type")}
+          <select value={docKind} onChange={(e) => setDocKind(e.target.value as DocKind)}>
+            <option value="voyage_fixture">{t("page.charters.fixture_voyage", "Voyage Fixture")}</option>
+            <option value="head">{t("page.charters.fixture_head", "Head Fixture")}</option>
+            <option value="relet">{t("page.charters.fixture_relet", "Relet Fixture")}</option>
+            <option value="master_contract">{t("page.charters.master_contract", "Master Contract")}</option>
+          </select>
+        </label>
+        {docKind !== "master_contract" ? (
+          <>
+            <label>
+              {t("page.charters.type", "Charter type")}
+              <select value={charterType} onChange={(e) => setCharterType(e.target.value)}>
+                <option value="voyage">voyage</option>
+                <option value="time">time</option>
+                <option value="tct">tct</option>
+                <option value="coa">coa</option>
+                <option value="bb">bb</option>
+              </select>
+            </label>
+            <label>
+              {t("page.charters.direction", "Direction")}
+              <select value={direction} onChange={(e) => setDirection(e.target.value)}>
+                <option value="out">out</option>
+                <option value="in">in</option>
+              </select>
+            </label>
+            <label>
+              {t("page.charters.master_contract", "Master Contract")}
+              <select value={masterContractId} onChange={(e) => setMasterContractId(e.target.value)}>
+                <option value="">{t("common.none", "None")}</option>
+                {masters.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.contract_no} — {m.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
+        ) : (
+          <>
+            <label>
+              {t("page.charters.mc_title", "Contract title")}
+              <input value={mcTitle} onChange={(e) => setMcTitle(e.target.value)} placeholder="COA 2026 …" />
+            </label>
+            <label>
+              {t("page.charters.mc_contract_type", "Master contract type")}
+              <select value={mcType} onChange={(e) => setMcType(e.target.value)}>
+                <option value="voyage_coa">voyage_coa</option>
+                <option value="time_charter">time_charter</option>
+                <option value="bareboat">bareboat</option>
+              </select>
+            </label>
+            <label>
+              {t("page.charters.mc_total_qty", "Total qty")}
+              <input type="number" step="any" value={mcQty} onChange={(e) => setMcQty(e.target.value)} />
+            </label>
+            <label>
+              {t("page.charters.mc_period_from", "Period from")}
+              <DateInput value={mcFrom} onChange={setMcFrom} />
+            </label>
+            <label>
+              {t("page.charters.mc_period_to", "Period to")}
+              <DateInput value={mcTo} onChange={setMcTo} />
+            </label>
+          </>
+        )}
+        <label>
+          {t("page.estimates.counterparty", "Counterparty")}
+          <PartyPicker value={partyId} onChange={setPartyId} />
+        </label>
+        {docKind !== "master_contract" ? (
+          <>
+            <label>
+              {t("page.estimates.vessel", "Vessel")}
+              <select value={vesselId} onChange={(e) => setVesselId(e.target.value)}>
+                <option value="">{t("common.select", "Select…")}</option>
+                {vessels.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              {t("page.charters.laycan_from", "Laycan from")}
+              <DateInput value={laycanFrom} onChange={setLaycanFrom} />
+            </label>
+            <label>
+              {t("page.charters.laycan_to", "Laycan to")}
+              <DateInput value={laycanTo} onChange={setLaycanTo} />
+            </label>
+            <label>
+              {t("page.estimates.commission", "Commission %")}
+              <input type="number" step="any" value={commission} onChange={(e) => setCommission(e.target.value)} />
+            </label>
+            <label>
+              {t("page.estimates.freight_rate", "Freight rate")}
+              <input type="number" step="any" value={freightRate} onChange={(e) => setFreightRate(e.target.value)} />
+            </label>
+            <label>
+              {t("page.estimates.cargo_qty", "Cargo qty")}
+              <input type="number" step="any" value={cargoQty} onChange={(e) => setCargoQty(e.target.value)} />
+            </label>
+            <TermInputs value={terms} onChange={setTerm} showTc={isTc(charterType)} />
+            <label style={{ gridColumn: "1 / -1" }}>
+              {t("page.charters.clauses", "Clauses / notes")}
+              <input value={clausesNotes} onChange={(e) => setClausesNotes(e.target.value)} placeholder="CP notes" />
+            </label>
+          </>
+        ) : null}
+      </RecordModal>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <ChartersPage />
+    </Suspense>
   );
 }

@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -88,6 +91,57 @@ export default function SensitivityPage() {
     return Math.max(...sensitivity.tornado.map((p) => p.max_impact));
   }, [sensitivity]);
 
+  const impactColumns: ColumnDef<Perturbation>[] = useMemo(
+    () => [
+      { key: "parameter", title: "Parameter", minWidth: 140, value: (p) => p.label },
+      {
+        key: "pnl_up",
+        title: `P&L if +${pct}%`,
+        width: 130,
+        align: "right",
+        value: (p) => p.pnl_up,
+        render: (v) => fmt(Number(v)),
+      },
+      {
+        key: "impact_up",
+        title: "Impact",
+        width: 110,
+        align: "right",
+        value: (p) => p.impact_up,
+        render: (v, p) => (
+          <span className={p.impact_up >= 0 ? "text-success" : "text-danger"}>{fmt(Number(v))}</span>
+        ),
+      },
+      {
+        key: "pnl_down",
+        title: `P&L if -${pct}%`,
+        width: 130,
+        align: "right",
+        value: (p) => p.pnl_down,
+        render: (v) => fmt(Number(v)),
+      },
+      {
+        key: "impact_down",
+        title: "Impact",
+        width: 110,
+        align: "right",
+        value: (p) => p.impact_down,
+        render: (v, p) => (
+          <span className={p.impact_down >= 0 ? "text-success" : "text-danger"}>{fmt(Number(v))}</span>
+        ),
+      },
+      {
+        key: "max_impact",
+        title: "Max Impact",
+        width: 120,
+        align: "right",
+        value: (p) => p.max_impact,
+        render: (v) => <span className="font-bold">{fmt(Number(v))}</span>,
+      },
+    ],
+    [pct],
+  );
+
   if (loading) {
     return (
       <AppShell>
@@ -115,21 +169,28 @@ export default function SensitivityPage() {
   return (
     <AppShell>
       <div className="container">
-        <div className="page-header">
-          <h1>Sensitivity Analysis</h1>
-          <div className="btn-group">
-            <label>Perturbation: ±{pct}%</label>
-            <input
-              type="range"
-              min="5"
-              max="30"
-              step="5"
-              value={pct}
-              onChange={(e) => setPct(Number(e.target.value))}
-              className="slider"
-            />
-          </div>
-        </div>
+        <PageHeader
+          title={t("page.sensitivity.title", "Sensitivity Analysis")}
+          breadcrumb={[
+            { label: t("nav.estimates", "Estimates"), href: "/estimates" },
+            { label: `#${estimateId}`, href: `/estimates?id=${estimateId}` },
+            { label: t("page.sensitivity.title", "Sensitivity Analysis") },
+          ]}
+          actions={
+            <div className="btn-group">
+              <label>{t("page.sensitivity.perturbation", "Perturbation")}: ±{pct}%</label>
+              <input
+                type="range"
+                min="5"
+                max="30"
+                step="5"
+                value={pct}
+                onChange={(e) => setPct(Number(e.target.value))}
+                className="slider"
+              />
+            </div>
+          }
+        />
 
         <div className="kpi-row">
           <div className="kpi">
@@ -170,34 +231,13 @@ export default function SensitivityPage() {
 
         <section className="card">
           <h2>Parameter Impact (±{pct}%)</h2>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Parameter</th>
-                <th className="text-right">P&L if +{pct}%</th>
-                <th className="text-right">Impact</th>
-                <th className="text-right">P&L if -{pct}%</th>
-                <th className="text-right">Impact</th>
-                <th className="text-right">Max Impact</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sensitivity.perturbations.map((p) => (
-                <tr key={p.parameter}>
-                  <td>{p.label}</td>
-                  <td className="text-right">{fmt(p.pnl_up)}</td>
-                  <td className={`text-right ${p.impact_up >= 0 ? "text-success" : "text-danger"}`}>
-                    {fmt(p.impact_up)}
-                  </td>
-                  <td className="text-right">{fmt(p.pnl_down)}</td>
-                  <td className={`text-right ${p.impact_down >= 0 ? "text-success" : "text-danger"}`}>
-                    {fmt(p.impact_down)}
-                  </td>
-                  <td className="text-right font-bold">{fmt(p.max_impact)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataGrid<Perturbation>
+            columns={impactColumns}
+            data={sensitivity.perturbations}
+            rowKey={(p) => p.parameter}
+            storageKey="estimate_sensitivity_grid"
+            emptyText="No parameters"
+          />
         </section>
 
         <section className="card">

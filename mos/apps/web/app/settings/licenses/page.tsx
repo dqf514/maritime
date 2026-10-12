@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiListLicenses } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -16,32 +18,35 @@ export default function LicensesPage() {
     apiListLicenses().then(setRows).catch(() => setRows([]));
   }, []);
 
+  const columns: ColumnDef<Lic>[] = [
+    { key: "module_code", title: t("page.licenses.module", "Module"), minWidth: 160, value: (r) => r.module_code },
+    { key: "status", title: t("common.status", "Status"), width: 120, value: (r) => r.status },
+    {
+      key: "is_core",
+      title: t("page.licenses.core", "Core"),
+      width: 90,
+      value: (r) => r.is_core,
+      render: (v) => (v ? t("page.licenses.yes", "yes") : t("page.licenses.no", "no")),
+    },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.settings_hub", "System settings"), href: "/settings" },
+          { label: t("page.licenses.title", "Module licenses") },
+        ]}
         title={t("page.licenses.title", "Module licenses")}
         subtitle={t("page.licenses.sub", "Active module entitlements for this tenant.")}
       />
-      <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("page.licenses.module", "Module")}</th>
-              <th>{t("common.status", "Status")}</th>
-              <th>{t("page.licenses.core", "Core")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.module_code}>
-                <td>{r.module_code}</td>
-                <td>{r.status}</td>
-                <td>{r.is_core ? t("page.licenses.yes", "yes") : t("page.licenses.no", "no")}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid<Lic>
+        columns={columns}
+        data={rows}
+        rowKey={(r) => r.module_code}
+        storageKey="settings_licenses_grid"
+        emptyText={t("common.no_data", "No data")}
+      />
     </AppShell>
   );
 }

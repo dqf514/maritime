@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { Toolbar } from "@/components/Toolbar";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -65,7 +68,7 @@ export default function OfficeEcosystemPage() {
   }
 
   useEffect(() => {
-    load().catch((e) => toast.success(String(e?.message || e)));
+    load().catch((e) => toast.error(String(e?.message || e)));
   }, []);
 
   async function connect() {
@@ -148,28 +151,115 @@ export default function OfficeEcosystemPage() {
     return <span className={cls}>{label}</span>;
   }
 
+  const jobColumns: ColumnDef<SyncJob>[] = [
+    { key: "channel", title: t("page.office.channel", "Channel"), width: 120, value: (r) => r.channel },
+    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "stats",
+      title: t("page.office.stats", "Stats"),
+      minWidth: 200,
+      value: (r) => JSON.stringify(r.stats || r.error || {}),
+      render: (v) => <code>{String(v)}</code>,
+    },
+  ];
+
+  const hookColumns: ColumnDef<Webhook>[] = [
+    { key: "name", title: t("common.name", "Name"), minWidth: 140, value: (r) => r.name },
+    {
+      key: "target_url",
+      title: "URL",
+      minWidth: 200,
+      value: (r) => r.target_url,
+      render: (v) => <code>{String(v)}</code>,
+    },
+    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "_actions",
+      title: "",
+      width: 90,
+      align: "right",
+      render: (_v, h) => (
+        <button className="btn" type="button" onClick={() => testHook(h.id).catch((e) => toast.error(String(e)))}>
+          {t("common.test", "Test")}
+        </button>
+      ),
+    },
+  ];
+
+  type AddonRow = Record<string, unknown>;
+
+  const addonColumns: ColumnDef<AddonRow>[] = [
+    {
+      key: "name",
+      title: t("common.name", "Name"),
+      minWidth: 140,
+      value: (r) => String(r.name || r.id),
+    },
+    {
+      key: "host",
+      title: t("page.office.host", "Host"),
+      width: 110,
+      value: (r) => String(r.host || "—"),
+    },
+    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => String(r.status) },
+    {
+      key: "manifest",
+      title: t("page.office.manifest", "Manifest"),
+      minWidth: 180,
+      value: (r) => String(r.manifest || ""),
+      render: (v) =>
+        v ? (
+          <a href={String(v)} target="_blank" rel="noreferrer">
+            {String(v)}
+          </a>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 130,
+      align: "right",
+      render: (_v, a) => (
+        <button
+          className="btn"
+          type="button"
+          onClick={() => markAddon(String(a.id), "installed").catch((e) => toast.error(String(e)))}
+        >
+          {t("page.office.mark_installed", "Mark installed")}
+        </button>
+      ),
+    },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.settings_hub", "System settings"), href: "/settings" },
+          { label: t("page.office.title", "Office ecosystem") },
+        ]}
         title={t("page.office.title", "Office ecosystem")}
         subtitle={t(
           "page.office.sub",
           "Microsoft 365 — Teams, SharePoint, OneDrive, Outlook — shared with MariOS resources."
         )}
-        actions={
-          <>
-            <button className="btn btn-primary" type="button" onClick={() => connect().catch((e) => toast.success(String(e)))}>
-              {t("page.office.connect", "Connect Microsoft 365")}
-            </button>
-            <button className="btn" type="button" onClick={() => refreshHealth().catch((e) => toast.success(String(e)))}>
-              {t("page.office.health", "Health check")}
-            </button>
-            <button className="btn" type="button" onClick={() => disconnect().catch((e) => toast.success(String(e)))}>
-              {t("page.office.disconnect", "Disconnect")}
-            </button>
-          </>
-        }
       />
+      <Toolbar>
+        <button className="btn btn-primary" type="button" onClick={() => connect().catch((e) => toast.error(String(e)))}>
+          {t("page.office.connect", "Connect Microsoft 365")}
+        </button>
+        <button className="btn" type="button" onClick={() => refreshHealth().catch((e) => toast.error(String(e)))}>
+          {t("page.office.health", "Health check")}
+        </button>
+        <button className="btn" type="button" onClick={() => disconnect().catch((e) => toast.error(String(e)))}>
+          {t("page.office.disconnect", "Disconnect")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
 
 
       <div className="panel">
@@ -192,7 +282,7 @@ export default function OfficeEcosystemPage() {
         </p>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           {(["mail", "onedrive", "sharepoint", "teams"] as const).map((ch) => (
-            <button key={ch} className="btn" type="button" onClick={() => sync(ch).catch((e) => toast.success(String(e)))}>
+            <button key={ch} className="btn" type="button" onClick={() => sync(ch).catch((e) => toast.error(String(e)))}>
               {t("page.office.sync_ch", "Sync {channel}", { channel: ch })}
             </button>
           ))}
@@ -202,7 +292,7 @@ export default function OfficeEcosystemPage() {
       <div className="workbench-grid" style={{ marginTop: "1rem" }}>
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.mail", "Mail")}</h3>
-          <button className="btn" type="button" onClick={() => loadMail().catch((e) => toast.success(String(e)))}>
+          <button className="btn" type="button" onClick={() => loadMail().catch((e) => toast.error(String(e)))}>
             {t("page.office.load_mail", "Load inbox sample")}
           </button>
           <ul>
@@ -216,7 +306,7 @@ export default function OfficeEcosystemPage() {
         </div>
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.files", "OneDrive / SharePoint")}</h3>
-          <button className="btn" type="button" onClick={() => loadDrives().catch((e) => toast.success(String(e)))}>
+          <button className="btn" type="button" onClick={() => loadDrives().catch((e) => toast.error(String(e)))}>
             {t("page.office.load_drives", "List drives")}
           </button>
           <ul>
@@ -229,7 +319,7 @@ export default function OfficeEcosystemPage() {
         </div>
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.teams", "Teams")}</h3>
-          <button className="btn" type="button" onClick={() => loadTeams().catch((e) => toast.success(String(e)))}>
+          <button className="btn" type="button" onClick={() => loadTeams().catch((e) => toast.error(String(e)))}>
             {t("page.office.load_teams", "List teams")}
           </button>
           <ul>
@@ -243,7 +333,7 @@ export default function OfficeEcosystemPage() {
             rows={3}
             style={{ width: "100%", marginTop: "0.5rem" }}
           />
-          <button className="btn btn-primary" type="button" onClick={() => sendTeams().catch((e) => toast.success(String(e)))}>
+          <button className="btn btn-primary" type="button" onClick={() => sendTeams().catch((e) => toast.error(String(e)))}>
             {t("page.office.notify", "Post channel message")}
           </button>
         </div>
@@ -251,26 +341,13 @@ export default function OfficeEcosystemPage() {
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <h3 style={{ marginTop: 0 }}>{t("page.office.jobs", "Sync jobs")}</h3>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("page.office.channel", "Channel")}</th>
-              <th>{t("common.status", "Status")}</th>
-              <th>{t("page.office.stats", "Stats")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((j) => (
-              <tr key={j.id}>
-                <td>{j.channel}</td>
-                <td>{j.status}</td>
-                <td>
-                  <code>{JSON.stringify(j.stats || j.error || {})}</code>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataGrid<SyncJob>
+          columns={jobColumns}
+          data={jobs}
+          rowKey={(r) => r.id}
+          storageKey="settings_office_jobs_grid"
+          emptyText={t("common.no_data", "No data")}
+        />
       </div>
 
       <div className="panel" style={{ marginTop: "1rem" }}>
@@ -286,74 +363,28 @@ export default function OfficeEcosystemPage() {
             placeholder="https://..."
             style={{ minWidth: "280px" }}
           />
-          <button className="btn" type="button" onClick={() => createHook().catch((e) => toast.success(String(e)))}>
+          <button className="btn" type="button" onClick={() => createHook().catch((e) => toast.error(String(e)))}>
             {t("common.create", "Create")}
           </button>
         </div>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.name", "Name")}</th>
-              <th>URL</th>
-              <th>{t("common.status", "Status")}</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {hooks.map((h) => (
-              <tr key={h.id}>
-                <td>{h.name}</td>
-                <td>
-                  <code>{h.target_url}</code>
-                </td>
-                <td>{h.status}</td>
-                <td>
-                  <button className="btn" type="button" onClick={() => testHook(h.id).catch((e) => toast.success(String(e)))}>
-                    {t("common.test", "Test")}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataGrid<Webhook>
+          columns={hookColumns}
+          data={hooks}
+          rowKey={(r) => r.id}
+          storageKey="settings_office_hooks_grid"
+          emptyText={t("common.no_data", "No data")}
+        />
       </div>
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <h3 style={{ marginTop: 0 }}>{t("page.office.addons", "Office / Teams add-ins")}</h3>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.name", "Name")}</th>
-              <th>{t("page.office.host", "Host")}</th>
-              <th>{t("common.status", "Status")}</th>
-              <th>{t("page.office.manifest", "Manifest")}</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(status?.addons || []).map((a) => (
-              <tr key={String(a.id)}>
-                <td>{String(a.name || a.id)}</td>
-                <td>{String(a.host || "—")}</td>
-                <td>{String(a.status)}</td>
-                <td>
-                  {a.manifest ? (
-                    <a href={String(a.manifest)} target="_blank" rel="noreferrer">
-                      {String(a.manifest)}
-                    </a>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td>
-                  <button className="btn" type="button" onClick={() => markAddon(String(a.id), "installed").catch((e) => toast.success(String(e)))}>
-                    {t("page.office.mark_installed", "Mark installed")}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataGrid<AddonRow>
+          columns={addonColumns}
+          data={status?.addons || []}
+          rowKey={(r) => String(r.id)}
+          storageKey="settings_office_addons_grid"
+          emptyText={t("common.no_data", "No data")}
+        />
       </div>
     </AppShell>
   );

@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { NavIcon, sectionIconId } from "@/components/NavIcon";
 import { useI18n } from "@/lib/i18n";
 
-export type NavItem = { id: string; label: string; href: string; label_zh?: string };
+export type NavItem = { id: string; label: string; href: string; label_zh?: string; locked?: boolean };
 export type NavSection = {
   section: string;
   label: string;
@@ -184,6 +184,27 @@ export function NavPopup({ sections, navCollapsed, pathname, onNavigate }: Props
                       ) : null}
                       {g.items.map((item) => {
                         const label = t(`nav.${item.id}`, item.label);
+                        if (item.locked) {
+                          // B1：无权条目保留入口，点击进 /denied 解释页（不再"功能消失"）
+                          return (
+                            <Link
+                              key={item.href}
+                              href={`/denied?m=${encodeURIComponent(item.href)}`}
+                              className="nav-popup-item locked"
+                              title={t("nav.locked_hint", "Not available for your role — click for details")}
+                              onClick={() => {
+                                setOpenSection(null);
+                                onNavigate();
+                              }}
+                            >
+                              <NavIcon id={item.id} />
+                              <span>{label}</span>
+                              <span className="nav-lock" aria-hidden>
+                                🔒
+                              </span>
+                            </Link>
+                          );
+                        }
                         return (
                           <Link
                             key={item.href}

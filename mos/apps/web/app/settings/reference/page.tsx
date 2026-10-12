@@ -1,13 +1,20 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { clearLookupCache } from "@/components/LookupSelect";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type Dataset = {
@@ -31,14 +38,16 @@ type Item = {
   source: string;
 };
 
-export default function ReferenceAdminPage() {
+function ReferenceAdminPage() {
   const { t, locale } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
+  const selected = query.ds || "countries";
+  const q = query.q ?? "";
   const loc = locale?.startsWith("zh") ? "zh-CN" : "en";
   const [datasets, setDatasets] = useState<Dataset[]>([]);
-  const [selected, setSelected] = useState<string>("countries");
   const [items, setItems] = useState<Item[]>([]);
-  const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<Item | null>(null);
   const [creating, setCreating] = useState(false);
@@ -54,9 +63,9 @@ export default function ReferenceAdminPage() {
     const rows = await apiGet(`/api/v1/reference/datasets?locale=${loc}`);
     setDatasets(rows);
     if (rows.length && !rows.find((d: Dataset) => d.code === selected)) {
-      setSelected(rows[0].code);
+      setQuery({ ds: rows[0].code }, { resetPage: true });
     }
-  }, [loc, selected]);
+  }, [loc, selected, setQuery]);
 
   const loadItems = useCallback(async () => {
     if (!selected) return;
@@ -85,7 +94,7 @@ export default function ReferenceAdminPage() {
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      toast.success(String(e));
+      toast.error(t("page.ref.clone_fail", "Failed to clone system pack: {err}", { err: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -101,7 +110,7 @@ export default function ReferenceAdminPage() {
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      toast.success(String(e));
+      toast.error(t("page.ref.reset_fail", "Failed to restore system pack: {err}", { err: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -112,6 +121,8 @@ export default function ReferenceAdminPage() {
     setOpen(null);
     setEdit({ code: "", label_en: "", label_zh: "", sort_order: "0", active: true });
   }
+
+  useListHotkeys(openCreate);
 
   function openEdit(r: Item) {
     setCreating(false);
@@ -153,7 +164,7 @@ export default function ReferenceAdminPage() {
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      toast.success(String(e));
+      toast.error(t("page.ref.save_fail", "Failed to save item: {err}", { err: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -170,110 +181,126 @@ export default function ReferenceAdminPage() {
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      toast.success(String(e));
+      toast.error(t("page.ref.delete_fail", "Failed to delete item: {err}", { err: String(e) }));
     } finally {
       setBusy(false);
     }
   }
 
+  const itemColumns: ColumnDef<Item>[] = [
+    {
+      key: "code",
+      title: t("common.code", "Code"),
+      width: 140,
+      value: (r) => r.code,
+      render: (v, r) =>
+        current?.mode === "local" ? (
+          <button type="button" className="linklike" onClick={() => openEdit(r)}>
+            {String(v)}
+          </button>
+        ) : (
+          String(v)
+        ),
+    },
+    { key: "label_zh", title: t("page.ref.label_zh", "Chinese"), minWidth: 140, value: (r) => r.label_zh },
+    { key: "label_en", title: t("page.ref.label_en", "English"), minWidth: 140, value: (r) => r.label_en },
+    {
+      key: "active",
+      title: t("common.status", "Status"),
+      width: 100,
+      value: (r) => r.active,
+      render: (v) => (v ? t("common.active", "Active") : t("common.inactive", "Inactive")),
+    },
+    { key: "source", title: t("page.ref.source", "Source"), width: 100, value: (r) => r.source },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.settings_hub", "System settings"), href: "/settings" },
+          { label: t("page.ref.title", "Reference data") },
+        ]}
         title={t("page.ref.title", "Reference data")}
         subtitle={t(
           "page.ref.sub",
-          "国家、时区、货币、船型、油种等标准选项。可复制系统包到本租户后自定义；业务表单将自动按当前模式取值。",
+          "Countries, time zones, currencies, vessel types and other standard options. Clone the system pack to customize locally; business forms pick up values by the current mode.",
         )}
         actions={
-          <Link href="/settings" className="btn btn-ghost">
-            {t("nav.settings_hub", "System settings")}
-          </Link>
+          <>
+            <SavedViews
+              storageKey="settings_reference"
+              onApply={(qs) => router.replace(`/settings/reference${qs}`)}
+            />
+            <Link href="/settings" className="btn btn-ghost">
+              {t("nav.settings_hub", "System settings")}
+            </Link>
+          </>
         }
       />
 
-      <div className="panel">
-        <div className="desk-toolbar" style={{ flexWrap: "wrap" }}>
-          <label>
-            {t("page.ref.dataset", "Dataset")}
-            <select value={selected} onChange={(e) => setSelected(e.target.value)}>
-              {datasets.map((d) => (
-                <option key={d.code} value={d.code}>
-                  {d.name} ({d.mode === "local" ? t("page.ref.local", "Local") : t("page.ref.system", "System")})
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={clone}>
-            {t("page.ref.clone", "Clone system pack")}
-          </button>
-          <button type="button" className="btn" disabled={busy || current?.mode !== "local"} onClick={reset}>
-            {t("page.ref.reset", "Restore system pack")}
-          </button>
-          <button type="button" className="btn" disabled={busy} onClick={openCreate}>
-            {t("page.ref.add", "New item")}
-          </button>
-        </div>
-        {current ? (
-          <p className="muted">
-            {current.description} · {t("page.ref.mode", "Mode")}: {current.mode} ·{" "}
-            {t("page.ref.counts", "System {s} / Local {l}", {
-              s: String(current.system_count),
-              l: String(current.local_count),
-            })}
-          </p>
-        ) : null}
-      </div>
+      <Toolbar
+        filterCount={(q ? 1 : 0) + (selected !== "countries" ? 1 : 0)}
+        onClearFilters={() => setQuery({ q: null, ds: null }, { resetPage: true })}
+        right={
+          <input
+            className="input input-sm"
+            style={{ width: 200 }}
+            value={q}
+            onChange={(e) => setQuery({ q: e.target.value || null }, { resetPage: true })}
+            placeholder={t("common.search", "Search")}
+          />
+        }
+      >
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          <span className="muted">{t("page.ref.dataset", "Dataset")}</span>
+          <select
+            className="input input-sm"
+            value={selected}
+            onChange={(e) => setQuery({ ds: e.target.value || null }, { resetPage: true })}
+          >
+            {datasets.map((d) => (
+              <option key={d.code} value={d.code}>
+                {d.name} ({d.mode === "local" ? t("page.ref.local", "Local") : t("page.ref.system", "System")})
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="btn btn-primary" disabled={busy} onClick={clone}>
+          {t("page.ref.clone", "Clone system pack")}
+        </button>
+        <button type="button" className="btn" disabled={busy || current?.mode !== "local"} onClick={reset}>
+          {t("page.ref.reset", "Restore system pack")}
+        </button>
+        <button type="button" className="btn" disabled={busy} onClick={openCreate}>
+          {t("page.ref.add", "New item")}
+        </button>
+      </Toolbar>
+      {current ? (
+        <p className="muted">
+          {current.description} · {t("page.ref.mode", "Mode")}: {current.mode} ·{" "}
+          {t("page.ref.counts", "System {s} / Local {l}", {
+            s: String(current.system_count),
+            l: String(current.local_count),
+          })}
+        </p>
+      ) : null}
 
       <div className="panel" style={{ marginTop: "1rem" }}>
-        <form
-          className="desk-toolbar"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            loadItems().catch(() => undefined);
+        <DataGrid<Item>
+          columns={itemColumns}
+          data={items}
+          rowKey={(r) => r.id}
+          storageKey="settings_reference_items_grid"
+          onRowDoubleClick={(r) => {
+            if (current?.mode === "local") openEdit(r);
           }}
-        >
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("common.search", "Search")} />
-          <button type="submit" className="btn">
-            {t("common.search", "Search")}
-          </button>
-        </form>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.code", "代码")}</th>
-              <th>{t("page.ref.label_zh", "Chinese")}</th>
-              <th>{t("page.ref.label_en", "English")}</th>
-              <th>{t("common.status", "Status")}</th>
-              <th>{t("page.ref.source", "Source")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((r) => (
-              <tr
-                key={r.id}
-                className={current?.mode === "local" ? "row-openable" : undefined}
-                onClick={() => {
-                  if (current?.mode === "local") openEdit(r);
-                }}
-              >
-                <td>{r.code}</td>
-                <td>{r.label_zh}</td>
-                <td>{r.label_en}</td>
-                <td>{r.active ? t("common.active", "Active") : t("common.inactive", "Inactive")}</td>
-                <td>{r.source}</td>
-              </tr>
-            ))}
-            {!items.length ? (
-              <tr>
-                <td colSpan={5} className="muted">
-                  {current?.mode === "system"
-                    ? t("page.ref.system_hint", "Using system pack (read-only). Clone to edit.")
-                    : t("common.empty", "No records")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+          emptyText={
+            current?.mode === "system"
+              ? t("page.ref.system_hint", "Using system pack (read-only). Clone to edit.")
+              : t("common.empty", "No records")
+          }
+        />
       </div>
 
       <RecordModal
@@ -313,5 +340,14 @@ export default function ReferenceAdminPage() {
         </label>
       </RecordModal>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <ReferenceAdminPage />
+    </Suspense>
   );
 }

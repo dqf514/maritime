@@ -8,7 +8,7 @@ commercial.py stays untouched. All ORM access is tenant-scoped
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -29,6 +29,7 @@ from app.models_time_charter import (
 from app.models_wave1 import Counterparty
 from app.security import AuthContext, require_module
 from app.services import hire_engine
+from app.services.audit import audit
 from app.services.state_machine import TIME_CHARTER_TRANSITIONS, transition
 from app.services.tenant_guard import scoped_get
 
@@ -64,6 +65,9 @@ class TCContractIn(BaseModel):
     profit_share_threshold: Optional[Decimal] = None
     address_comm_pct: Optional[Decimal] = None
     brokerage_pct: Optional[Decimal] = None
+    # 指数联动定价 — index-linked hire components (same spec as
+    # Estimate.inputs["unpriced_components"]); additive, optional.
+    hire_components: Optional[list[dict]] = None
 
 
 class TCContractPatch(BaseModel):
@@ -80,6 +84,7 @@ class TCContractPatch(BaseModel):
     profit_share_threshold: Optional[Decimal] = None
     address_comm_pct: Optional[Decimal] = None
     brokerage_pct: Optional[Decimal] = None
+    hire_components: Optional[list[dict]] = None
 
 
 class TCContractOut(BaseModel):
@@ -103,7 +108,9 @@ class TCContractOut(BaseModel):
     profit_share_threshold: Optional[float] = None
     address_comm_pct: Optional[float] = None
     brokerage_pct: Optional[float] = None
+    hire_components: Optional[list[dict]] = None
     status: str
+    updated_at: Optional[datetime] = None
 
 
 def _contract_out(c: TimeCharterContract) -> TCContractOut:
@@ -127,7 +134,9 @@ def _contract_out(c: TimeCharterContract) -> TCContractOut:
         profit_share_threshold=_f(c.profit_share_threshold) if c.profit_share_threshold is not None else None,
         address_comm_pct=_f(c.address_comm_pct) if c.address_comm_pct is not None else None,
         brokerage_pct=_f(c.brokerage_pct) if c.brokerage_pct is not None else None,
+        hire_components=c.hire_components,
         status=c.status,
+        updated_at=c.updated_at,
     )
 
 
@@ -321,8 +330,17 @@ def create_tc_contract(
         profit_share_threshold=body.profit_share_threshold,
         address_comm_pct=body.address_comm_pct,
         brokerage_pct=body.brokerage_pct,
+        hire_components=body.hire_components,
     )
     db.add(contract)
+    audit(
+        db,
+        action="tc_contract.create",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="time_charter",
+        entity_id=contract.id,
+    )
     db.commit()
     db.refresh(contract)
     return _contract_out(contract)
@@ -345,8 +363,18 @@ def update_tc_contract(
     db: Session = Depends(get_db),
 ):
     c = _get_tc(db, auth, contract_id)
+    fields = set(body.model_dump(exclude_unset=True)) - {"expected_updated_at"}
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(c, field, value)
+    audit(
+        db,
+        action="tc_contract.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="time_charter",
+        entity_id=c.id,
+        detail={"fields": sorted(fields)},
+    )
     db.commit()
     db.refresh(c)
     return _contract_out(c)
@@ -361,6 +389,15 @@ def transition_tc_contract(
 ):
     c = _get_tc(db, auth, contract_id)
     c.status = transition("time_charter", c.status, target, TIME_CHARTER_TRANSITIONS)
+    audit(
+        db,
+        action="tc_contract.transition",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="time_charter",
+        entity_id=c.id,
+        detail={"target": target, "status": c.status},
+    )
     db.commit()
     db.refresh(c)
     return _contract_out(c)

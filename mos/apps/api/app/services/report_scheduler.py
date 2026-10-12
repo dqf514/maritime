@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,42 @@ log = logging.getLogger("marios.report_scheduler")
 
 TICK_KIND = "report.schedule_tick"
 TICK_INTERVAL = timedelta(minutes=5)
+
+#: Allowed ``ReportSchedule.schedule_type`` values.
+SCHEDULE_TYPES: tuple[str, ...] = ("daily", "weekly", "monthly", "on_demand")
+
+#: Allowed ``ReportSchedule.output_format`` values.
+OUTPUT_FORMATS: tuple[str, ...] = ("excel", "pdf", "csv")
+
+
+def assert_schedule_type(value: str | None) -> str:
+    """Validate ``schedule_type``; raise 422 ``INVALID_SCHEDULE_TYPE`` otherwise."""
+    normalized = (value or "").strip().lower()
+    if normalized not in SCHEDULE_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_SCHEDULE_TYPE",
+                "message": f"Unknown schedule_type '{value}'",
+                "allowed": list(SCHEDULE_TYPES),
+            },
+        )
+    return normalized
+
+
+def assert_output_format(value: str | None) -> str:
+    """Validate ``output_format``; raise 422 ``INVALID_OUTPUT_FORMAT`` otherwise."""
+    normalized = (value or "").strip().lower()
+    if normalized not in OUTPUT_FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_OUTPUT_FORMAT",
+                "message": f"Unknown output_format '{value}'",
+                "allowed": list(OUTPUT_FORMATS),
+            },
+        )
+    return normalized
 
 
 def _utc(dt: datetime | None) -> datetime | None:
@@ -223,8 +260,49 @@ def run_due_schedules(db: Session, now: datetime | None = None) -> int:
         except Exception:  # noqa: BLE001 — 隔离单条失败
             log.exception("report schedule %s failed", schedule.id)
             db.rollback()
+            # rollback undid the in-flight status write — re-mark the failure
+            failed = db.get(ReportSchedule, schedule.id)
+            if failed is not None:
+                failed.last_run_at = now
+                failed.last_status = "failed"
         db.commit()
     return processed
+
+
+def run_schedule_now(db: Session, schedule: ReportSchedule, now: datetime | None = None) -> dict[str, Any]:
+    """Execute one schedule immediately (Run now) and record the outcome.
+
+    Returns ``{"ok": bool, "last_run_at", "last_status", "next_run_at", "error"}``.
+    Never raises for per-run failures — the outcome is persisted on the row.
+    """
+    now = _utc(now) or datetime.now(timezone.utc)
+    schedule_id = schedule.id
+    try:
+        processed = _run_one(db, schedule, now)
+        db.commit()
+        status = schedule.last_status or ("success" if processed else "failed")
+        return {
+            "ok": status == "success",
+            "last_run_at": schedule.last_run_at,
+            "last_status": status,
+            "next_run_at": schedule.next_run_at,
+            "error": None if status == "success" else "Report definition missing",
+        }
+    except Exception as exc:  # noqa: BLE001 — run-now records the failure instead of raising
+        log.exception("report schedule %s run-now failed", schedule_id)
+        db.rollback()
+        failed = db.get(ReportSchedule, schedule_id)
+        if failed is not None:
+            failed.last_run_at = now
+            failed.last_status = "failed"
+            db.commit()
+        return {
+            "ok": False,
+            "last_run_at": now,
+            "last_status": "failed",
+            "next_run_at": failed.next_run_at if failed is not None else None,
+            "error": str(exc),
+        }
 
 
 def _run_one(db: Session, schedule: ReportSchedule, now: datetime) -> int:
@@ -234,6 +312,8 @@ def _run_one(db: Session, schedule: ReportSchedule, now: datetime) -> int:
     report = db.get(ReportDefinition, schedule.report_id)
     if report is None:
         log.warning("report schedule %s points to missing report %s", schedule.id, schedule.report_id)
+        schedule.last_run_at = now
+        schedule.last_status = "failed"
         schedule.next_run_at = compute_next_run(schedule, now)
         return 0
 
@@ -265,6 +345,7 @@ def _run_one(db: Session, schedule: ReportSchedule, now: datetime) -> int:
         )
 
     schedule.last_run_at = now
+    schedule.last_status = "success"
     schedule.next_run_at = compute_next_run(schedule, now)
     return 1
 

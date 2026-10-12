@@ -36,9 +36,37 @@ export function parseCsv(text: string): string[][] {
   return rows.filter((r) => r.some((c) => c.trim() !== ""));
 }
 
-export function downloadCsv(filename: string, headers: string[], rows: (string | number | null | undefined)[][]) {
+/** CSV 公式注入防护（IMOS 同款）：= + @ \t \r 开头，或"非纯数字的 -"开头 → 加撇号 */
+function guardFormula(s: string): string {
+  if (/^[=+@\t\r]/.test(s)) return `'${s}`;
+  if (s.startsWith("-") && !/^-\d+(\.\d+)?$/.test(s)) return `'${s}`;
+  return s;
+}
+
+type DownloadCsvOpts = {
+  /** \u7A7A\u8868\u5B88\u536B\uFF1A\u7B5B\u9009\u540E 0 \u884C\u65F6\u7684\u786E\u8BA4\u6587\u6848\uFF08\u5DF2\u7FFB\u8BD1\uFF09\uFF1B\u53D6\u6D88\u5219\u4E0D\u5BFC\u51FA\uFF08D6\uFF1A\u5BFC\u51FA\u4E0E\u7B5B\u9009\u5F3A\u7ED1\u5B9A\uFF09 */
+  emptyGuard?: string;
+};
+
+/** D6\uFF1A\u6587\u4EF6\u540D\u9644\u5E26\u65F6\u95F4\u6233\uFF08\u5B9E\u4F53_YYYYMMDD-HHMM.csv\uFF09\uFF0C\u4FBF\u4E8E\u8FFD\u6EAF\u5BFC\u51FA\u65F6\u70B9 */
+function stampFilename(filename: string): string {
+  const base = filename.endsWith(".csv") ? filename.slice(0, -4) : filename;
+  if (/\d{8}[-_]?\d{4}/.test(base)) return `${base}.csv`; // \u8C03\u7528\u65B9\u5DF2\u5E26\u65F6\u95F4\u6233
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  return `${base}_${stamp}.csv`;
+}
+
+export function downloadCsv(
+  filename: string,
+  headers: string[],
+  rows: (string | number | null | undefined)[][],
+  opts?: DownloadCsvOpts,
+) {
+  if (!rows.length && opts?.emptyGuard && !window.confirm(opts.emptyGuard)) return;
   const esc = (v: string | number | null | undefined) => {
-    const s = v === null || v === undefined ? "" : String(v);
+    const s = guardFormula(v === null || v === undefined ? "" : String(v));
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [headers.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))];
@@ -46,7 +74,7 @@ export function downloadCsv(filename: string, headers: string[], rows: (string |
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename.endsWith(".csv") ? filename : `${filename}.csv`;
+  a.download = stampFilename(filename);
   document.body.appendChild(a);
   a.click();
   a.remove();

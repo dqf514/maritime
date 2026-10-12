@@ -277,6 +277,7 @@ class AlertRuleOut(BaseModel):
     alert_priority: str
     frequency_days: int | None
     enabled: bool
+    blocking: bool = False
     last_triggered_at: str | None
 
 
@@ -287,6 +288,7 @@ class AlertRuleIn(BaseModel):
     alert_message: str
     alert_priority: str = "normal"
     frequency_days: int | None = None
+    blocking: bool = False
 
 
 @router.get("/alert-rules", response_model=list[AlertRuleOut])
@@ -307,6 +309,7 @@ def list_alert_rules(
             alert_priority=r.alert_priority,
             frequency_days=r.frequency_days,
             enabled=r.enabled,
+            blocking=bool(r.blocking),
             last_triggered_at=r.last_triggered_at.isoformat() if r.last_triggered_at else None,
         )
         for r in rules
@@ -329,6 +332,7 @@ def create_alert_rule(
         alert_message=body.alert_message,
         alert_priority=body.alert_priority,
         frequency_days=body.frequency_days,
+        blocking=body.blocking,
         created_by=auth.user_id,
     )
     return AlertRuleOut(
@@ -340,6 +344,7 @@ def create_alert_rule(
         alert_priority=rule.alert_priority,
         frequency_days=rule.frequency_days,
         enabled=rule.enabled,
+        blocking=bool(rule.blocking),
         last_triggered_at=rule.last_triggered_at.isoformat() if rule.last_triggered_at else None,
     )
 

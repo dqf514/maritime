@@ -1,10 +1,21 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
+import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { StatusBadge } from "@/components/StatusBadge";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Toolbar } from "@/components/Toolbar";
 import { apiGet, apiPost } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type ShipReport = {
@@ -24,14 +35,42 @@ type ShipForm = {
   is_active: boolean;
 };
 
-export default function MariLinkPage() {
+function MariLinkPageInner() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
+  const filter = typeof query.form_type === "string" ? query.form_type : "";
   const [reports, setReports] = useState<ShipReport[]>([]);
   const [forms, setForms] = useState<ShipForm[]>([]);
-  const [filter, setFilter] = useState<string>("");
   const [open, setOpen] = useState<ShipReport | null>(null);
   const [reviewNotes, setReviewNotes] = useState("");
+  const rowCtx = useContextMenu<ShipReport>();
+
+  function exportRows(selected: ShipReport[]) {
+    downloadCsv(
+      "marilink-reports",
+      ["id", "report_ref", "form_type", "vessel_name", "submitted_at", "status", "submitted_by_name"],
+      selected.map((r) => [r.id, r.report_ref, r.form_type, r.vessel_name ?? "", r.submitted_at, r.status, r.submitted_by_name ?? ""]),
+    );
+  }
+
+  function rowMenuItems(target: ShipReport): ContextMenuItem[] {
+    return [
+      {
+        key: "open",
+        label: t("common.open", "Open"),
+        onClick: () => {
+          if (target.status === "submitted") setOpen(target);
+        },
+      },
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.id) },
+      { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportRows([target]) },
+      ...(target.status === "submitted"
+        ? [{ key: "review", label: t("common.review", "Review"), onClick: () => setOpen(target) } as ContextMenuItem]
+        : []),
+    ];
+  }
 
   async function load() {
     const params = filter ? `?form_type=${filter}` : "";
@@ -73,84 +112,110 @@ export default function MariLinkPage() {
     await load();
   }
 
-  const statusColor = (s: string) => {
-    if (s === "approved") return "var(--green-700)";
-    if (s === "rejected") return "var(--red-700)";
-    if (s === "review") return "var(--amber-700)";
-    return "var(--text-secondary)";
-  };
+  const columns: ColumnDef<ShipReport>[] = [
+    {
+      key: "report_ref",
+      title: t("page.marilink.ref", "Reference"),
+      width: 150,
+      value: (r) => r.report_ref,
+      render: (_v, r) => <span style={{ fontFamily: "monospace" }}>{r.report_ref}</span>,
+    },
+    { key: "form_type", title: t("page.marilink.type", "Type"), width: 130, value: (r) => r.form_type },
+    {
+      key: "vessel_name",
+      title: t("page.marilink.vessel", "Vessel"),
+      minWidth: 140,
+      value: (r) => r.vessel_name || "",
+      render: (_v, r) => r.vessel_name || "—",
+    },
+    {
+      key: "submitted_at",
+      title: t("page.marilink.submitted", "Submitted"),
+      width: 170,
+      value: (r) => r.submitted_at,
+      render: (_v, r) => new Date(r.submitted_at).toLocaleString(),
+    },
+    {
+      key: "status",
+      title: t("page.marilink.status", "Status"),
+      width: 110,
+      value: (r) => r.status,
+      render: (_v, r) => <StatusBadge status={r.status} />,
+    },
+    {
+      key: "actions",
+      title: t("common.actions", "Actions"),
+      width: 110,
+      value: (r) => r.status,
+      render: (_v, r) =>
+        r.status === "submitted" ? (
+          <button
+            className="btn btn-secondary"
+            style={{ padding: "4px 8px", fontSize: 12 }}
+            onClick={() => setOpen(r)}
+          >
+            {t("common.review", "Review")}
+          </button>
+        ) : (
+          ""
+        ),
+    },
+  ];
+
 
   return (
     <AppShell>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>
-          {t("page.marilink.title", "MariLink Ship Reports")}
-        </h1>
-        <button onClick={seedPresets} className="btn btn-secondary">
+      <PageHeader
+        breadcrumb={[
+          { label: t("nav.operations", "Operations"), href: "/operations/voyages" },
+          { label: t("page.marilink.title", "MariLink Ship Reports") },
+        ]}
+        title={t("page.marilink.title", "MariLink Ship Reports")}
+        actions={
+          <SavedViews storageKey="marilink_list" onApply={(q) => router.replace(`/operations/marilink${q}`)} />
+        }
+      />
+
+      <Toolbar
+        filterCount={filter ? 1 : 0}
+        onClearFilters={() => setQuery({ form_type: null })}
+        right={<span className="hint">{t("page.marilink.count", "{n} reports", { n: reports.length })}</span>}
+      >
+        <button onClick={seedPresets} className="btn btn-secondary btn-sm">
           {t("page.marilink.seed_forms", "Seed Form Presets")}
         </button>
-      </div>
-
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <select
+          className="input input-sm"
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border)" }}
+          onChange={(e) => setQuery({ form_type: e.target.value || null })}
+          aria-label={t("page.marilink.type", "Type")}
         >
           <option value="">{t("page.marilink.all_types", "All Types")}</option>
           <option value="noon_report">{t("page.marilink.noon_report", "Noon Report")}</option>
           <option value="bunker_report">{t("page.marilink.bunker_report", "Bunker Report")}</option>
           <option value="incident">{t("page.marilink.incident", "Incident")}</option>
         </select>
-      </div>
+      </Toolbar>
 
+      <StatusLegend statuses={["submitted", "review", "approved", "rejected"]} />
       <div className="card" style={{ overflow: "auto" }}>
-        <table className="dataTable" style={{ width: "100%" }}>
-          <thead>
-            <tr>
-              <th>{t("page.marilink.ref", "Reference")}</th>
-              <th>{t("page.marilink.type", "Type")}</th>
-              <th>{t("page.marilink.vessel", "Vessel")}</th>
-              <th>{t("page.marilink.submitted", "Submitted")}</th>
-              <th>{t("page.marilink.status", "Status")}</th>
-              <th>{t("common.actions", "Actions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {reports.map((r) => (
-              <tr key={r.id}>
-                <td style={{ fontFamily: "monospace" }}>{r.report_ref}</td>
-                <td>{r.form_type}</td>
-                <td>{r.vessel_name || "—"}</td>
-                <td>{new Date(r.submitted_at).toLocaleString()}</td>
-                <td>
-                  <span style={{ color: statusColor(r.status), fontWeight: 500 }}>
-                    {r.status}
-                  </span>
-                </td>
-                <td>
-                  {r.status === "submitted" && (
-                    <button
-                      className="btn btn-secondary"
-                      style={{ padding: "4px 8px", fontSize: 12 }}
-                      onClick={() => setOpen(r)}
-                    >
-                      {t("common.review", "Review")}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {reports.length === 0 && (
-              <tr>
-                <td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--text-secondary)" }}>
-                  {t("page.marilink.no_reports", "No ship reports yet")}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        {reports.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 24, color: "var(--text-secondary)" }}>
+            {t("page.marilink.no_reports", "No ship reports yet")}
+          </div>
+        ) : (
+          <div style={{ width: "100%" }}>
+            <DataGrid<ShipReport>
+              columns={columns}
+              data={reports}
+              rowKey={(r) => r.id}
+              onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
+              storageKey="marilink_reports_grid"
+              showFooter={false}
+              emptyText={t("page.marilink.no_reports", "No ship reports yet")}
+            />
+          </div>
+        )}
       </div>
 
       <div style={{ marginTop: 24 }}>
@@ -200,6 +265,16 @@ export default function MariLinkPage() {
           </div>
         </RecordModal>
       )}
+
+      <ContextMenu controller={rowCtx} items={rowMenuItems} />
     </AppShell>
+  );
+}
+
+export default function MariLinkPage() {
+  return (
+    <Suspense fallback={null}>
+      <MariLinkPageInner />
+    </Suspense>
   );
 }

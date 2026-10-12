@@ -3,6 +3,11 @@
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordModal } from "@/components/RecordModal";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { API_BASE as API, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -29,6 +34,8 @@ type Policy = {
   };
 };
 
+type SsoRow = { provider: string; mode: string; status: string };
+
 export default function TenantSecurityPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -37,6 +44,8 @@ export default function TenantSecurityPage() {
   const [msHint, setMsHint] = useState("");
   const [googleHd, setGoogleHd] = useState("");
   const [ssoNotes, setSsoNotes] = useState("");
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteSaving, setInviteSaving] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [invites, setInvites] = useState<any[]>([]);
@@ -55,7 +64,7 @@ export default function TenantSecurityPage() {
   }
 
   useEffect(() => {
-    load().catch(() => toast.success(t("page.security.admin_required", "需要租户管理员")));
+    load().catch(() => toast.error(t("page.security.admin_required", "需要租户管理员")));
   }, [t]);
 
   async function save(e: FormEvent) {
@@ -75,19 +84,32 @@ export default function TenantSecurityPage() {
     await load();
   }
 
-  async function invite(e: FormEvent) {
-    e.preventDefault();
-    const data = await apiPost("/api/v1/admin/security/invites", {
-      email: inviteEmail,
-      full_name: inviteName,
-      role_codes: ["viewer"],
-    });
-    setDemoToken(data.demo_token || "");
-    toast.success(t("page.security.invite_sent", "已向 {email} 发送邀请（控制台邮件通道）", { email: inviteEmail }));
-    setInviteEmail("");
-    setInviteName("");
-    await load();
+  async function invite() {
+    setInviteSaving(true);
+    try {
+      const data = await apiPost("/api/v1/admin/security/invites", {
+        email: inviteEmail,
+        full_name: inviteName,
+        role_codes: ["viewer"],
+      });
+      setDemoToken(data.demo_token || "");
+      toast.success(t("page.security.invite_sent", "已向 {email} 发送邀请（控制台邮件通道）", { email: inviteEmail }));
+      setInviteEmail("");
+      setInviteName("");
+      setInviteOpen(false);
+      await load();
+    } catch {
+      toast.error(t("page.security.invite_fail", "邀请失败"));
+    } finally {
+      setInviteSaving(false);
+    }
   }
+
+  function openInvite() {
+    setInviteOpen(true);
+  }
+
+  useListHotkeys(openInvite);
 
   if (!policy) {
     return (
@@ -101,15 +123,60 @@ export default function TenantSecurityPage() {
   const msMode = rt.microsoft?.mode || "unknown";
   const googMode = rt.google?.mode || "unknown";
 
+  function ssoStatus(mode: string, stubText: string): string {
+    return mode === "live"
+      ? t("page.security.sso_live", "已配置应用密钥，走真实 OAuth")
+      : mode === "stub"
+        ? stubText
+        : t("page.security.sso_off", "已禁用");
+  }
+
+  const ssoRows: SsoRow[] = [
+    {
+      provider: "Microsoft 365 / Entra",
+      mode: msMode,
+      status: ssoStatus(
+        msMode,
+        t("page.security.sso_stub", "未配置密钥，演示 stub（平台可设 OAUTH_ALLOW_STUB=false 关闭）"),
+      ),
+    },
+    {
+      provider: "Google",
+      mode: googMode,
+      status: ssoStatus(googMode, t("page.security.sso_stub", "未配置密钥，演示 stub")),
+    },
+  ];
+
+  const ssoColumns: ColumnDef<SsoRow>[] = [
+    { key: "provider", title: t("common.provider", "提供商"), width: 200, value: (r) => r.provider },
+    {
+      key: "mode",
+      title: t("common.mode", "模式"),
+      width: 110,
+      value: (r) => r.mode,
+      render: (v) => <code>{String(v)}</code>,
+    },
+    { key: "status", title: t("common.status", "状态"), minWidth: 220, value: (r) => r.status },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.admin", "Administration") }]}
         title={t("page.security.title", "登录与安全")}
         subtitle={t(
           "page.security.sub",
           "选择平台已批准的登录方式，强制邮箱验证 / 仅邀请，并限制企业邮箱域名。SSO 密钥由平台运维配置。",
         )}
       />
+      <Toolbar>
+        <button type="button" className="btn btn-primary" onClick={openInvite}>
+          {t("page.security.invite_title", "邀请用户")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
       {demoToken ? (
         <p className="muted">
           {t("page.security.demo_token", "演示邀请令牌:")} <code>{demoToken}</code> —{" "}
@@ -119,43 +186,14 @@ export default function TenantSecurityPage() {
 
       <div className="panel">
         <h2>{t("page.security.sso_status", "SSO 运行状态")}</h2>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.provider", "提供商")}</th>
-              <th>{t("common.mode", "模式")}</th>
-              <th>{t("common.status", "状态")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Microsoft 365 / Entra</td>
-              <td>
-                <code>{msMode}</code>
-              </td>
-              <td>
-                {msMode === "live"
-                  ? t("page.security.sso_live", "已配置应用密钥，走真实 OAuth")
-                  : msMode === "stub"
-                    ? t("page.security.sso_stub", "未配置密钥，演示 stub（平台可设 OAUTH_ALLOW_STUB=false 关闭）")
-                    : t("page.security.sso_off", "已禁用")}
-              </td>
-            </tr>
-            <tr>
-              <td>Google</td>
-              <td>
-                <code>{googMode}</code>
-              </td>
-              <td>
-                {googMode === "live"
-                  ? t("page.security.sso_live", "已配置应用密钥，走真实 OAuth")
-                  : googMode === "stub"
-                    ? t("page.security.sso_stub", "未配置密钥，演示 stub")
-                    : t("page.security.sso_off", "已禁用")}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <DataGrid<SsoRow>
+          columns={ssoColumns}
+          data={ssoRows}
+          rowKey={(r) => r.provider}
+          storageKey="admin_security_sso_grid"
+          emptyText={t("common.none", "无")}
+          showFooter={false}
+        />
         <p className="muted" style={{ fontSize: "0.85rem", marginBottom: 0 }}>
           {t("page.security.redirect_hint", "回调地址需在 IdP 登记:")}{" "}
           <code>{(rt.api_public_base || API).replace(/\/$/, "")}/api/v1/auth/oauth/microsoft/callback</code>
@@ -164,7 +202,7 @@ export default function TenantSecurityPage() {
         </p>
       </div>
 
-      <form className="panel" onSubmit={(e) => save(e).catch(() => toast.success(t("page.security.save_fail", "保存失败")))}>
+      <form className="panel" onSubmit={(e) => save(e).catch(() => toast.error(t("page.security.save_fail", "保存失败")))}>
         <h2>{t("page.security.methods", "登录方式")}</h2>
         <div className="check-grid">
           {(
@@ -235,24 +273,6 @@ export default function TenantSecurityPage() {
         </button>
       </form>
 
-      <form className="panel" onSubmit={(e) => invite(e).catch(() => toast.success(t("page.security.invite_fail", "邀请失败")))}>
-        <h2>{t("page.security.invite_title", "邀请用户")}</h2>
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
-          <label>
-            {t("page.users.full_name", "姓名")}
-            <input value={inviteName} onChange={(e) => setInviteName(e.target.value)} />
-          </label>
-          <label>
-            {t("common.email", "邮箱")}
-            <input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} required />
-          </label>
-          <button className="btn btn-primary" type="submit">
-            {t("page.security.send_invite", "发送邀请")}
-          </button>
-        </div>
-        <p className="muted">{t("page.security.invite_hint", "优先用邀请代替临时密码。接受邀请会标记邮箱已验证。")}</p>
-      </form>
-
       <div className="ship-layout">
         <div className="panel">
           <h2>{t("page.security.pending", "待处理邀请")}</h2>
@@ -277,6 +297,25 @@ export default function TenantSecurityPage() {
           </ul>
         </div>
       </div>
+
+      <RecordModal
+        open={inviteOpen}
+        title={t("page.security.invite_title", "邀请用户")}
+        onClose={() => setInviteOpen(false)}
+        onSave={() => invite()}
+        canDelete={false}
+        saving={inviteSaving}
+      >
+        <label>
+          {t("page.users.full_name", "姓名")}
+          <input value={inviteName} onChange={(e) => setInviteName(e.target.value)} />
+        </label>
+        <label>
+          {t("common.email", "邮箱")}
+          <input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} required />
+        </label>
+        <p className="muted">{t("page.security.invite_hint", "优先用邀请代替临时密码。接受邀请会标记邮箱已验证。")}</p>
+      </RecordModal>
     </AppShell>
   );
 }

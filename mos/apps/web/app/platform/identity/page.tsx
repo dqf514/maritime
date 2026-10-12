@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -37,7 +38,7 @@ export default function PlatformIdentityPage() {
   }
 
   useEffect(() => {
-    load().catch(() => toast.success(t("page.identity.admin_required", "Platform admin required")));
+    load().catch(() => toast.error(t("page.identity.admin_required", "Platform admin required")));
   }, [t]);
 
   async function save(e: FormEvent) {
@@ -66,10 +67,11 @@ export default function PlatformIdentityPage() {
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.identity.title", "Identity & verification (Platform)")}</h1>
-      <p className="page-sub">
-        {t("page.identity.sub", "Platform owns global OAuth apps, email delivery channel, and default policy templates.")}
-      </p>
+      <PageHeader
+        title={t("page.identity.title", "Identity & verification (Platform)")}
+        subtitle={t("page.identity.sub", "Platform owns global OAuth apps, email delivery channel, and default policy templates.")}
+        breadcrumb={[{ label: t("page.platform.title", "Platform"), href: "/platform" }, { label: t("page.identity.title", "Identity & verification (Platform)") }]}
+      />
 
       <div className="card verdict" style={{ marginBottom: "1rem", padding: "0.85rem 1rem", borderLeft: "4px solid var(--accent)", background: "#f3fbfa" }}>
         <strong>{t("page.identity.email_box", "邮件通道与发件人")}</strong>
@@ -100,7 +102,7 @@ export default function PlatformIdentityPage() {
         </div>
       </div>
 
-      <form className="panel" onSubmit={(e) => save(e).catch(() => toast.success(t("common.failed", "Failed")))}>
+      <form className="panel" onSubmit={(e) => save(e).catch(() => toast.error(t("common.failed", "Failed")))}>
         <h2>{t("page.identity.methods", "Global methods")}</h2>
         <div className="check-grid">
           {(

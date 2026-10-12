@@ -40,7 +40,7 @@ class Estimate(Base):
     parent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("estimates.id"))
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class EstimateTemplate(Base):
@@ -58,7 +58,7 @@ class EstimateTemplate(Base):
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class Charter(Base):
@@ -87,6 +87,10 @@ class Charter(Base):
     freight_rate: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     freight_basis: Mapped[str | None] = mapped_column(String(16))  # per_mt/lumpsum/worldscale
     cargo_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3))
+    # Cargo CP terms (billable quantity basis + MOL window + overage premium)
+    bill_by: Mapped[str | None] = mapped_column(String(16))  # weight|measure|volume
+    tolerance_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # ±pct MOL on cargo_qty
+    overage_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # rate uplift % beyond tolerance max
     load_rate_pd: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))  # mt per day
     disch_rate_pd: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     address_comm_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
@@ -110,7 +114,7 @@ class Charter(Base):
     rev_exp: Mapped[dict | None] = mapped_column(JSON)
     properties: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class MasterContract(Base):
@@ -132,7 +136,7 @@ class MasterContract(Base):
     clauses: Mapped[dict | None] = mapped_column(JSON)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class CargoBrokerRule(Base):
@@ -233,6 +237,9 @@ class Voyage(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class PortCall(Base):
@@ -244,6 +251,8 @@ class PortCall(Base):
     port_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("ports.id"))
     seq: Mapped[int] = mapped_column(default=1)
     purpose: Mapped[str] = mapped_column(Text, default="load")  # load|discharge|bunker|transit
+    # Canonical port function code (L/D/P/I/W — see services/port_functions.py). Nullable = unset.
+    function_code: Mapped[str | None] = mapped_column(String(8))
     eta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     etd: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ata: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -384,6 +393,10 @@ class Claim(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     # 对方联系人（索赔通讯对象，D 闭环：counterparty_contacts 可被业务引用）
     contact_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparty_contacts.id"))
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ClaimAction(Base):
@@ -467,7 +480,7 @@ class BunkerRequirement(Base):
     status: Mapped[str] = mapped_column(String(16), default="draft")  # draft|approved|tendering|ordered|fulfilled|cancelled
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class BunkerOption(Base):
@@ -543,9 +556,14 @@ class Invoice(Base):
     due_date: Mapped[date | None] = mapped_column(Date)
     gl_posted: Mapped[bool] = mapped_column(Boolean, default=False)
     mirror_of_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("invoices.id"))
+    mirror_synced_source_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # last pull-sync stamp (源改镜像跟)
     bill_by: Mapped[str | None] = mapped_column(String(16))  # cp_qty | bl_qty
     commission_basis: Mapped[str | None] = mapped_column(String(16))  # net | gross
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    # optimistic-lock stamp (D4/D8): nullable — legacy rows stay NULL until first UPDATE
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True
+    )
 
 
 class Payment(Base):
@@ -559,6 +577,9 @@ class Payment(Base):
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     reference: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class PaymentBatch(Base):
@@ -576,6 +597,9 @@ class PaymentBatch(Base):
     approval_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
 
 

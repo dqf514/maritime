@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { StateView } from "@/components/StateView";
@@ -50,9 +51,24 @@ export default function AnalyticsPage() {
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.analytics", "Analytics") }]}
         title={t("page.analytics.title", "Analytics")}
         subtitle={t("page.analytics.sub", "TCE, voyage P&L and AR aging.")}
       />
+      <div className="quick-row">
+        <Link href="/analytics/reports" className="btn btn-sm">
+          {t("page.analytics.link_reports", "Reports")}
+        </Link>
+        <Link href="/analytics/reports/builder" className="btn btn-sm">
+          {t("page.analytics.link_builder", "Report builder")}
+        </Link>
+        <Link href="/analytics/scheduler" className="btn btn-sm">
+          {t("page.analytics.link_sched", "Scheduled reports")}
+        </Link>
+        <Link href="/analytics/market" className="btn btn-sm">
+          {t("page.analytics.link_market", "Market")}
+        </Link>
+      </div>
       {warn && (tce.length || pnl.length || aging.length) ? <p className="muted">{warn}</p> : null}
       <StateView
         loading={loading}

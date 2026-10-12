@@ -7,6 +7,8 @@
 
 import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
 import { RecordModal } from "@/components/RecordModal";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef as GridColumnDef } from "@/components/grid/types";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -158,6 +160,41 @@ export function VesselCrudGrid({
     }
   }
 
+  async function removeRow(r: Row) {
+    try {
+      await apiDelete(`${base}/${r.id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      await load();
+    } catch (err: any) {
+      toast.error(err?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  const gridColumns: GridColumnDef<Row>[] = [
+    ...columns.map((c) => ({
+      key: c.key,
+      title: c.label,
+      value: (r: Row) => r[c.key],
+      render: (_v: unknown, r: Row) => (c.render ? c.render(r) : ((r[c.key] as ReactNode) ?? "—")),
+    })),
+    {
+      key: "_actions",
+      title: "",
+      width: 110,
+      align: "right",
+      render: (_v: unknown, r: Row) => (
+        <>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => openEdit(r)}>
+            {t("common.edit", "Edit")}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm btn-danger-text" onClick={() => removeRow(r)}>
+            {t("common.delete", "Delete")}
+          </button>
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="panel">
       <div className="desk-toolbar" style={{ marginTop: 0, justifyContent: "space-between" }}>
@@ -168,60 +205,15 @@ export function VesselCrudGrid({
           </button>
         ) : null}
       </div>
-      <table className="data-table">
-        <thead>
-          <tr>
-            {columns.map((c) => (
-              <th key={c.key}>{c.label}</th>
-            ))}
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id}>
-              {columns.map((c) => (
-                <td key={c.key}>{c.render ? c.render(r) : (r[c.key] as ReactNode) ?? "—"}</td>
-              ))}
-              <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                <button type="button" className="btn btn-ghost" style={{ fontSize: "0.75rem", padding: "0.1rem 0.4rem" }} onClick={() => openEdit(r)}>
-                  {t("common.edit", "Edit")}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ fontSize: "0.75rem", padding: "0.1rem 0.4rem", color: "var(--danger)" }}
-                  onClick={async () => {
-                    try {
-                      await apiDelete(`${base}/${r.id}`);
-                      toast.success(t("common.deleted", "Deleted"));
-                      await load();
-                    } catch (err: any) {
-                      toast.error(err?.message || t("common.failed", "Failed"));
-                    }
-                  }}
-                >
-                  {t("common.delete", "Delete")}
-                </button>
-              </td>
-            </tr>
-          ))}
-          {!loading && !rows.length ? (
-            <tr>
-              <td colSpan={columns.length + 1} className="muted">
-                {emptyText}
-              </td>
-            </tr>
-          ) : null}
-          {loading ? (
-            <tr>
-              <td colSpan={columns.length + 1} className="muted">
-                {t("common.loading", "Loading…")}
-              </td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
+      <DataGrid<Row>
+        columns={gridColumns}
+        data={rows}
+        rowKey={(r) => r.id}
+        loading={loading}
+        emptyText={emptyText}
+        onRowDoubleClick={(r) => openEdit(r)}
+        storageKey={`vessel_${path}_grid`}
+      />
 
       <RecordModal
         open={formOpen}

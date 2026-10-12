@@ -31,6 +31,7 @@ export function DataGrid<T extends Record<string, any>>({
   onCellSave,
   onRowDoubleClick,
   onRowClick,
+  onRowContextMenu,
   onSelectionChange,
   onSortChange,
   groupBy = [],
@@ -445,6 +446,14 @@ export function DataGrid<T extends Record<string, any>>({
                             className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}`}
                             onDoubleClick={() => onRowDoubleClick?.(row as T, globalIdx)}
                             onClick={() => onRowClick?.(row as T, globalIdx)}
+                            onContextMenu={
+                              onRowContextMenu
+                                ? (e) => {
+                                    e.preventDefault();
+                                    onRowContextMenu(row as T, globalIdx, e);
+                                  }
+                                : undefined
+                            }
                           >
                             {columns.map((col, ci) => renderCell(col, row, globalIdx, ci))}
                           </tr>
@@ -462,6 +471,14 @@ export function DataGrid<T extends Record<string, any>>({
                   className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}`}
                   onDoubleClick={() => onRowDoubleClick?.(row as T, ri)}
                   onClick={() => onRowClick?.(row as T, ri)}
+                  onContextMenu={
+                    onRowContextMenu
+                      ? (e) => {
+                          e.preventDefault();
+                          onRowContextMenu(row as T, ri, e);
+                        }
+                      : undefined
+                  }
                 >
                   {columns.map((col, ci) => renderCell(col, row, ri, ci))}
                 </tr>

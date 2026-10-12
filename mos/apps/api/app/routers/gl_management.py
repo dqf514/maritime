@@ -19,10 +19,21 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models_domain import VoyageAccrual
 from app.models_gl import AccountGroup, AccountingPeriod, ChartOfAccount, PeriodJournal
 from app.pagination import envelope, paginate
 from app.security import AuthContext, require_module
 from app.services import financial_statements as fs
+from app.services.period_close import (
+    accrual_is_referenced,
+    assert_macr_deletable,
+    assert_period_open,
+    get_accounting_period,
+    journal_is_referenced,
+    rebuild_voyage_accrual,
+    reverse_voyage_accrual,
+)
+from app.services.state_machine import PERIOD_TRANSITIONS, transition
 from app.services.tenant_guard import scoped_get, scoped_query
 
 router = APIRouter()
@@ -44,6 +55,7 @@ def _account_out(row: ChartOfAccount) -> dict[str, Any]:
         "parent_code": row.parent_code,
         "currency": row.currency,
         "is_active": bool(row.is_active),
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 
@@ -59,6 +71,7 @@ def _journal_out(row: PeriodJournal) -> dict[str, Any]:
         "status": row.status,
         "posted_at": row.posted_at.isoformat() if row.posted_at else None,
         "posted_by": str(row.posted_by) if row.posted_by else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 
@@ -276,6 +289,75 @@ def create_period(
     return {"id": str(row.id), "period": row.period, "status": row.status}
 
 
+def _require_period_admin(auth: AuthContext = Depends(require_module("finance"))) -> AuthContext:
+    """Close/open 期间属于财务关账动作：finance 模块 + 管理/财务角色。"""
+    allowed = {"tenant_admin", "finance", "management"}
+    if not (allowed & set(auth.roles or [])):
+        raise HTTPException(
+            403,
+            detail={"code": "ROLE_REQUIRED", "roles": sorted(allowed)},
+        )
+    return auth
+
+
+def _period_out(row: AccountingPeriod) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "period": row.period,
+        "status": row.status,
+        "closed_at": row.closed_at.isoformat() if row.closed_at else None,
+        "closed_by": str(row.closed_by) if row.closed_by else None,
+    }
+
+
+@router.post("/gl/periods/{period}/close")
+def close_period(
+    period: str,
+    auth: AuthContext = Depends(_require_period_admin),
+    db: Session = Depends(get_db),
+):
+    """关账：open → closed（C3-P2）。之后该期间禁止任何 GL 过账 → 409 PERIOD_CLOSED。"""
+    try:
+        p = fs.norm_period(period)
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "BAD_PERIOD", "message": str(exc)})
+    row = get_accounting_period(db, auth.tenant_id, p)
+    if row is None:
+        row = AccountingPeriod(tenant_id=auth.tenant_id, period=p, status="open")
+        db.add(row)
+        db.flush()
+    transition("period", row.status or "open", "closed", PERIOD_TRANSITIONS)
+    row.status = "closed"
+    row.closed_at = datetime.now(timezone.utc)
+    row.closed_by = auth.user_id
+    db.commit()
+    db.refresh(row)
+    return _period_out(row)
+
+
+@router.post("/gl/periods/{period}/open")
+def open_period(
+    period: str,
+    auth: AuthContext = Depends(_require_period_admin),
+    db: Session = Depends(get_db),
+):
+    """重新开账：closed → open。无期间行 → 404（未曾关账）。"""
+    try:
+        p = fs.norm_period(period)
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "BAD_PERIOD", "message": str(exc)})
+    row = get_accounting_period(db, auth.tenant_id, p)
+    if row is None:
+        raise HTTPException(404, detail={"code": "PERIOD_NOT_FOUND", "message": p})
+    transition("period", row.status or "open", "open", PERIOD_TRANSITIONS)
+    row.status = "open"
+    row.closed_at = None
+    row.closed_by = None
+    db.commit()
+    db.refresh(row)
+    return _period_out(row)
+
+
 # —— 日记账 ————————————————————————————————————————————————
 
 
@@ -359,6 +441,8 @@ def create_journal(
     if body.journal_type not in JOURNAL_TYPES:
         raise HTTPException(422, detail={"code": "BAD_JOURNAL_TYPE", "message": f"expected one of {JOURNAL_TYPES}"})
     entries = _normalize_entries(body.entries)
+    # C3-P2 期间关账护栏：关账期间不得新增 GL 分录
+    assert_period_open(db, auth.tenant_id, period)
     row = PeriodJournal(
         tenant_id=auth.tenant_id,
         period=period,
@@ -424,6 +508,8 @@ def post_journal(
             409,
             detail={"code": "INVALID_STATE", "message": f"Journal is {row.status}, only draft can be posted"},
         )
+    # C3-P2 期间关账护栏
+    assert_period_open(db, auth.tenant_id, row.period)
     total_debit = sum(Decimal(str(e.get("debit", 0) or 0)) for e in row.entries or [])
     total_credit = sum(Decimal(str(e.get("credit", 0) or 0)) for e in row.entries or [])
     if total_debit != total_credit:
@@ -454,6 +540,8 @@ def reverse_journal(
             409,
             detail={"code": "INVALID_STATE", "message": f"Journal is {row.status}, only posted can be reversed"},
         )
+    # C3-P2 期间关账护栏：冲销会在同期间生成新分录，关账后禁止
+    assert_period_open(db, auth.tenant_id, row.period)
     reversed_entries = [
         {
             "account_code": e.get("account_code") or e.get("account"),
@@ -481,6 +569,116 @@ def reverse_journal(
     db.commit()
     db.refresh(reversal)
     return {"original": _journal_out(row), "reversal": _journal_out(reversal)}
+
+
+@router.delete("/gl/journals/{journal_id}")
+def delete_journal(
+    journal_id: UUID,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """删除草稿分录。已过账/被引用的分录（含月度计提 MACR）只可冲销或重建 → 409 MACR_LOCKED。"""
+    row = scoped_get(db, PeriodJournal, journal_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "JOURNAL_NOT_FOUND", "message": str(journal_id)})
+    # C3-P2 期间关账护栏：关账期间不得删除分录
+    assert_period_open(db, auth.tenant_id, row.period)
+    assert_macr_deletable(row, referenced=journal_is_referenced(db, row))
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+# —— 月度计提 MACR（VoyageAccrual）：过账后不可删除，只可冲销/重建 ————————
+
+
+def _accrual_out(row: VoyageAccrual) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+        "period_ym": row.period_ym,
+        "line_type": row.line_type,
+        "amount": float(row.amount or 0),
+        "currency": row.currency,
+        "status": row.status,
+        "notes": row.notes,
+    }
+
+
+class AccrualRebuildIn(BaseModel):
+    amount: float | None = None
+    line_type: str | None = None
+    currency: str | None = None
+    notes: str | None = None
+    period_ym: str | None = None
+
+
+@router.delete("/finance/accruals/{accrual_id}")
+def delete_accrual(
+    accrual_id: UUID,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """MACR 完整性：月度计提过账后不可删除 —— 只可冲销或重建（409 MACR_LOCKED）。"""
+    row = scoped_get(db, VoyageAccrual, accrual_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "ACCRUAL_NOT_FOUND", "message": str(accrual_id)})
+    assert_period_open(db, auth.tenant_id, row.period_ym)
+    assert_macr_deletable(row, referenced=accrual_is_referenced(db, row))
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/finance/accruals/{accrual_id}/reverse")
+def reverse_accrual(
+    accrual_id: UUID,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """冲销月度计提：posted → reversed（非破坏，P&L 不再计入）。草稿不可冲销。"""
+    row = scoped_get(db, VoyageAccrual, accrual_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "ACCRUAL_NOT_FOUND", "message": str(accrual_id)})
+    assert_period_open(db, auth.tenant_id, row.period_ym)
+    try:
+        reverse_voyage_accrual(db, row)
+    except HTTPException:
+        raise
+    db.commit()
+    db.refresh(row)
+    return _accrual_out(row)
+
+
+@router.post("/finance/accruals/{accrual_id}/rebuild")
+def rebuild_accrual(
+    accrual_id: UUID,
+    body: AccrualRebuildIn | None = None,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """重建月度计提：冲销原计提（若已过账）并生成替代草稿，原件保留为审计痕迹。"""
+    row = scoped_get(db, VoyageAccrual, accrual_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "ACCRUAL_NOT_FOUND", "message": str(accrual_id)})
+    assert_period_open(db, auth.tenant_id, row.period_ym)
+    overrides: dict[str, Any] = {}
+    if body is not None:
+        if body.period_ym is not None:
+            try:
+                overrides["period_ym"] = fs.norm_period(body.period_ym)
+            except ValueError as exc:
+                raise HTTPException(422, detail={"code": "BAD_PERIOD", "message": str(exc)})
+            assert_period_open(db, auth.tenant_id, overrides["period_ym"])
+        for key in ("amount", "line_type", "currency", "notes"):
+            val = getattr(body, key)
+            if val is not None:
+                overrides[key] = val
+    replacement = rebuild_voyage_accrual(db, row, overrides=overrides or None)
+    db.commit()
+    db.refresh(row)
+    db.refresh(replacement)
+    return {"original": _accrual_out(row), "replacement": _accrual_out(replacement)}
 
 
 # —— 报表 ————————————————————————————————————————————————

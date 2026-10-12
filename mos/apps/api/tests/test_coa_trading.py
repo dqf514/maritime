@@ -533,3 +533,125 @@ def test_trade_and_coa_models_are_tenant_scoped(db_engine):
         assert any(t.id == trade.id for t in rows)
         rows = db.scalars(scoped_query(db, Trade, tb.id)).all()
         assert all(t.id != trade.id for t in rows)
+
+
+# ── COA PATCH null-clear（可空字段可清空；未发送键保持原值）─────────────────────
+
+
+def test_coa_patch_null_clears_nullable_fields(client, auth_headers):
+    """PATCH 显式 null 清空 cargo_spec/bill_by/tolerance_pct/overage_pct；
+    未发送的键不受影响；必填字段忽略 null。"""
+    h = auth_headers
+    charter = _make_charter(client, h)
+    coa = _make_coa(
+        client,
+        h,
+        charter["id"],
+        cargo_spec="VLSFO max 0.5% S",
+        bill_by="weight",
+        tolerance_pct=5.0,
+        overage_pct=10.0,
+    )
+    assert coa["cargo_spec"] == "VLSFO max 0.5% S"
+    assert coa["bill_by"] == "weight"
+
+    # 显式 null → 清空四个可空字段
+    cleared = client.patch(
+        f"/api/v1/coa/contracts/{coa['id']}",
+        headers=h,
+        json={"cargo_spec": None, "bill_by": None, "tolerance_pct": None, "overage_pct": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    body = cleared.json()
+    assert body["cargo_spec"] is None
+    assert body["bill_by"] is None
+    assert body["tolerance_pct"] is None
+    assert body["overage_pct"] is None
+
+    # 再写回，然后只改 rate（不带 cargo_spec 键）→ cargo_spec 保持
+    restored = client.patch(
+        f"/api/v1/coa/contracts/{coa['id']}",
+        headers=h,
+        json={"cargo_spec": "Iron ore fines", "bill_by": "measure", "tolerance_pct": 3.0},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["cargo_spec"] == "Iron ore fines"
+
+    untouched = client.patch(f"/api/v1/coa/contracts/{coa['id']}", headers=h, json={"rate": 30.0})
+    assert untouched.status_code == 200, untouched.text
+    body = untouched.json()
+    assert body["rate"] == 30.0
+    assert body["cargo_spec"] == "Iron ore fines"  # 未发送的键保持
+    assert body["bill_by"] == "measure"
+    assert body["tolerance_pct"] == 3.0
+
+    # 必填字段忽略 null（不清空）
+    ignored = client.patch(f"/api/v1/coa/contracts/{coa['id']}", headers=h, json={"total_qty": None, "rate": None})
+    assert ignored.status_code == 200, ignored.text
+    body = ignored.json()
+    assert body["total_qty"] == 60000.0
+    assert body["rate"] == 30.0
+
+
+# ── GET /api/v1/market-positions（交易看板持仓）────────────────────────────────
+
+
+def test_market_positions_long_short_net_and_pnl(client, auth_headers):
+    """两笔对冲-ish 交易：long 1000@50 + short 400@55 → net 600；
+    行情 60 → unrealized = (60−avg)×600；var_95 为正且确定性。"""
+    h = auth_headers
+    # 无持仓 → items: []
+    empty = client.get("/api/v1/market-positions", headers=h)
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["items"] == []
+
+    _make_trade(client, h, buy_sell="buy", qty=1000.0, price=50.0, route="C5")
+    _make_trade(client, h, buy_sell="sell", qty=400.0, price=55.0, route="C5")
+
+    q = client.post(
+        "/api/v1/market/quotes",
+        headers=h,
+        params={"symbol": "TCE_C5_PAC", "value": 60.0, "quote_date": "2026-09-01"},
+    )
+    assert q.status_code == 200, q.text
+
+    r = client.get("/api/v1/market-positions", headers=h, params={"as_of": "2026-09-01"})
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert len(items) == 1
+    row = items[0]
+    assert row["route"] == "C5"
+    assert row["commodity"] == ""
+    assert row["long_qty"] == 1000.0
+    assert row["short_qty"] == 400.0
+    assert row["net_qty"] == 600.0
+    # vwap = (50×1000 + 55×400) / 1400 = 51.428571… → 51.43
+    assert row["avg_price"] == 51.43
+    assert row["market_price"] == 60.0
+    # (60 − 51.43) × 600 = 5142.00（long 在价格上涨时盈利）
+    assert row["unrealized_pnl"] == 5142.0
+    # var_95 = 1.65 × |60×600| × vol；无历史 → vol=0.05 → 1.65×36000×0.05 = 2970
+    assert row["var_95"] == 2970.0
+    assert row["period"] == "2026-10-01..2026-12-31"
+
+    # 无行情时 market_price 回退 avg_price → pnl 0
+    flat = client.get("/api/v1/market-positions", headers=h, params={"as_of": "2026-01-01"})
+    assert flat.status_code == 200, flat.text
+    row = flat.json()["items"][0]
+    assert row["market_price"] == row["avg_price"]
+    assert row["unrealized_pnl"] == 0.0
+
+
+def test_market_positions_tenant_isolation(client, auth_headers):
+    """各租户只看到自己的持仓。"""
+    ha = auth_headers
+    _, hb = create_tenant(client, code="globex-mp", name="Globex MP", admin_email="mp-admin@globex.example.com")
+    _make_trade(client, ha, buy_sell="buy", qty=1000.0, route="C5")
+    _make_trade(client, hb, buy_sell="sell", qty=250.0, route="P6A")
+
+    ra = client.get("/api/v1/market-positions", headers=ha).json()["items"]
+    rb = client.get("/api/v1/market-positions", headers=hb).json()["items"]
+    assert [row["route"] for row in ra] == ["C5"]
+    assert [row["route"] for row in rb] == ["P6A"]
+    assert ra[0]["long_qty"] == 1000.0
+    assert rb[0]["short_qty"] == 250.0

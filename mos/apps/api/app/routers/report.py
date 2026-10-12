@@ -16,6 +16,7 @@ from pydantic import BaseModel, model_validator
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models_report import ReportDefinition, ReportSchedule
 from app.security import AuthContext, require_module
 from app.services.report_builder import (
     ReportSpecError,
@@ -43,6 +44,11 @@ from app.services.report_engine import (
     system_report_spec,
     update_report,
     update_schedule,
+)
+from app.services.report_scheduler import (
+    assert_output_format,
+    assert_schedule_type,
+    run_schedule_now,
 )
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -425,25 +431,54 @@ def export_csv(
     return {"csv": csv_text, "rows": result.get("total_rows", 0)}
 
 
+def _schedule_payload(s: ReportSchedule, report: ReportDefinition | None = None) -> dict:
+    return {
+        "id": str(s.id),
+        "report_id": str(s.report_id),
+        "report_name": report.report_name if report else None,
+        "schedule_type": s.schedule_type,
+        "cron_expression": s.cron_expression,
+        "recipients": s.recipients,
+        "output_format": s.output_format,
+        "is_active": s.is_active,
+        "last_run_at": str(s.last_run_at) if s.last_run_at else None,
+        "last_status": s.last_status,
+        "next_run_at": str(s.next_run_at) if s.next_run_at else None,
+    }
+
+
+def _report_map(db: Session, tenant_id: UUID, schedules: list[ReportSchedule]) -> dict[UUID, ReportDefinition]:
+    ids = {s.report_id for s in schedules}
+    if not ids:
+        return {}
+    rows = db.query(ReportDefinition).filter(
+        ReportDefinition.tenant_id == tenant_id,
+        ReportDefinition.id.in_(ids),
+    ).all()
+    return {r.id: r for r in rows}
+
+
 @router.get("/schedules/list")
 def list_all_schedules(
     auth: AuthContext = Depends(require_module("operations")),
     db: Session = Depends(get_db),
 ):
     schedules = list_schedules(db, auth.tenant_id)
-    return [
-        {
-            "id": str(s.id),
-            "report_id": str(s.report_id),
-            "schedule_type": s.schedule_type,
-            "cron_expression": s.cron_expression,
-            "recipients": s.recipients,
-            "output_format": s.output_format,
-            "is_active": s.is_active,
-            "last_run_at": str(s.last_run_at) if s.last_run_at else None,
-        }
-        for s in schedules
-    ]
+    reports = _report_map(db, auth.tenant_id, schedules)
+    return [_schedule_payload(s, reports.get(s.report_id)) for s in schedules]
+
+
+@router.get("/schedules/{schedule_id}")
+def get_single_schedule(
+    schedule_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    s = get_schedule(db, auth.tenant_id, schedule_id)
+    if not s:
+        raise HTTPException(404, "Schedule not found")
+    report = db.get(ReportDefinition, s.report_id) if s.report_id else None
+    return _schedule_payload(s, report)
 
 
 @router.post("/schedules")
@@ -453,9 +488,19 @@ def create_new_schedule(
     db: Session = Depends(get_db),
 ):
     data = body.model_dump(exclude_none=True)
+    data["schedule_type"] = assert_schedule_type(data.get("schedule_type"))
+    if data.get("output_format") is not None:
+        data["output_format"] = assert_output_format(data.get("output_format"))
+    report = db.query(ReportDefinition).filter(
+        ReportDefinition.id == data["report_id"],
+        ReportDefinition.tenant_id == auth.tenant_id,
+    ).first()
+    if report is None:
+        raise HTTPException(404, "Report not found")
+    data["report_id"] = report.id
     s = create_schedule(db, auth.tenant_id, data)
     db.commit()
-    return {"id": str(s.id), "schedule_type": s.schedule_type}
+    return _schedule_payload(s, report)
 
 
 @router.patch("/schedules/{schedule_id}")
@@ -469,9 +514,14 @@ def patch_schedule(
     if not s:
         raise HTTPException(404, "Schedule not found")
     data = body.model_dump(exclude_none=True)
+    if "schedule_type" in data:
+        data["schedule_type"] = assert_schedule_type(data.get("schedule_type"))
+    if "output_format" in data:
+        data["output_format"] = assert_output_format(data.get("output_format"))
     s = update_schedule(db, s, data)
     db.commit()
-    return {"id": str(s.id), "updated": True}
+    report = db.get(ReportDefinition, s.report_id) if s.report_id else None
+    return _schedule_payload(s, report)
 
 
 @router.delete("/schedules/{schedule_id}")
@@ -486,3 +536,21 @@ def remove_schedule(
     delete_schedule(db, s)
     db.commit()
     return {"deleted": True}
+
+
+@router.post("/schedules/{schedule_id}/run")
+def run_schedule_now_endpoint(
+    schedule_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """Run a schedule once immediately and record last_run_at / last_status."""
+    s = get_schedule(db, auth.tenant_id, schedule_id)
+    if not s:
+        raise HTTPException(404, "Schedule not found")
+    result = run_schedule_now(db, s)
+    report = db.get(ReportDefinition, s.report_id) if s.report_id else None
+    payload = _schedule_payload(s, report)
+    payload["ok"] = result["ok"]
+    payload["error"] = result.get("error")
+    return payload

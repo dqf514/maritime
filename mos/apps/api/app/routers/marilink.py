@@ -218,6 +218,7 @@ class ReportOut(BaseModel):
     review_notes: str | None
     imported_model: str | None
     imported_id: dict | None
+    updated_at: str | None = None
 
 
 class ReportSubmitIn(BaseModel):
@@ -258,6 +259,7 @@ def list_reports(
             review_notes=r.review_notes,
             imported_model=r.imported_model,
             imported_id=r.imported_id,
+            updated_at=r.updated_at.isoformat() if r.updated_at else None,
         )
         for r in reports
     ]
@@ -298,6 +300,7 @@ def submit_report(
         review_notes=None,
         imported_model=None,
         imported_id=None,
+        updated_at=report.updated_at.isoformat() if report.updated_at else None,
     )
 
 
@@ -337,4 +340,5 @@ def review_report(
         review_notes=report.review_notes,
         imported_model=report.imported_model,
         imported_id=report.imported_id,
+        updated_at=report.updated_at.isoformat() if report.updated_at else None,
     )

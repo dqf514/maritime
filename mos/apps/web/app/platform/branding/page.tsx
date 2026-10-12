@@ -2,7 +2,11 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { ImageCropModal, type CropKind } from "@/components/ImageCropModal";
+import { RecordModal } from "@/components/RecordModal";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiGet, apiPost, apiPut, apiUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -21,37 +25,49 @@ type Branding = {
 const MAX_UPLOAD_BYTES = 2.5 * 1024 * 1024;
 const OK_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
-export default function PlatformBrandingPage() {
+function PlatformBrandingPage() {
   const { t } = useI18n();
   const toast = useToast();
   const [form, setForm] = useState<Branding | null>(null);
   const [uploading, setUploading] = useState<string | null>(null);
   const [crop, setCrop] = useState<{ kind: CropKind; file: File } | null>(null);
   const [cropErr, setCropErr] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     apiGet("/api/v1/platform/branding")
       .then(setForm)
-      .catch(() => toast.success(t("page.branding.admin_required", "需要平台管理员")));
+      .catch(() => toast.error(t("page.branding.admin_required", "Platform admin required")));
   }, [t]);
+
+  function openEdit() {
+    setEditOpen(true);
+  }
+
+  useListHotkeys(openEdit);
 
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!form) return;
+    setSaving(true);
     try {
       await apiPut("/api/v1/platform/branding", form);
-      toast.success(t("page.branding.updated", "产品品牌已更新 — 门户、登录与顶栏会随之生效。"));
+      toast.success(t("page.branding.updated", "Product branding updated — portal, login and top bar pick it up."));
+      setEditOpen(false);
     } catch {
-      toast.success(t("common.failed", "保存失败"));
+      toast.error(t("common.failed", "Failed"));
+    } finally {
+      setSaving(false);
     }
   }
 
   async function reset() {
     try {
       setForm(await apiPost("/api/v1/platform/branding/reset"));
-      toast.success(t("page.branding.reset_done", "已恢复 MariOS 默认品牌。"));
+      toast.success(t("page.branding.reset_done", "Restored MariOS default branding."));
     } catch {
-      toast.success(t("page.branding.reset_fail", "重置失败"));
+      toast.error(t("page.branding.reset_fail", "Reset failed"));
     }
   }
 
@@ -59,11 +75,11 @@ export default function PlatformBrandingPage() {
     if (!file) return;
     toast.success("");
     if (!OK_TYPES.includes(file.type)) {
-      toast.success(t("page.branding.bad_type", "仅支持 png / jpg / webp 图片"));
+      toast.success(t("page.branding.bad_type", "Only png / jpg / webp images are supported"));
       return;
     }
     if (file.size > MAX_UPLOAD_BYTES) {
-      toast.success(t("page.branding.too_large", "文件超过 2.5MB，请压缩后再传"));
+      toast.success(t("page.branding.too_large", "File exceeds 2.5MB — compress and retry"));
       return;
     }
     setCropErr("");
@@ -79,10 +95,10 @@ export default function PlatformBrandingPage() {
       const fd = new FormData();
       fd.append("file", blob, `${kind}.png`);
       setForm(await apiUpload(`/api/v1/platform/branding/upload?kind=${kind}`, fd));
-      toast.success(t("page.branding.uploaded", "已上传 {kind}", { kind }));
+      toast.success(t("page.branding.uploaded", "Uploaded {kind}", { kind }));
       setCrop(null);
     } catch (err: any) {
-      setCropErr(t("page.branding.upload_fail", "上传失败：{err}", { err: String(err?.message || err) }));
+      setCropErr(t("page.branding.upload_fail", "Upload failed: {err}", { err: String(err?.message || err) }));
     } finally {
       setUploading(null);
     }
@@ -91,17 +107,35 @@ export default function PlatformBrandingPage() {
   if (!form) {
     return (
       <AppShell>
-        <p>{t("common.loading", "加载中…")}</p>
+        <p>{t("common.loading", "Loading…")}</p>
       </AppShell>
     );
   }
 
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("page.branding.title", "产品品牌")}</h1>
-      <p className="page-sub">
-        {t("page.branding.sub", "管理公共门户 Logo / 图标 / 文案。图片直接上传，可裁剪。")}
-      </p>
+      <PageHeader
+        title={t("page.branding.title", "Product branding")}
+        subtitle={t("page.branding.sub", "Manage public portal logo / icon / copy. Images upload directly and can be cropped.")}
+        breadcrumb={[{ label: t("page.platform.title", "Platform"), href: "/platform" }, { label: t("page.branding.title", "Product branding") }]}
+      />
+
+      <Toolbar>
+        <button type="button" className="btn btn-primary" onClick={openEdit}>
+          {t("page.branding.edit", "Edit branding")}
+        </button>
+        <button type="button" className="btn" onClick={reset}>
+          {t("page.branding.reset", "Restore defaults")}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => apiGet("/api/v1/platform/branding").then(setForm).catch(() => undefined)}
+          title={t("common.refresh", "Refresh")}
+        >
+          ↻
+        </button>
+      </Toolbar>
 
       <div className="brand-preview panel">
         <div className="brand-preview-row" style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
@@ -111,18 +145,18 @@ export default function PlatformBrandingPage() {
       </div>
 
       <div className="panel">
-        <h2 style={{ marginTop: 0 }}>{t("page.branding.upload_title", "上传素材")}</h2>
-        <p className="muted">{t("page.branding.upload_hint", "支持 png / jpg / webp，单文件不超过 2.5MB；上传前可拖动裁剪。")}</p>
+        <h2 style={{ marginTop: 0 }}>{t("page.branding.upload_title", "Upload assets")}</h2>
+        <p className="muted">{t("page.branding.upload_hint", "png / jpg / webp up to 2.5MB; crop by dragging before upload.")}</p>
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
           {(
             [
               ["logo", t("page.branding.logo", "Logo")],
-              ["icon", t("page.branding.icon", "图标")],
+              ["icon", t("page.branding.icon", "Icon")],
               ["favicon", t("page.branding.favicon", "Favicon")],
             ] as const
           ).map(([kind, label]) => (
             <label key={kind} className="btn btn-ghost" style={{ cursor: "pointer" }}>
-              {uploading === kind ? "…" : `${t("page.branding.upload", "上传")} ${label}`}
+              {uploading === kind ? "…" : `${t("page.branding.upload", "Upload")} ${label}`}
               <input
                 type="file"
                 accept=".png,.jpg,.jpeg,.webp"
@@ -138,42 +172,42 @@ export default function PlatformBrandingPage() {
         </div>
       </div>
 
-      <form className="panel" onSubmit={save}>
-        <h2 style={{ marginTop: 0 }}>{t("page.branding.fields", "文案与链接")}</h2>
+      <RecordModal
+        open={editOpen}
+        title={t("page.branding.edit", "Edit branding")}
+        onClose={() => setEditOpen(false)}
+        onSave={save}
+        saving={saving}
+        canDelete={false}
+      >
         <div className="kv-grid">
-          {(
-            [
-              "product_name",
-              "tagline",
-              "primary_color",
-              "hero_title",
-              "hero_subtitle",
-            ] as const
-          ).map((k) => (
-            <label key={k} style={k.includes("hero") || k === "tagline" ? { gridColumn: "1 / -1" } : undefined}>
-              {k.replaceAll("_", " ")}
-              {k === "hero_subtitle" ? (
-                <textarea
-                  value={form[k]}
-                  rows={3}
-                  onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-                  style={{ width: "100%", marginTop: "0.25rem" }}
-                />
-              ) : (
-                <input value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
-              )}
-            </label>
-          ))}
+          <label>
+            {t("page.branding.field_product_name", "Product name")}
+            <input value={form.product_name} onChange={(e) => setForm({ ...form, product_name: e.target.value })} />
+          </label>
+          <label>
+            {t("page.branding.field_primary_color", "Primary color")}
+            <input value={form.primary_color} onChange={(e) => setForm({ ...form, primary_color: e.target.value })} />
+          </label>
+          <label style={{ gridColumn: "1 / -1" }}>
+            {t("page.branding.field_tagline", "Tagline")}
+            <input value={form.tagline} onChange={(e) => setForm({ ...form, tagline: e.target.value })} />
+          </label>
+          <label style={{ gridColumn: "1 / -1" }}>
+            {t("page.branding.field_hero_title", "Hero title")}
+            <input value={form.hero_title} onChange={(e) => setForm({ ...form, hero_title: e.target.value })} />
+          </label>
+          <label style={{ gridColumn: "1 / -1" }}>
+            {t("page.branding.field_hero_subtitle", "Hero subtitle")}
+            <textarea
+              value={form.hero_subtitle}
+              rows={3}
+              onChange={(e) => setForm({ ...form, hero_subtitle: e.target.value })}
+              style={{ width: "100%", marginTop: "0.25rem" }}
+            />
+          </label>
         </div>
-        <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
-          <button className="btn btn-primary" type="submit">
-            {t("page.branding.save", "保存品牌")}
-          </button>
-          <button className="btn" type="button" onClick={reset}>
-            {t("page.branding.reset", "恢复默认")}
-          </button>
-        </div>
-      </form>
+      </RecordModal>
 
       <ImageCropModal
         open={Boolean(crop)}
@@ -190,4 +224,8 @@ export default function PlatformBrandingPage() {
       />
     </AppShell>
   );
+}
+
+export default function Page() {
+  return <PlatformBrandingPage />;
 }

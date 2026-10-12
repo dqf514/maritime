@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import {
   apiAddMigrationSource,
   apiCommitMigration,
@@ -87,20 +89,57 @@ export default function MigratePage() {
     );
   }
 
+  const columns: ColumnDef<Proposal>[] = [
+    {
+      key: "_select",
+      title: "",
+      width: 40,
+      render: (_v, p) =>
+        p.status === "proposed" ? (
+          <input
+            type="checkbox"
+            checked={!!selected[p.id]}
+            onChange={(e) => setSelected((s) => ({ ...s, [p.id]: e.target.checked }))}
+          />
+        ) : null,
+    },
+    { key: "entity_type", title: t("page.migrate.entity", "Entity"), width: 120, value: (r) => r.entity_type },
+    { key: "action", title: t("page.migrate.action", "Action"), width: 110, value: (r) => r.action },
+    {
+      key: "confidence",
+      title: t("page.migrate.confidence", "Confidence"),
+      width: 110,
+      value: (r) => r.confidence,
+      render: (v) => `${(Number(v) * 100).toFixed(0)}%`,
+    },
+    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "payload",
+      title: t("page.migrate.preview", "Preview"),
+      minWidth: 220,
+      value: (r) => JSON.stringify(r.payload),
+      render: (v) => <code>{String(v)}</code>,
+    },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.settings_hub", "System settings"), href: "/settings" },
+          { label: t("page.migrate.title", "AI Migration Wizard") },
+        ]}
         title={t("page.migrate.title", "AI Migration Wizard")}
         subtitle={t("page.migrate.sub", "Connect sources, analyze, confirm, commit.")}
         actions={
           step === "connect" ? (
-            <button className="btn btn-primary" type="button" onClick={() => start().catch(() => toast.success(t("common.failed", "Failed")))}>
+            <button className="btn btn-primary" type="button" onClick={() => start().catch(() => toast.error(t("common.failed", "Failed")))}>
               {t("page.migrate.connect", "Connect sources & start")}
             </button>
           ) : step === "analyze" || step === "review" ? (
             <>
               {step === "analyze" ? (
-                <button className="btn btn-primary" type="button" onClick={() => analyze().catch(() => toast.success(t("page.migrate.analyze_fail", "Analyze failed")))}>
+                <button className="btn btn-primary" type="button" onClick={() => analyze().catch(() => toast.error(t("page.migrate.analyze_fail", "Analyze failed")))}>
                   {t("page.migrate.run_ai", "Run AI analysis")}
                 </button>
               ) : null}
@@ -110,7 +149,7 @@ export default function MigratePage() {
                   type="file"
                   accept=".xlsx,.xlsm,.xls"
                   style={{ display: "none" }}
-                  onChange={(e) => onExcel(e.target.files?.[0] || null).catch(() => toast.success(t("page.migrate.excel_fail", "Excel upload failed")))}
+                  onChange={(e) => onExcel(e.target.files?.[0] || null).catch(() => toast.error(t("page.migrate.excel_fail", "Excel upload failed")))}
                 />
               </label>
             </>
@@ -118,52 +157,25 @@ export default function MigratePage() {
         }
       />
       {proposals.length ? (
-        <div className="panel">
-          <table className="table">
-            <thead>
-              <tr>
-                <th></th>
-                <th>{t("page.migrate.entity", "Entity")}</th>
-                <th>{t("page.migrate.action", "Action")}</th>
-                <th>{t("page.migrate.confidence", "Confidence")}</th>
-                <th>{t("common.status", "Status")}</th>
-                <th>{t("page.migrate.preview", "Preview")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {proposals.map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    {p.status === "proposed" ? (
-                      <input
-                        type="checkbox"
-                        checked={!!selected[p.id]}
-                        onChange={(e) => setSelected((s) => ({ ...s, [p.id]: e.target.checked }))}
-                      />
-                    ) : null}
-                  </td>
-                  <td>{p.entity_type}</td>
-                  <td>{p.action}</td>
-                  <td>{(p.confidence * 100).toFixed(0)}%</td>
-                  <td>{p.status}</td>
-                  <td>
-                    <code>{JSON.stringify(p.payload)}</code>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <>
+          <DataGrid<Proposal>
+            columns={columns}
+            data={proposals}
+            rowKey={(r) => r.id}
+            storageKey="settings_dataops_migrate_grid"
+            emptyText={t("common.no_data", "No data")}
+          />
           {step === "review" ? (
             <button
               className="btn btn-primary"
               type="button"
-              onClick={() => commit().catch(() => toast.success(t("page.migrate.commit_fail", "Commit failed")))}
+              onClick={() => commit().catch(() => toast.error(t("page.migrate.commit_fail", "Commit failed")))}
               style={{ marginTop: "1rem" }}
             >
               {t("page.migrate.apply", "Apply selected")}
             </button>
           ) : null}
-        </div>
+        </>
       ) : null}
     </AppShell>
   );

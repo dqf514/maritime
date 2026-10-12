@@ -2,11 +2,14 @@
 
 // 3.6：Voyage accruals 面板（自取数 + 创建/过账）。
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { LookupSelect } from "@/components/LookupSelect";
+import { Num } from "@/components/Num";
 import { useToast } from "@/components/ToastProvider";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { apiGet, apiPost } from "@/lib/api";
-import { fmt } from "@/lib/fmt";
 import { useI18n } from "@/lib/i18n";
 
 type VoyageRef = { id: string; voyage_no: string };
@@ -26,6 +29,7 @@ export function AccrualsPanel() {
   const [voyage, setVoyage] = useState("");
   const [currency, setCurrency] = useState("USD");
   const [busy, setBusy] = useState(false);
+  const ctx = useContextMenu<Accrual>();
 
   const load = useCallback(async () => {
     const [a, v] = await Promise.all([
@@ -74,6 +78,63 @@ export function AccrualsPanel() {
     }
   }
 
+  const cols = useMemo<ColumnDef<Accrual>[]>(
+    () => [
+      { key: "period_ym", title: t("page.finance.period", "Period YYYY-MM"), width: 110 },
+      { key: "line_type", title: t("common.type", "类型"), width: 110 },
+      {
+        key: "voyage_id",
+        title: t("page.voyages.list", "Voyages"),
+        value: (r) => r.voyage_id ?? "",
+        render: (v, r) =>
+          r.voyage_id
+            ? voyages.find((x) => x.id === r.voyage_id)?.voyage_no || r.voyage_id.slice(0, 8)
+            : "—",
+      },
+      {
+        key: "amount",
+        title: t("common.amount", "Amount"),
+        align: "right",
+        value: (r) => r.amount,
+        render: (v, r) => (
+          <>
+            <Num v={v as number} digits={2} /> {r.currency}
+          </>
+        ),
+      },
+      { key: "status", title: t("common.status", "Status"), width: 90 },
+      {
+        key: "actions",
+        title: "",
+        width: 90,
+        value: () => "",
+        render: (_v, r) =>
+          r.status === "draft" ? (
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                post(r.id);
+              }}
+            >
+              {t("page.finance.post", "Post")}
+            </button>
+          ) : null,
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, busy, voyages],
+  );
+
+  const menuItems = (row: Accrual): ContextMenuItem[] => [
+    { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(row.id) },
+    ...(row.status === "draft"
+      ? [{ key: "post", label: t("page.finance.post", "Post"), onClick: () => post(row.id) } as ContextMenuItem]
+      : []),
+  ];
+
   return (
     <>
       <form className="panel" onSubmit={create}>
@@ -119,46 +180,17 @@ export function AccrualsPanel() {
         </button>
       </form>
       <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("page.finance.period", "Period YYYY-MM")}</th>
-              <th>{t("common.type", "类型")}</th>
-              <th>{t("page.voyages.list", "Voyages")}</th>
-              <th>{t("common.amount", "Amount")}</th>
-              <th>{t("common.status", "Status")}</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {accruals.map((r) => (
-              <tr key={r.id}>
-                <td>{r.period_ym}</td>
-                <td>{r.line_type}</td>
-                <td>{r.voyage_id ? voyages.find((v) => v.id === r.voyage_id)?.voyage_no || r.voyage_id.slice(0, 8) : "—"}</td>
-                <td>
-                  {fmt(r.amount)} {r.currency}
-                </td>
-                <td>{r.status}</td>
-                <td>
-                  {r.status === "draft" ? (
-                    <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => post(r.id)}>
-                      {t("page.finance.post", "Post")}
-                    </button>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-            {!accruals.length ? (
-              <tr>
-                <td colSpan={6} className="muted">
-                  {t("common.empty", "No records")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+        <DataGrid<Accrual>
+          columns={cols}
+          data={accruals}
+          rowKey={(r) => r.id}
+          onRowContextMenu={(row, _i, e) => ctx.open(row)(e)}
+          storageKey="finance_accruals_grid"
+          showFooter={false}
+          emptyText={t("common.empty", "No records")}
+        />
       </div>
+      <ContextMenu controller={ctx} items={menuItems} />
     </>
   );
 }

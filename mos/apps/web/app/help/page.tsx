@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { HelpFrame } from "@/components/HelpFrame";
+import { PageHeader } from "@/components/PageHeader";
 import { useI18n } from "@/lib/i18n";
 
 import { API_BASE } from "@/lib/api";
@@ -84,8 +85,11 @@ function HelpHomePage() {
   return (
     <HelpFrame>
       <div className="help-hero">
-        <h1>{t("help.title", "Knowledge Centre")}</h1>
-        <p>{t("help.sub", "Browse guides, search by keyword, or ask a question in plain language.")}</p>
+        <PageHeader
+          breadcrumb={[{ label: t("nav.help", "Knowledge Centre") }]}
+          title={t("help.title", "Knowledge Centre")}
+          subtitle={t("help.sub", "Browse guides, search by keyword, or ask a question in plain language.")}
+        />
         <input
           className="help-search"
           value={q}

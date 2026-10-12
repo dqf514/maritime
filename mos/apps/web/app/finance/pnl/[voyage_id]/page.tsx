@@ -1,10 +1,14 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { Num } from "@/components/Num";
+import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -87,23 +91,247 @@ export default function VoyagePnlDetailPage() {
     });
   }
 
-  const netLines = useMemo(() => {
-    if (!data) return null;
-    const result: Record<string, Record<"estimate" | "actual" | "posted" | "variance", number>> = {};
-    for (const k of LINE_KEYS) {
-      result[k] = {
-        estimate: data.columns.estimate[k],
-        actual: data.columns.actual[k],
-        posted: data.columns.posted[k],
-        variance: data.columns.variance[k],
-      };
+  type PnlDetailRow = {
+    id: string;
+    label: string;
+    kind: "line" | "subtotal" | "total" | "tce" | "commission";
+    est: number | null;
+    act: number | null;
+    posted: number | null;
+    vari: number | null;
+    pct: number | null;
+    paren?: boolean;
+    indent?: boolean;
+    boldLabel?: boolean;
+  };
+
+  const detailRows = useMemo<PnlDetailRow[]>(() => {
+    if (!data) return [];
+    const estTotals = data.totals.estimate;
+    const actTotals = data.totals.actual;
+    const postTotals = data.totals.posted;
+    const pnlVariance = actTotals.pnl - estTotals.pnl;
+    const pnlVariancePct = variancePct(actTotals.pnl, estTotals.pnl);
+
+    if (grossNet === "gross") {
+      const rows: PnlDetailRow[] = LINE_KEYS.map((k) => {
+        const est = data.columns.estimate[k];
+        const act = data.columns.actual[k];
+        const posted = data.columns.posted[k];
+        const vari = data.columns.variance[k];
+        return {
+          id: `line-${k}`,
+          label: LINE_LABELS[k],
+          kind: "line",
+          est,
+          act,
+          posted,
+          vari,
+          pct: variancePct(act, est),
+        };
+      });
+      rows.push(
+        {
+          id: "total-revenue",
+          label: t("page.pnl.total_revenue", "Total Revenue"),
+          kind: "subtotal",
+          est: estTotals.revenue,
+          act: actTotals.revenue,
+          posted: postTotals.revenue,
+          vari: actTotals.revenue - estTotals.revenue,
+          pct: null,
+        },
+        {
+          id: "total-cost",
+          label: t("page.pnl.total_cost", "Total Cost"),
+          kind: "subtotal",
+          est: estTotals.cost,
+          act: actTotals.cost,
+          posted: postTotals.cost,
+          vari: actTotals.cost - estTotals.cost,
+          pct: null,
+        },
+        {
+          id: "net-pnl",
+          label: t("page.pnl.net_pnl", "NET P&L"),
+          kind: "total",
+          est: estTotals.pnl,
+          act: actTotals.pnl,
+          posted: postTotals.pnl,
+          vari: pnlVariance,
+          pct: pnlVariancePct,
+        },
+      );
+      if (estTotals.tce != null) {
+        rows.push({
+          id: "tce",
+          label: "TCE",
+          kind: "tce",
+          est: estTotals.tce,
+          act: null,
+          posted: null,
+          vari: null,
+          pct: null,
+        });
+      }
+      return rows;
     }
-    return result;
-  }, [data]);
+
+    return [
+      {
+        id: "gross-revenue",
+        label: t("page.pnl.gross_revenue", "Gross Revenue"),
+        kind: "line",
+        boldLabel: true,
+        est: data.columns.estimate.revenue + data.columns.estimate.hire + data.columns.estimate.demurrage,
+        act: data.columns.actual.revenue + data.columns.actual.hire + data.columns.actual.demurrage,
+        posted: data.columns.posted.revenue + data.columns.posted.hire + data.columns.posted.demurrage,
+        vari: null,
+        pct: null,
+      },
+      {
+        id: "commission",
+        label: `- ${LINE_LABELS.commission}`,
+        kind: "commission",
+        est: data.columns.estimate.commission,
+        act: data.columns.actual.commission,
+        posted: data.columns.posted.commission,
+        vari: null,
+        pct: null,
+        paren: true,
+        indent: true,
+      },
+      {
+        id: "net-revenue",
+        label: t("page.pnl.net_revenue", "Net Revenue"),
+        kind: "subtotal",
+        est: estTotals.revenue - data.columns.estimate.commission,
+        act: actTotals.revenue - data.columns.actual.commission,
+        posted: postTotals.revenue - data.columns.posted.commission,
+        vari: null,
+        pct: null,
+      },
+      {
+        id: "total-cost",
+        label: t("page.pnl.total_cost", "Total Cost"),
+        kind: "line",
+        boldLabel: true,
+        est: estTotals.cost,
+        act: actTotals.cost,
+        posted: postTotals.cost,
+        vari: null,
+        pct: null,
+      },
+      {
+        id: "net-pnl",
+        label: t("page.pnl.net_pnl", "NET P&L"),
+        kind: "total",
+        est: estTotals.pnl,
+        act: actTotals.pnl,
+        posted: postTotals.pnl,
+        vari: pnlVariance,
+        pct: pnlVariancePct,
+      },
+    ];
+  }, [data, grossNet, t]);
+
+  const detailCols = useMemo<ColumnDef<PnlDetailRow>[]>(
+    () => [
+      {
+        key: "label",
+        title: t("page.pnl.line_item", "Line Item"),
+        minWidth: 180,
+        value: (r) => r.label,
+        render: (_v, r) => (
+          <span style={r.indent ? { paddingLeft: "1.5rem" } : undefined}>
+            {r.id.startsWith("line-") ? (
+              <span className="pnl-expand">{expanded.has(r.id.slice(5)) ? "▾" : "▸"}</span>
+            ) : null}
+            {r.kind === "line" && !r.boldLabel ? r.label : <strong>{r.label}</strong>}
+          </span>
+        ),
+      },
+      {
+        key: "est",
+        title: t("page.pnl.estimate", "Estimate"),
+        align: "right",
+        value: (r) => r.est,
+        render: (v, r) => numCell(v as number | null, { bold: numBold(r), paren: r.paren }),
+      },
+      {
+        key: "act",
+        title: t("page.pnl.actual", "Actual"),
+        align: "right",
+        value: (r) => r.act,
+        render: (v, r) =>
+          numCell(v as number | null, {
+            bold: numBold(r),
+            paren: r.paren,
+            cls: r.kind === "total" && v != null ? ((v as number) >= 0 ? "pnl-fav" : "pnl-adv") : undefined,
+          }),
+      },
+      {
+        key: "posted",
+        title: t("page.pnl.posted", "Posted"),
+        align: "right",
+        value: (r) => r.posted,
+        render: (v, r) => numCell(v as number | null, { bold: numBold(r), paren: r.paren }),
+      },
+      {
+        key: "vari",
+        title: t("page.pnl.variance", "Variance"),
+        align: "right",
+        value: (r) => r.vari,
+        render: (v, r) =>
+          numCell(v as number | null, {
+            bold: numBold(r),
+            cls: v != null && r.est != null ? varianceClass(v as number, r.est) : undefined,
+          }),
+      },
+      {
+        key: "pct",
+        title: t("page.pnl.var_pct", "Var %"),
+        align: "right",
+        value: (r) => r.pct,
+        render: (v, r) => {
+          const pct = v as number | null;
+          if (pct == null) return "—";
+          const cls = Math.abs(pct) > 10 ? ((r.vari ?? 0) >= 0 ? "pnl-fav" : "pnl-adv") : "";
+          const body = r.kind !== "line" ? <strong>{`${pct.toFixed(1)}%`}</strong> : `${pct.toFixed(1)}%`;
+          return <span className={cls || undefined}>{body}</span>;
+        },
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, expanded],
+  );
+
+  function numCell(v: number | null, opts: { bold?: boolean; paren?: boolean; cls?: string }) {
+    if (v == null) return "—";
+    const core = opts.paren ? (
+      <>
+        (<Num v={v} digits={2} />)
+      </>
+    ) : (
+      <Num v={v} digits={2} />
+    );
+    const body = opts.bold ? <strong>{core}</strong> : core;
+    return opts.cls ? <span className={opts.cls}>{body}</span> : body;
+  }
+
+  const numBold = (r: PnlDetailRow) => r.kind === "subtotal" || r.kind === "total" || r.kind === "tce";
 
   if (loading) {
     return (
-      <AppShell breadcrumbs={[{ label: "Finance", href: "/finance" }, { label: "P&L", href: "/finance/pnl" }, { label: "Loading…" }]}>
+      <AppShell>
+        <PageHeader
+          breadcrumb={[
+            { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
+            { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
+            { label: `#${voyageId}` },
+          ]}
+          title={t("common.loading", "Loading…")}
+        />
         <div className="panel"><div className="skeleton-table" /></div>
       </AppShell>
     );
@@ -111,7 +339,15 @@ export default function VoyagePnlDetailPage() {
 
   if (!data) {
     return (
-      <AppShell breadcrumbs={[{ label: "Finance", href: "/finance" }, { label: "P&L", href: "/finance/pnl" }, { label: "Not Found" }]}>
+      <AppShell>
+        <PageHeader
+          breadcrumb={[
+            { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
+            { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
+            { label: `#${voyageId}` },
+          ]}
+          title={t("common.not_found", "Not found")}
+        />
         <div className="panel">
           <p className="muted">{t("common.not_found", "Voyage not found")}</p>
           <Link href="/finance/pnl" className="btn btn-ghost">{t("common.back", "Back")}</Link>
@@ -127,14 +363,13 @@ export default function VoyagePnlDetailPage() {
   const pnlVariancePct = variancePct(actTotals.pnl, estTotals.pnl);
 
   return (
-    <AppShell
-      breadcrumbs={[
-        { label: "Finance", href: "/finance" },
-        { label: "P&L", href: "/finance/pnl" },
-        { label: data.voyage_no },
-      ]}
-    >
+    <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
+          { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
+          { label: data.voyage_no ? `#${data.voyage_no}` : `#${voyageId}` },
+        ]}
         title={`${t("page.pnl.voyage_title", "Voyage P&L")} — ${data.voyage_no}`}
         subtitle={`${data.status} ${data.cargo ? `· ${data.cargo}` : ""}`}
         actions={
@@ -190,138 +425,19 @@ export default function VoyagePnlDetailPage() {
           </div>
         </div>
 
-        <div className="table-scroll">
-          <table className="table pnl-detail-table">
-            <thead>
-              <tr>
-                <th style={{ minWidth: 180 }}>{t("page.pnl.line_item", "Line Item")}</th>
-                <th className="pnl-num pnl-col-estimate">{t("page.pnl.estimate", "Estimate")}</th>
-                <th className="pnl-num pnl-col-actual">{t("page.pnl.actual", "Actual")}</th>
-                <th className="pnl-num pnl-col-posted">{t("page.pnl.posted", "Posted")}</th>
-                <th className="pnl-num pnl-col-variance">{t("page.pnl.variance", "Variance")}</th>
-                <th className="pnl-num">{t("page.pnl.var_pct", "Var %")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {grossNet === "gross" ? (
-                <>
-                  {LINE_KEYS.map((k) => {
-                    const est = data.columns.estimate[k];
-                    const act = data.columns.actual[k];
-                    const posted = data.columns.posted[k];
-                    const vari = data.columns.variance[k];
-                    const pct = variancePct(act, est);
-                    const isExpanded = expanded.has(k);
-                    return (
-                      <Fragment key={k}>
-                        <tr
-                          className={`pnl-line-row ${varianceClass(vari, est)}`}
-                          style={{ cursor: "pointer" }}
-                          onClick={() => toggleLine(k)}
-                        >
-                          <td>
-                            <span className="pnl-expand">{isExpanded ? "▾" : "▸"}</span>
-                            {LINE_LABELS[k]}
-                          </td>
-                          <td className="pnl-num">{fmt(est)}</td>
-                          <td className="pnl-num">{fmt(act)}</td>
-                          <td className="pnl-num">{fmt(posted)}</td>
-                          <td className={`pnl-num ${varianceClass(vari, est)}`}>{fmt(vari)}</td>
-                          <td className={`pnl-num ${pct != null && Math.abs(pct) > 10 ? (vari >= 0 ? "pnl-fav" : "pnl-adv") : ""}`}>
-                            {pct != null ? `${pct.toFixed(1)}%` : "—"}
-                          </td>
-                        </tr>
-                      </Fragment>
-                    );
-                  })}
-                  <tr className="pnl-subtotal-row">
-                    <td><strong>{t("page.pnl.total_revenue", "Total Revenue")}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(estTotals.revenue)}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(actTotals.revenue)}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(postTotals.revenue)}</strong></td>
-                    <td className={`pnl-num ${varianceClass(actTotals.revenue - estTotals.revenue, estTotals.revenue)}`}>
-                      <strong>{fmt(actTotals.revenue - estTotals.revenue)}</strong>
-                    </td>
-                    <td className="pnl-num">—</td>
-                  </tr>
-                  <tr className="pnl-subtotal-row">
-                    <td><strong>{t("page.pnl.total_cost", "Total Cost")}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(estTotals.cost)}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(actTotals.cost)}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(postTotals.cost)}</strong></td>
-                    <td className={`pnl-num ${varianceClass(actTotals.cost - estTotals.cost, estTotals.cost)}`}>
-                      <strong>{fmt(actTotals.cost - estTotals.cost)}</strong>
-                    </td>
-                    <td className="pnl-num">—</td>
-                  </tr>
-                  <tr className="pnl-total-row">
-                    <td><strong>{t("page.pnl.net_pnl", "NET P&L")}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(estTotals.pnl)}</strong></td>
-                    <td className={`pnl-num ${actTotals.pnl >= 0 ? "pnl-fav" : "pnl-adv"}`}><strong>{fmt(actTotals.pnl)}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(postTotals.pnl)}</strong></td>
-                    <td className={`pnl-num ${varianceClass(pnlVariance, estTotals.pnl)}`}><strong>{fmt(pnlVariance)}</strong></td>
-                    <td className={`pnl-num ${pnlVariancePct != null && Math.abs(pnlVariancePct) > 10 ? (pnlVariance >= 0 ? "pnl-fav" : "pnl-adv") : ""}`}>
-                      <strong>{pnlVariancePct != null ? `${pnlVariancePct.toFixed(1)}%` : "—"}</strong>
-                    </td>
-                  </tr>
-                  {estTotals.tce != null ? (
-                    <tr className="pnl-subtotal-row">
-                      <td><strong>TCE</strong></td>
-                      <td className="pnl-num"><strong>{fmt(estTotals.tce)}</strong></td>
-                      <td className="pnl-num" colSpan={4}>—</td>
-                    </tr>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <tr className="pnl-line-row">
-                    <td><strong>{t("page.pnl.gross_revenue", "Gross Revenue")}</strong></td>
-                    <td className="pnl-num">{fmt(data.columns.estimate.revenue + data.columns.estimate.hire + data.columns.estimate.demurrage)}</td>
-                    <td className="pnl-num">{fmt(data.columns.actual.revenue + data.columns.actual.hire + data.columns.actual.demurrage)}</td>
-                    <td className="pnl-num">{fmt(data.columns.posted.revenue + data.columns.posted.hire + data.columns.posted.demurrage)}</td>
-                    <td className="pnl-num">—</td>
-                    <td className="pnl-num">—</td>
-                  </tr>
-                  <tr className="pnl-line-row">
-                    <td style={{ paddingLeft: "1.5rem" }}>- {LINE_LABELS.commission}</td>
-                    <td className="pnl-num">({fmt(data.columns.estimate.commission)})</td>
-                    <td className="pnl-num">({fmt(data.columns.actual.commission)})</td>
-                    <td className="pnl-num">({fmt(data.columns.posted.commission)})</td>
-                    <td className="pnl-num">—</td>
-                    <td className="pnl-num">—</td>
-                  </tr>
-                  <tr className="pnl-subtotal-row">
-                    <td><strong>{t("page.pnl.net_revenue", "Net Revenue")}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(estTotals.revenue - data.columns.estimate.commission)}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(actTotals.revenue - data.columns.actual.commission)}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(postTotals.revenue - data.columns.posted.commission)}</strong></td>
-                    <td className="pnl-num">—</td>
-                    <td className="pnl-num">—</td>
-                  </tr>
-                  <tr className="pnl-line-row">
-                    <td><strong>{t("page.pnl.total_cost", "Total Cost")}</strong></td>
-                    <td className="pnl-num">{fmt(estTotals.cost)}</td>
-                    <td className="pnl-num">{fmt(actTotals.cost)}</td>
-                    <td className="pnl-num">{fmt(postTotals.cost)}</td>
-                    <td className="pnl-num">—</td>
-                    <td className="pnl-num">—</td>
-                  </tr>
-                  <tr className="pnl-total-row">
-                    <td><strong>{t("page.pnl.net_pnl", "NET P&L")}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(estTotals.pnl)}</strong></td>
-                    <td className={`pnl-num ${actTotals.pnl >= 0 ? "pnl-fav" : "pnl-adv"}`}><strong>{fmt(actTotals.pnl)}</strong></td>
-                    <td className="pnl-num"><strong>{fmt(postTotals.pnl)}</strong></td>
-                    <td className={`pnl-num ${varianceClass(pnlVariance, estTotals.pnl)}`}><strong>{fmt(pnlVariance)}</strong></td>
-                    <td className={`pnl-num ${pnlVariancePct != null && Math.abs(pnlVariancePct) > 10 ? (pnlVariance >= 0 ? "pnl-fav" : "pnl-adv") : ""}`}>
-                      <strong>{pnlVariancePct != null ? `${pnlVariancePct.toFixed(1)}%` : "—"}</strong>
-                    </td>
-                  </tr>
-                </>
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid<PnlDetailRow>
+          columns={detailCols}
+          data={detailRows}
+          rowKey={(r) => r.id}
+          onRowClick={(r) => {
+            if (r.id.startsWith("line-")) toggleLine(r.id.slice(5));
+          }}
+          storageKey="finance_pnl_voyage_grid"
+          showFooter={false}
+          emptyText={t("common.empty", "No records")}
+        />
       </div>
+      {voyageId ? <RevisionsPanel entityType="voyage" entityId={voyageId} /> : null}
     </AppShell>
   );
 }

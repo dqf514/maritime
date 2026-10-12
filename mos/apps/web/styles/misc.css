@@ -354,3 +354,55 @@
   .land-flow-track::before { display: none; }
   .land-zone-grid { grid-template-columns: 1fr; }
 }
+
+/* ── D1 双币字段（Amount + Amount base + FX rate 三联） ── */
+.currency-field {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--gap-sm);
+}
+.form-grid > .currency-field {
+  grid-column: 1 / -1;
+}
+.currency-field .field-row {
+  margin: 0;
+}
+.cur-ccy {
+  margin-left: 4px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--chrome-bg, var(--surface-2, rgba(0, 0, 0, 0.04)));
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.cur-ro {
+  display: block;
+  height: var(--input-h, 26px);
+  padding: 0 6px;
+  line-height: var(--input-h, 26px);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink);
+}
+.cur-hint {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* ── D2 港口本地时间（GMT±N 标签 + hover 全精度） ── */
+.port-time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.port-time-tz {
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+}

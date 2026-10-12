@@ -12,13 +12,14 @@ export default function CharterDetailPage() {
   const params = useParams<{ id: string }>();
 
   return (
-    <AppShell
-      breadcrumbs={[
-        { label: t("page.charters.title", "租约工作台"), href: "/charters" },
-        { label: t("page.charters.edit", "编辑租约") },
-      ]}
-    >
-      <CharterEditor charterId={params.id} />
+    <AppShell>
+      <CharterEditor
+        charterId={params.id}
+        breadcrumb={[
+          { label: t("nav.charters", "Charters"), href: "/charters" },
+          { label: `#${params.id}` },
+        ]}
+      />
     </AppShell>
   );
 }

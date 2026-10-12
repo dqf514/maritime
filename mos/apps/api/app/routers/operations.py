@@ -28,9 +28,13 @@ from app.models_domain import (
 from app.models_wave1 import Counterparty, Port, Vessel
 from app.security import AuthContext, require_module
 from app.services.pnl import PNL_LINE_KEYS, voyage_pnl_row
+from app.services.port_functions import normalize_function_code
+from app.services.alert_engine import assert_no_blocking_alerts
+from app.services.audit import audit
 from app.services.recycle import soft_delete
+from app.services.report_sequence import assert_report_sequence
 from app.services.tenant_guard import scoped_get
-from app.services.state_machine import VOYAGE_TRANSITIONS, transition
+from app.services.state_machine import VOYAGE_TRANSITIONS, InvalidState, transition
 
 router = APIRouter(tags=["Operations"])
 
@@ -63,6 +67,19 @@ def _alive(status: str | None) -> bool:
     return status != "deleted"
 
 
+def _voyage_alert_context(row: Voyage) -> dict:
+    """告警规则评估上下文（field 路径 voyage.* → evaluate_condition）。"""
+    return {
+        "voyage": {
+            "voyage_no": row.voyage_no,
+            "status": row.status,
+            "cargo": row.cargo,
+            "vessel_id": str(row.vessel_id) if row.vessel_id else None,
+            "charter_id": str(row.charter_id) if row.charter_id else None,
+        }
+    }
+
+
 class VoyageIn(BaseModel):
     voyage_no: str
     vessel_id: UUID | None = None
@@ -78,6 +95,7 @@ class VoyageOut(BaseModel):
     vessel_id: UUID | None
     charter_id: UUID | None
     cargo: str | None
+    updated_at: datetime | None = None
 
 
 class PortCallIn(BaseModel):
@@ -85,6 +103,7 @@ class PortCallIn(BaseModel):
     port_id: UUID | None = None
     seq: int = 1
     purpose: str = "load"
+    function_code: str | None = None
     eta: datetime | None = None
     etd: datetime | None = None
     agent: str | None = None
@@ -98,6 +117,7 @@ class PortCallOut(BaseModel):
     port_id: UUID | None
     seq: int
     purpose: str
+    function_code: str | None = None
     eta: datetime | None
     etd: datetime | None
     ata: datetime | None
@@ -130,6 +150,7 @@ class NoonOut(BaseModel):
     wind_bf: float | None = None
     sea_state: str | None = None
     current_kn: float | None = None
+    stage: str | None = None  # 推导的活动报告阶段（sea/arrival/in_port/cargo/bunker/departure/sof）
 
 
 class SofIn(BaseModel):
@@ -164,6 +185,8 @@ def create_voyage(body: VoyageIn, auth: AuthContext = Depends(require_module("op
         cargo=body.cargo,
         status="planned",
     )
+    # Tasks & Alerts 可阻断保存：命中 blocking 高优先级规则 → 409 ALERT_BLOCKED
+    assert_no_blocking_alerts(db, auth.tenant_id, "voyage", _voyage_alert_context(row))
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -198,6 +221,17 @@ def update_voyage(
         if scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
             raise HTTPException(404, "Vessel not found")
         row.vessel_id = body.vessel_id
+    # Tasks & Alerts 可阻断保存：字段落地后、提交前评估 blocking 规则
+    assert_no_blocking_alerts(db, auth.tenant_id, "voyage", _voyage_alert_context(row))
+    audit(
+        db,
+        action="voyage.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="voyage",
+        entity_id=str(row.id),
+        detail={"fields": sorted(fields)},
+    )
     db.commit()
     db.refresh(row)
     return VoyageOut.model_validate(row)
@@ -234,12 +268,257 @@ def voyage_transition(
     row = db.get(Voyage, voyage_id)
     if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Voyage not found")
+    prev = row.status
     row.status = transition("voyage", row.status, body.target, VOYAGE_TRANSITIONS)
     now = datetime.now(timezone.utc)
     if body.target == "in_progress":
-        row.started_at = now
+        if not row.started_at:
+            row.started_at = now
+        if prev == "completed":
+            row.completed_at = None  # reopen：清除完成时间，保留原始开航时间
     if body.target == "completed":
         row.completed_at = now
+    # Tasks & Alerts 可阻断保存：状态落地后、提交前评估 blocking 规则
+    assert_no_blocking_alerts(db, auth.tenant_id, "voyage", _voyage_alert_context(row))
+    audit(
+        db,
+        action="voyage.transition",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="voyage",
+        entity_id=str(row.id),
+        detail={"from": prev, "to": body.target},
+    )
+    db.commit()
+    db.refresh(row)
+    return VoyageOut.model_validate(row)
+
+
+# ── Batch operations (C2-P2) ──────────────────────────────────────────────
+# POST /voyages/batch — 批量 close / reopen / assign。
+# 语义（部分成功允许）：
+#   200 {ok:[id], failed:[{id,code,message}]} — 至少一个成功（或空输入无失败）
+#   409 — 全部失败时返回第一个错误（detail 带 code/message，并附 failed 明细）
+#   403 — batch close 角色不足（operations|management|tenant_admin）
+#   422 BATCH_TOO_LARGE — voyage_ids > 200
+# 未知/跨租户 id 记入 failed（NOT_FOUND），不整体 404、不泄露存在性。
+# 状态机只走 VOYAGE_TRANSITIONS 边；reopen 走 completed → in_progress（清
+# completed_at、保留 started_at），cancelled 无出边仍按 INVALID_STATE 记入 failed。
+
+BATCH_MAX_IDS = 200
+_BATCH_CLOSE_ROLES = {"operations", "management", "tenant_admin"}
+_BATCH_ACTIONS = ("close", "reopen", "assign")
+# close → completed（与 lifecycle「Closed」步骤一致）；reopen → in_progress
+# （仅 completed 可重开；cancelled 终态 INVALID_STATE；非终态报 NOT_CLOSED）。
+_BATCH_ACTION_TARGET = {"close": "completed", "reopen": "in_progress"}
+
+
+class VoyageBatchIn(BaseModel):
+    action: str
+    voyage_ids: list[UUID]
+    operator: str | None = None
+
+
+class VoyageBatchFail(BaseModel):
+    id: str
+    code: str
+    message: str
+
+
+class VoyageBatchOut(BaseModel):
+    ok: list[str]
+    failed: list[VoyageBatchFail]
+
+
+def _batch_fail(vid: UUID, code: str, message: str) -> dict:
+    return {"id": str(vid), "code": code, "message": message}
+
+
+def _batch_fail_from_exc(vid: UUID, exc: HTTPException) -> dict:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        return _batch_fail(vid, str(detail.get("code") or "ERROR"), str(detail.get("message") or detail))
+    return _batch_fail(vid, "ERROR", str(detail))
+
+
+@router.post("/voyages/batch", response_model=VoyageBatchOut)
+def voyages_batch(
+    body: VoyageBatchIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """批量操作航次：close（→completed）/ reopen（completed→in_progress）/ assign（写 meta.operator）。
+
+    部分成功允许；全部失败时 409 带第一个错误。逐条独立提交/回滚。
+    """
+    if body.action not in _BATCH_ACTIONS:
+        raise HTTPException(422, detail={"code": "INVALID_ACTION", "message": f"action must be one of {list(_BATCH_ACTIONS)}"})
+    if len(body.voyage_ids) > BATCH_MAX_IDS:
+        raise HTTPException(
+            422,
+            detail={"code": "BATCH_TOO_LARGE", "message": f"voyage_ids must be <= {BATCH_MAX_IDS}", "max": BATCH_MAX_IDS},
+        )
+    # IMOS：批量关闭属运营关账动作，收紧到运营/管理角色
+    if body.action == "close" and not (_BATCH_CLOSE_ROLES & set(auth.roles or [])):
+        raise HTTPException(403, detail={"code": "FORBIDDEN", "message": "Batch close requires operations/management role"})
+    if body.action == "assign" and not (body.operator or "").strip():
+        raise HTTPException(422, detail={"code": "OPERATOR_REQUIRED", "message": "operator is required for assign"})
+
+    # 去重保序
+    seen: set[UUID] = set()
+    ids: list[UUID] = []
+    for vid in body.voyage_ids:
+        if vid not in seen:
+            seen.add(vid)
+            ids.append(vid)
+
+    ok: list[str] = []
+    failed: list[dict] = []
+    target = _BATCH_ACTION_TARGET.get(body.action)
+
+    for vid in ids:
+        try:
+            row = db.get(Voyage, vid)
+            if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+                failed.append(_batch_fail(vid, "NOT_FOUND", "Voyage not found"))
+                continue
+            if body.action == "reopen" and row.status not in ("completed", "cancelled"):
+                # reopen 只对终态有意义；planned→in_progress 是 start，不是 reopen
+                failed.append(_batch_fail(vid, "NOT_CLOSED", f"Voyage is {row.status}, not closed"))
+                continue
+            if body.action == "assign":
+                meta = dict(row.meta or {})
+                meta["operator"] = body.operator.strip()
+                row.meta = meta
+                audit(
+                    db,
+                    action="voyage.assign",
+                    tenant_id=auth.tenant_id,
+                    actor_user_id=auth.user_id,
+                    entity_type="voyage",
+                    entity_id=str(row.id),
+                    detail={"operator": body.operator.strip()},
+                )
+            else:
+                prev = row.status
+                try:
+                    row.status = transition("voyage", row.status, target, VOYAGE_TRANSITIONS)
+                except InvalidState as exc:
+                    failed.append(_batch_fail_from_exc(vid, exc))
+                    continue
+                now = datetime.now(timezone.utc)
+                if target == "completed":
+                    row.completed_at = now
+                elif target == "in_progress":
+                    if not row.started_at:
+                        row.started_at = now
+                    if prev == "completed":
+                        row.completed_at = None  # reopen：清完成时间
+                assert_no_blocking_alerts(db, auth.tenant_id, "voyage", _voyage_alert_context(row))
+                audit(
+                    db,
+                    action="voyage.transition",
+                    tenant_id=auth.tenant_id,
+                    actor_user_id=auth.user_id,
+                    entity_type="voyage",
+                    entity_id=str(row.id),
+                    detail={"from": prev, "to": target, "batch": body.action},
+                )
+            db.commit()
+            ok.append(str(vid))
+        except HTTPException as exc:
+            db.rollback()
+            failed.append(_batch_fail_from_exc(vid, exc))
+        except Exception as exc:  # noqa: BLE001 — 单条失败不拖垮整批
+            db.rollback()
+            failed.append(_batch_fail(vid, "ERROR", str(exc)))
+
+    # 汇总审计（独立事务，即使 0 成功也留痕）
+    audit(
+        db,
+        action="voyage.batch",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="voyage",
+        entity_id=None,
+        detail={"action": body.action, "ok": len(ok), "failed": len(failed)},
+        commit=True,
+    )
+
+    if not ok and failed:
+        first = failed[0]
+        raise HTTPException(
+            409,
+            detail={"code": first["code"], "message": first["message"], "failed": failed},
+        )
+    return {"ok": ok, "failed": failed}
+
+
+# ── Voyage itinerary template (C2-P3) ─────────────────────────────────────
+# POST /voyages/{id}/copy-itinerary → 新航次（planned）+ 复制挂靠。
+# 时间语义：ETA/ETD 按绝对时间原样复制（新航次尚无计划日期，绝对复制最简单可辩护）。
+# 执行事实（ATA/ATD/NOR/EOSP/B/L）不复制。as_template=true 仅表示“副本即模板”，
+# 不额外落库（无模板注册表）。新航次状态用 planned（VOYAGE_TRANSITIONS 无 draft 态）。
+
+
+@router.post("/voyages/{voyage_id}/copy-itinerary", response_model=VoyageOut)
+def copy_voyage_itinerary(
+    voyage_id: UUID,
+    as_template: bool = Query(False),
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """复制航次挂靠行程到新航次（planned）。模板=副本本身，无额外注册。"""
+    src = db.get(Voyage, voyage_id)
+    if not src or src.tenant_id != auth.tenant_id or not _alive(src.status):
+        raise HTTPException(404, "Voyage not found")
+    src_calls = db.scalars(
+        select(PortCall).where(PortCall.tenant_id == auth.tenant_id, PortCall.voyage_id == src.id).order_by(PortCall.seq)
+    ).all()
+
+    base_no = f"{src.voyage_no}-COPY"
+    new_no = base_no
+    n = 1
+    while db.scalar(select(Voyage.id).where(Voyage.tenant_id == auth.tenant_id, Voyage.voyage_no == new_no)):
+        n += 1
+        new_no = f"{base_no}-{n}"
+
+    row = Voyage(
+        tenant_id=auth.tenant_id,
+        voyage_no=new_no,
+        vessel_id=src.vessel_id,
+        charter_id=src.charter_id,
+        cargo=src.cargo,
+        status="planned",
+        meta={"copied_from": str(src.id), "as_template": bool(as_template)},
+    )
+    assert_no_blocking_alerts(db, auth.tenant_id, "voyage", _voyage_alert_context(row))
+    db.add(row)
+    db.flush()
+    for pc in src_calls:
+        db.add(
+            PortCall(
+                tenant_id=auth.tenant_id,
+                voyage_id=row.id,
+                port_id=pc.port_id,
+                seq=pc.seq,
+                purpose=pc.purpose,
+                function_code=pc.function_code,
+                eta=pc.eta,
+                etd=pc.etd,
+                agent=pc.agent,
+                timezone=pc.timezone,
+            )
+        )
+    audit(
+        db,
+        action="voyage.copy_itinerary",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="voyage",
+        entity_id=str(row.id),
+        detail={"from": str(src.id), "port_calls": len(src_calls), "as_template": bool(as_template)},
+    )
     db.commit()
     db.refresh(row)
     return VoyageOut.model_validate(row)
@@ -415,6 +694,7 @@ def voyage_overview(
                 "id": str(pc.id),
                 "seq": pc.seq,
                 "purpose": pc.purpose,
+                "function_code": pc.function_code,
                 "port_id": str(pc.port_id) if pc.port_id else None,
                 "eta": pc.eta.isoformat() if pc.eta else None,
                 "etd": pc.etd.isoformat() if pc.etd else None,
@@ -480,6 +760,7 @@ def create_port_call(body: PortCallIn, auth: AuthContext = Depends(require_modul
     v = db.get(Voyage, body.voyage_id)
     if not v or v.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Voyage not found")
+    body.function_code = normalize_function_code(body.function_code)
     row = PortCall(tenant_id=auth.tenant_id, **body.model_dump())
     db.add(row)
     db.commit()
@@ -535,6 +816,18 @@ def create_noon(body: NoonIn, auth: AuthContext = Depends(require_module("operat
     v = db.get(Voyage, body.voyage_id)
     if not v or v.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Voyage not found")
+    # Activity Report 审批顺序链：阶段不得回退（同阶段可重复；CFGRelaxReportSequence 可关）
+    stage = assert_report_sequence(
+        db,
+        auth.tenant_id,
+        v.id,
+        report_at=body.report_at,
+        lat=body.lat,
+        lon=body.lon,
+        speed=body.speed,
+        remarks=body.remarks,
+        voyage_no=v.voyage_no,
+    )
     deviation = None
     # ETA deviation vs first port call ETA
     pc = db.scalar(select(PortCall).where(PortCall.voyage_id == v.id).order_by(PortCall.seq).limit(1))
@@ -578,6 +871,7 @@ def create_noon(body: NoonIn, auth: AuthContext = Depends(require_module("operat
         wind_bf=body.wind_bf,
         sea_state=body.sea_state,
         current_kn=body.current_kn,
+        stage=stage,
     )
 
 

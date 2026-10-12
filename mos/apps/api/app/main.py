@@ -43,12 +43,15 @@ import app.models_trading  # noqa: F401
 import app.models_pooling  # noqa: F401
 import app.models_lightering  # noqa: F401
 import app.models_reference_ext  # noqa: F401
+import app.models_interface  # noqa: F401
+import app.models_field_perms  # noqa: F401
 from app.routers.admin_platform import router as admin_router
 from app.routers.ai_chat import router as ai_chat_router
 from app.routers.ai_actions import router as ai_actions_router
 from app.routers.metrics import router as metrics_router
 from app.routers.ai_hub import router as ai_router
 from app.routers.webhooks import router as webhooks_router
+from app.routers.market_data import positions_router as market_positions_router
 from app.routers.market_data import router as market_data_router
 from app.routers.email_intelligence import router as email_intel_router
 from app.routers.report import router as report_router
@@ -56,19 +59,24 @@ from app.routers.compliance import router as compliance_router
 from app.routers.commercial import router as commercial_router
 from app.routers.time_charter import router as time_charter_router
 from app.routers.config import router as config_router
+from app.routers.meta import router as meta_router
 from app.routers.connectors import router as connectors_router
 from app.routers.dashboards import router as dashboards_router
 from app.routers.email_notify import router as email_router
 from app.routers.exceptions import router as exceptions_router
 from app.routers.exports import router as exports_router
+from app.routers.imports import router as imports_router
 from app.routers.files import router as files_router
 from app.routers.finance_ext import router as finance_router
 from app.routers.finance_depth import router as finance_depth_router
 from app.routers.payment_batches import router as payment_batches_router
+from app.routers.payment_export import router as payment_export_router
 from app.routers.gl_management import router as gl_management_router
 from app.routers.laytimes import router as laytimes_router
 from app.routers.claims import router as claims_router
 from app.routers.invoices import router as invoices_router
+from app.routers.mirror_invoices import router as mirror_invoices_router
+from app.routers.approvals import router as approvals_router
 from app.routers.bunker import router as bunker_router
 from app.routers.portcosts import router as portcosts_router
 from app.routers.rates import router as rates_router
@@ -97,6 +105,9 @@ from app.routers.trading import router as trading_router
 from app.routers.pooling import router as pooling_router
 from app.routers.lightering import router as lightering_router
 from app.routers.masterdata_ext import router as masterdata_ext_router
+from app.routers.interface_messages import router as interface_messages_router
+from app.routers.field_perms import router as field_perms_router
+from app.routers.udf import router as udf_router
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo
 from app.seed_demo_flow import seed_full_demo_flow
 from app.seed_i18n import seed_i18n
@@ -381,6 +392,7 @@ app.include_router(ai_actions_router, prefix="/api/v1")
 app.include_router(metrics_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(market_data_router, prefix="/api/v1")
+app.include_router(market_positions_router, prefix="/api/v1")
 app.include_router(email_intel_router, prefix="/api/v1")
 app.include_router(report_router, prefix="/api/v1")
 app.include_router(compliance_router, prefix="/api/v1")
@@ -389,15 +401,19 @@ app.include_router(email_router, prefix="/api/v1")
 app.include_router(commercial_router, prefix="/api/v1")
 app.include_router(time_charter_router, prefix="/api/v1")
 app.include_router(config_router, prefix="/api/v1")
+app.include_router(meta_router, prefix="/api/v1")
 app.include_router(marilink_router, prefix="/api/v1")
 app.include_router(operations_router, prefix="/api/v1")
 app.include_router(finance_router, prefix="/api/v1")
 app.include_router(finance_depth_router, prefix="/api/v1")
 app.include_router(payment_batches_router, prefix="/api/v1")
+app.include_router(payment_export_router, prefix="/api/v1")
 app.include_router(gl_management_router, prefix="/api/v1")
 app.include_router(laytimes_router, prefix="/api/v1")
 app.include_router(claims_router, prefix="/api/v1")
 app.include_router(invoices_router, prefix="/api/v1")
+app.include_router(mirror_invoices_router, prefix="/api/v1")
+app.include_router(approvals_router, prefix="/api/v1")
 app.include_router(bunker_router, prefix="/api/v1")
 app.include_router(portcosts_router, prefix="/api/v1")
 app.include_router(rates_router, prefix="/api/v1")
@@ -416,6 +432,7 @@ app.include_router(recycle_router, prefix="/api/v1")
 app.include_router(guides_router, prefix="/api/v1")
 app.include_router(onboarding_router, prefix="/api/v1")
 app.include_router(exports_router, prefix="/api/v1")
+app.include_router(imports_router, prefix="/api/v1")
 app.include_router(cargo_router, prefix="/api/v1")
 app.include_router(scheduling_router, prefix="/api/v1")
 app.include_router(coa_router, prefix="/api/v1")
@@ -423,6 +440,9 @@ app.include_router(trading_router, prefix="/api/v1")
 app.include_router(pooling_router, prefix="/api/v1")
 app.include_router(lightering_router, prefix="/api/v1")
 app.include_router(masterdata_ext_router, prefix="/api/v1")
+app.include_router(interface_messages_router, prefix="/api/v1")
+app.include_router(field_perms_router, prefix="/api/v1")
+app.include_router(udf_router, prefix="/api/v1")
 
 # Only branding assets are public; backups and other uploads are never statically served
 app.mount("/uploads/branding", StaticFiles(directory=str(UPLOAD_ROOT / "branding")), name="branding")

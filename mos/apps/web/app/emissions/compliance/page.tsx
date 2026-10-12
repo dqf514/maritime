@@ -88,8 +88,12 @@ export default function CompliancePage() {
   return (
     <AppShell>
       <PageHeader
-        title="Carbon Compliance"
-        subtitle="EU ETS, FuelEU Maritime, CII — full emissions compliance dashboard"
+        breadcrumb={[
+          { label: t("nav.emissions", "Emissions / FuelEU"), href: "/emissions" },
+          { label: t("nav.compliance", "Carbon compliance") },
+        ]}
+        title={t("page.compliance.title", "Carbon Compliance")}
+        subtitle={t("page.compliance.sub", "EU ETS, FuelEU Maritime, CII — full emissions compliance dashboard")}
       />
       {/* Fleet compliance summary */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>

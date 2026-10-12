@@ -2,11 +2,14 @@
 
 // 3.6：PDA/FDA 面板（自取数 + 创建/流转）。
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { LookupSelect } from "@/components/LookupSelect";
+import { Num } from "@/components/Num";
 import { useToast } from "@/components/ToastProvider";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { apiGet, apiPost } from "@/lib/api";
-import { fmt } from "@/lib/fmt";
 import { useI18n } from "@/lib/i18n";
 
 type VoyageRef = { id: string; voyage_no: string };
@@ -22,6 +25,7 @@ export function PdaPanel() {
   const [fdaAmount, setFdaAmount] = useState("");
   const [currency, setCurrency] = useState("USD");
   const [busy, setBusy] = useState(false);
+  const ctx = useContextMenu<Pda>();
 
   const load = useCallback(async () => {
     const [p, v] = await Promise.all([
@@ -72,6 +76,117 @@ export function PdaPanel() {
     }
   }
 
+  const cols = useMemo<ColumnDef<Pda>[]>(
+    () => [
+      {
+        key: "id",
+        title: "ID",
+        width: 90,
+        value: (r) => r.id,
+        render: (v) => String(v).slice(0, 8),
+      },
+      {
+        key: "voyage_id",
+        title: t("page.voyages.list", "Voyages"),
+        value: (r) => r.voyage_id ?? "",
+        render: (v, r) =>
+          r.voyage_id
+            ? voyages.find((x) => x.id === r.voyage_id)?.voyage_no || r.voyage_id.slice(0, 8)
+            : "—",
+      },
+      {
+        key: "pda_amount",
+        title: "PDA",
+        align: "right",
+        value: (r) => r.pda_amount,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "fda_amount",
+        title: "FDA",
+        align: "right",
+        value: (r) => r.fda_amount ?? null,
+        render: (v) => <Num v={v as number | null} digits={2} />,
+      },
+      {
+        key: "variance",
+        title: t("page.finance.variance", "差异"),
+        align: "right",
+        value: (r) => r.variance ?? null,
+        render: (v) => <Num v={v as number | null} digits={2} />,
+      },
+      { key: "status", title: t("common.status", "Status"), width: 100 },
+      {
+        key: "actions",
+        title: "",
+        width: 170,
+        value: () => "",
+        render: (_v, r) => (
+          <div className="desk-toolbar" style={{ margin: 0 }}>
+            {r.status === "draft" ? (
+              <button
+                className="btn btn-sm"
+                type="button"
+                disabled={busy}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  transition(r.id, "submitted");
+                }}
+              >
+                {t("common.submit", "提交")}
+              </button>
+            ) : null}
+            {r.status === "submitted" ? (
+              <button
+                className="btn btn-sm"
+                type="button"
+                disabled={busy}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  transition(r.id, "approved");
+                }}
+              >
+                {t("common.approve", "批准")}
+              </button>
+            ) : null}
+            {r.status === "approved" ? (
+              <button
+                className="btn btn-primary btn-sm"
+                type="button"
+                disabled={busy}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  transition(r.id, "fda");
+                }}
+              >
+                → FDA
+              </button>
+            ) : null}
+          </div>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, busy, voyages, fdaAmount],
+  );
+
+  // 同源 handler：右键菜单与行内按钮共用 transition()
+  const menuItems = (row: Pda): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = [
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(row.id) },
+    ];
+    if (row.status === "draft") {
+      items.push({ key: "submit", label: t("common.submit", "提交"), onClick: () => transition(row.id, "submitted") });
+    }
+    if (row.status === "submitted") {
+      items.push({ key: "approve", label: t("common.approve", "批准"), onClick: () => transition(row.id, "approved") });
+    }
+    if (row.status === "approved") {
+      items.push({ key: "fda", label: "→ FDA", onClick: () => transition(row.id, "fda") });
+    }
+    return items;
+  };
+
   return (
     <>
       <form className="panel" onSubmit={create}>
@@ -106,58 +221,17 @@ export function PdaPanel() {
         </button>
       </form>
       <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>{t("page.voyages.list", "Voyages")}</th>
-              <th>PDA</th>
-              <th>FDA</th>
-              <th>{t("page.finance.variance", "差异")}</th>
-              <th>{t("common.status", "Status")}</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {pdas.map((r) => (
-              <tr key={r.id}>
-                <td>{r.id.slice(0, 8)}</td>
-                <td>{r.voyage_id ? voyages.find((v) => v.id === r.voyage_id)?.voyage_no || r.voyage_id.slice(0, 8) : "—"}</td>
-                <td>{fmt(r.pda_amount)}</td>
-                <td>{fmt(r.fda_amount ?? null)}</td>
-                <td>{fmt(r.variance ?? null)}</td>
-                <td>{r.status}</td>
-                <td>
-                  <div className="desk-toolbar" style={{ margin: 0 }}>
-                    {r.status === "draft" ? (
-                      <button className="btn btn-sm" type="button" disabled={busy} onClick={() => transition(r.id, "submitted")}>
-                        {t("common.submit", "提交")}
-                      </button>
-                    ) : null}
-                    {r.status === "submitted" ? (
-                      <button className="btn btn-sm" type="button" disabled={busy} onClick={() => transition(r.id, "approved")}>
-                        {t("common.approve", "批准")}
-                      </button>
-                    ) : null}
-                    {r.status === "approved" ? (
-                      <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => transition(r.id, "fda")}>
-                        → FDA
-                      </button>
-                    ) : null}
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {!pdas.length ? (
-              <tr>
-                <td colSpan={7} className="muted">
-                  {t("common.empty", "No records")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+        <DataGrid<Pda>
+          columns={cols}
+          data={pdas}
+          rowKey={(r) => r.id}
+          onRowContextMenu={(row, _i, e) => ctx.open(row)(e)}
+          storageKey="finance_pda_grid"
+          showFooter={false}
+          emptyText={t("common.empty", "No records")}
+        />
       </div>
+      <ContextMenu controller={ctx} items={menuItems} />
     </>
   );
 }

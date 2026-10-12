@@ -30,9 +30,11 @@ from app.models_wave1 import Counterparty, Vessel
 from app.models_time_charter import HireSurvey
 from app.security import AuthContext, require_module
 from app.services.doc_numbering import next_doc_number
+from app.services.optimistic_lock import assert_fresh
 from app.models_clause import ClauseTemplate
 from app.services.clause_library import list_clauses, materialize_params
 from app.services.estimate_engine import compute_estimate, sensitivity
+from app.services.audit import audit
 from app.services.recycle import soft_delete
 from app.services.tenant_guard import scoped_get
 from app.services.state_machine import (
@@ -45,6 +47,7 @@ from app.services.state_machine import (
 )
 from app.models_time_charter import HireStatement, TimeCharterContract
 from app.services import hire_engine
+from app.services.cargo_terms import freight_with_overage
 from app.services.pricing_engine import AdvancedPricingEngine, WorldscaleCalculator
 from app.services.distance_service import get_distance, get_route
 from app.models_reference import PortDistance, WorldscaleRate
@@ -80,6 +83,7 @@ class EstimateOut(BaseModel):
     inputs: dict
     results: dict
     parent_id: UUID | None = None
+    updated_at: datetime | None = None
 
 
 class _CharterTermsMixin(BaseModel):
@@ -92,6 +96,10 @@ class _CharterTermsMixin(BaseModel):
     freight_rate: float | None = None
     freight_basis: Literal["per_mt", "lumpsum", "worldscale"] | None = None
     cargo_qty: float | None = None
+    # Cargo CP terms: billable qty basis + MOL window + overage premium
+    bill_by: Literal["weight", "measure", "volume"] | None = None
+    tolerance_pct: Decimal | None = Field(default=None, ge=0, le=50)
+    overage_pct: Decimal | None = Field(default=None, ge=0, le=100)
     load_rate_pd: float | None = None
     disch_rate_pd: float | None = None
     address_comm_pct: float | None = None
@@ -159,6 +167,9 @@ class CharterOut(BaseModel):
     freight_rate: float | None = None
     freight_basis: str | None = None
     cargo_qty: float | None = None
+    bill_by: str | None = None
+    tolerance_pct: float | None = None
+    overage_pct: float | None = None
     load_rate_pd: float | None = None
     disch_rate_pd: float | None = None
     address_comm_pct: float | None = None
@@ -179,6 +190,7 @@ class CharterOut(BaseModel):
     planning_periods: dict | None = None
     rev_exp: dict | None = None
     properties: dict | None = None
+    updated_at: datetime | None = None
 
 
 class ScheduleIn(BaseModel):
@@ -229,6 +241,15 @@ def create_estimate(body: EstimateIn, auth: AuthContext = Depends(require_module
         created_by=auth.user_id,
     )
     db.add(row)
+    # 修订史（Revisions 侧栏）
+    audit(
+        db,
+        action="estimate.create",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="estimate",
+        entity_id=row.id,
+    )
     db.commit()
     db.refresh(row)
     return EstimateOut.model_validate(row)
@@ -604,6 +625,16 @@ def update_estimate(
         if row.status == "calculated":
             row.status = "draft"
     row.updated_at = datetime.now().astimezone()
+    # 修订史（Revisions 侧栏）：记录本次改动的字段清单
+    audit(
+        db,
+        action="estimate.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="estimate",
+        entity_id=row.id,
+        detail={"fields": sorted(fields)},
+    )
     db.commit()
     db.refresh(row)
     return EstimateOut.model_validate(row)
@@ -622,6 +653,14 @@ def delete_estimate(estimate_id: UUID, auth: AuthContext = Depends(require_modul
         row=row,
         title=row.title,
     )
+    audit(
+        db,
+        action="estimate.delete",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="estimate",
+        entity_id=row.id,
+    )
     db.commit()
     return {"ok": True, "recycled": True}
 
@@ -637,6 +676,14 @@ def calculate_estimate(estimate_id: UUID, auth: AuthContext = Depends(require_mo
         raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     row.status = "calculated"
     row.updated_at = datetime.now().astimezone()
+    audit(
+        db,
+        action="estimate.calculate",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="estimate",
+        entity_id=row.id,
+    )
     db.commit()
     db.refresh(row)
     return EstimateOut.model_validate(row)
@@ -720,6 +767,10 @@ def estimate_to_charter(estimate_id: UUID, auth: AuthContext = Depends(require_m
         cargo_qty=inputs.get("cargo_qty"),
         freight_rate=inputs.get("freight_rate"),
         freight_basis=basis_map.get(results.get("freight_basis")),
+        # cargo CP terms carried over from estimate inputs (optional; often unset)
+        bill_by=inputs.get("bill_by"),
+        tolerance_pct=inputs.get("cargo_tolerance_pct", inputs.get("tolerance_pct")),
+        overage_pct=inputs.get("overage_pct"),
         address_comm_pct=inputs.get("address_comm_pct") or inputs.get("commission_pct"),
         brokerage_pct=inputs.get("brokerage_pct"),
         hire_per_day=inputs.get("hire_per_day"),
@@ -758,6 +809,9 @@ def _charter_out(c: Charter) -> CharterOut:
         freight_rate=_f(c.freight_rate),
         freight_basis=c.freight_basis,
         cargo_qty=_f(c.cargo_qty),
+        bill_by=c.bill_by,
+        tolerance_pct=_f(c.tolerance_pct),
+        overage_pct=_f(c.overage_pct),
         load_rate_pd=_f(c.load_rate_pd),
         disch_rate_pd=_f(c.disch_rate_pd),
         address_comm_pct=_f(c.address_comm_pct),
@@ -778,6 +832,7 @@ def _charter_out(c: Charter) -> CharterOut:
         planning_periods=c.planning_periods,
         rev_exp=c.rev_exp,
         properties=c.properties,
+        updated_at=c.updated_at,
     )
 
 
@@ -1258,6 +1313,47 @@ def charter_laytime_inputs(
     return {"charter_id": str(row.id), "clause_codes": codes, "inputs": inputs}
 
 
+@router.get("/charters/{charter_id}/cargo-terms-price")
+def charter_cargo_terms_price(
+    charter_id: UUID,
+    billed_qty: Decimal = Query(..., gt=0, description="Billed quantity (e.g. B/L qty) in the bill_by unit"),
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """Billable freight under the charter's cargo CP terms.
+
+    Tolerance window bounds the contracted-rate quantity; overage above the
+    tolerance max bills at freight_rate × (1 + overage_pct/100). Read-only
+    pricing path — the TCE gold engine (estimate_engine) is intentionally not
+    wired to overage so fixtures stay byte-identical.
+    """
+    row = db.scalar(
+        select(Charter).where(
+            Charter.id == charter_id,
+            Charter.tenant_id == auth.tenant_id,
+            Charter.status != "deleted",
+        )
+    )
+    if row is None:
+        raise HTTPException(404, "Charter not found")
+    try:
+        priced = freight_with_overage(
+            contract_qty=row.cargo_qty,
+            billed_qty=billed_qty,
+            freight_rate=row.freight_rate or 0,
+            tolerance_pct=row.tolerance_pct,
+            overage_pct=row.overage_pct,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "CARGO_TERMS_PRICE_INVALID", "message": str(exc)})
+    return {
+        "charter_id": str(row.id),
+        "bill_by": row.bill_by,
+        "freight_basis": row.freight_basis,
+        "priced": priced,
+    }
+
+
 CHARTER_TERM_FIELDS = (
     "demurrage_rate",
     "despatch_rate",
@@ -1266,6 +1362,9 @@ CHARTER_TERM_FIELDS = (
     "freight_rate",
     "freight_basis",
     "cargo_qty",
+    "bill_by",
+    "tolerance_pct",
+    "overage_pct",
     "load_rate_pd",
     "disch_rate_pd",
     "address_comm_pct",
@@ -1354,6 +1453,9 @@ class CharterUpdate(_CharterTermsMixin):
     clauses: dict | None = None
     clear_vessel: bool = False
     clear_counterparty: bool = False
+    # optimistic-lock token (D4/D8) — excluded from model_dump so it never
+    # reaches the ORM via field loops / audits
+    expected_updated_at: str | None = Field(default=None, exclude=True)
 
 
 @router.patch("/charters/{charter_id}", response_model=CharterOut)
@@ -1366,7 +1468,8 @@ def update_charter(
     row = db.get(Charter, charter_id)
     if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Charter not found")
-    fields = body.model_fields_set
+    assert_fresh(row, body.expected_updated_at)
+    fields = body.model_fields_set - {"expected_updated_at"}
     if row.status in ("active", "completed"):
         locked = sorted(set(CHARTER_AMENDABLE_FIELDS) & fields)
         if locked:
@@ -1415,6 +1518,16 @@ def update_charter(
     if body.clauses is not None:
         row.clauses = body.clauses
     row.updated_at = datetime.now().astimezone()
+    # 修订史（Revisions 侧栏）：记录本次改动的字段清单
+    audit(
+        db,
+        action="charter.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="charter",
+        entity_id=str(row.id),
+        detail={"fields": sorted(fields)},
+    )
     db.commit()
     db.refresh(row)
     return _charter_out(row)
@@ -2065,6 +2178,7 @@ class TCContractOut(BaseModel):
     payment_frequency: str
     cancel_date: date | None
     status: str
+    updated_at: datetime | None = None
 
 
 @router.get("/tc-contracts", response_model=list[TCContractOut])

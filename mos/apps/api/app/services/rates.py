@@ -242,6 +242,7 @@ def _row_out(r: RateTableRow) -> dict[str, Any]:
         "unit": r.unit,
         "priority": r.priority,
         "notes": r.notes,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
 
 

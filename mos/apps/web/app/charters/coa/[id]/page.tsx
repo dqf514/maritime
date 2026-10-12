@@ -10,8 +10,14 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
 import { DateInput } from "@/components/DateInput";
-import { PageHeader } from "@/components/PageHeader";
-import { apiGet, apiPatch } from "@/lib/api";
+import { DetailHeader } from "@/components/DetailHeader";
+import { Num } from "@/components/Num";
+import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Tabs } from "@/components/Tabs";
+import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
+import { useStateActions } from "@/components/useTransitions";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -27,6 +33,9 @@ type CoaContract = {
   rate: number;
   currency: string;
   cargo_spec: string | null;
+  bill_by: string | null;
+  tolerance_pct: number | null;
+  overage_pct: number | null;
   status: string;
 };
 
@@ -81,6 +90,32 @@ type PnlResult = {
 
 type RefItem = { id: string; name: string };
 
+type PnlLine = { key: string; label: string; amount: number; total?: boolean };
+
+type ScoreMatch = {
+  cargo_id: string | null;
+  cargo_no: string | null;
+  score: number;
+  within_tolerance: boolean;
+};
+
+type ScoreLeg = {
+  itinerary_id: string | null;
+  seq: number;
+  load_port_id: string | null;
+  disch_port_id: string | null;
+  qty: number | null;
+  matches: ScoreMatch[];
+};
+
+type ScoreResult = {
+  contract_id: string;
+  bill_by: string | null;
+  tolerance_pct: number | null;
+  overage_pct: number | null;
+  items: ScoreLeg[];
+};
+
 const TABS = ["contract", "liftings", "allocation", "voyages", "pnl"] as const;
 type TabId = (typeof TABS)[number];
 
@@ -120,6 +155,11 @@ export default function CoaWorkspacePage() {
 
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [score, setScore] = useState<ScoreResult | null>(null);
+  const [scoreBusy, setScoreBusy] = useState(false);
+
+  // 状态机动作可见性：只渲染当前状态可执行的转移（coa_contract 表）
+  const nextStatuses = useStateActions("coa_contract", contract?.status);
 
   const toDraft = useCallback((c: CoaContract) => {
     setDraft({
@@ -131,14 +171,41 @@ export default function CoaWorkspacePage() {
       rate: String(c.rate ?? ""),
       currency: c.currency || "USD",
       cargo_spec: c.cargo_spec || "",
+      bill_by: c.bill_by || "",
+      tolerance_pct: c.tolerance_pct == null ? "" : String(c.tolerance_pct),
+      overage_pct: c.overage_pct == null ? "" : String(c.overage_pct),
     });
   }, []);
+
+  function validateCoa(): ValidateIssue[] {
+    const issues: ValidateIssue[] = [];
+    const qty = Number(draft.total_qty);
+    if (draft.total_qty === "" || !Number.isFinite(qty) || qty <= 0) {
+      issues.push({ level: "error", message: t("validate.coa.no_qty", "Total quantity must be greater than zero") });
+    }
+    if (draft.period_from && draft.period_to && draft.period_from > draft.period_to) {
+      issues.push({ level: "error", message: t("validate.coa.period", "Period from is after period to") });
+    }
+    const rate = Number(draft.rate);
+    if (draft.rate === "" || !Number.isFinite(rate) || rate < 0) {
+      issues.push({ level: "error", message: t("validate.coa.rate", "Rate is required and must not be negative") });
+    }
+    const tol = Number(draft.tolerance_pct);
+    if (draft.tolerance_pct !== "" && (!Number.isFinite(tol) || tol < 0 || tol > 50)) {
+      issues.push({ level: "error", message: t("validate.coa.tolerance", "Tolerance must be between 0 and 50") });
+    }
+    const over = Number(draft.overage_pct);
+    if (draft.overage_pct !== "" && (!Number.isFinite(over) || over < 0 || over > 100)) {
+      issues.push({ level: "error", message: t("validate.coa.overage", "Overage must be between 0 and 100") });
+    }
+    return issues;
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
     setErr("");
     try {
-      const c = await apiGet(`/api/v1/coa/${coaId}`);
+      const c = await apiGet(`/api/v1/coa/contracts/${coaId}`);
       setContract(c);
       toDraft(c);
       apiGet("/api/v1/masterdata/ports")
@@ -199,13 +266,43 @@ export default function CoaWorkspacePage() {
         currency: draft.currency,
       };
       if (draft.cargo_spec) payload.cargo_spec = draft.cargo_spec;
-      const updated = await apiPatch(`/api/v1/coa/${coaId}`, payload);
+      // C1-P1 cargo CP terms (null clears)
+      payload.bill_by = draft.bill_by || null;
+      payload.tolerance_pct = draft.tolerance_pct === "" ? null : Number(draft.tolerance_pct);
+      payload.overage_pct = draft.overage_pct === "" ? null : Number(draft.overage_pct);
+      const updated = await apiPatch(`/api/v1/coa/contracts/${coaId}`, payload);
       setContract(updated);
       toast.success(t("common.saved", "Saved"));
-    } catch (ex) {
-      toast.error(String(ex));
+    } catch (ex: any) {
+      if (ex?.status === 422) {
+        toast.error(ex?.message || t("page.coa.cp_terms_invalid", "Cargo CP terms invalid — check bill by / tolerance / overage"));
+      } else {
+        toast.error(String(ex));
+      }
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function transitionTo(target: string) {
+    try {
+      const res = await apiPost(`/api/v1/coa/contracts/${coaId}/transition?target=${encodeURIComponent(target)}`);
+      setContract((c) => (c ? { ...c, status: res.status || target } : c));
+      toast.success(t("page.coa.transitioned", "Status → {s}", { s: res.status || target }));
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function loadScore() {
+    setScoreBusy(true);
+    try {
+      const res: ScoreResult = await apiGet(`/api/v1/coa/contracts/${coaId}/score`);
+      setScore(res);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    } finally {
+      setScoreBusy(false);
     }
   }
 
@@ -221,6 +318,7 @@ export default function CoaWorkspacePage() {
         width: 115,
         agg: "sum",
         value: (r) => r.planned_qty ?? 0,
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       {
         key: "actual_qty",
@@ -229,6 +327,7 @@ export default function CoaWorkspacePage() {
         width: 115,
         agg: "sum",
         value: (r) => r.actual_qty ?? 0,
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       {
         key: "status",
@@ -266,7 +365,7 @@ export default function CoaWorkspacePage() {
         width: 115,
         agg: "sum",
         value: (r) => r.qty,
-        render: (v) => Number(v ?? 0).toLocaleString(),
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       {
         key: "allocated_qty",
@@ -275,7 +374,7 @@ export default function CoaWorkspacePage() {
         width: 115,
         agg: "sum",
         value: (r) => r.allocated_qty,
-        render: (v) => Number(v ?? 0).toLocaleString(),
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       {
         key: "remaining_qty",
@@ -284,7 +383,7 @@ export default function CoaWorkspacePage() {
         width: 115,
         agg: "sum",
         value: (r) => r.remaining_qty,
-        render: (v) => Number(v ?? 0).toLocaleString(),
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -312,7 +411,7 @@ export default function CoaWorkspacePage() {
         value: (r) => r.lifting.voyage_id || "",
         render: (v) =>
           v ? (
-            <Link href={`/operations/voyages/${v}`}>{String(v)}</Link>
+            <Link href={`/operations/voyages/${v}/workspace`}>{String(v)}</Link>
           ) : (
             "—"
           ),
@@ -330,10 +429,48 @@ export default function CoaWorkspacePage() {
         width: 115,
         agg: "sum",
         value: (r) => r.lifting.actual_qty ?? r.lifting.planned_qty ?? 0,
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
     ],
     [t],
   );
+
+  const pnlLineColumns: ColumnDef<PnlLine>[] = useMemo(
+    () => [
+      {
+        key: "label",
+        title: t("page.coa.pnl.line", "Line"),
+        value: (r) => r.label,
+        render: (v, r) => (r.total ? <strong>{String(v)}</strong> : String(v)),
+      },
+      {
+        key: "amount",
+        title: pnl?.currency || "USD",
+        align: "right",
+        value: (r) => r.amount,
+        render: (v, r) =>
+          r.total ? (
+            <strong>
+              <Num v={Number(v)} digits={2} />
+            </strong>
+          ) : (
+            <Num v={Number(v)} digits={2} />
+          ),
+      },
+    ],
+    [t, pnl?.currency],
+  );
+
+  const pnlLines: PnlLine[] = useMemo(() => {
+    if (!pnl) return [];
+    return [
+      { key: "revenue", label: t("page.coa.pnl.revenue", "Revenue"), amount: pnl.revenue },
+      { key: "fuel_cost", label: t("page.coa.pnl.fuel_cost", "Fuel cost"), amount: -pnl.fuel_cost },
+      { key: "other_cost", label: t("page.coa.pnl.other_cost", "Other cost"), amount: -pnl.other_cost },
+      { key: "gross", label: t("page.coa.pnl.gross", "P&L gross"), amount: pnl.pnl_gross, total: true },
+      { key: "fuel_neutral", label: t("page.coa.pnl.fuel_neutral", "P&L fuel-neutral"), amount: pnl.pnl_fuel_neutral, total: true },
+    ];
+  }, [pnl, t]);
 
   const tabLabels: Record<TabId, string> = {
     contract: t("page.coa.tab.contract", "Contract"),
@@ -349,30 +486,34 @@ export default function CoaWorkspacePage() {
       : 0;
 
   return (
-    <AppShell
-      breadcrumbs={[
-        { label: t("page.coa.title", "COA"), href: "/charters/coa" },
-        { label: contract?.coa_no || t("page.coa.workspace", "COA Manager") },
-      ]}
-    >
+    <AppShell>
       {err ? <p className="flash-err">{err}</p> : null}
 
       {contract ? (
         <>
-          <PageHeader
-            title={
-              <>
-                {contract.coa_no}
-                <span className={`badge tc-status-${contract.status}`}>{contract.status}</span>
-              </>
-            }
+          <DetailHeader
+            breadcrumb={[
+              { label: t("page.coa.title", "COA"), href: "/charters?type=coa" },
+              { label: contract.coa_no ? `#${contract.coa_no}` : `#${coaId}` },
+            ]}
+            title={contract.coa_no}
+            status={contract.status}
             subtitle={`${contract.rate_basis} · ${contract.rate.toLocaleString()} ${contract.currency} · ${contract.total_qty.toLocaleString()} ${contract.qty_unit}`}
-            actions={
-              <Link href="/charters/coa" className="btn btn-ghost">
-                {t("common.back", "Back")}
-              </Link>
-            }
+            actions={[
+              ...nextStatuses.map((s) => ({
+                key: `go-${s}`,
+                label: t(`page.coa.action.${s}`, s.replace(/_/g, " ")),
+                variant: s === "cancelled" ? ("danger" as const) : ("primary" as const),
+                onClick: () => void transitionTo(s),
+              })),
+              {
+                key: "back",
+                label: t("common.back", "Back"),
+                onClick: () => window.location.href = "/charters?type=coa",
+              },
+            ]}
           />
+          <StatusLegend statuses={["draft", "active", "completed", "cancelled"]} />
 
           {allocation ? (
             <div className="coa-kpis">
@@ -409,27 +550,24 @@ export default function CoaWorkspacePage() {
             </div>
           ) : null}
 
-          <div className="desk-tabs">
-            {TABS.map((tb) => (
-              <button
-                key={tb}
-                type="button"
-                className={`desk-tab${tab === tb ? " active" : ""}`}
-                onClick={() => setTab(tb)}
-              >
-                {tabLabels[tb]}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            items={TABS.map((tb) => ({ key: tb, label: tabLabels[tb] }))}
+            value={tab}
+            onChange={(k) => setTab(k as TabId)}
+            variant="line"
+          />
 
           <div className="coa-tab-body">
             {tab === "contract" ? (
               <div className="coa-panel">
                 <div className="coa-panel-head">
                   <h3>{t("page.coa.tab.contract", "Contract")}</h3>
-                  <button type="button" className="btn btn-primary" onClick={saveContract} disabled={saving}>
-                    {t("common.save", "Save")}
-                  </button>
+                  <div className="quick-row">
+                    <ValidateButton onValidate={validateCoa} />
+                    <button type="button" className="btn btn-primary" onClick={saveContract} disabled={saving}>
+                      {t("common.save", "Save")}
+                    </button>
+                  </div>
                 </div>
                 <div className="coa-panel-body">
                   <FormPanel columns={3}>
@@ -504,6 +642,38 @@ export default function CoaWorkspacePage() {
                           rows={3}
                         />
                       </FieldRow>
+                      {/* C1-P1 货物 CP 条款：计费量基准 / MOL 公差 / 超量加价 */}
+                      <FieldRow label={t("page.coa.terms.bill_by", "Bill by")}>
+                        <select
+                          value={draft.bill_by || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, bill_by: e.target.value }))}
+                        >
+                          <option value="">—</option>
+                          <option value="weight">weight</option>
+                          <option value="measure">measure</option>
+                          <option value="volume">volume</option>
+                        </select>
+                      </FieldRow>
+                      <FieldRow label={t("page.coa.terms.tolerance_pct", "Tolerance % (0–50)")}>
+                        <input
+                          type="number"
+                          step="any"
+                          min={0}
+                          max={50}
+                          value={draft.tolerance_pct || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, tolerance_pct: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.coa.terms.overage_pct", "Overage % (0–100)")}>
+                        <input
+                          type="number"
+                          step="any"
+                          min={0}
+                          max={100}
+                          value={draft.overage_pct || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, overage_pct: e.target.value }))}
+                        />
+                      </FieldRow>
                     </FormSection>
                   </FormPanel>
                 </div>
@@ -532,11 +702,16 @@ export default function CoaWorkspacePage() {
               <div className="coa-panel">
                 <div className="coa-panel-head">
                   <h3>{t("page.coa.tab.allocation", "Itinerary Allocation")}</h3>
-                  {allocation ? (
-                    <span className="muted">
-                      {t("page.coa.alloc.ratio", "Allocated {pct} of contracted", { pct: `${allocPct.toFixed(1)}%` })}
-                    </span>
-                  ) : null}
+                  <div className="quick-row">
+                    {allocation ? (
+                      <span className="muted">
+                        {t("page.coa.alloc.ratio", "Allocated {pct} of contracted", { pct: `${allocPct.toFixed(1)}%` })}
+                      </span>
+                    ) : null}
+                    <button type="button" className="btn btn-sm" onClick={() => void loadScore()} disabled={scoreBusy}>
+                      {scoreBusy ? t("common.loading", "Loading…") : t("page.coa.score_match", "Score match")}
+                    </button>
+                  </div>
                 </div>
                 <div className="coa-panel-body">
                   {allocation ? (
@@ -557,6 +732,63 @@ export default function CoaWorkspacePage() {
                   ) : (
                     <p className="muted">{t("common.loading", "Loading…")}</p>
                   )}
+                  {score ? (
+                    <div className="desk-section">
+                      <h3>{t("page.coa.score_title", "Cargo × leg score (0–100)")}</h3>
+                      {score.items.length === 0 ? (
+                        <p className="muted">{t("page.coa.score_empty", "No itinerary legs to score")}</p>
+                      ) : (
+                        score.items.map((leg) => (
+                          <div key={leg.itinerary_id || leg.seq} className="desk-section">
+                            <p className="muted">
+                              {t("page.coa.score_leg", "Leg {seq}", { seq: leg.seq })} · {portName(leg.load_port_id)} → {portName(leg.disch_port_id)}
+                              {leg.qty != null ? ` · ${leg.qty.toLocaleString()}` : ""}
+                            </p>
+                            {leg.matches.length === 0 ? (
+                              <p className="muted">{t("page.coa.score_no_match", "No matching cargoes")}</p>
+                            ) : (
+                              <DataGrid<ScoreMatch>
+                                columns={[
+                                  {
+                                    key: "cargo_no",
+                                    title: t("page.coa.score_cargo", "Cargo"),
+                                    minWidth: 140,
+                                    value: (r) => r.cargo_no || r.cargo_id || "",
+                                  },
+                                  {
+                                    key: "score",
+                                    title: t("page.coa.score_value", "Score"),
+                                    width: 100,
+                                    align: "right",
+                                    value: (r) => r.score,
+                                    render: (v) => <Num v={Number(v ?? 0)} digits={1} />,
+                                  },
+                                  {
+                                    key: "within_tolerance",
+                                    title: t("page.coa.score_tolerance", "In tolerance"),
+                                    width: 110,
+                                    value: (r) => r.within_tolerance,
+                                    render: (v) =>
+                                      v ? (
+                                        <span className="badge badge-pass">{t("common.yes", "Yes")}</span>
+                                      ) : (
+                                        <span className="badge badge-warn">{t("common.no", "No")}</span>
+                                      ),
+                                  },
+                                ]}
+                                data={leg.matches}
+                                rowKey={(r, i) => `${leg.seq}-${r.cargo_id || i}`}
+                                storageKey="coa-score-matches"
+                                showFooter={false}
+                                showColumnMenu={false}
+                                emptyText={t("common.empty", "No records")}
+                              />
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -624,38 +856,15 @@ export default function CoaWorkspacePage() {
                           <strong>{pnl.voyage_count}</strong>
                         </div>
                       </div>
-                      <table className="coa-pnl-table">
-                        <thead>
-                          <tr>
-                            <th>{t("page.coa.pnl.line", "Line")}</th>
-                            <th style={{ textAlign: "right" }}>{pnl.currency}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr>
-                            <td>{t("page.coa.pnl.revenue", "Revenue")}</td>
-                            <td className="num">{pnl.revenue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                          </tr>
-                          <tr>
-                            <td>{t("page.coa.pnl.fuel_cost", "Fuel cost")}</td>
-                            <td className="num">−{pnl.fuel_cost.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                          </tr>
-                          <tr>
-                            <td>{t("page.coa.pnl.other_cost", "Other cost")}</td>
-                            <td className="num">−{pnl.other_cost.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                          </tr>
-                          <tr>
-                            <td>{t("page.coa.pnl.gross", "P&L gross")}</td>
-                            <td className="num">{pnl.pnl_gross.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                          </tr>
-                          <tr className="coa-pnl-total">
-                            <td>{t("page.coa.pnl.fuel_neutral", "P&L fuel-neutral")}</td>
-                            <td className="num">
-                              {pnl.pnl_fuel_neutral.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
+                      <DataGrid<PnlLine>
+                        columns={pnlLineColumns}
+                        data={pnlLines}
+                        rowKey={(r) => r.key}
+                        storageKey="coa_pnl_lines"
+                        showFooter={false}
+                        showColumnMenu={false}
+                        emptyText={t("common.empty", "No records")}
+                      />
                       <p className="muted" style={{ marginTop: 10 }}>
                         {t(
                           "page.coa.pnl.hint",
@@ -670,6 +879,7 @@ export default function CoaWorkspacePage() {
               </div>
             ) : null}
           </div>
+          {contract ? <RevisionsPanel entityType="coa_contract" entityId={contract.id} /> : null}
         </>
       ) : loading ? (
         <p className="muted">{t("common.loading", "Loading…")}</p>

@@ -32,13 +32,26 @@ CROSS_TENANT_BY_DESIGN = {
 }
 
 QUERY_FUNCS = {"select", "update", "delete", "insert"}
-QUERY_METHODS = {"get", "scalars", "scalar", "execute", "query"}
+# 这些 Session 方法名不会出现在 dict 上，恒计为查询点
+QUERY_METHODS = {"scalars", "scalar", "execute", "query"}
+# .get 需区分 ORM Session.get(Model, pk) 与 dict.get(k)：
+# 仅当接收者是 session/db 风格对象时才计为查询点（dict.get 是常见误报）
+GET_METHODS = {"get"}
+SESSION_HINTS = {"db", "session", "sess", "conn", "connection", "dao", "store", "datastore"}
 PROTECT_MARKERS = ("tenant_id", "scoped_get", "scoped_query")
 
 
 def _func_protected(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     src = ast.dump(fn)
     return any(marker in src for marker in PROTECT_MARKERS)
+
+
+def _session_like(receiver: ast.AST) -> bool:
+    try:
+        text = ast.unparse(receiver)
+    except Exception:
+        return False
+    return any(seg in SESSION_HINTS for seg in text.split("."))
 
 
 def _has_query_site(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -51,6 +64,8 @@ def _has_query_site(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
             if isinstance(f, ast.Name) and f.id in QUERY_FUNCS:
                 return True
             if isinstance(f, ast.Attribute) and f.attr in QUERY_METHODS:
+                return True
+            if isinstance(f, ast.Attribute) and f.attr in GET_METHODS and _session_like(f.value):
                 return True
     return False
 

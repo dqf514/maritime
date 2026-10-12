@@ -4,15 +4,20 @@
 // 经纪规则 / 交还船检验 / 子合同。行详情页 /charters/tc/{id}。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
 import { DateInput } from "@/components/DateInput";
-import { PageHeader } from "@/components/PageHeader";
+import { DetailHeader } from "@/components/DetailHeader";
+import { Num } from "@/components/Num";
+import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Tabs } from "@/components/Tabs";
 import { PartyPicker } from "@/components/DataPicker";
+import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
+import { useStateActions } from "@/components/useTransitions";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -174,6 +179,32 @@ export default function TcWorkspacePage() {
   const [brokerForm, setBrokerForm] = useState({ broker_party_id: "", commission_type: "brokerage", commission_pct: "", applies_to: "all" });
   const [surveyForm, setSurveyForm] = useState({ kind: "on_hire", surveyed_at: "" });
   const [childForm, setChildForm] = useState({ contract_type: "tci", contract_style: "time_charter", hire_rate: "", hire_currency: "USD", delivery_date: "", redelivery_date: "" });
+
+  // 状态机动作可见性：只渲染当前状态可执行的转移（time_charter 表）
+  const nextStatuses = useStateActions("time_charter", contract?.status);
+
+  function validateTc(): ValidateIssue[] {
+    const issues: ValidateIssue[] = [];
+    const hire = Number(draft.hire_rate);
+    if (draft.hire_rate === "" || !Number.isFinite(hire) || hire <= 0) {
+      issues.push({ level: "error", message: t("validate.tc.no_hire", "Hire rate is required") });
+    }
+    if (!contract?.counterparty_id) {
+      issues.push({ level: "error", message: t("validate.tc.no_counterparty", "Counterparty is required") });
+    }
+    if (draft.delivery_date && draft.redelivery_date && draft.delivery_date > draft.redelivery_date) {
+      issues.push({ level: "error", message: t("validate.tc.dates", "Delivery date is after redelivery date") });
+    }
+    const addr = Number(draft.address_comm_pct);
+    if (draft.address_comm_pct !== "" && Number.isFinite(addr) && addr > 100) {
+      issues.push({ level: "error", message: t("validate.tc.addr_comm", "Address commission exceeds 100%") });
+    }
+    const brok = Number(draft.brokerage_pct);
+    if (draft.brokerage_pct !== "" && Number.isFinite(brok) && brok > 100) {
+      issues.push({ level: "error", message: t("validate.tc.brokerage", "Brokerage exceeds 100%") });
+    }
+    return issues;
+  }
 
   const toDraft = useCallback((c: TcContract) => {
     setDraft({
@@ -478,7 +509,7 @@ export default function TcWorkspacePage() {
         width: 120,
         agg: "sum",
         value: (r) => r.amount,
-        render: (v) => Number(v ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       {
         key: "status",
@@ -510,8 +541,8 @@ export default function TcWorkspacePage() {
       { key: "statement_number", title: t("page.tc.col.statement_no", "No"), width: 110, sticky: true, value: (r) => r.statement_number },
       { key: "period_start", title: t("page.tc.col.period_start", "From"), width: 95, value: (r) => d(r.period_start) },
       { key: "period_end", title: t("page.tc.col.period_end", "To"), width: 95, value: (r) => d(r.period_end) },
-      { key: "hire_days", title: t("page.tc.col.hire_days", "Hire days"), align: "right", width: 90, agg: "sum", value: (r) => r.hire_days },
-      { key: "off_hire_days", title: t("page.tc.col.off_days", "Off-hire d"), align: "right", width: 95, agg: "sum", value: (r) => r.off_hire_days },
+      { key: "hire_days", title: t("page.tc.col.hire_days", "Hire days"), align: "right", width: 90, agg: "sum", value: (r) => r.hire_days, render: (v) => <Num v={Number(v ?? 0)} digits={2} /> },
+      { key: "off_hire_days", title: t("page.tc.col.off_days", "Off-hire d"), align: "right", width: 95, agg: "sum", value: (r) => r.off_hire_days, render: (v) => <Num v={Number(v ?? 0)} digits={2} /> },
       {
         key: "gross_hire",
         title: t("page.tc.col.gross_hire", "Gross hire"),
@@ -519,7 +550,7 @@ export default function TcWorkspacePage() {
         width: 115,
         agg: "sum",
         value: (r) => r.gross_hire,
-        render: (v) => Number(v ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       {
         key: "off_hire_deduction",
@@ -528,7 +559,7 @@ export default function TcWorkspacePage() {
         width: 115,
         agg: "sum",
         value: (r) => r.off_hire_deduction,
-        render: (v) => Number(v ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       {
         key: "net_hire",
@@ -537,7 +568,11 @@ export default function TcWorkspacePage() {
         width: 115,
         agg: "sum",
         value: (r) => r.net_hire,
-        render: (v) => <strong>{Number(v ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>,
+        render: (v) => (
+          <strong>
+            <Num v={Number(v ?? 0)} digits={2} />
+          </strong>
+        ),
       },
       { key: "status", title: t("common.status", "Status"), width: 85, value: (r) => r.status },
     ],
@@ -557,6 +592,7 @@ export default function TcWorkspacePage() {
         width: 80,
         agg: "sum",
         value: (r) => r.deducted_days ?? 0,
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       {
         key: "status",
@@ -585,6 +621,7 @@ export default function TcWorkspacePage() {
         width: 95,
         agg: "sum",
         value: (r) => r.commission_pct,
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       { key: "applies_to", title: t("page.tc.col.applies_to", "Applies to"), width: 100, value: (r) => r.applies_to },
     ],
@@ -634,6 +671,7 @@ export default function TcWorkspacePage() {
         width: 110,
         agg: "sum",
         value: (r) => r.hire_rate,
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       { key: "delivery_date", title: t("page.tc.col.delivery", "Delivery"), width: 100, value: (r) => d(r.delivery_date) },
       { key: "redelivery_date", title: t("page.tc.col.redelivery", "Redelivery"), width: 100, value: (r) => d(r.redelivery_date) },
@@ -653,52 +691,34 @@ export default function TcWorkspacePage() {
   };
 
   return (
-    <AppShell
-      breadcrumbs={[
-        { label: t("page.tc.title", "Time Charter"), href: "/charters/tc" },
-        { label: typeLabel || t("page.tc.workspace", "TC Manager") },
-      ]}
-    >
+    <AppShell>
       {err ? <p className="flash-err">{err}</p> : null}
 
       {contract ? (
         <>
-          <PageHeader
-            title={
-              <>
-                {typeLabel}
-                <span className={`badge tc-status-${contract.status}`}>{contract.status}</span>
-              </>
-            }
+          <DetailHeader
+            breadcrumb={[
+              { label: t("page.tc.title", "Time charter"), href: "/charters?type=tc" },
+              { label: contract.id ? `#${contract.id}` : `#${contractId}` },
+            ]}
+            title={typeLabel}
+            status={contract.status}
             subtitle={`${nameOf(vessels, contract.vessel_id)} · ${nameOf(parties, contract.counterparty_id)}`}
-            actions={
-              <>
-                {contract.status === "draft" ? (
-                  <>
-                    <button type="button" className="btn btn-primary" onClick={() => transitionTo("active")}>
-                      {t("page.tc.action.activate", "Activate")}
-                    </button>
-                    <button type="button" className="btn btn-ghost" onClick={() => transitionTo("cancelled")}>
-                      {t("page.tc.action.cancel", "Cancel")}
-                    </button>
-                  </>
-                ) : null}
-                {contract.status === "active" ? (
-                  <>
-                    <button type="button" className="btn btn-primary" onClick={() => transitionTo("completed")}>
-                      {t("page.tc.action.complete", "Complete")}
-                    </button>
-                    <button type="button" className="btn btn-ghost" onClick={() => transitionTo("cancelled")}>
-                      {t("page.tc.action.cancel", "Cancel")}
-                    </button>
-                  </>
-                ) : null}
-                <Link href="/charters/tc" className="btn btn-ghost">
-                  {t("common.back", "Back")}
-                </Link>
-              </>
-            }
+            actions={[
+              ...nextStatuses.map((s) => ({
+                key: `go-${s}`,
+                label: t(`page.tc.action.${s}`, s.replace(/_/g, " ")),
+                variant: s === "cancelled" ? ("danger" as const) : ("primary" as const),
+                onClick: () => void transitionTo(s),
+              })),
+              {
+                key: "back",
+                label: t("common.back", "Back"),
+                onClick: () => router.push("/charters?type=tc"),
+              },
+            ]}
           />
+          <StatusLegend statuses={["draft", "active", "completed", "cancelled"]} />
 
           {summary ? (
             <div className="tc-kpis">
@@ -737,27 +757,24 @@ export default function TcWorkspacePage() {
             </div>
           ) : null}
 
-          <div className="desk-tabs">
-            {TABS.map((tb) => (
-              <button
-                key={tb}
-                type="button"
-                className={`desk-tab${tab === tb ? " active" : ""}`}
-                onClick={() => setTab(tb)}
-              >
-                {tabLabels[tb]}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            items={TABS.map((tb) => ({ key: tb, label: tabLabels[tb] }))}
+            value={tab}
+            onChange={(k) => setTab(k as TabId)}
+            variant="line"
+          />
 
           <div className="tc-tab-body">
             {tab === "contract" ? (
               <div className="tc-panel">
                 <div className="tc-panel-head">
                   <h3>{t("page.tc.tab.contract", "Contract")}</h3>
-                  <button type="button" className="btn btn-primary" onClick={saveContract} disabled={saving}>
-                    {t("common.save", "Save")}
-                  </button>
+                  <div className="quick-row">
+                    <ValidateButton onValidate={validateTc} />
+                    <button type="button" className="btn btn-primary" onClick={saveContract} disabled={saving}>
+                      {t("common.save", "Save")}
+                    </button>
+                  </div>
                 </div>
                 <div className="tc-panel-body">
                   <FormPanel columns={3}>
@@ -1143,6 +1160,7 @@ export default function TcWorkspacePage() {
               </div>
             ) : null}
           </div>
+          {contract ? <RevisionsPanel entityType="time_charter" entityId={contract.id} /> : null}
         </>
       ) : loading ? (
         <p className="muted">{t("common.loading", "Loading…")}</p>

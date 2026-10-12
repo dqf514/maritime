@@ -142,6 +142,7 @@ def _trade_public(row: Trade, legs: list[TradeLeg] | None = None) -> dict:
         "trade_date": row.trade_date.isoformat(),
         "settlement_date": row.settlement_date.isoformat() if row.settlement_date else None,
         "notes": row.notes,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
     if legs is not None:
         out["legs"] = [_leg_public(lg) for lg in legs]

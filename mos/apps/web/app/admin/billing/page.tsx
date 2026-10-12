@@ -4,18 +4,25 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { Toolbar } from "@/components/Toolbar";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
+
+type PlanRow = Record<string, unknown>;
+type PackRow = Record<string, unknown>;
+type UsageRow = Record<string, unknown>;
 
 export default function BillingPage() {
   const { t } = useI18n();
   const toast = useToast();
   const [sub, setSub] = useState<Record<string, unknown> | null>(null);
-  const [plans, setPlans] = useState<Array<Record<string, unknown>>>([]);
-  const [packs, setPacks] = useState<Array<Record<string, unknown>>>([]);
+  const [plans, setPlans] = useState<PlanRow[]>([]);
+  const [packs, setPacks] = useState<PackRow[]>([]);
   const [wallet, setWallet] = useState<Array<{ meter_code: string; balance: number }>>([]);
-  const [usage, setUsage] = useState<Array<Record<string, unknown>>>([]);
+  const [usage, setUsage] = useState<UsageRow[]>([]);
 
   async function load() {
     const [s, p, pk, w, u] = await Promise.all([
@@ -33,7 +40,7 @@ export default function BillingPage() {
   }
 
   useEffect(() => {
-    load().catch(() => toast.success(t("page.billing.admin_required", "需要租户管理员")));
+    load().catch(() => toast.error(t("page.billing.admin_required", "需要租户管理员")));
   }, [t]);
 
   async function invokeAi() {
@@ -49,15 +56,92 @@ export default function BillingPage() {
 
   const plan = (sub?.plan || null) as Record<string, unknown> | null;
 
+  const planColumns: ColumnDef<PlanRow>[] = [
+    {
+      key: "name",
+      title: t("page.billing.plan", "套餐"),
+      minWidth: 200,
+      value: (r) => String(r.name || ""),
+      render: (v, r) => (
+        <span>
+          <b>{String(v)}</b>
+          <div className="muted">{String(r.description || "")}</div>
+        </span>
+      ),
+    },
+    {
+      key: "price",
+      title: t("page.billing.price", "价格"),
+      width: 180,
+      value: (r) => `${String(r.price_amount)} ${String(r.currency)}`,
+      render: (_v, r) => (
+        <span>
+          {String(r.price_amount)} {String(r.currency)} / {String(r.billing_period)}
+        </span>
+      ),
+    },
+    {
+      key: "seat_limit",
+      title: t("page.billing.seats", "席位"),
+      width: 90,
+      value: (r) => (r.seat_limit == null ? null : Number(r.seat_limit)),
+      render: (_v, r) => <span>{r.seat_limit == null ? t("page.billing.unlimited", "不限") : String(r.seat_limit)}</span>,
+    },
+    {
+      key: "status",
+      title: t("common.status", "状态"),
+      width: 130,
+      value: (r) => String(r.code || ""),
+      render: (_v, r) => {
+        const current = plan && String(plan.code) === String(r.code) && String(sub?.status) === "active";
+        return current ? (
+          <span className="badge">{t("page.billing.current_badge", "当前套餐")}</span>
+        ) : (
+          <span className="muted">{t("page.billing.contact_platform", "联系平台开通")}</span>
+        );
+      },
+    },
+  ];
+
+  const packColumns: ColumnDef<PackRow>[] = [
+    { key: "name", title: t("page.billing.pack", "用量包"), minWidth: 160, value: (r) => String(r.name || "") },
+    { key: "meter_code", title: t("page.billing.meter", "计量项"), width: 130, value: (r) => String(r.meter_code || "") },
+    { key: "quantity", title: t("page.billing.qty", "数量"), width: 90, align: "right", value: (r) => String(r.quantity ?? "") },
+    {
+      key: "price",
+      title: t("page.billing.price", "价格"),
+      width: 120,
+      value: (r) => `${String(r.price_amount)} ${String(r.currency)}`,
+      render: (_v, r) => (
+        <span>
+          {String(r.price_amount)} {String(r.currency)}
+        </span>
+      ),
+    },
+  ];
+
+  const usageColumns: ColumnDef<UsageRow>[] = [
+    { key: "meter_code", title: t("page.billing.meter", "计量项"), width: 130, value: (r) => String(r.meter_code || "") },
+    { key: "direction", title: t("page.billing.dir", "方向"), width: 90, value: (r) => String(r.direction || "") },
+    { key: "quantity", title: t("page.billing.qty", "数量"), width: 90, align: "right", value: (r) => String(r.quantity ?? "") },
+    { key: "note", title: t("common.notes", "备注"), minWidth: 180, value: (r) => String(r.note || "") },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.admin", "Administration") }]}
         title={t("page.billing.title", "订阅与用量")}
         subtitle={t(
           "page.billing.sub_readonly",
           "查看当前套餐与用量。订阅与充值由平台管理员开通；线上支付开通后再支持自助下单。",
         )}
       />
+      <Toolbar>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
 
       <div className="panel" style={{ borderLeft: "3px solid var(--accent, #1A9B96)" }}>
         <p style={{ margin: 0 }}>
@@ -79,7 +163,7 @@ export default function BillingPage() {
         ) : (
           <p>{t("page.billing.no_sub", "暂无有效订阅")}</p>
         )}
-        <button className="btn" type="button" onClick={() => invokeAi().catch((e) => toast.success(String(e)))}>
+        <button className="btn" type="button" onClick={() => invokeAi().catch((e) => toast.error(String(e)))}>
           {t("page.billing.invoke_ai", "试调用计量 AI（演示）")}
         </button>
       </div>
@@ -103,97 +187,38 @@ export default function BillingPage() {
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.billing.plans", "套餐目录（只读）")}</h3>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("page.billing.plan", "套餐")}</th>
-              <th>{t("page.billing.price", "价格")}</th>
-              <th>{t("page.billing.seats", "席位")}</th>
-              <th>{t("common.status", "状态")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {plans.map((p) => {
-              const current = plan && String(plan.code) === String(p.code) && String(sub?.status) === "active";
-              return (
-                <tr key={String(p.code)}>
-                  <td>
-                    <b>{String(p.name)}</b>
-                    <div style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{String(p.description || "")}</div>
-                  </td>
-                  <td>
-                    {String(p.price_amount)} {String(p.currency)} / {String(p.billing_period)}
-                  </td>
-                  <td>{p.seat_limit == null ? t("page.billing.unlimited", "不限") : String(p.seat_limit)}</td>
-                  <td>
-                    {current ? (
-                      <span className="badge">{t("page.billing.current_badge", "当前套餐")}</span>
-                    ) : (
-                      <span className="muted">{t("page.billing.contact_platform", "联系平台开通")}</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <DataGrid<PlanRow>
+          columns={planColumns}
+          data={plans}
+          rowKey={(r) => String(r.code)}
+          storageKey="admin_billing_plans_grid"
+          emptyText={t("common.none", "无")}
+          showFooter={false}
+        />
       </div>
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.billing.packs", "用量包目录（只读）")}</h3>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("page.billing.pack", "用量包")}</th>
-              <th>{t("page.billing.meter", "计量项")}</th>
-              <th>{t("page.billing.qty", "数量")}</th>
-              <th>{t("page.billing.price", "价格")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {packs.map((p) => (
-              <tr key={String(p.code)}>
-                <td>{String(p.name)}</td>
-                <td>{String(p.meter_code)}</td>
-                <td>{String(p.quantity)}</td>
-                <td>
-                  {String(p.price_amount)} {String(p.currency)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataGrid<PackRow>
+          columns={packColumns}
+          data={packs}
+          rowKey={(r) => String(r.code)}
+          storageKey="admin_billing_packs_grid"
+          emptyText={t("common.none", "无")}
+          showFooter={false}
+        />
       </div>
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.billing.ledger", "用量流水")}</h3>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("page.billing.meter", "计量项")}</th>
-              <th>{t("page.billing.dir", "方向")}</th>
-              <th>{t("page.billing.qty", "数量")}</th>
-              <th>{t("common.notes", "备注")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {usage.slice(0, 20).map((u, i) => (
-              <tr key={i}>
-                <td>{String(u.meter_code)}</td>
-                <td>{String(u.direction)}</td>
-                <td>{String(u.quantity)}</td>
-                <td>{String(u.note || "")}</td>
-              </tr>
-            ))}
-            {!usage.length ? (
-              <tr>
-                <td colSpan={4} className="muted">
-                  {t("common.none", "无")}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+        <DataGrid<UsageRow>
+          columns={usageColumns}
+          data={usage.slice(0, 20)}
+          rowKey={(r, i) => String(r.id ?? r.meter_code ?? i) + `_${i}`}
+          storageKey="admin_billing_usage_grid"
+          emptyText={t("common.none", "无")}
+          showFooter={false}
+        />
       </div>
     </AppShell>
   );

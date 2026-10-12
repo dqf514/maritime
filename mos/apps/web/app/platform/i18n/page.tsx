@@ -1,32 +1,44 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
+import { RecordModal } from "@/components/RecordModal";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { apiGet, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
-export default function PlatformI18nPage() {
+function PlatformI18nPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const pathname = usePathname();
+  const { query, setQuery } = useListQuery();
+  const locale = query.locale || "zh-CN";
+  const q = query.q ?? "";
   const [overview, setOverview] = useState<any>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [terms, setTerms] = useState<any[]>([]);
-  const [locale, setLocale] = useState("zh-CN");
-  const [q, setQ] = useState("");
   const [editKey, setEditKey] = useState("");
   const [editText, setEditText] = useState("");
 
   async function load() {
     setOverview(await apiGet("/api/v1/platform/i18n/overview"));
-    setMessages(await apiGet(`/api/v1/platform/i18n/messages?locale=${locale}`));
+    setMessages(await apiGet(`/api/v1/platform/i18n/messages?locale=${encodeURIComponent(locale)}`));
     const data = await apiGet(`/api/v1/platform/i18n/terminology?q=${encodeURIComponent(q)}`);
     setTerms(data.items || []);
   }
 
   useEffect(() => {
-    load().catch(() => toast.success(t("i18n.platform_admin_required", "Platform admin required")));
-  }, [locale]);
+    load().catch(() => toast.error(t("i18n.platform_admin_required", "Platform admin required")));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locale, q]);
 
   async function saveMessage(e: FormEvent) {
     e.preventDefault();
@@ -36,12 +48,69 @@ export default function PlatformI18nPage() {
     await load();
   }
 
+  type I18nRow = Record<string, unknown>;
+
+  const messageColumns = useMemo<ColumnDef<I18nRow>[]>(
+    () => [
+      {
+        key: "key",
+        title: t("common.key", "Key"),
+        width: 220,
+        value: (r) => r.key,
+        render: (v) => <code>{String(v)}</code>,
+      },
+      {
+        key: "text",
+        title: t("i18n.text", "Text"),
+        value: (r) => r.text,
+      },
+      {
+        key: "actions",
+        title: "",
+        width: 90,
+        render: (_v, row) => (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => {
+              setEditKey(String(row.key));
+              setEditText(String(row.text));
+            }}
+          >
+            {t("common.edit", "Edit")}
+          </button>
+        ),
+      },
+    ],
+    [t],
+  );
+
+  const termColumns = useMemo<ColumnDef<I18nRow>[]>(
+    () => [
+      {
+        key: "term_key",
+        title: t("common.key", "Key"),
+        width: 200,
+        value: (r) => r.term_key,
+        render: (v) => <code>{String(v)}</code>,
+      },
+      { key: "en", title: "EN", value: (r) => r.en },
+      { key: "zh_cn", title: "zh-CN", value: (r) => r.zh_cn },
+      { key: "category", title: t("common.category", "Category"), value: (r) => r.category },
+    ],
+    [t],
+  );
+
+  const filterCount = (q ? 1 : 0) + (locale !== "zh-CN" ? 1 : 0);
+
   return (
     <AppShell>
-      <h1 style={{ marginTop: 0 }}>{t("i18n.platform_title", "Platform languages & terminology")}</h1>
-      <p className="page-sub">
-        {t("i18n.platform_sub", "Global language packs (en / zh-CN) and maritime terminology catalog. Tenants may override labels; secrets stay out of this plane.")}
-      </p>
+      <PageHeader
+        title={t("i18n.platform_title", "Platform languages & terminology")}
+        subtitle={t("i18n.platform_sub", "Global language packs (en / zh-CN) and maritime terminology catalog. Tenants may override labels; secrets stay out of this plane.")}
+        breadcrumb={[{ label: t("page.platform.title", "Platform"), href: "/platform" }, { label: t("i18n.platform_title", "Platform languages & terminology") }]}
+        actions={<SavedViews storageKey="platform_i18n" onApply={(qs) => router.replace(`${pathname}${qs}`)} />}
+      />
 
       <div className="kpi-row">
         <div className="kpi-card">
@@ -61,6 +130,35 @@ export default function PlatformI18nPage() {
         </div>
       </div>
 
+      <Toolbar
+        filterCount={filterCount}
+        onClearFilters={() => setQuery({ q: null, locale: null }, { resetPage: true })}
+        right={
+          <>
+            <select
+              className="input input-sm"
+              value={locale}
+              onChange={(e) => setQuery({ locale: e.target.value === "zh-CN" ? null : e.target.value }, { resetPage: true })}
+              aria-label={t("i18n.locale", "Locale")}
+            >
+              <option value="en">en</option>
+              <option value="zh-CN">zh-CN</option>
+            </select>
+            <input
+              className="input input-sm"
+              value={q}
+              onChange={(e) => setQuery({ q: e.target.value || null }, { resetPage: true })}
+              placeholder={t("i18n.search", "Search terms")}
+              aria-label={t("i18n.search", "Search terms")}
+            />
+          </>
+        }
+      >
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
+
       <div className="panel">
         <h2>{t("i18n.languages", "Languages")}</h2>
         <ul className="compact-list">
@@ -75,88 +173,46 @@ export default function PlatformI18nPage() {
 
       <div className="panel">
         <h2>{t("i18n.ui_messages", "UI messages")}</h2>
-        <label>
-          {t("i18n.locale", "Locale")}
-          <select value={locale} onChange={(e) => setLocale(e.target.value)}>
-            <option value="en">en</option>
-            <option value="zh-CN">zh-CN</option>
-          </select>
-        </label>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>{t("common.key", "Key")}</th>
-              <th>{t("i18n.text", "Text")}</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {messages.slice(0, 50).map((m) => (
-              <tr key={m.key}>
-                <td>
-                  <code>{m.key}</code>
-                </td>
-                <td>{m.text}</td>
-                <td>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => {
-                      setEditKey(m.key);
-                      setEditText(m.text);
-                    }}
-                  >
-                    {t("common.edit", "Edit")}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {editKey ? (
-          <form onSubmit={(e) => saveMessage(e).catch(() => toast.success(t("common.failed", "Failed")))}>
-            <h3>
-              {t("common.edit", "Edit")} <code>{editKey}</code> ({locale})
-            </h3>
-            <input value={editText} onChange={(e) => setEditText(e.target.value)} style={{ width: "100%" }} />
-            <button className="btn btn-primary" type="submit">
-              {t("common.save", "Save")}
-            </button>
-          </form>
-        ) : null}
+        <DataGrid
+          columns={messageColumns}
+          data={messages.slice(0, 50)}
+          rowKey={(r) => String(r.key)}
+          storageKey="platform_i18n_messages"
+          emptyText={t("common.empty", "No records")}
+        />
+        <RecordModal
+          open={Boolean(editKey)}
+          title={`${t("common.edit", "Edit")} ${editKey} (${locale})`}
+          onClose={() => setEditKey("")}
+          onSave={(e) => saveMessage(e).catch(() => toast.error(t("common.failed", "Failed")))}
+          canDelete={false}
+        >
+          <label>
+            {t("i18n.text", "Text")}
+            <input value={editText} onChange={(e) => setEditText(e.target.value)} required />
+          </label>
+        </RecordModal>
       </div>
 
       <div className="panel">
         <h2>{t("i18n.terms", "Terminology")}</h2>
-        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("i18n.search", "Search terms")} />
-          <button type="button" className="btn btn-ghost" onClick={() => load().catch(() => undefined)}>
-            {t("common.search", "Search")}
-          </button>
-        </div>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>{t("common.key", "Key")}</th>
-              <th>EN</th>
-              <th>zh-CN</th>
-              <th>{t("common.category", "Category")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {terms.slice(0, 60).map((row) => (
-              <tr key={row.term_key}>
-                <td>
-                  <code>{row.term_key}</code>
-                </td>
-                <td>{row.en}</td>
-                <td>{row.zh_cn}</td>
-                <td>{row.category}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataGrid
+          columns={termColumns}
+          data={terms.slice(0, 60)}
+          rowKey={(r) => String(r.term_key)}
+          storageKey="platform_i18n_terms"
+          emptyText={t("common.empty", "No records")}
+        />
       </div>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <PlatformI18nPage />
+    </Suspense>
   );
 }

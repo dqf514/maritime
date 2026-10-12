@@ -1,0 +1,23 @@
+{
+  "id": "tce_gold_08",
+  "note": "Track C1 lump_sum mode: explicit freight_basis=lump_sum, gross freight = lump_sum_freight 1000000 (no cargo_qty scaling). address comm 2.5% = 25000; net 975000; voyage_cost = gold_01 503750; tce = (975000-503750)/40 = 11781.25",
+  "inputs": {
+    "freight_basis": "lump_sum",
+    "lump_sum_freight": 1000000,
+    "commission_pct": 2.5,
+    "sea_days": 30,
+    "port_days": 10,
+    "bunker_sea_tpd": 28,
+    "bunker_port_tpd": 3.5,
+    "bunker_price": 450,
+    "port_costs": 80000,
+    "canal_costs": 20000,
+    "other_costs": 10000,
+    "currency": "USD"
+  },
+  "expect": {
+    "tce": 11781.25,
+    "voyage_cost": 503750.0,
+    "gross_freight": 1000000.0
+  }
+}

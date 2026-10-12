@@ -49,7 +49,7 @@ def _get_csv(client, entity, headers, lang=None):
     assert "text/csv" in r.headers["content-type"]
     disposition = r.headers["content-disposition"]
     assert disposition.startswith("attachment; filename=")
-    assert re.match(rf'attachment; filename="{entity}_\d{{8}}\.csv"', disposition)
+    assert re.match(rf'attachment; filename="{entity}_\d{{8}}(_\d{{6}})?\.csv"', disposition)
     assert r.content.startswith(b"\xef\xbb\xbf"), f"{entity}: missing UTF-8 BOM"
     return r.content.decode("utf-8-sig")
 

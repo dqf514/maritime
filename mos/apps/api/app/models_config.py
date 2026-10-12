@@ -128,6 +128,8 @@ class ConfigAlertRule(Base):
     )  # low | normal | high | urgent
     frequency_days: Mapped[int | None] = mapped_column(Integer)  # repeat every N days
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # true = 命中且 severity ∈ {high, urgent}（对应 ALERT ERROR/critical 档）时阻断保存 (ALERT_BLOCKED)
+    blocking: Mapped[bool] = mapped_column(Boolean, default=False)
     last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(
@@ -191,11 +193,15 @@ class UdfDefinition(Base):
     )  # voyage | charter | invoice | vessel
     field_key: Mapped[str] = mapped_column(String(64), nullable=False)
     field_label: Mapped[str] = mapped_column(String(128), nullable=False)
+    # C4-P3 数据字典: 中英双语标签 + 启停（field_label 保留作兼容显示名）
+    label_en: Mapped[str | None] = mapped_column(String(128))
+    label_zh: Mapped[str | None] = mapped_column(String(128))
     field_type: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="string"
-    )  # string | number | date | boolean | select
+        String(16), nullable=False, default="text"
+    )  # text | number | date | select (legacy: string | boolean)
     options_json: Mapped[dict | None] = mapped_column(JSON)  # for select type
     required: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
     default_value: Mapped[str | None] = mapped_column(Text)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
@@ -274,6 +280,7 @@ CONFIG_FLAG_PRESETS: dict[str, list[dict]] = {
         {"key": "CFGEnableCargoBooking", "description": "Enable cargo booking module", "type": "bool", "default": False},
         {"key": "CFGEnableCOA", "description": "Enable contract of affreightment", "type": "bool", "default": False},
         {"key": "CFGEnableSustainability", "description": "Enable sustainability reporting", "type": "bool", "default": False},
+        {"key": "CFGRelaxReportSequence", "description": "Relax activity-report stage sequencing (allow out-of-order noon reports)", "type": "bool", "default": False},
     ],
     "chartering": [
         {"key": "CFGEnableTrading", "description": "Enable trading module", "type": "bool", "default": False},

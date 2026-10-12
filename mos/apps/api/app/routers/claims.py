@@ -116,6 +116,7 @@ def create_claim(body: ClaimIn, auth: AuthContext = Depends(require_module("clai
         "status": row.status,
         "amount": float(row.amount or 0),
         "time_bar": row.time_bar.isoformat() if row.time_bar else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 
@@ -229,6 +230,7 @@ def list_claims(
                 "time_bar": r.time_bar.isoformat() if r.time_bar else None,
                 "days_to_timebar": _days_to_timebar(r.time_bar),
                 "settlement_amount": float(r.settlement_amount) if r.settlement_amount is not None else None,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }
             for r in rows
         ],
@@ -267,6 +269,7 @@ def get_claim(
         "days_to_timebar": _days_to_timebar(r.time_bar),
         "settlement_amount": float(r.settlement_amount) if r.settlement_amount is not None else None,
         "notes": r.notes,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
 
 

@@ -51,7 +51,8 @@ function pathAllowed(path: string, prefixes: string[] | undefined): boolean {
     p.startsWith("/manual") ||
     p.startsWith("/account") ||
     p.startsWith("/home") ||
-    p.startsWith("/dashboards")
+    p.startsWith("/dashboards") ||
+    p.startsWith("/denied")
   ) {
     return true;
   }
@@ -154,7 +155,8 @@ export function AppShell({
   useEffect(() => {
     if (!shell?.allowed_paths?.length) return;
     if (!pathAllowed(pathname, shell.allowed_paths)) {
-      router.replace("/home");
+      // B1/D7：不再静默弹回首页——给出可读的拒绝解释页（缺失角色或模块许可）
+      router.replace(`/denied?m=${encodeURIComponent(pathname)}`);
     }
   }, [pathname, shell, router]);
 

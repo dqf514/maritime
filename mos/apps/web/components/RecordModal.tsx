@@ -15,6 +15,8 @@ type Props = {
   canDelete?: boolean;
   saving?: boolean;
   size?: "md" | "lg" | "xl";
+  /** 页脚左侧校验插槽（如 ValidateButton），位于操作按钮左方 */
+  validate?: ReactNode;
   children: ReactNode;
 };
 
@@ -30,6 +32,7 @@ export function RecordModal({
   canDelete = true,
   saving,
   size = "md",
+  validate,
   children,
 }: Props) {
   const { t } = useI18n();
@@ -151,6 +154,7 @@ export function RecordModal({
             ) : (
               <span />
             )}
+            {validate ? <div className="record-modal-foot-validate">{validate}</div> : null}
             <div className="record-modal-actions">
               <button type="button" className="btn btn-ghost" onClick={requestClose}>
                 {t("common.cancel", "取消")}

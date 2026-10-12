@@ -15,15 +15,67 @@ export function OmniSearch() {
   const { t } = useI18n();
 
   useEffect(() => {
+    // B6 键盘效率：Ctrl+K / `/` 唤起搜索；`g` 系跳列表（IMOS 同款 go-to 快捷键）
+    const GOTO: Record<string, string> = {
+      e: "/estimates",
+      v: "/operations/voyages",
+      c: "/charters",
+      f: "/finance",
+      i: "/finance/payments",
+      p: "/masterdata/ports",
+      s: "/masterdata/vessels",
+      b: "/bunker",
+      a: "/analytics",
+      h: "/home",
+    };
+    let gPending = false;
+    let gTimer: number | undefined;
+    const inEditable = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (!tgt) return false;
+      const tag = tgt.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tgt.isContentEditable;
+    };
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setOpen(true);
+        return;
       }
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        gPending = false;
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey || inEditable(e)) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        setOpen(true);
+        return;
+      }
+      if (gPending) {
+        const href = GOTO[e.key.toLowerCase()];
+        gPending = false;
+        window.clearTimeout(gTimer);
+        if (href) {
+          e.preventDefault();
+          router.push(href);
+        }
+        return;
+      }
+      if (e.key.toLowerCase() === "g") {
+        gPending = true;
+        window.clearTimeout(gTimer);
+        gTimer = window.setTimeout(() => {
+          gPending = false;
+        }, 1200);
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.clearTimeout(gTimer);
+    };
   }, []);
 
   useEffect(() => {

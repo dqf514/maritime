@@ -9,6 +9,7 @@ import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
 import { PageHeader } from "@/components/PageHeader";
 import { StateView } from "@/components/StateView";
+import { StatusBadge, type StatusTone } from "@/components/StatusBadge";
 import { useToast } from "@/components/ToastProvider";
 import { GanttBoard } from "@/components/gantt/GanttBoard";
 import {
@@ -72,6 +73,12 @@ type OpenPositionRow = {
   open_days: number;
 };
 
+type PortFunctionMeta = { code: string; label_en: string; label_zh: string; tone: string };
+
+function fnTone(tone: string): StatusTone | null {
+  return tone === "ok" || tone === "warn" || tone === "danger" || tone === "info" || tone === "muted" ? tone : null;
+}
+
 function toDateInput(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -97,7 +104,7 @@ async function fetchRows<T>(path: string): Promise<T[]> {
 }
 
 export default function SchedulePage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const router = useRouter();
 
@@ -112,6 +119,7 @@ export default function SchedulePage() {
   const [cargos, setCargos] = useState<CargoRow[]>([]);
   const [berths, setBerths] = useState<BerthRow[]>([]);
   const [positions, setPositions] = useState<OpenPositionRow[]>([]);
+  const [portFns, setPortFns] = useState<PortFunctionMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -125,20 +133,22 @@ export default function SchedulePage() {
       const qs = `date_from=${encodeURIComponent(new Date(rangeStart).toISOString())}&date_to=${encodeURIComponent(
         new Date(rangeEnd).toISOString(),
       )}`;
-      const [b, v, c, bw, pos] = await Promise.all([
+      const [b, v, c, bw, pos, fns] = await Promise.all([
         fetchRows<ScheduleBlockRow>(`/api/v1/scheduling/blocks?${qs}&limit=500`),
         fetchRows<VesselRow>("/api/v1/vessels"),
         fetchRows<CargoRow>("/api/v1/scheduling/cargo-book"),
         fetchRows<BerthRow>("/api/v1/scheduling/berth-windows"),
         fetchRows<OpenPositionRow>(`/api/v1/scheduling/open-positions?${qs}`),
+        fetchRows<PortFunctionMeta>("/api/v1/meta/port-functions"),
       ]);
       setBlocks(b);
       setVessels(v);
       setCargos(c);
       setBerths(bw);
       setPositions(pos);
+      setPortFns(fns);
     } catch (e: any) {
-      setError(e?.message || t("common.failed", "加载失败"));
+      setError(e?.message || t("common.failed", "Failed"));
     } finally {
       setLoading(false);
     }
@@ -187,7 +197,7 @@ export default function SchedulePage() {
           block_type: "berth",
           start: b.start_at,
           end: b.end_at,
-          label: b.status || t("sched.berth_window", "泊位窗口"),
+          label: b.status || t("sched.berth_window", "Berth window"),
           voyage_id: b.voyage_id,
           meta: { port_id: b.port_id },
         });
@@ -243,8 +253,8 @@ export default function SchedulePage() {
       } catch (e: any) {
         const msg =
           e?.detail?.code === "SCHEDULE_CONFLICT"
-            ? t("sched.conflict", "与其他排程块冲突，已拒绝")
-            : e?.message || t("common.failed", "保存失败");
+            ? t("sched.conflict", "Conflicts with another schedule block, rejected")
+            : e?.message || t("common.failed", "Failed");
         toast.error(msg);
         await load();
       }
@@ -275,40 +285,39 @@ export default function SchedulePage() {
       <WorkspaceShell
         header={
           <PageHeader
-            left={
-              <div className="ws-crumb">
-                <span className="muted">{t("sched.crumb", "运营 · 排程")}</span>
-              </div>
-            }
-            title={t("sched.title", "集中排程")}
-            subtitle={t("sched.sub", "船舶 / 货盘 / 泊位统一时间轴，拖动块可调整窗口")}
+            breadcrumb={[
+              { label: t("nav.operations", "Operations"), href: "/operations/voyages" },
+              { label: t("nav.schedule", "Scheduling") },
+            ]}
+            title={t("sched.title", "Central scheduling")}
+            subtitle={t("sched.sub", "Unified timeline for vessels / cargoes / berths; drag blocks to adjust windows")}
             actions={
               <button type="button" className="btn btn-ghost btn-sm" onClick={load}>
-                {t("common.refresh", "刷新")}
+                {t("common.refresh", "Refresh")}
               </button>
             }
           />
         }
       >
         <div className="sched-controls">
-          <div className="sched-seg" role="group" aria-label={t("sched.view", "视图")}>
+          <div className="sched-seg" role="group" aria-label={t("sched.view", "View")}>
             <button type="button" className={view === "vessel" ? "active" : ""} onClick={() => setView("vessel")}>
-              {t("sched.view_vessel", "船舶排程")}
+              {t("sched.view_vessel", "Vessel schedule")}
             </button>
             <button type="button" className={view === "cargo" ? "active" : ""} onClick={() => setView("cargo")}>
-              {t("sched.view_cargo", "货盘簿")}
+              {t("sched.view_cargo", "Cargo book")}
             </button>
             <button type="button" className={view === "berth" ? "active" : ""} onClick={() => setView("berth")}>
-              {t("sched.view_berth", "泊位排程")}
+              {t("sched.view_berth", "Berth schedule")}
             </button>
           </div>
           <div className="sched-range">
             <label>
-              {t("sched.from", "从")}
+              {t("sched.from", "From")}
               <DateInput value={rangeFrom} onChange={setRangeFrom} />
             </label>
             <label>
-              {t("sched.to", "到")}
+              {t("sched.to", "To")}
               <DateInput value={rangeTo} onChange={setRangeTo} />
             </label>
             <button
@@ -319,10 +328,26 @@ export default function SchedulePage() {
                 setRangeTo(toDateInput(startOfDay(Date.now()) + 45 * DAY_MS));
               }}
             >
-              {t("sched.reset_range", "重置")}
+              {t("sched.reset_range", "Reset")}
             </button>
           </div>
         </div>
+        {portFns.length ? (
+          <div className="status-legend" role="note" aria-label={t("sched.port_fn_legend", "Port function")}>
+            <span className="status-legend-title">{t("sched.port_fn_legend", "Port function")}</span>
+            {portFns.map((fn) => {
+              const label = locale.startsWith("zh") ? fn.label_zh || fn.label_en : fn.label_en;
+              const tone = fnTone(fn.tone);
+              return tone ? (
+                <StatusBadge key={fn.code} status={fn.code} tone={tone} label={`${fn.code} · ${label}`} />
+              ) : (
+                <span key={fn.code} className="muted">
+                  {fn.code} · {label}
+                </span>
+              );
+            })}
+          </div>
+        ) : null}
 
         <div className="sched-layout">
           <div>
@@ -337,14 +362,14 @@ export default function SchedulePage() {
                 onBlockMove={onBlockMove}
                 onBlockResize={onBlockResize}
                 onBlockClick={onBlockClick}
-                emptyText={t("sched.empty_lanes", "当前范围没有排程块")}
+                emptyText={t("sched.empty_lanes", "No schedule blocks in range")}
               />
             </StateView>
           </div>
 
-          <Panel title={t("sched.open_positions", "空档船期")} collapsible>
+          <Panel title={t("sched.open_positions", "Open positions")} collapsible>
             {loading && !positions.length ? (
-              <p className="muted">{t("common.loading", "加载中…")}</p>
+              <p className="muted">{t("common.loading", "Loading…")}</p>
             ) : positions.length ? (
               <ul className="gantt-pos-list">
                 {positions.map((p) => (
@@ -352,7 +377,7 @@ export default function SchedulePage() {
                     <strong>{p.vessel_name}</strong>
                     {p.imo ? <span className="muted"> · {p.imo}</span> : null}
                     <div className="muted" style={{ fontSize: 11 }}>
-                      {t("sched.open_days", "可用 {n} 天", { n: p.open_days })}
+                      {t("sched.open_days", "{n} open days", { n: p.open_days })}
                     </div>
                     <div>
                       {p.gaps.map((g, i) => (
@@ -367,7 +392,7 @@ export default function SchedulePage() {
                 ))}
               </ul>
             ) : (
-              <p className="muted">{t("sched.no_positions", "暂无空档")}</p>
+              <p className="muted">{t("sched.no_positions", "No open positions")}</p>
             )}
           </Panel>
         </div>

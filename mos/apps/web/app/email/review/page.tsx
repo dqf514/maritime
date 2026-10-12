@@ -2,8 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Toolbar } from "@/components/Toolbar";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { apiGet, apiPost } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -23,6 +30,7 @@ export default function EmailReviewPage() {
   const toast = useToast();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [rows, setRows] = useState<Msg[]>([]);
+  const rowCtx = useContextMenu<Msg>();
 
   async function load() {
     const [acc, review] = await Promise.all([
@@ -64,59 +72,105 @@ export default function EmailReviewPage() {
     await load();
   }
 
+  function copyMsgId(m: Msg) {
+    void navigator.clipboard.writeText(m.id);
+    toast.success(t("ctx.copied_id", "ID copied"));
+  }
+
+  function exportMsgs(list: Msg[]) {
+    downloadCsv(
+      "email_review",
+      ["id", "subject", "from_email", "parse_status", "parse_confidence"],
+      list.map((m) => [m.id, m.subject ?? "", m.from_email ?? "", m.parse_status, m.parse_confidence ?? ""]),
+      { emptyGuard: t("export.empty_confirm", "No rows to export. Export anyway?") },
+    );
+  }
+
+  const menuItems = (m: Msg): ContextMenuItem[] => [
+    ...(m.parse_status === "review"
+      ? [
+          {
+            key: "confirm",
+            label: t("common.confirm", "Confirm"),
+            onClick: () => confirm(m.id).catch(() => toast.error(t("page.email.confirm_fail", "Confirm failed"))),
+          },
+        ]
+      : []),
+    { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyMsgId(m) },
+    { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportMsgs([m]) },
+  ];
+
+  const columns: ColumnDef<Msg>[] = [
+    {
+      key: "subject",
+      title: t("page.email.subject", "Subject"),
+      minWidth: 180,
+      value: (r) => r.subject || "",
+      render: (_v, r) => r.subject || t("page.email.no_subject", "(no subject)"),
+    },
+    {
+      key: "from_email",
+      title: t("page.email.from", "From"),
+      width: 160,
+      value: (r) => r.from_email || "",
+      render: (_v, r) => r.from_email || "—",
+    },
+    { key: "parse_status", title: t("common.status", "Status"), width: 110, value: (r) => r.parse_status },
+    {
+      key: "parse_confidence",
+      title: t("page.email.confidence", "Confidence"),
+      width: 110,
+      align: "right",
+      value: (r) => r.parse_confidence ?? null,
+      render: (_v, r) => (r.parse_confidence != null ? <><Num v={r.parse_confidence * 100} digits={0} />%</> : "—"),
+    },
+    {
+      key: "parse_preview",
+      title: t("page.email.preview", "Parse preview"),
+      minWidth: 220,
+      value: (r) => JSON.stringify(r.parse_result),
+      render: (v) => <code>{String(v)}</code>,
+    },
+    {
+      key: "actions",
+      title: "",
+      width: 110,
+      render: (_v, r) =>
+        r.parse_status === "review" ? (
+          <button
+            className="btn"
+            type="button"
+            onClick={() => confirm(r.id).catch(() => toast.error(t("page.email.confirm_fail", "Confirm failed")))}
+          >
+            {t("common.confirm", "Confirm")}
+          </button>
+        ) : null,
+    },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.email", "Email Review") }]}
         title={t("page.email.title", "Email Review")}
         subtitle={t("page.email.sub", "AI-parsed recaps awaiting confirmation.")}
-        actions={
-          <button className="btn btn-primary" type="button" onClick={() => sync().catch(() => toast.success(t("page.email.sync_fail", "Sync failed")))}>
-            {t("page.email.sync_btn", "Sync demo inbox")}
-          </button>
-        }
       />
-      <div className="panel" style={{ marginTop: "1rem" }}>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("page.email.subject", "Subject")}</th>
-              <th>{t("page.email.from", "From")}</th>
-              <th>{t("common.status", "Status")}</th>
-              <th>{t("page.email.confidence", "Confidence")}</th>
-              <th>{t("page.email.preview", "Parse preview")}</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>{r.subject || t("page.email.no_subject", "(no subject)")}</td>
-                <td>{r.from_email || "—"}</td>
-                <td>{r.parse_status}</td>
-                <td>{r.parse_confidence != null ? `${(r.parse_confidence * 100).toFixed(0)}%` : "—"}</td>
-                <td>
-                  <code>{JSON.stringify(r.parse_result)}</code>
-                </td>
-                <td>
-                  {r.parse_status === "review" ? (
-                    <button
-                      className="btn"
-                      type="button"
-                      onClick={() => confirm(r.id).catch(() => toast.success(t("page.email.confirm_fail", "Confirm failed")))}
-                    >
-                      {t("common.confirm", "Confirm")}
-                    </button>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-            {!rows.length ? (
-              <tr>
-                <td colSpan={6}>{t("page.email.empty", "No messages pending review.")}</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+      <Toolbar right={<span className="hint">{t("page.email.count", "{n} messages", { n: rows.length })}</span>}>
+        <button className="btn btn-primary" type="button" onClick={() => sync().catch(() => toast.error(t("page.email.sync_fail", "Sync failed")))}>
+          {t("page.email.sync_btn", "Sync demo inbox")}
+        </button>
+      </Toolbar>
+      <StatusLegend statuses={["pending", "review", "parsed", "failed"]} />
+      <div className="panel">
+        <DataGrid<Msg>
+          columns={columns}
+          data={rows}
+          rowKey={(r) => r.id}
+          onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
+          storageKey="email_review_grid"
+          emptyText={t("page.email.empty", "No messages pending review.")}
+        />
+        <ContextMenu controller={rowCtx} items={menuItems} />
       </div>
     </AppShell>
   );

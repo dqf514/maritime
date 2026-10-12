@@ -20,6 +20,53 @@ def _d(v: Any) -> Decimal:
 
 DEFAULT_CO2_FACTOR = Decimal("3.114")  # mt CO2 per mt fuel (IMO default)
 
+# Explicit freight_basis input vocabulary (Track C1). Aliases accept the charter
+# master-data spellings (per_mt / lumpsum / worldscale) and the engine's legacy
+# output names. Normalized canonical values: per_mt | lump_sum | worldscale | ws_differential.
+_FREIGHT_BASIS_ALIASES: dict[str, str] = {
+    "rate": "per_mt",
+    "per_mt": "per_mt",
+    "per-mt": "per_mt",
+    "permt": "per_mt",
+    "lump": "lump_sum",
+    "lump_sum": "lump_sum",
+    "lump-sum": "lump_sum",
+    "lumpsum": "lump_sum",
+    "worldscale": "worldscale",
+    "ws": "worldscale",
+    "ws_differential": "ws_differential",
+    "ws-differential": "ws_differential",
+    "wsdifferential": "ws_differential",
+    "ws_diff": "ws_differential",
+    "ws_differentials": "ws_differential",
+}
+
+# Differential add-on bases: per_mt × cargo_qty (mt), per_measure × cargo_measure,
+# lump = flat amount (negative amounts allowed — commercial rebates).
+_DIFF_BASIS_ALIASES: dict[str, str] = {
+    "per_mt": "per_mt",
+    "per-mt": "per_mt",
+    "permt": "per_mt",
+    "mt": "per_mt",
+    "per_measure": "per_measure",
+    "per-measure": "per_measure",
+    "permeasure": "per_measure",
+    "measure": "per_measure",
+    "lump": "lump",
+    "lump_sum": "lump",
+    "lump-sum": "lump",
+    "lumpsum": "lump",
+    "flat": "lump",
+}
+
+# Output vocabulary for freight_basis (legacy keys preserved: rate/lump_sum/worldscale).
+_BASIS_OUTPUT = {
+    "per_mt": "rate",
+    "lump_sum": "lump_sum",
+    "worldscale": "worldscale",
+    "ws_differential": "ws_differential",
+}
+
 
 def _apply_legs(inputs: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
     """Derive (sea_days, port_days, leg_cargo_qty) from a multi-leg itinerary.
@@ -108,16 +155,81 @@ def _resolve_rate_table_inputs(inputs: dict[str, Any], db: Any, tenant_id: Any) 
     return out
 
 
+def _parse_differentials(inputs: dict[str, Any]) -> tuple[Decimal, list[dict[str, Any]]]:
+    """Parse additive freight differentials (WS + differentials, Track C1).
+
+    ``differentials``: list of ``{basis, amount, label?}`` where basis is
+    ``per_mt`` (× cargo_qty mt), ``per_measure`` (× cargo_measure) or ``lump``
+    (flat). Parsed defensively but strictly: malformed entries raise ValueError
+    so API layers can surface 422. Returns (total, rows) — rows only carry
+    ``label`` when provided. Absent/empty input → (0, []) so legacy results stay
+    byte-identical.
+    """
+    raw = inputs.get("differentials")
+    if not raw:
+        return Decimal("0"), []
+    if isinstance(raw, (str, bytes, dict)) or not isinstance(raw, (list, tuple)):
+        raise ValueError(
+            f"differentials must be a list of {{basis, amount, label?}} objects, got {type(raw).__name__}"
+        )
+    cargo_qty = _d(inputs.get("cargo_qty") or 0)
+    if inputs.get("legs") and not _d(inputs.get("cargo_qty") or 0):
+        _, _, leg_cargo = _apply_legs(inputs)
+        cargo_qty = leg_cargo
+    cargo_measure_raw = inputs.get("cargo_measure")
+    total = Decimal("0")
+    rows: list[dict[str, Any]] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ValueError(f"differentials[{i}] must be an object with basis/amount, got {type(entry).__name__}")
+        basis_raw = str(entry.get("basis") or "").strip().lower()
+        basis = _DIFF_BASIS_ALIASES.get(basis_raw)
+        if not basis:
+            raise ValueError(
+                f"differentials[{i}].basis must be per_mt|per_measure|lump, got {entry.get('basis')!r}"
+            )
+        amount_raw = entry.get("amount")
+        if amount_raw is None or (isinstance(amount_raw, str) and not amount_raw.strip()):
+            raise ValueError(f"differentials[{i}].amount is required")
+        amount = _d(amount_raw)
+        if basis == "per_mt":
+            value = amount * cargo_qty
+        elif basis == "per_measure":
+            if cargo_measure_raw is None:
+                raise ValueError(
+                    f"differentials[{i}].basis=per_measure requires a cargo_measure input"
+                )
+            value = amount * _d(cargo_measure_raw)
+        else:  # lump — flat add-on (negative = rebate)
+            value = amount
+        value = value.quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+        total += value
+        row: dict[str, Any] = {"basis": basis, "amount": float(amount), "value": float(value)}
+        if entry.get("label") is not None:
+            row["label"] = str(entry.get("label"))
+        rows.append(row)
+    return total, rows
+
+
 def compute_estimate(inputs: dict[str, Any], *, db: Any = None, tenant_id: Any = None) -> dict[str, Any]:
     """
     TCE = (total_revenue - voyage_cost) / total_days
     voyage_cost excludes hire / opportunity hire; brokerage and EU ETS
     emissions cost are included. Address commission is deducted from freight revenue.
 
-    Freight modes:
-    - lump_sum_freight > 0 → lump sum
-    - ws_flat + ws_pct → Worldscale: cargo_qty * ws_flat * (ws_pct/100)
-    - else cargo_qty * freight_rate
+    Freight modes (Track C1: Per MT / Lump Sum / WS + Differentials):
+    - explicit ``freight_basis`` input selects the mode (aliases accepted, see
+      ``_FREIGHT_BASIS_ALIASES``): per_mt / lump_sum / worldscale / ws_differential.
+    - without an explicit basis, legacy auto-detect (byte-identical):
+      lump_sum_freight > 0 → lump sum; ws_flat + ws_pct (or ws_rate_pct) →
+      Worldscale: cargo_qty * ws_flat * (ws_pct/100); else cargo_qty * freight_rate.
+    - ``differentials: [{basis: per_mt|per_measure|lump, amount, label?}]`` are
+      additive freight add-ons: per_mt × cargo_qty, per_measure × cargo_measure,
+      lump = flat amount (negative = rebate). Added to gross freight before
+      commissions. When applied on top of a Worldscale base the output
+      ``freight_basis`` becomes ``ws_differential``.
+    - Explicit modes validate their required inputs (ValueError → 422); the
+      legacy auto path never raises on missing freight inputs.
 
     Optional inputs:
     - legs: multi-leg itinerary; overrides sea_days/port_days (Σ distance/speed/24,
@@ -140,6 +252,29 @@ def compute_estimate(inputs: dict[str, Any], *, db: Any = None, tenant_id: Any =
       fills demurrage_income; surcharge_rate_table_id × cargo_qty adds
       surcharge_income to revenue. Direct values win when provided
       (backward compatibility) — the rate table is the optional fill-in.
+    - scale_table (比例运费表, services/freight_terms.py): tiered per-mt rates
+      {qty_from, qty_to, rate} selected by scale_qty (default cargo_qty). Fills
+      freight_rate when no direct rate is given (fill-in, same precedence as
+      rate tables). Per-mt only — a lump_sum/worldscale mode together with a
+      scale_table raises ValueError. Provenance keys ``scale_table_rate`` /
+      ``scale_qty`` are added to results only when the table is present.
+    - extra_freight_terms: [{term, basis: per_mt|per_lump|pct_of_freight, rate,
+      applies_when?}] additive surcharges appended to gross freight (after
+      differentials, before commissions). pct_of_freight multiplies the freight
+      base (gross after differentials, before extras — terms do not compound).
+      applies_when is an optional predicate dict over the estimate inputs
+      (exact key/value match; ``*_min``/``*_max`` numeric bounds). Absent/empty
+      → legacy output byte-identical; present → result keys
+      ``extra_freight_terms`` / ``extra_freight_total``.
+    - unpriced_components (指数联动定价, services/unpriced_components.py):
+      index-linked hire elements [{name, formula: rolling_index|range|level|
+      offset, index_name?, observations?, base_value?, offset_value?, floor?,
+      cap?, window_days?, factor?, basis: per_day|per_lump}] resolved against
+      inline observations or a tenant-scoped MarketQuote series. The resolved
+      total is folded into hire_cost as extra hire lines (hire is excluded from
+      voyage_cost / TCE, so TCE is unchanged and net_result absorbs it).
+      Absent/empty → legacy output byte-identical; present → result keys
+      ``unpriced_components`` / ``unpriced_components_total``.
     """
     legs = inputs.get("legs") or []
     leg_sea_days = leg_port_days = leg_cargo = None
@@ -157,7 +292,14 @@ def compute_estimate(inputs: dict[str, Any], *, db: Any = None, tenant_id: Any =
     # brokerage is a voyage cost, not a revenue deduction
     brokerage_pct = _d(inputs.get("brokerage_pct") or 0)
     ws_flat = _d(inputs.get("ws_flat") or 0)
-    ws_pct = _d(inputs.get("ws_pct") or 0)
+    # ws_rate_pct is an accepted alias for ws_pct (Track C1 input vocabulary)
+    ws_pct_raw = inputs.get("ws_pct")
+    if ws_pct_raw is None or (isinstance(ws_pct_raw, str) and not ws_pct_raw.strip()):
+        ws_pct_raw = inputs.get("ws_rate_pct")
+        if isinstance(ws_pct_raw, str) and not ws_pct_raw.strip():
+            ws_pct_raw = None
+    ws_pct = _d(ws_pct_raw)
+    ws_pct_provided = ws_pct_raw is not None
 
     # Phase 4 rate tables (optional; no-op without *_rate_table_id keys)
     rate_table_hits: dict[str, Decimal] = {}
@@ -166,16 +308,103 @@ def compute_estimate(inputs: dict[str, Any], *, db: Any = None, tenant_id: Any =
     if "freight_rate" in rate_table_hits:
         freight_rate = rate_table_hits["freight_rate"]
 
-    freight_basis = "rate"
-    if lump_sum > 0:
-        gross_freight = lump_sum
-        freight_basis = "lump_sum"
-    elif ws_flat > 0 and ws_pct > 0:
-        # Worldscale: flat rate × WS% × cargo quantity (simplified commercial form)
-        gross_freight = cargo_qty * ws_flat * (ws_pct / Decimal("100"))
-        freight_basis = "worldscale"
+    # Scale table (比例运费表) — optional fill-in for freight_rate (direct wins).
+    scale_qty = _d(inputs.get("scale_qty") if inputs.get("scale_qty") is not None else cargo_qty)
+    scale_rate: Decimal | None = None
+    if inputs.get("scale_table"):
+        from app.services.freight_terms import apply_scale_table  # local: engine stays import-light
+
+        scale_rate = apply_scale_table(scale_qty, inputs["scale_table"])
+        if not _d(inputs.get("freight_rate") or 0) and "freight_rate" not in rate_table_hits:
+            freight_rate = scale_rate
+
+    # Freight mode selection: explicit freight_basis input wins; otherwise legacy
+    # auto-detect (byte-identical when no new inputs are present).
+    basis_raw = inputs.get("freight_basis")
+    explicit_basis: str | None = None
+    if basis_raw is not None and str(basis_raw).strip() != "":
+        key = str(basis_raw).strip().lower()
+        explicit_basis = _FREIGHT_BASIS_ALIASES.get(key)
+        if explicit_basis is None:
+            raise ValueError(
+                f"freight_basis must be per_mt|lump_sum|worldscale|ws_differential, got {basis_raw!r}"
+            )
+
+    if explicit_basis is not None:
+        mode = explicit_basis
+        if mode == "per_mt":
+            if freight_rate <= 0:
+                raise ValueError(
+                    "freight_basis=per_mt requires freight_rate > 0 "
+                    f"(or freight_rate_table_id resolvable), got {inputs.get('freight_rate')!r}"
+                )
+        elif mode == "lump_sum":
+            if lump_sum <= 0:
+                # pricing_engine convention: freight_rate carries the lump amount
+                # when lump_sum_freight is absent
+                lump_sum = freight_rate
+            if lump_sum <= 0:
+                raise ValueError(
+                    "freight_basis=lump_sum requires lump_sum_freight > 0 "
+                    f"(or freight_rate as the lump amount), got {inputs.get('lump_sum_freight')!r}"
+                )
+        else:  # worldscale | ws_differential
+            if ws_flat <= 0:
+                raise ValueError(
+                    f"freight_basis={mode} requires ws_flat > 0, got {inputs.get('ws_flat')!r}"
+                )
+            if not ws_pct_provided:
+                raise ValueError(
+                    f"freight_basis={mode} requires ws_pct (or ws_rate_pct), got none"
+                )
+            if ws_pct < 0:
+                raise ValueError(
+                    f"freight_basis={mode} requires ws_pct (or ws_rate_pct) >= 0, got {ws_pct}"
+                )
     else:
-        gross_freight = cargo_qty * freight_rate
+        # legacy auto-detect
+        if lump_sum > 0:
+            mode = "lump_sum"
+        elif ws_flat > 0 and ws_pct > 0:
+            mode = "worldscale"
+        else:
+            mode = "per_mt"
+
+    if scale_rate is not None and mode != "per_mt":
+        raise ValueError(
+            "scale_table is per-mt only: it cannot price freight_basis="
+            f"{_BASIS_OUTPUT[mode]!r} freight; remove scale_table or switch to per_mt"
+        )
+
+    if mode == "lump_sum":
+        base_freight = lump_sum
+    elif mode in ("worldscale", "ws_differential"):
+        # Worldscale: flat rate × WS% × cargo quantity (simplified commercial form)
+        base_freight = cargo_qty * ws_flat * (ws_pct / Decimal("100"))
+    else:  # per_mt
+        base_freight = cargo_qty * freight_rate
+
+    # Freight differentials (additive add-ons; absent → no-op, legacy unchanged)
+    differentials_total, differential_rows = _parse_differentials(inputs)
+    if differentials_total or differential_rows:
+        if mode in ("worldscale", "ws_differential"):
+            mode = "ws_differential"
+        gross_freight = base_freight + differentials_total
+    else:
+        gross_freight = base_freight
+
+    # Extra freight terms (additive surcharges; absent → no-op, legacy unchanged).
+    # pct_of_freight multiplies the freight base (gross after differentials,
+    # before extras) — terms do not compound each other.
+    extra_terms_total, extra_term_rows = (Decimal("0"), [])
+    if inputs.get("extra_freight_terms"):
+        from app.services.freight_terms import parse_extra_freight_terms  # local import
+
+        extra_terms_total, extra_term_rows = parse_extra_freight_terms(inputs, gross_freight)
+        if extra_term_rows:
+            gross_freight = gross_freight + extra_terms_total
+
+    freight_basis = _BASIS_OUTPUT[mode]
 
     address_commission = (gross_freight * address_comm_pct / Decimal("100")).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
     brokerage = (gross_freight * brokerage_pct / Decimal("100")).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
@@ -244,6 +473,21 @@ def compute_estimate(inputs: dict[str, Any], *, db: Any = None, tenant_id: Any =
     hire_per_day = _d(inputs.get("hire_per_day") or 0)
     hire_cost = hire_per_day * total_days  # reported separately, not in voyage_cost for TCE
 
+    # Unpriced (index-linked) components — extra hire lines; absent → no-op.
+    unpriced_total = Decimal("0")
+    unpriced_rows: list[dict[str, Any]] = []
+    if inputs.get("unpriced_components"):
+        from app.services.unpriced_components import evaluate_unpriced_components  # local import
+
+        unpriced_total, unpriced_rows = evaluate_unpriced_components(
+            inputs["unpriced_components"],
+            days=total_days,
+            db=db,
+            tenant_id=tenant_id,
+            default_pricing_date=_as_of(inputs),
+        )
+        hire_cost = hire_cost + unpriced_total
+
     tce = ((total_revenue - voyage_cost) / total_days).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
     net_result = (total_revenue - voyage_cost - hire_cost).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
 
@@ -271,6 +515,18 @@ def compute_estimate(inputs: dict[str, Any], *, db: Any = None, tenant_id: Any =
 
     # rate-table provenance — only present when a table actually contributed,
     # so legacy results stay byte-identical.
+    if differential_rows:
+        result["differentials"] = differential_rows
+        result["differentials_total"] = float(differentials_total.quantize(TWOPLACES))
+    if extra_term_rows:
+        result["extra_freight_terms"] = extra_term_rows
+        result["extra_freight_total"] = float(extra_terms_total.quantize(TWOPLACES))
+    if unpriced_rows:
+        result["unpriced_components"] = unpriced_rows
+        result["unpriced_components_total"] = float(unpriced_total.quantize(TWOPLACES))
+    if scale_rate is not None:
+        result["scale_table_rate"] = float(scale_rate.quantize(FOUR, rounding=ROUND_HALF_UP))
+        result["scale_qty"] = float(scale_qty.quantize(THREE, rounding=ROUND_HALF_UP))
     if rate_table_hits:
         result["surcharge_income"] = float(surcharge_income.quantize(TWOPLACES))
         result["rate_table_rates"] = {

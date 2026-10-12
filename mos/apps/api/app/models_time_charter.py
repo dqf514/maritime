@@ -81,11 +81,15 @@ class TimeCharterContract(Base):
     )  # TCE threshold before profit share kicks in
     address_comm_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     brokerage_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    # 指数联动定价 — index-linked hire components (same spec as
+    # Estimate.inputs["unpriced_components"], see services/unpriced_components.py).
+    # Additive: null/empty → hire statements behave exactly as before.
+    hire_components: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -169,7 +173,7 @@ class HireBillingSchedule(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -199,7 +203,7 @@ class HirePaymentSchedule(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -257,7 +261,7 @@ class HireStatement(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 

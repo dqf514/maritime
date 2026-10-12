@@ -115,6 +115,7 @@ def _table_out(r: RateTable) -> dict[str, Any]:
         "valid_to": r.valid_to.isoformat() if r.valid_to else None,
         "description": r.description,
         "is_active": r.is_active,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
 
 
@@ -126,6 +127,7 @@ def _template_out(r: PricingTemplate) -> dict[str, Any]:
         "rate_table_refs": {k: str(v) for k, v in (r.rate_table_refs or {}).items()},
         "rules": r.rules or {},
         "is_active": r.is_active,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
 
 

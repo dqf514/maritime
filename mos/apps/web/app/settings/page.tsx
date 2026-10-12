@@ -103,6 +103,22 @@ const TILES = [
     desc: "Install & runtime diagnostics",
   },
   {
+    href: "/settings/flags",
+    icon: "settings_hub",
+    titleKey: "settings.tile.flags",
+    title: "Configuration flags",
+    descKey: "settings.tile.flags_d",
+    desc: "Runtime CFG* switches, tenant & platform",
+  },
+  {
+    href: "/settings/udf",
+    icon: "perm",
+    titleKey: "settings.tile.udf",
+    title: "User-defined fields",
+    descKey: "settings.tile.udf_d",
+    desc: "Extra tenant fields on parties, voyages, invoices and more",
+  },
+  {
     href: "/settings/dataops/migrate",
     icon: "migrate",
     titleKey: "settings.tile.migrate",
@@ -181,8 +197,9 @@ export default function SettingsHubPage() {
   return (
     <AppShell>
       <PageHeader
-        title={t("settings.title", "系统设置")}
-        subtitle={t("settings.sub", "租户级配置入口：用户、安全、许可、集成等。")}
+        breadcrumb={[{ label: t("nav.settings_hub", "System settings") }]}
+        title={t("settings.title", "System settings")}
+        subtitle={t("settings.sub", "Tenant configuration hub: users, security, licenses, integrations and more.")}
       />
       <div className="workbench-grid">
         {TILES.map((tile) => (

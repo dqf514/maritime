@@ -1,18 +1,30 @@
 "use client";
 
+import { Suspense } from "react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
 import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Tabs, type TabItem } from "@/components/Tabs";
+import { Toolbar } from "@/components/Toolbar";
 import { StateView } from "@/components/StateView";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiGet, apiPatch, apiPost, type TaskAssignee, type TaskOut } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type Tab = "open" | "done" | "all";
+
+type TaskRow = TaskOut & { updated_at?: string | null };
 
 const PRIORITIES: TaskOut["priority"][] = ["low", "normal", "high", "urgent"];
 
@@ -34,17 +46,72 @@ const EMPTY_DRAFT: Draft = {
   assignee_user_id: "",
 };
 
-export default function TasksPage() {
+function TasksPageInner() {
   const { t } = useI18n();
   const toast = useToast();
-  const [tab, setTab] = useState<Tab>("open");
-  const [tasks, setTasks] = useState<TaskOut[]>([]);
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
+  const tab: Tab = query.tab === "done" || query.tab === "all" ? query.tab : "open";
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [assignees, setAssignees] = useState<TaskAssignee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState("");
+
+  useListHotkeys(() => setDraft({ ...EMPTY_DRAFT }));
+
+  const rowCtx = useContextMenu<TaskRow>();
+
+  function fmtStamp(iso?: string | null) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toISOString().slice(0, 16).replace("T", " ");
+  }
+
+  function exportRows(selected: TaskRow[]) {
+    downloadCsv(
+      "tasks",
+      ["id", "title", "status", "priority", "due_at", "updated_at", "assignee", "description"],
+      selected.map((r) => [
+        r.id,
+        r.title,
+        r.status,
+        r.priority,
+        r.due_at ?? "",
+        r.updated_at ?? "",
+        r.assignee?.full_name || r.assignee?.email || "",
+        r.description ?? "",
+      ]),
+    );
+  }
+
+  function openEdit(task: TaskRow) {
+    setDraft({
+      id: task.id,
+      title: task.title,
+      description: task.description || "",
+      priority: task.priority,
+      due_at: task.due_at ? task.due_at.slice(0, 10) : "",
+      assignee_user_id: task.assignee?.id || "",
+    });
+  }
+
+  function rowMenuItems(target: TaskRow): ContextMenuItem[] {
+    const done = target.status === "done" || target.status === "cancelled";
+    return [
+      { key: "open", label: t("common.open", "Open"), onClick: () => openEdit(target) },
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.id) },
+      { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportRows([target]) },
+      { key: "div", divider: true, label: "" },
+      ...(done
+        ? [{ key: "reopen", label: t("page.tasks.reopen", "Reopen"), onClick: () => transition(target, "reopen") } as ContextMenuItem]
+        : [{ key: "complete", label: t("page.tasks.complete", "Complete"), onClick: () => transition(target, "complete") } as ContextMenuItem]),
+      { key: "edit", label: t("common.edit", "Edit"), onClick: () => openEdit(target) },
+    ];
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,7 +121,7 @@ export default function TasksPage() {
       const rows = await apiGet(`/api/v1/tasks/my${qs}`);
       setTasks(Array.isArray(rows) ? rows : []);
     } catch (e: any) {
-      setError(e?.message || t("common.failed", "加载失败"));
+      setError(e?.message || t("common.failed", "Failed"));
     } finally {
       setLoading(false);
     }
@@ -80,8 +147,8 @@ export default function TasksPage() {
     day.setHours(0, 0, 0, 0);
     const diff = Math.round((day.getTime() - today.getTime()) / 86_400_000);
     if (task.status !== "done" && task.status !== "cancelled") {
-      if (diff < 0) return { text: t("page.tasks.overdue_days", "已逾期 {n} 天", { n: -diff }), overdue: true };
-      if (diff === 0) return { text: t("page.tasks.due_today", "今天截止"), overdue: false };
+      if (diff < 0) return { text: t("page.tasks.overdue_days", "Overdue by {n} days", { n: -diff }), overdue: true };
+      if (diff === 0) return { text: t("page.tasks.due_today", "Due today"), overdue: false };
     }
     return { text: task.due_at.slice(0, 10), overdue: false };
   }
@@ -89,7 +156,7 @@ export default function TasksPage() {
   async function saveDraft() {
     if (!draft) return;
     if (!draft.title.trim()) {
-      toast.success(t("page.tasks.need_title", "请填写任务标题"));
+      toast.success(t("page.tasks.need_title", "Enter a task title"));
       return;
     }
     setSaving(true);
@@ -103,102 +170,101 @@ export default function TasksPage() {
       };
       if (draft.id) {
         await apiPatch(`/api/v1/tasks/${draft.id}`, payload);
-        toast.success(t("page.tasks.updated", "任务已更新"));
+        toast.success(t("page.tasks.updated", "Task updated."));
       } else {
         await apiPost("/api/v1/tasks", payload);
-        toast.success(t("page.tasks.created", "任务已创建"));
+        toast.success(t("page.tasks.created", "Task created."));
       }
       setDraft(null);
       await load();
     } catch (e: any) {
-      toast.success(e?.message || t("common.failed", "操作失败"));
+      toast.error(e?.message || t("common.failed", "Failed"));
     } finally {
       setSaving(false);
     }
   }
 
-  async function transition(task: TaskOut, action: "complete" | "reopen") {
+  async function transition(task: TaskRow, action: "complete" | "reopen") {
     setBusyId(task.id);
     try {
       await apiPost(`/api/v1/tasks/${task.id}/${action}`);
       await load();
     } catch (e: any) {
-      toast.success(e?.message || t("common.failed", "操作失败"));
+      toast.error(e?.message || t("common.failed", "Failed"));
     } finally {
       setBusyId("");
     }
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "open", label: t("page.tasks.tab_open", "待办") },
-    { id: "done", label: t("page.tasks.tab_done", "已完成") },
-    { id: "all", label: t("page.tasks.tab_all", "全部") },
+  const tabs: TabItem[] = [
+    { key: "open", label: t("page.tasks.tab_open", "Open") },
+    { key: "done", label: t("page.tasks.tab_done", "Done") },
+    { key: "all", label: t("page.tasks.tab_all", "All") },
   ];
 
   return (
     <AppShell>
       <PageHeader
-        title={t("page.tasks.title", "我的任务")}
-        subtitle={t("page.tasks.sub", "跟进指派给你的待办、截止与完成情况。")}
+        breadcrumb={[{ label: t("nav.tasks", "Tasks") }]}
+        title={t("page.tasks.title", "My tasks")}
+        subtitle={t("page.tasks.sub", "Track open items, due dates and completions assigned to you.")}
         actions={
           <>
-            <ExportButton entity="tasks" />
             <PageGuide pageKey="tasks" />
-            <button type="button" className="btn btn-primary" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
-              {t("page.tasks.new", "新建任务")}
-            </button>
+            <SavedViews storageKey="tasks_list" onApply={(q) => router.replace(`/tasks${q}`)} />
           </>
         }
       />
 
-      <div className="page-tabs" role="tablist">
-        {tabs.map((x) => (
-          <button
-            key={x.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === x.id}
-            className={`page-tab ${tab === x.id ? "active" : ""}`}
-            onClick={() => setTab(x.id)}
-          >
-            {x.label}
-          </button>
-        ))}
-      </div>
+      <Toolbar right={<ExportButton entity="tasks" />}>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
+          {t("page.tasks.new", "New task")}
+        </button>
+      </Toolbar>
+
+      <Tabs items={tabs} value={tab} onChange={(k) => setQuery({ tab: k === "open" ? null : k })} variant="pill" />
+
+      <StatusLegend statuses={["todo", "in_progress", "done", "cancelled"]} />
 
       <div className="panel">
         <StateView
           loading={loading}
           error={error}
           empty={!tasks.length}
-          emptyText={t("page.tasks.empty", "暂无任务")}
+          emptyText={t("page.tasks.empty", "No tasks.")}
           onRetry={load}
         >
           {tasks.map((task) => {
             const due = dueLabel(task);
             const done = task.status === "done" || task.status === "cancelled";
             return (
-              <div key={task.id} className={`task-row ${done ? "task-done" : ""}`}>
+              <div
+                key={task.id}
+                className={`task-row ${done ? "task-done" : ""}`}
+                onContextMenu={rowCtx.open(task)}
+              >
                 <span className="task-row-main">
                   <span className="task-row-title">
                     <span className={`pill ${task.priority}`}>{task.priority}</span>
                     {task.title}
                     {task.status === "in_progress" ? (
-                      <span className="pill">{t("page.tasks.in_progress", "进行中")}</span>
+                      <span className="pill">{t("page.tasks.in_progress", "In progress")}</span>
                     ) : null}
                     {task.status === "cancelled" ? (
-                      <span className="pill cancelled">{t("page.tasks.cancelled", "已取消")}</span>
+                      <span className="pill cancelled">{t("page.tasks.cancelled", "Cancelled")}</span>
                     ) : null}
                   </span>
                   {task.description ? <small className="muted">{task.description}</small> : null}
                   <small className="muted">
                     {task.assignee
-                      ? t("page.tasks.assignee", "指派：{name}", {
+                      ? t("page.tasks.assignee", "Assignee", {
                           name: task.assignee.full_name || task.assignee.email,
                         })
-                      : t("page.tasks.unassigned", "未指派")}
+                      : t("page.tasks.unassigned", "Unassigned")}
                     {due ? " · " : ""}
                     {due ? <span className={due.overdue ? "overdue" : ""}>{due.text}</span> : null}
+                    {" · "}
+                    {t("common.last_modified", "Updated")} {fmtStamp(task.updated_at)}
                   </small>
                 </span>
                 <span className="task-row-ops">
@@ -209,7 +275,7 @@ export default function TasksPage() {
                       disabled={busyId === task.id}
                       onClick={() => transition(task, "complete")}
                     >
-                      {t("page.tasks.complete", "完成")}
+                      {t("page.tasks.complete", "Complete")}
                     </button>
                   ) : (
                     <button
@@ -218,24 +284,15 @@ export default function TasksPage() {
                       disabled={busyId === task.id}
                       onClick={() => transition(task, "reopen")}
                     >
-                      {t("page.tasks.reopen", "重开")}
+                      {t("page.tasks.reopen", "Reopen")}
                     </button>
                   )}
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    onClick={() =>
-                      setDraft({
-                        id: task.id,
-                        title: task.title,
-                        description: task.description || "",
-                        priority: task.priority,
-                        due_at: task.due_at ? task.due_at.slice(0, 10) : "",
-                        assignee_user_id: task.assignee?.id || "",
-                      })
-                    }
+                    onClick={() => openEdit(task)}
                   >
-                    {t("common.edit", "编辑")}
+                    {t("common.edit", "Edit")}
                   </button>
                 </span>
               </div>
@@ -244,16 +301,18 @@ export default function TasksPage() {
         </StateView>
       </div>
 
+      <ContextMenu controller={rowCtx} items={rowMenuItems} />
+
       <RecordModal
         open={Boolean(draft)}
-        title={draft?.id ? t("page.tasks.edit", "编辑任务") : t("page.tasks.new", "新建任务")}
+        title={draft?.id ? t("page.tasks.edit", "Edit task") : t("page.tasks.new", "New task")}
         onClose={() => setDraft(null)}
         onSave={saveDraft}
         canDelete={false}
         saving={saving}
       >
         <label>
-          {t("page.tasks.field_title", "标题")}
+          {t("page.tasks.field_title", "Title")}
           <input
             value={draft?.title || ""}
             required
@@ -261,7 +320,7 @@ export default function TasksPage() {
           />
         </label>
         <label>
-          {t("page.tasks.field_desc", "描述")}
+          {t("page.tasks.field_desc", "Description")}
           <textarea
             rows={3}
             value={draft?.description || ""}
@@ -269,7 +328,7 @@ export default function TasksPage() {
           />
         </label>
         <label>
-          {t("page.tasks.field_priority", "优先级")}
+          {t("page.tasks.field_priority", "Priority")}
           <select
             value={draft?.priority || "normal"}
             onChange={(e) => setDraft((d) => (d ? { ...d, priority: e.target.value as TaskOut["priority"] } : d))}
@@ -282,19 +341,19 @@ export default function TasksPage() {
           </select>
         </label>
         <label>
-          {t("page.tasks.field_due", "截止日期")}
+          {t("page.tasks.field_due", "Due date")}
           <DateInput
             value={draft?.due_at || ""}
             onChange={(v) => setDraft((d) => (d ? { ...d, due_at: v } : d))}
           />
         </label>
         <label>
-          {t("page.tasks.field_assignee", "指派人")}
+          {t("page.tasks.field_assignee", "Assignee")}
           <select
             value={draft?.assignee_user_id || ""}
             onChange={(e) => setDraft((d) => (d ? { ...d, assignee_user_id: e.target.value } : d))}
           >
-            <option value="">{t("page.tasks.unassigned", "未指派")}</option>
+            <option value="">{t("page.tasks.unassigned", "Unassigned")}</option>
             {assignees.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.full_name || a.email}
@@ -304,5 +363,13 @@ export default function TasksPage() {
         </label>
       </RecordModal>
     </AppShell>
+  );
+}
+
+export default function TasksPage() {
+  return (
+    <Suspense fallback={null}>
+      <TasksPageInner />
+    </Suspense>
   );
 }

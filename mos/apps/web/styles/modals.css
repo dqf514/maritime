@@ -102,6 +102,11 @@
   border-top: 1px solid var(--border-light);
 }
 .record-modal-actions { display: flex; gap: var(--gap-xs); }
+.record-modal-foot-validate {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+}
 
 /* Badges */
 .badge {

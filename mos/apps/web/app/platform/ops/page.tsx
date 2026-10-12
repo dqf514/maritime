@@ -1,15 +1,30 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
+import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
+import { Tabs } from "@/components/Tabs";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { apiGet, apiPatch, apiPost, apiDelete } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 
 type Tab = "datasource" | "tenants" | "init" | "deploy" | "monitor";
+const TAB_IDS: readonly string[] = ["datasource", "tenants", "init", "deploy", "monitor"];
 
-export default function PlatformOpsPage() {
+function PlatformOpsPage() {
   const { t } = useI18n();
-  const [tab, setTab] = useState<Tab>("datasource");
+  const router = useRouter();
+  const pathname = usePathname();
+  const { query, setQuery } = useListQuery();
+  const tab: Tab = TAB_IDS.includes(query.tab ?? "") ? (query.tab as Tab) : "datasource";
+  const setTab = (id: Tab) => setQuery({ tab: id === "datasource" ? null : id, page: null });
   const [overview, setOverview] = useState<Record<string, unknown> | null>(null);
   const [bindings, setBindings] = useState<Array<Record<string, unknown>>>([]);
   const [tenants, setTenants] = useState<Array<Record<string, unknown>>>([]);
@@ -19,10 +34,11 @@ export default function PlatformOpsPage() {
   const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null);
   const [msg, setMsg] = useState<string>("");
   const [busy, setBusy] = useState(false);
+  const [bindingOpen, setBindingOpen] = useState(false);
 
   const [form, setForm] = useState({
     tenant_id: "",
-    display_name: "租户主库",
+    display_name: "Tenant primary DB",
     engine: "sqlite",
     host_mode: "local",
     cloud_provider: "",
@@ -65,13 +81,23 @@ export default function PlatformOpsPage() {
     }
   }, [tab]);
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "datasource", label: t("page.ops.tab.ds", "运行时数据源") },
-    { id: "tenants", label: t("page.ops.tab.tenant", "租户库绑定") },
-    { id: "init", label: t("page.ops.tab.init", "系统初始化") },
-    { id: "deploy", label: t("page.ops.tab.deploy", "部署档案") },
-    { id: "monitor", label: t("page.ops.tab.monitor", "监控与预警") },
-  ];
+  const tabs = useMemo(
+    () => [
+      { key: "datasource" as Tab, label: t("page.ops.tab.ds", "Runtime datasource") },
+      { key: "tenants" as Tab, label: t("page.ops.tab.tenant", "Tenant DB bindings") },
+      { key: "init" as Tab, label: t("page.ops.tab.init", "System init") },
+      { key: "deploy" as Tab, label: t("page.ops.tab.deploy", "Deploy profiles") },
+      { key: "monitor" as Tab, label: t("page.ops.tab.monitor", "Monitor & alerts") },
+    ],
+    [t],
+  );
+
+  function openCreate() {
+    setBindingOpen(true);
+    if (tab !== "tenants") setTab("tenants");
+  }
+
+  useListHotkeys(openCreate);
 
   async function onCreateBinding(e: FormEvent) {
     e.preventDefault();
@@ -88,10 +114,11 @@ export default function PlatformOpsPage() {
         connection_url: form.connection_url,
         routing_policy: form.routing_policy,
       });
-      setMsg(t("page.ops.saved", "已保存绑定（连接串已加密存储）"));
+      setMsg(t("page.ops.saved", "Binding saved (connection string stored encrypted)"));
+      setBindingOpen(false);
       await loadCore();
     } catch (err: any) {
-      setMsg(err?.detail?.message || err.message || "保存失败");
+      setMsg(err?.detail?.message || err.message || t("page.ops.save_fail", "Save failed"));
     } finally {
       setBusy(false);
     }
@@ -101,10 +128,14 @@ export default function PlatformOpsPage() {
     setBusy(true);
     try {
       const r = await apiPost(`/api/v1/platform/ops/datastores/${id}/test`);
-      setMsg(r.ok ? `连通正常（${r.elapsed_ms} ms）` : `失败：${r.message}`);
+      setMsg(
+        r.ok
+          ? t("page.ops.test_ok", "Connected OK ({ms} ms)", { ms: r.elapsed_ms })
+          : t("page.ops.test_fail", "Failed: {msg}", { msg: r.message }),
+      );
       await loadCore();
     } catch (err: any) {
-      setMsg(err?.detail?.message || err.message || "测试失败");
+      setMsg(err?.detail?.message || err.message || t("page.ops.test_fail_generic", "Test failed"));
     } finally {
       setBusy(false);
     }
@@ -114,10 +145,10 @@ export default function PlatformOpsPage() {
     setBusy(true);
     try {
       await apiDelete(`/api/v1/platform/ops/datastores/${id}`);
-      setMsg("已删除绑定");
+      setMsg(t("page.ops.deleted", "Binding deleted"));
       await loadCore();
     } catch (err: any) {
-      setMsg(err.message || "删除失败");
+      setMsg(err.message || t("page.ops.delete_fail", "Delete failed"));
     } finally {
       setBusy(false);
     }
@@ -130,7 +161,7 @@ export default function PlatformOpsPage() {
       setMsg(`${r.title}: ${r.last_result?.message || r.status}`);
       setSteps(await apiGet("/api/v1/platform/ops/init/steps"));
     } catch (err: any) {
-      setMsg(err?.detail?.message || err.message || "执行失败");
+      setMsg(err?.detail?.message || err.message || t("page.ops.run_fail", "Run failed"));
     } finally {
       setBusy(false);
     }
@@ -140,10 +171,10 @@ export default function PlatformOpsPage() {
     setBusy(true);
     try {
       const r = await apiPost(`/api/v1/platform/ops/deploy/profiles/${id}/apply`);
-      setMsg(r.apply_log?.message || "已生成部署指引");
+      setMsg(r.apply_log?.message || t("page.ops.deploy_guide", "Deployment guide generated"));
       setProfiles(await apiGet("/api/v1/platform/ops/deploy/profiles"));
     } catch (err: any) {
-      setMsg(err?.detail?.message || err.message || "应用失败");
+      setMsg(err?.detail?.message || err.message || t("page.ops.apply_fail", "Apply failed"));
     } finally {
       setBusy(false);
     }
@@ -155,9 +186,9 @@ export default function PlatformOpsPage() {
       const s = await apiGet("/api/v1/platform/ops/monitor/snapshot");
       setSnapshot(s);
       setAlerts(await apiGet("/api/v1/platform/ops/monitor/alerts"));
-      setMsg("监控快照已刷新");
+      setMsg(t("page.ops.monitor_refreshed", "Monitor snapshot refreshed"));
     } catch (err: any) {
-      setMsg(err.message || "刷新失败");
+      setMsg(err.message || t("page.ops.refresh_fail", "Refresh failed"));
     } finally {
       setBusy(false);
     }
@@ -168,39 +199,113 @@ export default function PlatformOpsPage() {
       await apiPatch(`/api/v1/platform/ops/monitor/alerts/${id}`, { enabled: !enabled });
       setAlerts(await apiGet("/api/v1/platform/ops/monitor/alerts"));
     } catch (err: any) {
-      setMsg(err.message || "更新失败");
+      setMsg(err.message || t("page.ops.update_fail", "Update failed"));
     }
   }
 
   const ds = (overview?.datasource || {}) as Record<string, unknown>;
   const caps = (overview?.capabilities || {}) as Record<string, unknown>;
 
+  type OpsRow = Record<string, unknown>;
+
+  const bindingColumns: ColumnDef<OpsRow>[] = [
+    { key: "display_name", title: t("page.ops.col.name", "Name"), value: (r) => r.display_name },
+    {
+      key: "engine",
+      title: t("page.ops.col.engine", "Engine"),
+      value: (r) => `${String(r.engine)} / ${String(r.host_mode)}`,
+      render: (v) => String(v),
+    },
+    {
+      key: "cloud_provider",
+      title: t("page.ops.col.form", "Form factor"),
+      value: (r) => r.cloud_provider || "—",
+    },
+    {
+      key: "connection_hint",
+      title: t("page.ops.col.conn", "Masked connection"),
+      value: (r) => r.connection_hint,
+      render: (v) => <code>{String(v)}</code>,
+    },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      value: (r) =>
+        `${String(r.status)}${r.last_test_ok === true ? " · OK" : r.last_test_ok === false ? " · Fail" : ""}`,
+    },
+    {
+      key: "actions",
+      title: t("common.actions", "Actions"),
+      width: 150,
+      render: (_v, row) => (
+        <span style={{ whiteSpace: "nowrap" }}>
+          <button type="button" className="btn" disabled={busy} onClick={() => testBinding(String(row.id))}>
+            {t("common.test", "Test")}
+          </button>{" "}
+          <button type="button" className="btn" disabled={busy} onClick={() => removeBinding(String(row.id))}>
+            {t("common.delete", "Delete")}
+          </button>
+        </span>
+      ),
+    },
+  ];
+
+  const metricColumns: ColumnDef<OpsRow>[] = [
+    { key: "name", title: t("page.ops.col.metric", "Metric"), value: (r) => r.name },
+    { key: "category", title: t("common.category", "Category"), value: (r) => r.category },
+    { key: "value", title: t("common.value", "Value"), value: (r) => r.value, align: "right" },
+    { key: "unit", title: t("page.ops.col.unit", "Unit"), value: (r) => r.unit },
+  ];
+
+  const alertColumns: ColumnDef<OpsRow>[] = [
+    { key: "name", title: t("page.ops.col.name", "Name"), value: (r) => r.name },
+    { key: "metric_code", title: t("page.ops.col.metric", "Metric"), value: (r) => r.metric_code },
+    {
+      key: "condition",
+      title: t("page.ops.col.condition", "Condition"),
+      value: (r) => `${String(r.operator)} ${String(r.threshold)}`,
+    },
+    { key: "severity", title: t("page.ops.col.severity", "Severity"), value: (r) => r.severity },
+    { key: "last_state", title: t("common.status", "Status"), value: (r) => r.last_state },
+    {
+      key: "enabled",
+      title: t("page.ops.col.enabled", "Enabled"),
+      width: 90,
+      render: (_v, row) => (
+        <button type="button" className="btn" onClick={() => toggleAlert(String(row.id), Boolean(row.enabled))}>
+          {row.enabled ? t("common.disable", "Disable") : t("common.enable", "Enable")}
+        </button>
+      ),
+    },
+  ];
+
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.ops.title", "平台数据面与部署")}</h1>
-          <p className="page-sub">
-            {t(
-              "page.ops.sub",
-              "配置运行时数据源、租户库绑定、初始化向导、部署档案与监控预警。业务会话当前仍使用平台主库；租户独立引擎已预留。"
-            )}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.ops.title", "Platform data plane & deployment")}
+        subtitle={t(
+          "page.ops.sub",
+          "Configure runtime datasource, tenant DB bindings, init wizard, deploy profiles and monitor alerts. Business sessions still use the platform primary DB; per-tenant engines are reserved.",
+        )}
+        breadcrumb={[{ label: t("page.platform.title", "Platform"), href: "/platform" }, { label: t("page.ops.title", "Platform data plane & deployment") }]}
+        actions={<SavedViews storageKey="platform_ops" onApply={(qs) => router.replace(`${pathname}${qs}`)} />}
+      />
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-        {tabs.map((x) => (
-          <button
-            key={x.id}
-            type="button"
-            className={tab === x.id ? "btn primary" : "btn"}
-            onClick={() => setTab(x.id)}
-          >
-            {x.label}
-          </button>
-        ))}
-      </div>
+      <Toolbar>
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
+          {t("page.ops.bind_new", "New tenant DB binding")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => loadCore().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
+
+      <Tabs
+        items={tabs}
+        value={tab}
+        onChange={(k) => setTab(k as Tab)}
+        variant="line"
+      />
 
       {msg ? (
         <div className="panel" style={{ marginBottom: 12, color: "var(--text, inherit)" }}>
@@ -210,38 +315,39 @@ export default function PlatformOpsPage() {
 
       {tab === "datasource" && (
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>{t("page.ops.runtime", "当前运行时")}</h3>
+          <h3 style={{ marginTop: 0 }}>{t("page.ops.runtime", "Current runtime")}</h3>
           <dl className="kv-grid">
             <div>
-              <dt>方言</dt>
+              <dt>{t("page.ops.dialect", "Dialect")}</dt>
               <dd className="kv">{String(ds.dialect ?? "—")}</dd>
             </div>
             <div>
-              <dt>驱动</dt>
+              <dt>{t("page.ops.driver", "Driver")}</dt>
               <dd className="kv">{String(ds.driver ?? "—")}</dd>
             </div>
             <div>
-              <dt>连接（脱敏）</dt>
+              <dt>{t("page.ops.conn_masked", "Connection (masked)")}</dt>
               <dd className="kv">
                 <code>{String(ds.url_masked ?? "—")}</code>
               </dd>
             </div>
             <div>
-              <dt>多租户模式</dt>
+              <dt>{t("page.ops.multi_tenant", "Multi-tenant mode")}</dt>
               <dd className="kv">{String(ds.multi_tenant_mode ?? "—")}</dd>
             </div>
             <div>
-              <dt>租户引擎路由</dt>
+              <dt>{t("page.ops.engine_routing", "Tenant engine routing")}</dt>
               <dd className="kv">{String(ds.tenant_engine_routing ?? "—")}</dd>
             </div>
             <div>
-              <dt>说明</dt>
+              <dt>{t("page.ops.notes", "Notes")}</dt>
               <dd className="kv">{String(ds.notes ?? "")}</dd>
             </div>
           </dl>
           <p style={{ fontSize: 13, opacity: 0.85 }}>
-            能力：绑定 {caps.tenant_db_binding ? "✓" : "—"} · 连通测试 {caps.connectivity_test ? "✓" : "—"} ·
-            独立引擎切换 {caps.tenant_engine_switch ? "✓" : "预留"}
+            {t("page.ops.capabilities", "Capabilities")}: {t("page.ops.cap_binding", "binding")} {caps.tenant_db_binding ? "✓" : "—"} ·{" "}
+            {t("page.ops.cap_test", "connectivity test")} {caps.connectivity_test ? "✓" : "—"} ·{" "}
+            {t("page.ops.cap_switch", "engine switch")} {caps.tenant_engine_switch ? "✓" : t("page.ops.cap_reserved", "reserved")}
           </p>
           <button
             type="button"
@@ -251,7 +357,11 @@ export default function PlatformOpsPage() {
               setBusy(true);
               try {
                 const r = await apiPost("/api/v1/platform/ops/datasource/test", {});
-                setMsg(r.ok ? `主库连通正常（${r.elapsed_ms} ms）` : `主库探测失败：${r.message}`);
+                setMsg(
+                  r.ok
+                    ? t("page.ops.primary_ok", "Primary DB connected ({ms} ms)", { ms: r.elapsed_ms })
+                    : t("page.ops.primary_fail", "Primary DB probe failed: {msg}", { msg: r.message }),
+                );
               } catch (err: any) {
                 setMsg(err?.detail?.message || err.message);
               } finally {
@@ -259,139 +369,25 @@ export default function PlatformOpsPage() {
               }
             }}
           >
-            {t("page.ops.test_primary", "测试主库连通")}
+            {t("page.ops.test_primary", "Test primary DB")}
           </button>
         </div>
       )}
 
       {tab === "tenants" && (
         <div style={{ display: "grid", gap: 16 }}>
-          <form className="panel" onSubmit={onCreateBinding}>
-            <h3 style={{ marginTop: 0 }}>{t("page.ops.bind_new", "新建 / 更新租户库绑定")}</h3>
-            <div className="form-grid">
-              <label>
-                租户
-                <select
-                  value={form.tenant_id}
-                  onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}
-                  required
-                >
-                  <option value="">选择租户</option>
-                  {tenants.map((tn) => (
-                    <option key={String(tn.id)} value={String(tn.id)}>
-                      {String(tn.code)} — {String(tn.name)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                显示名
-                <input
-                  value={form.display_name}
-                  onChange={(e) => setForm({ ...form, display_name: e.target.value })}
-                  required
-                />
-              </label>
-              <label>
-                引擎
-                <select value={form.engine} onChange={(e) => setForm({ ...form, engine: e.target.value })}>
-                  <option value="sqlite">SQLite（本地）</option>
-                  <option value="postgres">PostgreSQL</option>
-                  <option value="mysql">MySQL</option>
-                  <option value="cloud_rds">云托管 RDS</option>
-                </select>
-              </label>
-              <label>
-                部署形态
-                <select value={form.host_mode} onChange={(e) => setForm({ ...form, host_mode: e.target.value })}>
-                  <option value="local">本地文件 / 本机</option>
-                  <option value="server">数据库服务器</option>
-                  <option value="cloud">主流云数据库</option>
-                </select>
-              </label>
-              <label>
-                云厂商（可选）
-                <select
-                  value={form.cloud_provider}
-                  onChange={(e) => setForm({ ...form, cloud_provider: e.target.value })}
-                >
-                  <option value="">无</option>
-                  <option value="aliyun">阿里云</option>
-                  <option value="tencent">腾讯云</option>
-                  <option value="huawei">华为云</option>
-                  <option value="aws">AWS</option>
-                  <option value="azure">Azure</option>
-                </select>
-              </label>
-              <label>
-                路由策略
-                <select
-                  value={form.routing_policy}
-                  onChange={(e) => setForm({ ...form, routing_policy: e.target.value })}
-                >
-                  <option value="bind_only">仅绑定登记</option>
-                  <option value="prefer_tenant">优先租户库（预留）</option>
-                  <option value="force_tenant">强制租户库（预留，当前仍回落主库）</option>
-                </select>
-              </label>
-              <label style={{ gridColumn: "1 / -1" }}>
-                连接串
-                <input
-                  value={form.connection_url}
-                  onChange={(e) => setForm({ ...form, connection_url: e.target.value })}
-                  required
-                  placeholder="postgresql+psycopg://user:pass@host:5432/db"
-                />
-              </label>
-            </div>
-            <button type="submit" className="btn primary" disabled={busy} style={{ marginTop: 12 }}>
-              保存绑定
-            </button>
-          </form>
-
           <div className="panel">
-            <h3 style={{ marginTop: 0 }}>已有绑定</h3>
+            <h3 style={{ marginTop: 0 }}>{t("page.ops.existing_bindings", "Existing bindings")}</h3>
             {bindings.length === 0 ? (
-              <p className="page-sub">暂无租户库绑定。</p>
+              <p className="page-sub">{t("page.ops.no_bindings", "No tenant DB bindings yet.")}</p>
             ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>名称</th>
-                    <th>引擎</th>
-                    <th>形态</th>
-                    <th>脱敏连接</th>
-                    <th>状态</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bindings.map((b) => (
-                    <tr key={String(b.id)}>
-                      <td>{String(b.display_name)}</td>
-                      <td>
-                        {String(b.engine)} / {String(b.host_mode)}
-                      </td>
-                      <td>{String(b.cloud_provider || "—")}</td>
-                      <td>
-                        <code>{String(b.connection_hint)}</code>
-                      </td>
-                      <td>
-                        {String(b.status)}
-                        {b.last_test_ok === true ? " · OK" : b.last_test_ok === false ? " · Fail" : ""}
-                      </td>
-                      <td style={{ whiteSpace: "nowrap" }}>
-                        <button type="button" className="btn" disabled={busy} onClick={() => testBinding(String(b.id))}>
-                          测试
-                        </button>{" "}
-                        <button type="button" className="btn" disabled={busy} onClick={() => removeBinding(String(b.id))}>
-                          删除
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <DataGrid
+                columns={bindingColumns}
+                data={bindings}
+                rowKey={(r) => String(r.id)}
+                storageKey="platform_ops_bindings"
+                emptyText={t("common.empty", "No records")}
+              />
             )}
           </div>
         </div>
@@ -399,21 +395,21 @@ export default function PlatformOpsPage() {
 
       {tab === "init" && (
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>{t("page.ops.init_title", "初始化向导")}</h3>
-          <p className="page-sub">按步骤执行建表、目录种子、演示数据与就绪检查。</p>
+          <h3 style={{ marginTop: 0 }}>{t("page.ops.init_title", "Init wizard")}</h3>
+          <p className="page-sub">{t("page.ops.init_sub", "Run schema create, catalog seed, demo data and readiness checks step by step.")}</p>
           <ol style={{ paddingLeft: 18 }}>
             {steps.map((s) => (
               <li key={String(s.id)} style={{ marginBottom: 12 }}>
                 <strong>{String(s.title)}</strong>{" "}
                 <span style={{ opacity: 0.75 }}>
-                  [{String(s.status)}] {s.required ? "必选" : "可选"}
+                  [{String(s.status)}] {s.required ? t("page.ops.step_required", "required") : t("page.ops.step_optional", "optional")}
                 </span>
                 <div style={{ fontSize: 13 }}>{String(s.description || "")}</div>
                 {s.last_result && (s.last_result as any).message ? (
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>上次：{String((s.last_result as any).message)}</div>
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>{t("page.ops.step_last", "Last")}: {String((s.last_result as any).message)}</div>
                 ) : null}
                 <button type="button" className="btn primary" disabled={busy} onClick={() => runStep(String(s.id))} style={{ marginTop: 6 }}>
-                  执行
+                  {t("page.ops.step_run", "Run")}
                 </button>
               </li>
             ))}
@@ -438,10 +434,10 @@ export default function PlatformOpsPage() {
                 ))}
               </ul>
               <button type="button" className="btn primary" disabled={busy} onClick={() => applyProfile(String(p.id))}>
-                生成部署指引
+                {t("page.ops.gen_guide", "Generate deploy guide")}
               </button>
               {p.last_applied_at ? (
-                <div style={{ fontSize: 12, marginTop: 8 }}>上次：{String(p.last_applied_at)}</div>
+                <div style={{ fontSize: 12, marginTop: 8 }}>{t("page.ops.step_last", "Last")}: {String(p.last_applied_at)}</div>
               ) : null}
             </div>
           ))}
@@ -452,9 +448,9 @@ export default function PlatformOpsPage() {
         <div style={{ display: "grid", gap: 16 }}>
           <div className="panel">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ margin: 0 }}>资源与指标快照</h3>
+              <h3 style={{ margin: 0 }}>{t("page.ops.snapshot", "Resource & metric snapshot")}</h3>
               <button type="button" className="btn" disabled={busy} onClick={refreshMonitor}>
-                刷新
+                {t("common.refresh", "Refresh")}
               </button>
             </div>
             {snapshot ? (
@@ -462,74 +458,133 @@ export default function PlatformOpsPage() {
                 <p className="page-sub">
                   {String(snapshot.host)} · {String(snapshot.platform)} · {String(snapshot.captured_at)}
                 </p>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>指标</th>
-                      <th>分类</th>
-                      <th>值</th>
-                      <th>单位</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {((snapshot.metrics as any[]) || []).map((m) => (
-                      <tr key={m.code}>
-                        <td>{m.name}</td>
-                        <td>{m.category}</td>
-                        <td>{m.value}</td>
-                        <td>{m.unit}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <DataGrid
+                  columns={metricColumns}
+                  data={((snapshot.metrics as OpsRow[]) || []).map((m) => ({ ...m, id: m.code }))}
+                  rowKey={(r) => String(r.id)}
+                  storageKey="platform_ops_metrics"
+                  emptyText={t("common.empty", "No records")}
+                />
                 {((snapshot.alerts_firing as any[]) || []).length > 0 ? (
                   <p style={{ color: "#b45309" }}>
-                    触发中：
+                    {t("page.ops.firing", "Firing")}:{" "}
                     {((snapshot.alerts_firing as any[]) || []).map((a) => a.name).join("、")}
                   </p>
                 ) : (
-                  <p className="page-sub">当前无触发预警。</p>
+                  <p className="page-sub">{t("page.ops.no_firing", "No alerts firing.")}</p>
                 )}
               </>
             ) : (
-              <p className="page-sub">加载中…</p>
+              <p className="page-sub">{t("common.loading", "Loading…")}</p>
             )}
           </div>
           <div className="panel">
-            <h3 style={{ marginTop: 0 }}>预警规则</h3>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>指标</th>
-                  <th>条件</th>
-                  <th>级别</th>
-                  <th>状态</th>
-                  <th>启用</th>
-                </tr>
-              </thead>
-              <tbody>
-                {alerts.map((a) => (
-                  <tr key={String(a.id)}>
-                    <td>{String(a.name)}</td>
-                    <td>{String(a.metric_code)}</td>
-                    <td>
-                      {String(a.operator)} {String(a.threshold)}
-                    </td>
-                    <td>{String(a.severity)}</td>
-                    <td>{String(a.last_state)}</td>
-                    <td>
-                      <button type="button" className="btn" onClick={() => toggleAlert(String(a.id), Boolean(a.enabled))}>
-                        {a.enabled ? "关闭" : "开启"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <h3 style={{ marginTop: 0 }}>{t("page.ops.alert_rules", "Alert rules")}</h3>
+            <DataGrid
+              columns={alertColumns}
+              data={alerts}
+              rowKey={(r) => String(r.id)}
+              storageKey="platform_ops_alerts"
+              emptyText={t("common.empty", "No records")}
+            />
           </div>
         </div>
       )}
+
+      <RecordModal
+        open={bindingOpen}
+        title={t("page.ops.bind_new", "New tenant DB binding")}
+        onClose={() => setBindingOpen(false)}
+        onSave={onCreateBinding}
+        saving={busy}
+        canDelete={false}
+      >
+        <div className="form-grid">
+          <label>
+            {t("page.ops.field_tenant", "Tenant")}
+            <select
+              value={form.tenant_id}
+              onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}
+              required
+            >
+              <option value="">{t("page.ops.pick_tenant", "Select tenant")}</option>
+              {tenants.map((tn) => (
+                <option key={String(tn.id)} value={String(tn.id)}>
+                  {String(tn.code)} — {String(tn.name)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            {t("page.ops.field_display_name", "Display name")}
+            <input
+              value={form.display_name}
+              onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+              required
+            />
+          </label>
+          <label>
+            {t("page.ops.field_engine", "Engine")}
+            <select value={form.engine} onChange={(e) => setForm({ ...form, engine: e.target.value })}>
+              <option value="sqlite">{t("page.ops.engine_sqlite", "SQLite (local)")}</option>
+              <option value="postgres">PostgreSQL</option>
+              <option value="mysql">MySQL</option>
+              <option value="cloud_rds">{t("page.ops.engine_rds", "Cloud RDS")}</option>
+            </select>
+          </label>
+          <label>
+            {t("page.ops.field_host_mode", "Host mode")}
+            <select value={form.host_mode} onChange={(e) => setForm({ ...form, host_mode: e.target.value })}>
+              <option value="local">{t("page.ops.host_local", "Local file / machine")}</option>
+              <option value="server">{t("page.ops.host_server", "Database server")}</option>
+              <option value="cloud">{t("page.ops.host_cloud", "Cloud database")}</option>
+            </select>
+          </label>
+          <label>
+            {t("page.ops.field_cloud", "Cloud provider (optional)")}
+            <select
+              value={form.cloud_provider}
+              onChange={(e) => setForm({ ...form, cloud_provider: e.target.value })}
+            >
+              <option value="">{t("common.none", "None")}</option>
+              <option value="aliyun">Alibaba Cloud</option>
+              <option value="tencent">Tencent Cloud</option>
+              <option value="huawei">Huawei Cloud</option>
+              <option value="aws">AWS</option>
+              <option value="azure">Azure</option>
+            </select>
+          </label>
+          <label>
+            {t("page.ops.field_routing", "Routing policy")}
+            <select
+              value={form.routing_policy}
+              onChange={(e) => setForm({ ...form, routing_policy: e.target.value })}
+            >
+              <option value="bind_only">{t("page.ops.route_bind", "Bind only")}</option>
+              <option value="prefer_tenant">{t("page.ops.route_prefer", "Prefer tenant DB (reserved)")}</option>
+              <option value="force_tenant">{t("page.ops.route_force", "Force tenant DB (reserved, falls back to primary)")}</option>
+            </select>
+          </label>
+          <label style={{ gridColumn: "1 / -1" }}>
+            {t("page.ops.field_conn", "Connection string")}
+            <input
+              value={form.connection_url}
+              onChange={(e) => setForm({ ...form, connection_url: e.target.value })}
+              required
+              placeholder="postgresql+psycopg://user:pass@host:5432/db"
+            />
+          </label>
+        </div>
+      </RecordModal>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <PlatformOpsPage />
+    </Suspense>
   );
 }

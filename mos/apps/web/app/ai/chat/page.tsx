@@ -2,7 +2,10 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { StatusLegend } from "@/components/StatusLegend";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -21,6 +24,7 @@ type Conversation = {
   status: string;
   message_count: number;
   created_at: string;
+  updated_at?: string | null;
 };
 
 type Message = {
@@ -41,6 +45,7 @@ export default function AiChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const convCtx = useContextMenu<Conversation>();
 
   async function loadAgents() {
     try {
@@ -113,16 +118,35 @@ export default function AiChatPage() {
       setInput("");
       setActiveConv({ ...activeConv, message_count: (activeConv.message_count || 0) + 2 });
     } catch {
-      toast.success(t("ai.error", "Chat error"));
+      toast.error(t("ai.error", "Chat error"));
     }
     setLoading(false);
   }
 
   const agent = agents.find((a) => a.agent_name === selectedAgent);
 
+  function copyConvId(c: Conversation) {
+    void navigator.clipboard.writeText(c.id);
+    toast.success(t("ctx.copied_id", "ID copied"));
+  }
+
+  function formatTs(iso: string | null | undefined): string {
+    if (!iso) return "—";
+    return iso.slice(0, 16).replace("T", " ");
+  }
+
+  const convMenuItems = (c: Conversation): ContextMenuItem[] => [
+    { key: "open", label: t("ctx.open", "Open"), onClick: () => setActiveConv(c) },
+    { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyConvId(c) },
+  ];
+
   return (
     <AppShell>
-      <PageHeader title="MariAI Chat" />
+      <PageHeader
+        breadcrumb={[{ label: t("nav.ai_chat", "MariAI") }]}
+        title={t("page.ai.title", "MariAI Chat")}
+        subtitle={t("page.ai.sub", "Ask the fleet copilot — estimates, voyages, laytime and market context.")}
+      />
       <div className="space-y-4">
 
         <div className="flex gap-4">
@@ -150,22 +174,27 @@ export default function AiChatPage() {
 
             <div className="rounded-lg border bg-white p-3">
               <h3 className="mb-2 text-sm font-semibold">{t("ai.history", "History")}</h3>
+              <StatusLegend statuses={["active", "archived"]} />
               <div className="max-h-64 space-y-1 overflow-y-auto">
                 {conversations.map((c) => (
                   <button
                     key={c.id}
                     onClick={() => setActiveConv(c)}
+                    onContextMenu={convCtx.open(c)}
                     className={`block w-full truncate rounded px-2 py-1 text-left text-xs ${
                       activeConv?.id === c.id ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
                     }`}
                   >
-                    {c.title || c.agent_name} ({c.message_count})
+                    <span>{c.title || c.agent_name}</span>{" "}
+                    <Num v={c.message_count} digits={0} />
+                    <span className="text-[10px] text-gray-400"> · {t("ai.updated_at", "Updated")} {formatTs(c.updated_at ?? c.created_at)}</span>
                   </button>
                 ))}
                 {conversations.length === 0 && (
                   <p className="text-xs text-gray-400">{t("ai.no_history", "No conversations yet")}</p>
                 )}
               </div>
+              <ContextMenu controller={convCtx} items={convMenuItems} />
             </div>
           </div>
 

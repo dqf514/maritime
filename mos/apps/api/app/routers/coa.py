@@ -14,6 +14,7 @@ Path map (all under ``/api/v1``):
   POST   /coa/{id}/allocate              — allocate lifting → itinerary seq
   GET    /coa/{id}/allocation            — allocation summary
   GET    /coa/{id}/pnl                   — fuel-neutral P&L
+  GET    /coa/contracts/{id}/score       — cargo parcel ↔ itinerary leg scoring
 
 Route order: literal ``/coa/contracts/...`` paths are registered before the
 parametric ``/coa/{coa_id}/...`` group.
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -31,11 +33,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models_coa import COA_QTY_UNITS, COA_RATE_BASES, CoaContract, CoaItinerary
+from app.models_cargo import Cargo
+from app.models_coa import COA_BILL_BY, COA_QTY_UNITS, COA_RATE_BASES, CoaContract, CoaItinerary
 from app.models_domain import Charter
 from app.pagination import envelope, paginate
 from app.security import AuthContext, require_module
 from app.services import coa as coa_svc
+from app.services.audit import audit
+from app.services.cargo_terms import score_cargoes_to_legs
 from app.services.doc_numbering import next_doc_number
 from app.services.recycle import soft_delete
 from app.services.state_machine import COA_CONTRACT_TRANSITIONS, transition
@@ -54,6 +59,10 @@ class CoaContractIn(BaseModel):
     rate: Decimal
     currency: str = "USD"
     cargo_spec: str | None = None
+    # Cargo CP terms: billable qty basis + MOL window + overage premium
+    bill_by: Literal["weight", "measure", "volume"] | None = None
+    tolerance_pct: Decimal | None = Field(default=None, ge=0, le=50)
+    overage_pct: Decimal | None = Field(default=None, ge=0, le=100)
 
 
 class CoaContractPatch(BaseModel):
@@ -65,6 +74,9 @@ class CoaContractPatch(BaseModel):
     rate: Decimal | None = None
     currency: str | None = None
     cargo_spec: str | None = None
+    bill_by: Literal["weight", "measure", "volume"] | None = None
+    tolerance_pct: Decimal | None = Field(default=None, ge=0, le=50)
+    overage_pct: Decimal | None = Field(default=None, ge=0, le=100)
 
 
 class CoaItineraryIn(BaseModel):
@@ -91,6 +103,11 @@ def _f(v) -> float:
     return float(v) if v is not None else 0.0
 
 
+def _f_opt(v) -> float | None:
+    """None-preserving float for nullable CP terms (0 ≠ unset)."""
+    return float(v) if v is not None else None
+
+
 def _contract_public(row: CoaContract) -> dict:
     return {
         "id": str(row.id),
@@ -104,7 +121,11 @@ def _contract_public(row: CoaContract) -> dict:
         "rate": _f(row.rate),
         "currency": row.currency,
         "cargo_spec": row.cargo_spec,
+        "bill_by": row.bill_by,
+        "tolerance_pct": _f_opt(row.tolerance_pct),
+        "overage_pct": _f_opt(row.overage_pct),
         "status": row.status,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 
@@ -142,6 +163,9 @@ def _validate_contract_fields(db: Session, tenant_id: UUID, body: CoaContractIn 
     rate_basis = body.rate_basis
     if rate_basis is not None and rate_basis not in COA_RATE_BASES:
         raise HTTPException(422, detail={"code": "COA_RATE_BASIS_UNKNOWN", "message": rate_basis})
+    bill_by = getattr(body, "bill_by", None)
+    if bill_by is not None and bill_by not in COA_BILL_BY:
+        raise HTTPException(422, detail={"code": "COA_BILL_BY_UNKNOWN", "message": bill_by})
     p_from = getattr(body, "period_from", None)
     p_to = getattr(body, "period_to", None)
     if p_from is not None and p_to is not None and p_to < p_from:
@@ -201,8 +225,19 @@ def create_coa_contract(
         rate=body.rate,
         currency=body.currency,
         cargo_spec=body.cargo_spec,
+        bill_by=body.bill_by,
+        tolerance_pct=body.tolerance_pct,
+        overage_pct=body.overage_pct,
     )
     db.add(row)
+    audit(
+        db,
+        action="coa_contract.create",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="coa_contract",
+        entity_id=row.id,
+    )
     db.commit()
     db.refresh(row)
     return _contract_public(row)
@@ -225,7 +260,16 @@ def update_coa_contract(
     db: Session = Depends(get_db),
 ):
     row = _get_contract(db, contract_id, auth.tenant_id)
-    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    # exclude_unset: 客户端显式发送的键（含 null）才落库；未发送的键不动。
+    # 仅 cargo_spec / bill_by / tolerance_pct / overage_pct 允许 null 清空；
+    # 必填值字段（total_qty/period_*/rate/…）忽略 null，避免误清空。
+    sent = body.model_dump(exclude_unset=True)
+    nullable_clearable = {"cargo_spec", "bill_by", "tolerance_pct", "overage_pct"}
+    fields = {}
+    for k, v in sent.items():
+        if v is None and k not in nullable_clearable:
+            continue
+        fields[k] = v
     if fields:
         merged = CoaContractPatch(
             total_qty=fields.get("total_qty", row.total_qty),
@@ -236,10 +280,22 @@ def update_coa_contract(
             rate=fields.get("rate", row.rate),
             currency=fields.get("currency", row.currency),
             cargo_spec=fields.get("cargo_spec", row.cargo_spec),
+            bill_by=fields.get("bill_by", row.bill_by),
+            tolerance_pct=fields.get("tolerance_pct", row.tolerance_pct),
+            overage_pct=fields.get("overage_pct", row.overage_pct),
         )
         _validate_contract_fields(db, auth.tenant_id, merged, partial=True)
         for k, v in fields.items():
             setattr(row, k, v)
+        audit(
+            db,
+            action="coa_contract.update",
+            tenant_id=auth.tenant_id,
+            actor_user_id=auth.user_id,
+            entity_type="coa_contract",
+            entity_id=row.id,
+            detail={"fields": sorted(fields)},
+        )
     db.commit()
     db.refresh(row)
     return _contract_public(row)
@@ -260,6 +316,14 @@ def delete_coa_contract(
         row=row,
         title=row.coa_no,
     )
+    audit(
+        db,
+        action="coa_contract.delete",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="coa_contract",
+        entity_id=row.id,
+    )
     db.commit()
     return {"ok": True, "recycled": True}
 
@@ -273,8 +337,74 @@ def transition_coa_contract(
 ):
     row = _get_contract(db, contract_id, auth.tenant_id)
     row.status = transition("coa_contract", row.status, target, COA_CONTRACT_TRANSITIONS)
+    audit(
+        db,
+        action="coa_contract.transition",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="coa_contract",
+        entity_id=row.id,
+        detail={"target": target, "status": row.status},
+    )
     db.commit()
     return {"id": str(row.id), "status": row.status}
+
+
+@router.get("/coa/contracts/{contract_id}/score")
+def score_coa_cargoes(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """Pricing-tab auto scoring: match open cargo parcels to itinerary legs.
+
+    Minimal deterministic score (0-100 per cargo↔leg pair) from
+    ``services.cargo_terms.score_cargoes_to_legs`` — ports 50, qty fit 30,
+    laycan ∩ contract period 20. Read-only; no allocation is written.
+    """
+    contract = _get_contract(db, contract_id, auth.tenant_id)
+    legs = db.scalars(
+        scoped_query(db, CoaItinerary, auth.tenant_id)
+        .where(CoaItinerary.coa_contract_id == contract.id)
+        .order_by(CoaItinerary.seq)
+    ).all()
+    cargoes = db.scalars(
+        scoped_query(db, Cargo, auth.tenant_id).where(Cargo.status.in_(("open", "booked", "nominated")))
+    ).all()
+    items = score_cargoes_to_legs(
+        [
+            {
+                "id": str(c.id),
+                "cargo_no": c.cargo_no,
+                "load_port_id": str(c.load_port_id) if c.load_port_id else None,
+                "disch_port_id": str(c.disch_port_id) if c.disch_port_id else None,
+                "qty": float(c.qty) if c.qty is not None else None,
+                "laycan_from": c.laycan_from,
+                "laycan_to": c.laycan_to,
+            }
+            for c in cargoes
+        ],
+        [
+            {
+                "id": str(it.id),
+                "seq": it.seq,
+                "load_port_id": str(it.load_port_id) if it.load_port_id else None,
+                "disch_port_id": str(it.disch_port_id) if it.disch_port_id else None,
+                "qty": float(it.qty) if it.qty is not None else None,
+            }
+            for it in legs
+        ],
+        tolerance_pct=contract.tolerance_pct,
+        period_from=contract.period_from,
+        period_to=contract.period_to,
+    )
+    return {
+        "contract_id": str(contract.id),
+        "bill_by": contract.bill_by,
+        "tolerance_pct": _f_opt(contract.tolerance_pct),
+        "overage_pct": _f_opt(contract.overage_pct),
+        "items": items,
+    }
 
 
 # ── Itineraries ──────────────────────────────────────────────────────────────

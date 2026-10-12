@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { Toolbar } from "@/components/Toolbar";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -20,7 +21,7 @@ export default function AccountSecurityPage() {
   }
 
   useEffect(() => {
-    load().catch(() => toast.success(t("page.account.signin_required", "Sign in required")));
+    load().catch(() => toast.error(t("page.account.signin_required", "Sign in required")));
   }, [t]);
 
   async function requestVerify() {
@@ -62,9 +63,15 @@ export default function AccountSecurityPage() {
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.account_sec", "My security") }]}
         title={t("page.account.title", "My account security")}
         subtitle={t("page.account.sub", "Verify email, manage password, and linked Microsoft / Google identities.")}
       />
+      <Toolbar>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
 
       <div className="panel">
         <h2>{t("page.account.email", "Email")}</h2>
@@ -78,11 +85,11 @@ export default function AccountSecurityPage() {
         </p>
         {!sec.email_verified ? (
           <div className="quick-row">
-            <button type="button" className="btn btn-primary" onClick={() => requestVerify().catch(() => toast.success(t("common.failed", "Failed")))}>
+            <button type="button" className="btn btn-primary" onClick={() => requestVerify().catch(() => toast.error(t("common.failed", "Failed")))}>
               {t("page.account.send_verify", "Send verification email")}
             </button>
             {demoToken ? (
-              <form onSubmit={(e) => confirmVerify(e).catch(() => toast.success(t("page.account.confirm_fail", "Confirm failed")))} style={{ display: "flex", gap: "0.5rem" }}>
+              <form onSubmit={(e) => confirmVerify(e).catch(() => toast.error(t("page.account.confirm_fail", "Confirm failed")))} style={{ display: "flex", gap: "0.5rem" }}>
                 <input value={demoToken} onChange={(e) => setDemoToken(e.target.value)} />
                 <button className="btn btn-ghost" type="submit">
                   {t("page.account.confirm_token", "Confirm token")}
@@ -93,7 +100,7 @@ export default function AccountSecurityPage() {
         ) : null}
       </div>
 
-      <form className="panel" onSubmit={(e) => changePassword(e).catch(() => toast.success(t("page.account.pw_fail", "Password change failed")))}>
+      <form className="panel" onSubmit={(e) => changePassword(e).catch(() => toast.error(t("page.account.pw_fail", "Password change failed")))}>
         <h2>{t("page.account.password", "Password")}</h2>
         {sec.has_password ? (
           <label>
@@ -122,7 +129,7 @@ export default function AccountSecurityPage() {
                 type="button"
                 className="btn btn-ghost"
                 style={{ marginLeft: "0.75rem" }}
-                onClick={() => unlink(i.provider).catch(() => toast.success(t("page.account.unlink_fail", "Unlink failed")))}
+                onClick={() => unlink(i.provider).catch(() => toast.error(t("page.account.unlink_fail", "Unlink failed")))}
               >
                 {t("page.account.unlink", "Unlink")}
               </button>

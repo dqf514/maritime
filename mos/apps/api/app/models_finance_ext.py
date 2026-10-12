@@ -226,6 +226,53 @@ class AdvanceAllocation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ApprovalLimit(Base):
+    """审批额度 — approval amount bands per role/group (Amt From → Amt To).
+
+    IMOS Financial Control: an approval beyond the approver's limit is rejected.
+    A limit row is scoped to (role_code, entity_type, currency); amounts are
+    inclusive on both ends. ``role_code`` matches ``Role.code`` (org/group).
+    Permissive default: approvers with no active rows may approve any amount.
+    """
+
+    __tablename__ = "approval_limits"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    role_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)  # e.g. invoice|payment
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    amount_from: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    amount_to: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class FxDateRule(Base):
+    """汇率日期规则 — which date an FX rate is taken from, per invoice type.
+
+    ``rate_date_basis``: departure | arrival | invoice | posted.
+    No row for an invoice type → system default basis ("invoice"); FX conversion
+    keeps its historical "latest rate" behaviour when no active rule exists.
+    """
+
+    __tablename__ = "fx_date_rules"
+    __table_args__ = (UniqueConstraint("tenant_id", "invoice_type"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    invoice_type: Mapped[str] = mapped_column(String(32), nullable=False)  # canonical code, e.g. FRT
+    rate_date_basis: Mapped[str] = mapped_column(String(16), nullable=False, default="invoice")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 # OffHireEvent is canonically defined in app.models_domain (P0 commercial contract:
 # includes voyage_id + status open/closed). Re-exported here so existing
 # `from app.models_finance_ext import OffHireEvent` imports keep working.

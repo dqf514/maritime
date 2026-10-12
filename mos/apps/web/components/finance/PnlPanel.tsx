@@ -2,8 +2,11 @@
 
 // 3.6 前端拆分试点：Dynamic P&L 面板（自取数，finance 页标签挂载）。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
+import { Num } from "@/components/Num";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -49,6 +52,144 @@ export function PnlPanel() {
     load("actual").catch(() => undefined);
   }, [load]);
 
+  const listCols = useMemo<ColumnDef<PnlRow>[]>(
+    () => [
+      {
+        key: "voyage_no",
+        title: t("page.voyages.no", "No"),
+        width: 110,
+        sticky: true,
+        value: (r) => r.voyage_no,
+        render: (v, r) => <Link href={`/finance/pnl/${r.voyage_id}`}>{String(v)}</Link>,
+      },
+      { key: "status", title: t("common.status", "Status"), width: 100 },
+      {
+        key: "estimated_revenue",
+        title: t("page.finance.est_rev", "Est. revenue"),
+        align: "right",
+        value: (r) => r.estimated_revenue,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "estimated_cost",
+        title: t("page.finance.est_cost", "Est. cost"),
+        align: "right",
+        value: (r) => r.estimated_cost,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "estimated_pnl",
+        title: t("page.finance.est_pnl", "Est. P&L"),
+        align: "right",
+        value: (r) => r.estimated_pnl,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "actual_revenue",
+        title: t("page.finance.act_rev", "Actual revenue"),
+        align: "right",
+        value: (r) => r.actual_revenue,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "actual_cost",
+        title: t("page.finance.act_cost", "Actual cost"),
+        align: "right",
+        value: (r) => r.actual_cost,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "actual_pnl",
+        title: t("page.finance.act_pnl", "Actual P&L"),
+        align: "right",
+        value: (r) => r.actual_pnl,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      ...(basis === "accrual"
+        ? [
+            {
+              key: "accrual_net",
+              title: t("page.finance.accrual_net", "Accrual net"),
+              align: "right" as const,
+              value: (r: PnlRow) => r.accrual_net ?? null,
+              render: (v: unknown) => <Num v={v as number | null} digits={2} />,
+            },
+          ]
+        : []),
+      {
+        key: "variance_pnl",
+        title: t("page.finance.variance", "Variance"),
+        align: "right",
+        value: (r) => r.variance_pnl,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "estimated_tce",
+        title: "TCE",
+        align: "right",
+        value: (r) => r.estimated_tce ?? null,
+        render: (v) => fmt(v as number | null),
+      },
+    ],
+    [t, basis],
+  );
+
+  const sel = pnl.find((r) => r.voyage_id === selected);
+
+  type LineRow = { id: string; label: string; merged: number; accrual: number | null };
+
+  const lineRows = useMemo<LineRow[]>(() => {
+    if (!sel?.lines) return [];
+    const rows: LineRow[] = PNL_LINE_KEYS.map((k) => ({
+      id: k,
+      label: k,
+      merged: sel.lines?.[k] ?? 0,
+      accrual: sel.lines_accrual?.[k] ?? 0,
+    }));
+    if (basis === "accrual") {
+      rows.push({
+        id: "accrual_net",
+        label: t("page.finance.accrual_net", "Accrual net"),
+        merged: sel.accrual_net ?? 0,
+        accrual: null,
+      });
+    }
+    return rows;
+  }, [sel, basis, t]);
+
+  const lineCols = useMemo<ColumnDef<LineRow>[]>(
+    () => [
+      {
+        key: "label",
+        title: t("page.finance.line", "Line"),
+        value: (r) => r.label,
+        render: (v, r) => (r.id === "accrual_net" ? <strong>{String(v)}</strong> : String(v)),
+      },
+      {
+        key: "merged",
+        title: basis === "accrual" ? t("page.finance.lines_merged", "Merged") : t("page.finance.lines_actual", "Actual"),
+        align: "right",
+        value: (r) => r.merged,
+        render: (v, r) => {
+          const text = <Num v={v as number} digits={2} />;
+          return r.id === "accrual_net" ? <strong>{text}</strong> : text;
+        },
+      },
+      ...(basis === "accrual"
+        ? [
+            {
+              key: "accrual",
+              title: t("page.finance.lines_accrual", "Accrual"),
+              align: "right" as const,
+              value: (r: LineRow) => r.accrual,
+              render: (v: unknown) => (v == null ? "" : <Num v={v as number} digits={2} />),
+            },
+          ]
+        : []),
+    ],
+    [t, basis],
+  );
+
   return (
     <div className="panel">
       <div className="desk-toolbar" style={{ marginBottom: "0.75rem" }}>
@@ -78,92 +219,30 @@ export function PnlPanel() {
           {t("common.refresh", "刷新")}
         </button>
       </div>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>{t("page.voyages.no", "No")}</th>
-            <th>{t("common.status", "Status")}</th>
-            <th>{t("page.finance.est_rev", "Est. revenue")}</th>
-            <th>{t("page.finance.est_cost", "Est. cost")}</th>
-            <th>{t("page.finance.est_pnl", "Est. P&L")}</th>
-            <th>{t("page.finance.act_rev", "Actual revenue")}</th>
-            <th>{t("page.finance.act_cost", "Actual cost")}</th>
-            <th>{t("page.finance.act_pnl", "Actual P&L")}</th>
-            {basis === "accrual" ? <th>{t("page.finance.accrual_net", "Accrual net")}</th> : null}
-            <th>{t("page.finance.variance", "Variance")}</th>
-            <th>TCE</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pnl.map((r) => (
-            <tr
-              key={r.voyage_id}
-              className={r.voyage_id === selected ? "selected" : ""}
-              style={{ cursor: "pointer" }}
-              onClick={() => setSelected(r.voyage_id === selected ? null : r.voyage_id)}
-            >
-              <td><Link href={`/finance/pnl/${r.voyage_id}`}>{r.voyage_no}</Link></td>
-              <td>{r.status}</td>
-              <td>{fmt(r.estimated_revenue)}</td>
-              <td>{fmt(r.estimated_cost)}</td>
-              <td>{fmt(r.estimated_pnl)}</td>
-              <td>{fmt(r.actual_revenue)}</td>
-              <td>{fmt(r.actual_cost)}</td>
-              <td>{fmt(r.actual_pnl)}</td>
-              {basis === "accrual" ? <td>{fmt(r.accrual_net ?? null)}</td> : null}
-              <td>{fmt(r.variance_pnl)}</td>
-              <td>{fmt(r.estimated_tce ?? null)}</td>
-            </tr>
-          ))}
-          {!pnl.length ? (
-            <tr>
-              <td colSpan={basis === "accrual" ? 11 : 10} className="muted">
-                {t("common.empty", "No records")}
-              </td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
-      {(() => {
-        const sel = pnl.find((r) => r.voyage_id === selected);
-        if (!sel || !sel.lines) return null;
-        return (
-          <div className="desk-section">
-            <h3>
-              {t("page.finance.pnl_lines", "行项分列")} · {sel.voyage_no}
-            </h3>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>{t("page.finance.line", "Line")}</th>
-                  <th>{basis === "accrual" ? t("page.finance.lines_merged", "Merged") : t("page.finance.lines_actual", "Actual")}</th>
-                  {basis === "accrual" ? <th>{t("page.finance.lines_accrual", "Accrual")}</th> : null}
-                </tr>
-              </thead>
-              <tbody>
-                {PNL_LINE_KEYS.map((k) => (
-                  <tr key={k}>
-                    <td>{k}</td>
-                    <td>{fmt(sel.lines?.[k] ?? 0)}</td>
-                    {basis === "accrual" ? <td>{fmt(sel.lines_accrual?.[k] ?? 0)}</td> : null}
-                  </tr>
-                ))}
-                {basis === "accrual" ? (
-                  <tr>
-                    <td>
-                      <strong>{t("page.finance.accrual_net", "Accrual net")}</strong>
-                    </td>
-                    <td>
-                      <strong>{fmt(sel.accrual_net ?? null)}</strong>
-                    </td>
-                    <td></td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        );
-      })()}
+      <DataGrid<PnlRow>
+        columns={listCols}
+        data={pnl}
+        rowKey={(r) => r.voyage_id}
+        onRowClick={(r) => setSelected(r.voyage_id === selected ? null : r.voyage_id)}
+        storageKey="finance_pnl_panel_grid"
+        showFooter={false}
+        emptyText={t("common.empty", "No records")}
+      />
+      {sel && sel.lines ? (
+        <div className="desk-section">
+          <h3>
+            {t("page.finance.pnl_lines", "行项分列")} · {sel.voyage_no}
+          </h3>
+          <DataGrid<LineRow>
+            columns={lineCols}
+            data={lineRows}
+            rowKey={(r) => r.id}
+            storageKey="finance_pnl_panel_lines_grid"
+            showFooter={false}
+            emptyText={t("common.empty", "No records")}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

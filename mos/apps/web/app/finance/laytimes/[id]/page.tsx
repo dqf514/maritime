@@ -2,14 +2,18 @@
 
 // U2/U4 单据详情：laytime 计算书（可深链 + 打印/PDF + 对账）。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { Num } from "@/components/Num";
+import { RevisionsPanel } from "@/components/RevisionsPanel";
 import { SkeletonCard } from "@/components/Skeleton";
 import { PrintDoc } from "@/components/PrintDoc";
 import { LaytimeDemurragePanel } from "@/components/finance/LaytimeDemurragePanel";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -94,6 +98,98 @@ export default function LaytimeDetailPage() {
     }
   }
 
+  const fmtTs = (v: unknown) => (v ? String(v).replace("T", " ").slice(0, 16) : "—");
+
+  const eventCols = useMemo<ColumnDef<StatementEventRow>[]>(
+    () => [
+      { key: "start", title: t("common.start", "开始"), width: 130, value: (r) => r.start ?? "", render: (v) => fmtTs(v) },
+      { key: "end", title: t("common.end", "结束"), width: 130, value: (r) => r.end ?? "", render: (v) => fmtTs(v) },
+      {
+        key: "kind",
+        title: t("common.kind", "类型"),
+        value: (r) => r.kind,
+        render: (_v, r) =>
+          `${r.kind}${r.caller_excluded ? ` (${t("page.finance.ev_excluded", "剔除")})` : ""}`,
+      },
+      {
+        key: "gross_hours",
+        title: t("page.finance.ev_gross", "挂钟(h)"),
+        align: "right",
+        value: (r) => r.gross_hours,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "term_excluded_hours",
+        title: t("page.finance.ev_excl", "除外(h)"),
+        align: "right",
+        value: (r) => r.term_excluded_hours,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "counted_hours",
+        title: t("page.finance.ev_counted", "计费(h)"),
+        align: "right",
+        value: (r) => r.counted_hours,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "cumulative_hours",
+        title: t("page.finance.ev_cum", "累计(h)"),
+        align: "right",
+        value: (r) => r.cumulative_hours,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+    ],
+    [t],
+  );
+
+  type DiffRow = { id: string; label: string; mine: unknown; theirs: unknown; delta: number | null };
+  const diffRows: DiffRow[] = useMemo(() => {
+    if (!cmpr || cmpr.match) return [];
+    return [
+      ...cmpr.field_diffs.map((d) => ({
+        id: `f-${d.field}`,
+        label: d.field,
+        mine: d.mine,
+        theirs: d.theirs,
+        delta: d.delta,
+      })),
+      ...cmpr.event_diffs.map((d) => ({
+        id: `e-${d.start}-${d.end}`,
+        label: `${fmtTs(d.start)} ~ ${fmtTs(d.end)} (${d.issue})`,
+        mine: d.mine,
+        theirs: d.theirs,
+        delta: d.delta,
+      })),
+    ];
+  }, [cmpr]);
+
+  const diffCols = useMemo<ColumnDef<DiffRow>[]>(
+    () => [
+      { key: "label", title: t("page.finance.lt_cmp_field", "口径/事件") },
+      {
+        key: "mine",
+        title: t("page.finance.lt_cmp_mine", "我方"),
+        value: (r) => r.mine ?? "",
+        render: (v) => String(v ?? "—"),
+      },
+      {
+        key: "theirs",
+        title: t("page.finance.lt_cmp_theirs", "对方"),
+        value: (r) => r.theirs ?? "",
+        render: (v) => String(v ?? "—"),
+      },
+      {
+        key: "delta",
+        title: t("page.finance.lt_cmp_delta", "差额"),
+        align: "right",
+        value: (r) => r.delta ?? "",
+        render: (v) => (v !== "" && v != null ? <Num v={v as number} digits={2} /> : "—"),
+      },
+    ],
+    [t],
+  );
+
   if (notFound) {
     return (
       <AppShell>
@@ -108,13 +204,12 @@ export default function LaytimeDetailPage() {
   }
 
   return (
-    <AppShell
-      breadcrumbs={[
-        { label: t("page.finance.title", "Finance / laytime / P&L"), href: "/finance" },
-        { label: t("page.finance.lt_statement", "Laytime 计算书") },
-      ]}
-    >
+    <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.finance", "Finance"), href: "/finance?tab=laytime" },
+          { label: st?.id ? `#${st.id.slice(0, 8)}` : `#${id.slice(0, 8)}` },
+        ]}
         title={
           <>
             {t("page.finance.lt_statement", "Laytime 计算书")} {st ? <span className="badge badge-warn">{st.status}</span> : null}
@@ -173,35 +268,14 @@ export default function LaytimeDetailPage() {
           {st.events?.length ? (
             <div className="panel">
               <h3 style={{ marginTop: 0 }}>{t("page.finance.lt_events", "事件明细")}</h3>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>{t("common.start", "开始")}</th>
-                    <th>{t("common.end", "结束")}</th>
-                    <th>{t("common.kind", "类型")}</th>
-                    <th>{t("page.finance.ev_gross", "挂钟(h)")}</th>
-                    <th>{t("page.finance.ev_excl", "除外(h)")}</th>
-                    <th>{t("page.finance.ev_counted", "计费(h)")}</th>
-                    <th>{t("page.finance.ev_cum", "累计(h)")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {st.events.map((ev, i) => (
-                    <tr key={i}>
-                      <td>{ev.start?.replace("T", " ").slice(0, 16)}</td>
-                      <td>{ev.end?.replace("T", " ").slice(0, 16)}</td>
-                      <td>
-                        {ev.kind}
-                        {ev.caller_excluded ? ` (${t("page.finance.ev_excluded", "剔除")})` : ""}
-                      </td>
-                      <td>{fmt(ev.gross_hours)}</td>
-                      <td>{fmt(ev.term_excluded_hours)}</td>
-                      <td>{fmt(ev.counted_hours)}</td>
-                      <td>{fmt(ev.cumulative_hours)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <DataGrid<StatementEventRow>
+                columns={eventCols}
+                data={st.events}
+                rowKey={(r, i) => `${r.start ?? ""}-${r.end ?? ""}-${i}`}
+                storageKey="laytime_events_grid"
+                showFooter={false}
+                emptyText={t("common.empty", "No records")}
+              />
             </div>
           ) : null}
 
@@ -226,40 +300,22 @@ export default function LaytimeDetailPage() {
               ) : null}
             </div>
             {cmpr && !cmpr.match ? (
-              <table className="table" style={{ marginTop: "0.5rem" }}>
-                <thead>
-                  <tr>
-                    <th>{t("page.finance.lt_cmp_field", "口径/事件")}</th>
-                    <th>{t("page.finance.lt_cmp_mine", "我方")}</th>
-                    <th>{t("page.finance.lt_cmp_theirs", "对方")}</th>
-                    <th>{t("page.finance.lt_cmp_delta", "差额")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cmpr.field_diffs.map((d) => (
-                    <tr key={`f-${d.field}`}>
-                      <td>{d.field}</td>
-                      <td>{String(d.mine ?? "—")}</td>
-                      <td>{String(d.theirs ?? "—")}</td>
-                      <td>{d.delta != null ? fmt(d.delta) : "—"}</td>
-                    </tr>
-                  ))}
-                  {cmpr.event_diffs.map((d) => (
-                    <tr key={`e-${d.start}-${d.end}`}>
-                      <td>
-                        {d.start.replace("T", " ").slice(0, 16)} ~ {d.end.replace("T", " ").slice(0, 16)} ({d.issue})
-                      </td>
-                      <td>{String(d.mine ?? "—")}</td>
-                      <td>{String(d.theirs ?? "—")}</td>
-                      <td>{d.delta != null ? fmt(d.delta) : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div style={{ marginTop: "0.5rem" }}>
+                <DataGrid<DiffRow>
+                  columns={diffCols}
+                  data={diffRows}
+                  rowKey={(r) => r.id}
+                  storageKey="laytime_compare_grid"
+                  showFooter={false}
+                  emptyText={t("common.empty", "No records")}
+                />
+              </div>
             ) : null}
           </div>
         </PrintDoc>
       )}
+
+      {id ? <RevisionsPanel entityType="laytime" entityId={id} /> : null}
     </AppShell>
   );
 }

@@ -1,0 +1,111 @@
+/* ── 统一 Tab 组件样式（全站唯一 tab 实现） ── */
+
+.ui-tabs {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--gap-md);
+  min-width: 0;
+  margin-bottom: var(--gap-sm);
+}
+
+.ui-tabs-list {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.ui-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 var(--gap-md);
+  height: var(--control-h);
+  border: none;
+  background: transparent;
+  font-size: var(--font-label);
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.ui-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* line 变体：底边下划线（详情页 / 工作区） */
+.ui-tabs--line {
+  border-bottom: 1px solid var(--border);
+}
+.ui-tabs--line .ui-tab {
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  border-radius: 0;
+}
+.ui-tabs--line .ui-tab:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--toolbar-bg);
+}
+.ui-tabs--line .ui-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: transparent;
+}
+
+/* pill 变体：药丸式（页内分段） */
+.ui-tabs--pill {
+  border-bottom: none;
+}
+.ui-tabs--pill .ui-tab {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  margin-right: 2px;
+}
+.ui-tabs--pill .ui-tab:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--toolbar-bg);
+}
+.ui-tabs--pill .ui-tab.active {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.ui-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--border-light);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.ui-tab.active .ui-tab-badge {
+  background: var(--accent);
+  color: #fff;
+}
+
+.ui-tabs--md .ui-tab {
+  height: calc(var(--control-h) + 4px);
+  font-size: var(--font-ui);
+}
+
+.ui-tabs-right {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  padding-bottom: 2px;
+  flex-shrink: 0;
+}

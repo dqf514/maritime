@@ -1,14 +1,25 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { PageHeader } from "@/components/PageHeader";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { LookupSelect } from "@/components/LookupSelect";
 import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
+import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
+import { useListQuery } from "@/lib/useListQuery";
 
 type Port = {
   id: string;
@@ -27,19 +38,19 @@ function parseHolidays(v: string): string[] {
     .filter(Boolean);
 }
 
-export default function PortsPage() {
+function PortsPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const pathname = usePathname();
+  const { query, setQuery } = useListQuery();
+  const q = query.q ?? "";
   const [rows, setRows] = useState<Port[]>([]);
-  const [name, setName] = useState("");
-  const [unlocode, setUnlocode] = useState("");
-  const [country, setCountry] = useState("CN");
-  const [timezone, setTimezone] = useState("Asia/Shanghai");
-  const [holidays, setHolidays] = useState("");
-  const [isEu, setIsEu] = useState(false);
   const [open, setOpen] = useState<Port | null>(null);
+  const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({ name: "", unlocode: "", country: "", timezone: "UTC", holidays: "", is_eu: false });
   const [saving, setSaving] = useState(false);
+  const rowCtx = useContextMenu<Port>();
 
   async function load() {
     setRows(await apiGet("/api/v1/masterdata/ports"));
@@ -49,25 +60,28 @@ export default function PortsPage() {
     load().catch(() => setRows([]));
   }, []);
 
-  async function onCreate(e: FormEvent) {
-    e.preventDefault();
-    await apiPost("/api/v1/masterdata/ports", {
-      name,
-      unlocode: unlocode || null,
-      country: country || null,
-      timezone: timezone || "UTC",
-      holidays: parseHolidays(holidays),
-      is_eu: isEu,
+  function openCreate() {
+    setCreating(true);
+    setOpen(null);
+    setEdit({
+      name: "",
+      unlocode: "",
+      country: "CN",
+      timezone: "Asia/Shanghai",
+      holidays: "",
+      is_eu: false,
     });
-    setName("");
-    setUnlocode("");
-    setHolidays("");
-    setIsEu(false);
-    toast.success(t("page.ports.created", "Port created"));
-    await load();
+  }
+
+  useListHotkeys(openCreate);
+
+  function closeModal() {
+    setOpen(null);
+    setCreating(false);
   }
 
   function openRow(r: Port) {
+    setCreating(false);
     setOpen(r);
     setEdit({
       name: r.name,
@@ -79,21 +93,31 @@ export default function PortsPage() {
     });
   }
 
+  function payload() {
+    return {
+      name: edit.name,
+      unlocode: edit.unlocode || null,
+      country: edit.country || null,
+      timezone: edit.timezone || "UTC",
+      holidays: parseHolidays(edit.holidays),
+      is_eu: edit.is_eu,
+    };
+  }
+
   async function save() {
-    if (!open) return;
     setSaving(true);
     try {
-      await apiPatch(`/api/v1/masterdata/ports/${open.id}`, {
-        name: edit.name,
-        unlocode: edit.unlocode || null,
-        country: edit.country || null,
-        timezone: edit.timezone || "UTC",
-        holidays: parseHolidays(edit.holidays),
-        is_eu: edit.is_eu,
-      });
-      toast.success(t("common.saved", "Saved"));
-      setOpen(null);
+      if (creating || !open) {
+        await apiPost("/api/v1/masterdata/ports", payload());
+        toast.success(t("page.ports.created", "Port created"));
+      } else {
+        await apiPatch(`/api/v1/masterdata/ports/${open.id}`, payload());
+        toast.success(t("common.saved", "Saved"));
+      }
+      closeModal();
       await load();
+    } catch {
+      toast.error(creating ? t("page.ports.create_fail", "Create failed") : t("common.failed", "Failed"));
     } finally {
       setSaving(false);
     }
@@ -101,20 +125,94 @@ export default function PortsPage() {
 
   async function remove() {
     if (!open) return;
+    await removePort(open);
+  }
+
+  async function removePort(p: Port) {
     setSaving(true);
     try {
-      await apiDelete(`/api/v1/masterdata/ports/${open.id}`);
+      await apiDelete(`/api/v1/masterdata/ports/${p.id}`);
       toast.success(t("common.recycled", "Moved to recycle bin"));
-      setOpen(null);
+      closeModal();
       await load();
     } finally {
       setSaving(false);
     }
   }
 
+  function validateEdit(): ValidateIssue[] {
+    const issues: ValidateIssue[] = [];
+    if (!edit.name.trim()) issues.push({ level: "error", message: t("page.ports.err_name", "Name is required") });
+    if (edit.unlocode && edit.unlocode.trim().length !== 5)
+      issues.push({ level: "warn", message: t("page.ports.warn_unlocode", "UN/LOCODE is usually 5 characters") });
+    if (!edit.country.trim()) issues.push({ level: "warn", message: t("page.ports.warn_country", "Country is empty") });
+    if (!edit.timezone.trim()) issues.push({ level: "error", message: t("page.ports.err_tz", "Time zone is required") });
+    return issues;
+  }
+
+  function copyId(id: string) {
+    void navigator.clipboard.writeText(id);
+    toast.success(t("ctx.copied_id", "ID copied"));
+  }
+
+  function exportPorts(list: Port[]) {
+    downloadCsv(
+      "ports",
+      ["id", "name", "unlocode", "country", "timezone", "is_eu"],
+      list.map((r) => [r.id, r.name, r.unlocode ?? "", r.country ?? "", r.timezone, r.is_eu ? "Y" : "N"]),
+      { emptyGuard: t("export.empty_confirm", "No rows to export. Export anyway?") },
+    );
+  }
+
+  const menuItems = (r: Port): ContextMenuItem[] => [
+    { key: "open", label: t("ctx.open", "Open"), onClick: () => openRow(r) },
+    { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyId(r.id) },
+    { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportPorts([r]) },
+    { key: "d1", label: "", divider: true },
+    { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => void removePort(r) },
+  ];
+
+  const filtered = q
+    ? rows.filter((r) => {
+        const needle = q.toLowerCase();
+        return (
+          r.name.toLowerCase().includes(needle) ||
+          (r.unlocode || "").toLowerCase().includes(needle) ||
+          (r.country || "").toLowerCase().includes(needle)
+        );
+      })
+    : rows;
+
+  const columns: ColumnDef<Port>[] = [
+    { key: "name", title: t("common.name", "Name"), minWidth: 140, value: (r) => r.name },
+    {
+      key: "unlocode",
+      title: t("page.ports.unlocode", "UN/LOCODE"),
+      width: 120,
+      value: (r) => r.unlocode || "",
+      render: (_v, r) => r.unlocode || "—",
+    },
+    {
+      key: "country",
+      title: t("page.ports.country", "Country"),
+      width: 110,
+      value: (r) => r.country || "",
+      render: (_v, r) => r.country || "—",
+    },
+    { key: "timezone", title: t("page.ports.timezone", "Time zone"), width: 140, value: (r) => r.timezone },
+    {
+      key: "is_eu",
+      title: t("page.ports.eu", "EU"),
+      width: 80,
+      value: (r) => Boolean(r.is_eu),
+      render: (_v, r) => (r.is_eu ? <span className="badge badge-pass">{t("page.ports.eu", "EU")}</span> : "—"),
+    },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.master", "Master data") }]}
         title={t("page.ports.title", "Ports")}
         subtitle={t("page.ports.sub", "Port master data (UN/LOCODE). Open a row to edit.")}
         actions={
@@ -123,72 +221,50 @@ export default function PortsPage() {
           </Link>
         }
       />
-      <form
-        className="panel"
-        onSubmit={(e) => onCreate(e).catch(() => toast.success(t("page.ports.create_fail", "Create failed")))}
-        style={{ marginBottom: "1rem" }}
+      <Toolbar
+        filterCount={q ? 1 : 0}
+        onClearFilters={() => setQuery({ q: null }, { resetPage: true })}
+        right={
+          <>
+            <input
+              className="input input-sm"
+              type="search"
+              value={q}
+              onChange={(e) => setQuery({ q: e.target.value || null }, { resetPage: true })}
+              placeholder={t("page.ports.search", "Search name / UN/LOCODE / country…")}
+              aria-label={t("common.search", "Search")}
+            />
+            <SavedViews storageKey="md_ports" onApply={(qs) => router.replace(`${pathname}${qs}`)} />
+          </>
+        }
       >
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
-          <label>
-            {t("common.name", "Name")}
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </label>
-          <label>
-            UN/LOCODE
-            <input value={unlocode} onChange={(e) => setUnlocode(e.target.value)} />
-          </label>
-          <label>
-            {t("page.ports.country", "Country")}
-            <LookupSelect dataset="countries" value={country} onChange={setCountry} />
-          </label>
-          <label>
-            {t("page.ports.timezone", "Time zone")}
-            <LookupSelect dataset="timezones" value={timezone} onChange={setTimezone} allowEmpty={false} />
-          </label>
-          <label>
-            {t("page.ports.holidays", "Holidays")}
-            <input value={holidays} onChange={(e) => setHolidays(e.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" />
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-            <input type="checkbox" checked={isEu} onChange={(e) => setIsEu(e.target.checked)} />
-            {t("page.ports.is_eu", "EU/EEA 港口")}
-          </label>
-          <button className="btn btn-primary" type="submit">
-            {t("page.ports.add", "New port")}
-          </button>
-        </div>
-      </form>
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
+          {t("page.ports.add", "New port")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
       <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t("common.name", "Name")}</th>
-              <th>UN/LOCODE</th>
-              <th>{t("page.ports.country", "Country")}</th>
-              <th>{t("page.ports.timezone", "Time zone")}</th>
-              <th>EU</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="row-openable" onClick={() => openRow(r)}>
-                <td>{r.name}</td>
-                <td>{r.unlocode || "—"}</td>
-                <td>{r.country || "—"}</td>
-                <td>{r.timezone}</td>
-                <td>{r.is_eu ? <span className="badge badge-pass">EU</span> : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataGrid<Port>
+          columns={columns}
+          data={filtered}
+          rowKey={(r) => r.id}
+          onRowClick={(r) => openRow(r)}
+          onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
+          storageKey="masterdata_ports_grid"
+          emptyText={t("common.empty", "No records")}
+        />
+        <ContextMenu controller={rowCtx} items={menuItems} />
       </div>
 
       <RecordModal
-        open={Boolean(open)}
-        title={t("page.ports.edit", "Edit port")}
-        onClose={() => setOpen(null)}
+        open={creating || Boolean(open)}
+        title={creating ? t("page.ports.add", "New port") : t("page.ports.edit", "Edit port")}
+        onClose={closeModal}
         onSave={save}
-        onDelete={remove}
+        onDelete={creating ? undefined : remove}
+        canDelete={!creating}
         saving={saving}
       >
         <label>
@@ -196,7 +272,7 @@ export default function PortsPage() {
           <input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} required />
         </label>
         <label>
-          UN/LOCODE
+          {t("page.ports.unlocode", "UN/LOCODE")}
           <input value={edit.unlocode} onChange={(e) => setEdit({ ...edit, unlocode: e.target.value })} />
         </label>
         <label>
@@ -217,14 +293,26 @@ export default function PortsPage() {
           <input
             value={edit.holidays}
             onChange={(e) => setEdit({ ...edit, holidays: e.target.value })}
-            placeholder="YYYY-MM-DD, YYYY-MM-DD"
+            placeholder={t("page.ports.holidays_ph", "YYYY-MM-DD, YYYY-MM-DD")}
           />
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
           <input type="checkbox" checked={edit.is_eu} onChange={(e) => setEdit({ ...edit, is_eu: e.target.checked })} />
-          {t("page.ports.is_eu", "EU/EEA 港口")}
+          {t("page.ports.is_eu", "EU/EEA port")}
         </label>
+        <div className="record-modal-validate">
+          <ValidateButton onValidate={validateEdit} />
+        </div>
       </RecordModal>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <PortsPage />
+    </Suspense>
   );
 }

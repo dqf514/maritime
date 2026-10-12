@@ -1,9 +1,12 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { Num } from "@/components/Num";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -122,6 +125,12 @@ export default function PnlOverviewPage() {
         av = a.voyage_no; bv = b.voyage_no;
       } else if (sortKey === "status") {
         av = a.status; bv = b.status;
+      } else if (sortKey === "variance_fav") {
+        av = (a.totals.actual?.pnl ?? 0) - (a.totals.estimate?.pnl ?? 0);
+        bv = (b.totals.actual?.pnl ?? 0) - (b.totals.estimate?.pnl ?? 0);
+      } else if (sortKey === "variance_line") {
+        av = (a.columns.variance?.revenue ?? 0) + (a.columns.variance?.hire ?? 0) + (a.columns.variance?.demurrage ?? 0);
+        bv = (b.columns.variance?.revenue ?? 0) + (b.columns.variance?.hire ?? 0) + (b.columns.variance?.demurrage ?? 0);
       } else {
         av = 0; bv = 0;
       }
@@ -131,16 +140,188 @@ export default function PnlOverviewPage() {
     return arr;
   }, [voyages, sortKey, sortDir]);
 
-  function toggleSort(key: string) {
-    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir("asc"); }
-  }
+  const FLEET_ID = "__fleet_total__";
 
-  const sortIcon = (key: string) => (sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : "");
+  type GridRow = VoyageRow | (FleetSummary & { voyage_id: string; voyage_no: string; status: string });
+
+  const gridRows = useMemo<GridRow[]>(() => {
+    const rows: GridRow[] = [...sorted];
+    if (fleet) {
+      rows.push({ ...fleet, voyage_id: FLEET_ID, voyage_no: "FLEET TOTAL", status: "" });
+    }
+    return rows;
+  }, [sorted, fleet]);
+
+  const isFleet = (r: GridRow) => r.voyage_id === FLEET_ID;
+
+  const fleetNum = (v: number, fleetRow: boolean) =>
+    fleetRow ? (
+      <strong>
+        <Num v={v} digits={2} />
+      </strong>
+    ) : (
+      <Num v={v} digits={2} />
+    );
+
+  const cols = useMemo<ColumnDef<GridRow>[]>(
+    () => [
+      {
+        key: "voyage_no",
+        title: t("page.voyages.no", "Voyage"),
+        width: 130,
+        sticky: true,
+        sortable: true,
+        value: (r) => r.voyage_no,
+        render: (v, r) =>
+          isFleet(r) ? (
+            <strong>{String(v)}</strong>
+          ) : (
+            <Link href={`/finance/pnl/${r.voyage_id}`}>{String(v)}</Link>
+          ),
+      },
+      {
+        key: "status",
+        title: t("common.status", "Status"),
+        width: 100,
+        sortable: true,
+        value: (r) => r.status,
+        render: (v, r) => (isFleet(r) ? "" : String(v ?? "")),
+      },
+      {
+        key: "totals.estimate.revenue",
+        title: t("page.pnl.est_rev_short", "Est. Rev"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.estimate.revenue,
+        render: (v, r) => fleetNum(v as number, isFleet(r)),
+      },
+      {
+        key: "totals.estimate.cost",
+        title: t("page.pnl.est_cost_short", "Est. Cost"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.estimate.cost,
+        render: (v, r) => fleetNum(v as number, isFleet(r)),
+      },
+      {
+        key: "totals.estimate.pnl",
+        title: t("page.pnl.est_pnl_short", "Est. P&L"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.estimate.pnl,
+        render: (v, r) => fleetNum(v as number, isFleet(r)),
+      },
+      {
+        key: "totals.actual.revenue",
+        title: t("page.pnl.act_rev_short", "Act. Rev"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.actual.revenue,
+        render: (v, r) => fleetNum(v as number, isFleet(r)),
+      },
+      {
+        key: "totals.actual.cost",
+        title: t("page.pnl.act_cost_short", "Act. Cost"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.actual.cost,
+        render: (v, r) => fleetNum(v as number, isFleet(r)),
+      },
+      {
+        key: "totals.actual.pnl",
+        title: t("page.pnl.act_pnl_short", "Act. P&L"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.actual.pnl,
+        render: (v, r) => fleetNum(v as number, isFleet(r)),
+      },
+      {
+        key: "totals.posted.revenue",
+        title: t("page.pnl.post_rev_short", "Post. Rev"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.posted.revenue,
+        render: (v, r) => fleetNum(v as number, isFleet(r)),
+      },
+      {
+        key: "totals.posted.cost",
+        title: t("page.pnl.post_cost_short", "Post. Cost"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.posted.cost,
+        render: (v, r) => fleetNum(v as number, isFleet(r)),
+      },
+      {
+        key: "totals.posted.pnl",
+        title: t("page.pnl.post_pnl_short", "Post. P&L"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.posted.pnl,
+        render: (v, r) => fleetNum(v as number, isFleet(r)),
+      },
+      {
+        key: "variance_fav",
+        title: t("page.pnl.fav_adv", "Fav/(Adv)"),
+        align: "right",
+        sortable: true,
+        value: (r) => r.totals.actual.pnl - r.totals.estimate.pnl,
+        render: (_v, r) => {
+          const estPnl = r.totals.estimate.pnl;
+          const varPnl = r.totals.actual.pnl - estPnl;
+          if (isFleet(r)) return <strong><Num v={varPnl} digits={2} /></strong>;
+          return <span className={varianceClass(varPnl, estPnl)}><Num v={varPnl} digits={2} /></span>;
+        },
+      },
+      {
+        key: "variance_pct",
+        title: t("page.pnl.var_pct", "%"),
+        align: "right",
+        value: (r) => {
+          if (isFleet(r)) return null;
+          const estPnl = r.totals.estimate.pnl;
+          return estPnl !== 0 ? ((r.totals.actual.pnl - estPnl) / Math.abs(estPnl)) * 100 : null;
+        },
+        render: (_v, r) => {
+          if (isFleet(r)) return "—";
+          const estPnl = r.totals.estimate.pnl;
+          const varPnl = r.totals.actual.pnl - estPnl;
+          const varPct = estPnl !== 0 ? (varPnl / Math.abs(estPnl)) * 100 : null;
+          if (varPct == null) return "—";
+          const cls = Math.abs(varPct) > 10 ? (varPnl >= 0 ? "pnl-fav" : "pnl-adv") : "";
+          return <span className={cls}>{`${varPct.toFixed(1)}%`}</span>;
+        },
+      },
+      {
+        key: "variance_line",
+        title: t("page.pnl.var_pnl_short", "Var. P&L"),
+        align: "right",
+        sortable: true,
+        value: (r) => {
+          if (isFleet(r)) return null;
+          return (r.columns.variance?.revenue ?? 0) + (r.columns.variance?.hire ?? 0) + (r.columns.variance?.demurrage ?? 0);
+        },
+        render: (_v, r) => {
+          if (isFleet(r)) return "—";
+          return (
+            <Num
+              v={(r.columns.variance?.revenue ?? 0) + (r.columns.variance?.hire ?? 0) + (r.columns.variance?.demurrage ?? 0)}
+              digits={2}
+            />
+          );
+        },
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t],
+  );
 
   return (
-    <AppShell breadcrumbs={[{ label: "Finance", href: "/finance" }, { label: "P&L" }]}>
+    <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
+          { label: t("page.pnl.title", "Profit & Loss") },
+        ]}
         title={t("page.pnl.title", "Profit & Loss — 4-Column Comparison")}
         actions={
           <>
@@ -193,95 +374,18 @@ export default function PnlOverviewPage() {
         {loading ? (
           <div className="skeleton-table" />
         ) : (
-          <div className="table-scroll">
-            <table className="table pnl-table">
-              <thead>
-                <tr>
-                  <th rowSpan={2} className="pnl-sticky-col" onClick={() => toggleSort("voyage_no")}>
-                    {t("page.voyages.no", "Voyage")}{sortIcon("voyage_no")}
-                  </th>
-                  <th rowSpan={2} onClick={() => toggleSort("status")}>
-                    {t("common.status", "Status")}{sortIcon("status")}
-                  </th>
-                  <th colSpan={3} className="pnl-col-header pnl-col-estimate">Estimate</th>
-                  <th colSpan={3} className="pnl-col-header pnl-col-actual">Actual</th>
-                  <th colSpan={3} className="pnl-col-header pnl-col-posted">Posted</th>
-                  <th colSpan={3} className="pnl-col-header pnl-col-variance">Variance</th>
-                </tr>
-                <tr>
-                  {(["estimate", "actual", "posted"] as const).map((col) => (
-                    <Fragment key={col}>
-                      <th className="pnl-num" onClick={() => toggleSort(`totals.${col}.revenue`)}>
-                        Rev{sortIcon(`totals.${col}.revenue`)}
-                      </th>
-                      <th className="pnl-num" onClick={() => toggleSort(`totals.${col}.cost`)}>
-                        Cost{sortIcon(`totals.${col}.cost`)}
-                      </th>
-                      <th className="pnl-num" onClick={() => toggleSort(`totals.${col}.pnl`)}>
-                        P&L{sortIcon(`totals.${col}.pnl`)}
-                      </th>
-                    </Fragment>
-                  ))}
-                  <th className="pnl-num">Fav/(Adv)</th>
-                  <th className="pnl-num">%</th>
-                  <th className="pnl-num">P&L</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((r) => {
-                  const estPnl = r.totals.estimate.pnl;
-                  const actPnl = r.totals.actual.pnl;
-                  const varPnl = actPnl - estPnl;
-                  const varPct = estPnl !== 0 ? (varPnl / Math.abs(estPnl)) * 100 : null;
-                  return (
-                    <tr key={r.voyage_id}>
-                      <td className="pnl-sticky-col">
-                        <Link href={`/finance/pnl/${r.voyage_id}`}>{r.voyage_no}</Link>
-                      </td>
-                      <td>{r.status}</td>
-                      <td className="pnl-num pnl-col-estimate">{fmt(r.totals.estimate.revenue)}</td>
-                      <td className="pnl-num pnl-col-estimate">{fmt(r.totals.estimate.cost)}</td>
-                      <td className="pnl-num pnl-col-estimate">{fmt(r.totals.estimate.pnl)}</td>
-                      <td className="pnl-num pnl-col-actual">{fmt(r.totals.actual.revenue)}</td>
-                      <td className="pnl-num pnl-col-actual">{fmt(r.totals.actual.cost)}</td>
-                      <td className="pnl-num pnl-col-actual">{fmt(r.totals.actual.pnl)}</td>
-                      <td className="pnl-num pnl-col-posted">{fmt(r.totals.posted.revenue)}</td>
-                      <td className="pnl-num pnl-col-posted">{fmt(r.totals.posted.cost)}</td>
-                      <td className="pnl-num pnl-col-posted">{fmt(r.totals.posted.pnl)}</td>
-                      <td className={`pnl-num ${varianceClass(varPnl, estPnl)}`}>{fmt(varPnl)}</td>
-                      <td className={`pnl-num ${varPct != null && Math.abs(varPct) > 10 ? (varPnl >= 0 ? "pnl-fav" : "pnl-adv") : ""}`}>
-                        {varPct != null ? `${varPct.toFixed(1)}%` : "—"}
-                      </td>
-                      <td className={`pnl-num pnl-col-variance`}>{fmt(r.columns.variance.revenue + r.columns.variance.hire + r.columns.variance.demurrage)}</td>
-                    </tr>
-                  );
-                })}
-                {!sorted.length ? (
-                  <tr><td colSpan={14} className="muted">{t("common.empty", "No records")}</td></tr>
-                ) : null}
-              </tbody>
-              {fleet ? (
-                <tfoot>
-                  <tr className="pnl-total-row">
-                    <td className="pnl-sticky-col"><strong>FLEET TOTAL</strong></td>
-                    <td></td>
-                    <td className="pnl-num">{fmt(fleet.totals.estimate.revenue)}</td>
-                    <td className="pnl-num">{fmt(fleet.totals.estimate.cost)}</td>
-                    <td className="pnl-num">{fmt(fleet.totals.estimate.pnl)}</td>
-                    <td className="pnl-num">{fmt(fleet.totals.actual.revenue)}</td>
-                    <td className="pnl-num">{fmt(fleet.totals.actual.cost)}</td>
-                    <td className="pnl-num">{fmt(fleet.totals.actual.pnl)}</td>
-                    <td className="pnl-num">{fmt(fleet.totals.posted.revenue)}</td>
-                    <td className="pnl-num">{fmt(fleet.totals.posted.cost)}</td>
-                    <td className="pnl-num">{fmt(fleet.totals.posted.pnl)}</td>
-                    <td className="pnl-num">{fmt(fleet.totals.actual.pnl - fleet.totals.estimate.pnl)}</td>
-                    <td className="pnl-num">—</td>
-                    <td className="pnl-num">—</td>
-                  </tr>
-                </tfoot>
-              ) : null}
-            </table>
-          </div>
+          <DataGrid<GridRow>
+            columns={cols}
+            data={gridRows}
+            rowKey={(r) => r.voyage_id}
+            onSortChange={(key, dir) => {
+              setSortKey(key);
+              setSortDir(dir === "desc" ? "desc" : "asc");
+            }}
+            storageKey="finance_pnl_list_grid"
+            showFooter={false}
+            emptyText={t("common.empty", "No records")}
+          />
         )}
       </div>
     </AppShell>

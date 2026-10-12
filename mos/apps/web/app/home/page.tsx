@@ -5,14 +5,19 @@
 // 采用软件式面板网格布局，信息密度高
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell, useShellBootstrap } from "@/components/AppShell";
 import { OnboardingCard } from "@/components/OnboardingCard";
 import { PageGuide } from "@/components/PageGuide";
+import { PageHeader } from "@/components/PageHeader";
+import { SavedViews } from "@/components/SavedViews";
 import { StateView } from "@/components/StateView";
 import { NavIcon, resolveIconId } from "@/components/NavIcon";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiGet, apiMe, apiPost, apiPatch, type HomeSummary, type TaskOut, type TaskAssignee } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -31,28 +36,34 @@ function dueInfo(dueAt: string | null, t: any, locale: string) {
   const day = new Date(due);
   day.setHours(0, 0, 0, 0);
   const diff = Math.round((day.getTime() - today.getTime()) / 86_400_000);
-  if (diff < 0) return { text: t("page.home.overdue_days", "逾期{n}天", { n: -diff }), overdue: true, days: diff };
-  if (diff === 0) return { text: t("page.home.due_today", "今天"), overdue: false, days: 0 };
-  if (diff === 1) return { text: t("page.home.due_tomorrow", "明天"), overdue: false, days: 1 };
+  if (diff < 0) return { text: t("page.home.overdue_days", "Overdue {n} days", { n: -diff }), overdue: true, days: diff };
+  if (diff === 0) return { text: t("page.home.due_today", "Due today"), overdue: false, days: 0 };
+  if (diff === 1) return { text: t("page.home.due_tomorrow", "Tomorrow"), overdue: false, days: 1 };
   return { text: dueAt.slice(5, 10), overdue: false, days: diff };
 }
 
 type TaskFilter = "all" | "open" | "today" | "overdue" | "done";
 
-export default function WorkbenchPage() {
+function WorkbenchPageInner() {
   const { shell } = useShellBootstrap();
   const { t, locale } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
   const [fullName, setFullName] = useState("");
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
-  const [taskFilter, setTaskFilter] = useState<TaskFilter>("open");
+  const taskFilter: TaskFilter =
+    query.tf === "today" || query.tf === "overdue" || query.tf === "done" || query.tf === "all" ? query.tf : "open";
+  const setTaskFilter = (f: TaskFilter) => setQuery({ tf: f === "open" ? null : f });
   const [showNewTask, setShowNewTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskPriority, setNewTaskPriority] = useState("normal");
   const [newTaskDue, setNewTaskDue] = useState("");
+
+  useListHotkeys(() => setShowNewTask(true));
 
   const loadSummary = useCallback(async () => {
     setLoading(true);
@@ -60,7 +71,7 @@ export default function WorkbenchPage() {
     try {
       setSummary(await apiGet("/api/v1/home/summary"));
     } catch (e: any) {
-      setError(e?.message || t("common.failed", "加载失败"));
+      setError(e?.message || t("common.failed", "Failed"));
     } finally {
       setLoading(false);
     }
@@ -80,10 +91,10 @@ export default function WorkbenchPage() {
     setBusyId(task.id);
     try {
       await apiPost(`/api/v1/tasks/${task.id}/complete`);
-      toast.success(t("page.home.task_done", "任务已完成"));
+      toast.success(t("page.home.task_done", "Task completed"));
       await loadSummary();
     } catch {
-      toast.error(t("common.failed", "操作失败"));
+      toast.error(t("common.failed", "Failed"));
     } finally {
       setBusyId("");
     }
@@ -97,14 +108,14 @@ export default function WorkbenchPage() {
         priority: newTaskPriority,
         due_at: newTaskDue || null,
       });
-      toast.success(t("page.home.task_created", "任务已创建"));
+      toast.success(t("page.home.task_created", "Task created"));
       setNewTaskTitle("");
       setNewTaskPriority("normal");
       setNewTaskDue("");
       setShowNewTask(false);
       await loadSummary();
     } catch {
-      toast.error(t("common.failed", "创建失败"));
+      toast.error(t("common.failed", "Failed"));
     }
   }
 
@@ -144,6 +155,18 @@ export default function WorkbenchPage() {
 
   return (
     <AppShell>
+      <PageHeader
+        breadcrumb={[{ label: t("nav.home", "Workbench") }]}
+        title={t("page.home.title", "Workbench")}
+        subtitle={t("page.home.sub", "Tasks, approvals, exceptions and today's fleet pulse.")}
+        actions={
+          <>
+            <PageGuide pageKey="home" />
+            <SavedViews storageKey="home_list" onApply={(q) => router.replace(`/home${q}`)} />
+          </>
+        }
+      />
+
       {/* ── Top status bar ── */}
       <div className="wb-statusbar">
         <div className="wb-statusbar-left">
@@ -153,20 +176,20 @@ export default function WorkbenchPage() {
         <div className="wb-statusbar-kpis">
           <Link href="/tasks" className="wb-kpi-chip">
             <span className="wb-kpi-chip-val">{openTasks}</span>
-            <span className="wb-kpi-chip-label">{t("page.home.stat_tasks", "待办")}</span>
+            <span className="wb-kpi-chip-label">{t("page.home.stat_tasks", "Tasks")}</span>
           </Link>
           <Link href="/workflows/inbox" className="wb-kpi-chip">
             <span className="wb-kpi-chip-val">{approvals}</span>
-            <span className="wb-kpi-chip-label">{t("page.home.stat_approvals", "审批")}</span>
+            <span className="wb-kpi-chip-label">{t("page.home.stat_approvals", "Approvals")}</span>
           </Link>
           <span className="wb-kpi-chip">
             <span className="wb-kpi-chip-val">{unread}</span>
-            <span className="wb-kpi-chip-label">{t("page.home.stat_unread", "未读")}</span>
+            <span className="wb-kpi-chip-label">{t("page.home.stat_unread", "Unread")}</span>
           </span>
           {excCritical > 0 ? (
             <Link href="/exceptions" className="wb-kpi-chip wb-kpi-danger">
               <span className="wb-kpi-chip-val">{excCritical}</span>
-              <span className="wb-kpi-chip-label">{t("page.home.exc", "异常")}</span>
+              <span className="wb-kpi-chip-label">{t("page.home.exc", "Exceptions")}</span>
             </Link>
           ) : null}
         </div>
@@ -176,7 +199,6 @@ export default function WorkbenchPage() {
               {a.label}
             </Link>
           ))}
-          <PageGuide pageKey="home" />
         </div>
       </div>
 
@@ -205,7 +227,7 @@ export default function WorkbenchPage() {
             <div className="wb-panel-head">
               <h2 className="wb-panel-title">
                 <NavIcon id="tasks" size={14} />
-                {t("page.home.my_tasks", "我的任务")}
+                {t("page.home.my_tasks", "My tasks")}
               </h2>
               <div className="wb-panel-actions">
                 {/* Filter tabs */}
@@ -218,12 +240,12 @@ export default function WorkbenchPage() {
                       onClick={() => setTaskFilter(f)}
                     >
                       {f === "open"
-                        ? t("page.home.filter_open", "进行中")
+                        ? t("page.home.filter_open", "In progress")
                         : f === "today"
-                          ? t("page.home.filter_today", "今天")
+                          ? t("page.home.filter_today", "Today")
                           : f === "overdue"
-                            ? t("page.home.filter_overdue", "逾期")
-                            : t("page.home.filter_done", "已完成")}
+                            ? t("page.home.filter_overdue", "Overdue")
+                            : t("page.home.filter_done", "Done")}
                     </button>
                   ))}
                 </div>
@@ -232,7 +254,7 @@ export default function WorkbenchPage() {
                   className="btn btn-sm btn-primary"
                   onClick={() => setShowNewTask((v) => !v)}
                 >
-                  + {t("page.home.new_task", "新建")}
+                  + {t("page.home.new_task", "New")}
                 </button>
               </div>
             </div>
@@ -243,7 +265,7 @@ export default function WorkbenchPage() {
                 <input
                   type="text"
                   className="wb-new-task-input"
-                  placeholder={t("page.home.task_title_ph", "任务标题…")}
+                  placeholder={t("page.home.task_title_ph", "Task title…")}
                   value={newTaskTitle}
                   onChange={(e) => setNewTaskTitle(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && createTask()}
@@ -254,10 +276,10 @@ export default function WorkbenchPage() {
                   onChange={(e) => setNewTaskPriority(e.target.value)}
                   className="wb-new-task-pri"
                 >
-                  <option value="low">{t("page.home.pri_low", "低")}</option>
-                  <option value="normal">{t("page.home.pri_normal", "中")}</option>
-                  <option value="high">{t("page.home.pri_high", "高")}</option>
-                  <option value="urgent">{t("page.home.pri_urgent", "紧急")}</option>
+                  <option value="low">{t("page.home.pri_low", "Low")}</option>
+                  <option value="normal">{t("page.home.pri_normal", "Normal")}</option>
+                  <option value="high">{t("page.home.pri_high", "High")}</option>
+                  <option value="urgent">{t("page.home.pri_urgent", "Urgent")}</option>
                 </select>
                 <input
                   type="date"
@@ -266,10 +288,10 @@ export default function WorkbenchPage() {
                   className="wb-new-task-due"
                 />
                 <button type="button" className="btn btn-sm btn-primary" onClick={createTask}>
-                  {t("common.add", "添加")}
+                  {t("common.add", "Add")}
                 </button>
                 <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowNewTask(false)}>
-                  {t("common.cancel", "取消")}
+                  {t("common.cancel", "Cancel")}
                 </button>
               </div>
             ) : null}
@@ -286,7 +308,7 @@ export default function WorkbenchPage() {
                         className="wb-task-check"
                         disabled={busyId === task.id}
                         onClick={() => completeTask(task)}
-                        title={t("page.home.mark_done", "标记完成")}
+                        title={t("page.home.mark_done", "Mark done")}
                       >
                         {task.status === "done" ? "✓" : ""}
                       </button>
@@ -305,13 +327,13 @@ export default function WorkbenchPage() {
                   );
                 })
               ) : (
-                <div className="wb-empty">{t("page.home.no_tasks", "暂无待办")}</div>
+                <div className="wb-empty">{t("page.home.no_tasks", "No tasks")}</div>
               )}
             </div>
             {summary?.tasks.items && summary.tasks.items.length > 15 ? (
               <div className="wb-panel-foot">
                 <Link href="/tasks" className="wb-more">
-                  {t("page.home.view_all", "查看全部")} ({summary.tasks.items.length}) →
+                  {t("page.home.view_all", "View all")} ({summary.tasks.items.length}) →
                 </Link>
               </div>
             ) : null}
@@ -324,13 +346,13 @@ export default function WorkbenchPage() {
               <div className="wb-panel-head">
                 <h2 className="wb-panel-title">
                   <NavIcon id="exceptions" size={14} />
-                  {t("page.home.todo_alerts", "待办与提醒")}
+                  {t("page.home.todo_alerts", "Tasks & alerts")}
                 </h2>
               </div>
               <div className="wb-alert-list">
                 {summary?.exceptions && (excCritical > 0 || excWarning > 0) ? (
                   <Link href="/exceptions" className="wb-alert-item wb-alert-danger">
-                    <span>{t("page.home.exceptions", "业务异常")}</span>
+                    <span>{t("page.home.exceptions", "Business exceptions")}</span>
                     <span className="wb-alert-badges">
                       {excCritical > 0 ? <span className="exc-badge critical">{excCritical}</span> : null}
                       {excWarning > 0 ? <span className="exc-badge warning">{excWarning}</span> : null}
@@ -338,12 +360,12 @@ export default function WorkbenchPage() {
                   </Link>
                 ) : null}
                 <Link href="/workflows/inbox" className="wb-alert-item wb-alert-info">
-                  <span>{t("page.home.approvals", "待审批")}</span>
+                  <span>{t("page.home.approvals", "Pending approvals")}</span>
                   <strong>{approvals}</strong>
                 </Link>
                 {(summary?.approvals.items || []).slice(0, 3).map((a, i) => (
                   <Link key={i} href={a.href || "/workflows/inbox"} className="wb-alert-item">
-                    <span className="wb-alert-title">{a.title || t("page.home.approval_item", "审批事项")}</span>
+                    <span className="wb-alert-title">{a.title || t("page.home.approval_item", "Approval items")}</span>
                   </Link>
                 ))}
                 {(summary?.alerts || []).slice(0, 4).map((a, i) => (
@@ -357,7 +379,7 @@ export default function WorkbenchPage() {
                   </Link>
                 ))}
                 {!summary?.alerts?.length && !summary?.approvals.items?.length && excCritical === 0 ? (
-                  <div className="wb-empty">{t("page.home.no_alerts", "暂无提醒")}</div>
+                  <div className="wb-empty">{t("page.home.no_alerts", "No alerts")}</div>
                 ) : null}
               </div>
             </div>
@@ -367,7 +389,7 @@ export default function WorkbenchPage() {
               <div className="wb-panel-head">
                 <h2 className="wb-panel-title">
                   <NavIcon id="tasks" size={14} />
-                  {t("page.home.schedule", "日程")}
+                  {t("page.home.schedule", "Upcoming schedule")}
                 </h2>
               </div>
               <div className="wb-sched-list">
@@ -395,7 +417,7 @@ export default function WorkbenchPage() {
                     );
                   })
                 ) : (
-                  <div className="wb-empty">{t("page.home.no_schedule", "暂无日程")}</div>
+                  <div className="wb-empty">{t("page.home.no_schedule", "No schedule")}</div>
                 )}
               </div>
             </div>
@@ -406,7 +428,7 @@ export default function WorkbenchPage() {
                 <div className="wb-panel-head">
                   <h2 className="wb-panel-title">
                     <NavIcon id="inbox" size={14} />
-                    {t("page.home.work_queues", "工作队列")}
+                    {t("page.home.work_queues", "Work queues")}
                   </h2>
                 </div>
                 <div className="wb-queue-list">
@@ -438,7 +460,7 @@ export default function WorkbenchPage() {
         </div>
 
         {/* ── Quick links ── */}
-        <div className="wb-links-head">{t("page.home.quick_links", "快捷入口")}</div>
+        <div className="wb-links-head">{t("page.home.quick_links", "Quick links")}</div>
         <div className="wb-links">
           {(shell?.home_widgets || []).map((w) => (
             <Link key={w.id} href={w.href} className="wb-link-tile">
@@ -449,5 +471,13 @@ export default function WorkbenchPage() {
         </div>
       </StateView>
     </AppShell>
+  );
+}
+
+export default function WorkbenchPage() {
+  return (
+    <Suspense fallback={null}>
+      <WorkbenchPageInner />
+    </Suspense>
   );
 }

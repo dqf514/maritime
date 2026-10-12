@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { HubTile } from "@/components/HubTile";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -16,17 +17,14 @@ export default function PlatformHomePage() {
 
   return (
     <AppShell>
-      <div className="page-header">
-        <div>
-          <h1 style={{ margin: 0 }}>{t("page.platform.title", "平台运营控制台")}</h1>
-          <p className="page-sub">
-            {t(
-              "page.platform.sub",
-              "租户与许可证、身份邮件通道、产品品牌、套餐用量与数据部署。请使用侧栏「租户与许可证」「身份与邮件」进入完整配置。",
-            )}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title={t("page.platform.title", "Platform operator console")}
+        subtitle={t(
+          "page.platform.sub",
+          "Tenants & licenses, identity & mail channel, product branding, plans & usage, data plane & deployment. Use the sidebar entries for full configuration.",
+        )}
+        breadcrumb={[{ label: t("nav.plat_home", "Operator console") }]}
+      />
       <div className="workbench-grid">
         <HubTile
           href="/platform/tenants"
@@ -70,6 +68,12 @@ export default function PlatformHomePage() {
           icon="plat_ops"
           title={t("page.platform.ops", "数据与部署")}
           description={t("page.platform.ops_d", "数据源、初始化向导、部署档案、监控")}
+        />
+        <HubTile
+          href="/platform/interfaces"
+          icon="plat_ops"
+          title={t("page.platform.interfaces", "Interface messages")}
+          description={t("page.platform.interfaces_d", "Inbound / outbound interface payloads, status and retry")}
         />
       </div>
     </AppShell>

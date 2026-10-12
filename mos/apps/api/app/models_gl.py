@@ -38,6 +38,9 @@ class ChartOfAccount(Base):
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class BusinessRule(Base):
@@ -75,6 +78,9 @@ class PeriodJournal(Base):
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     posted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class AccountGroup(Base):

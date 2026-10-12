@@ -27,7 +27,10 @@ def test_eta_watch_flags_deviation(client, auth_headers, db_session):
     voy.status = "in_progress"  # 种子航次可能是 completed，看板只看在航/待航
     tid = voy.tenant_id
 
-    base = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+    # 种子午报按相对日期生成（now − N 天），基线必须同样相对：
+    # 第二条落在 now − 6h，严格晚于所有种子午报，否则日期漂移后
+    # 种子的 NULL 偏差午报会成为最新一条（时间炸弹）。
+    base = datetime.now(timezone.utc) - timedelta(hours=30)
     # 两条午报：只取最新；偏差 +20h → critical（阈值 12）
     db_session.add(
         NoonReport(

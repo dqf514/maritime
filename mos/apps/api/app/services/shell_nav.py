@@ -43,6 +43,7 @@ NAV_DESK: list[dict[str, Any]] = [
     {"id": "market", "label": "Market data", "href": "/analytics/market", "roles": ["chartering", "operations", "management", "bunker"]},
     {"id": "reports", "label": "Reports", "href": "/analytics/reports", "roles": ["management", "finance", "chartering", "operations"]},
     {"id": "report-builder", "label": "Report Builder", "label_zh": "报表设计器", "href": "/analytics/reports/builder", "roles": ["management", "finance", "chartering", "operations"]},
+    {"id": "sched", "label": "Scheduled reports", "label_zh": "定时报表", "href": "/analytics/scheduler", "roles": ["management", "finance", "chartering", "operations"]},
     {"id": "compliance", "label": "Carbon compliance", "href": "/emissions/compliance", "roles": ["operations", "management", "technical", "finance"]},
 ]
 
@@ -69,11 +70,14 @@ NAV_MASTER: list[dict[str, Any]] = [
     {"id": "rate-tables", "label": "Rate Tables", "label_zh": "费率表", "href": "/masterdata/rates", "roles": ["chartering", "operations", "tenant_admin", "finance", "bunker"]},
     {"id": "fuel_zones", "label": "Fuel zones", "href": "/masterdata/fuel-zones", "roles": ["operations", "bunker", "tenant_admin", "compliance"]},
     {"id": "parties", "label": "Counterparties", "href": "/masterdata/counterparties", "roles": ["chartering", "finance", "tenant_admin", "compliance"]},
+    {"id": "import_wizard", "label": "Import wizard", "label_zh": "导入向导", "href": "/masterdata/import", "roles": ["chartering", "operations", "tenant_admin"]},
 ]
 
 NAV_ADMIN: list[dict[str, Any]] = [
     {"id": "inbox", "label": "Approval inbox", "href": "/workflows/inbox", "roles": ["tenant_admin", "management", "finance", "chartering"]},
     {"id": "settings_hub", "label": "System settings", "href": "/settings", "roles": ["tenant_admin"]},
+    {"id": "flags", "label": "Configuration flags", "label_zh": "配置标志", "href": "/settings/flags", "roles": ["tenant_admin"]},
+    {"id": "udf", "label": "User-defined fields", "label_zh": "用户自定义字段", "href": "/settings/udf", "roles": ["tenant_admin"]},
 ]
 
 NAV_PLATFORM: list[dict[str, Any]] = [
@@ -84,6 +88,7 @@ NAV_PLATFORM: list[dict[str, Any]] = [
     {"id": "plat_brand", "label": "Product branding", "href": "/platform/branding", "roles": ["platform_admin"]},
     {"id": "plat_identity", "label": "Identity & email", "href": "/platform/identity", "roles": ["platform_admin"]},
     {"id": "plat_health", "label": "Estate health", "href": "/platform/health", "roles": ["platform_admin"]},
+    {"id": "plat_interfaces", "label": "Interface messages", "label_zh": "接口报文", "href": "/platform/interfaces", "roles": ["platform_admin"]},
 ]
 
 # ── Module definitions (modular functional grouping) ──────────────
@@ -127,7 +132,7 @@ MODULES: list[dict[str, Any]] = [
     {
         "id": "analytics",
         "label": "Analytics & AI",
-        "item_ids": ["dashboards", "analytics", "market", "reports", "report-builder", "ai_chat"],
+        "item_ids": ["dashboards", "analytics", "market", "reports", "report-builder", "sched", "ai_chat"],
         "roles": ["*"],
         "collapsed_default": False,
     },
@@ -311,23 +316,36 @@ def _primary_role(user_roles: list[str]) -> str:
     return user_roles[0] if user_roles else "viewer"
 
 
-def _filter_items(items: list[dict[str, Any]], roles: list[str]) -> list[dict[str, Any]]:
-    out = []
-    seen: set[str] = set()
-    for item in items:
-        if not _role_match(roles, item["roles"]):
-            continue
-        if item["id"] in seen:
-            continue
-        seen.add(item["id"])
-        out.append({"id": item["id"], "label": item["label"], "href": item["href"]})
+def _entry(item: dict[str, Any], *, locked: bool = False) -> dict[str, Any]:
+    out: dict[str, Any] = {"id": item["id"], "label": item["label"], "href": item["href"]}
+    if locked:
+        out["locked"] = True
     return out
 
 
+def _filter_items(items: list[dict[str, Any]], roles: list[str]) -> list[dict[str, Any]]:
+    """Visible items first, then role-hidden items marked ``locked``.
+
+    B1（菜单与权限解耦）：无权条目保留入口（置灰 + 锁标），点击进 /denied 解释页，
+    避免"功能消失"的感知；路由与搜索 ACL 仍按 allowed_paths 拒绝访问。
+    """
+    visible: list[dict[str, Any]] = []
+    locked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        if item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        if _role_match(roles, item["roles"]):
+            visible.append(_entry(item))
+        else:
+            locked.append(_entry(item, locked=True))
+    return visible + locked
+
+
 def _filter_module_items(module: dict[str, Any], roles: list[str]) -> list[dict[str, Any]]:
-    """Return role-visible items for a module, preserving catalogue order."""
-    if not _role_match(roles, module["roles"]):
-        return []
+    """Module items preserving catalogue order; role-mismatched entries are locked (B1)."""
+    module_ok = _role_match(roles, module["roles"])
     item_ids = module["item_ids"]
     # 模块条目可能来自任一目录（platform 模块的 plat_* 在 NAV_PLATFORM）。
     # NAV_ADMIN_DESK 与 NAV_DESK 有同名 id（角色更宽），先到先得以 NAV_DESK 为准。
@@ -338,8 +356,12 @@ def _filter_module_items(module: dict[str, Any], roles: list[str]) -> list[dict[
     out = []
     for iid in item_ids:
         item = catalog.get(iid)
-        if item and _role_match(roles, item["roles"]):
-            out.append({"id": item["id"], "label": item["label"], "href": item["href"]})
+        if not item:
+            continue
+        if module_ok and _role_match(roles, item["roles"]):
+            out.append(_entry(item))
+        else:
+            out.append(_entry(item, locked=True))
     return out
 
 

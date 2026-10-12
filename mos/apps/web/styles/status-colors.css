@@ -1,0 +1,173 @@
+/* ── 全站唯一状态色表（IMOS 式视觉状态语言） ──
+   绿=通过/完成  黄=进行中/待办  红=异常/阻断  蓝=预测/系统投影  灰=终止/归档 */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 15px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.status-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.status-badge--dot {
+  border: none;
+  padding: 0;
+  background: transparent !important;
+  text-transform: none;
+  font-size: var(--font-label);
+  font-weight: 600;
+}
+
+.status-badge--ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+}
+.status-badge--warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.status-badge--danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.status-badge--info {
+  color: #1f6fb2;
+  background: rgba(31, 111, 178, 0.1);
+  border-color: rgba(31, 111, 178, 0.35);
+}
+.status-badge--muted {
+  color: var(--muted);
+  background: var(--border-light);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] .status-badge--info {
+  color: #6db3f2;
+}
+
+/* ── 字体色语义（IMOS：红=手工覆盖 蓝=系统投影 黑=实际值） ── */
+.val-manual {
+  color: var(--danger);
+}
+.val-projected {
+  color: #1f6fb2;
+}
+[data-theme="dark"] .val-projected {
+  color: #6db3f2;
+}
+.val-actual {
+  color: var(--ink);
+}
+
+/* 行内有备注：黄色高亮（IMOS 黄行=Remarks） */
+.row-has-remark {
+  background: rgba(183, 121, 31, 0.12) !important;
+}
+
+/* 不变量破坏：红 + 删除线 */
+.val-broken {
+  color: var(--danger);
+  text-decoration: line-through;
+}
+
+/* DRAFT 水印（未过账单据） */
+.draft-watermark {
+  position: relative;
+}
+.draft-watermark::after {
+  content: "DRAFT";
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-24deg);
+  font-size: 64px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: rgba(192, 57, 43, 0.1);
+  pointer-events: none;
+  z-index: 1;
+  user-select: none;
+}
+
+/* ── B3 状态色图例条（列表页头部：成套状态说明） ── */
+.status-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-xs);
+  margin: var(--gap-xs) 0 var(--gap-sm);
+}
+.status-legend-title {
+  font-size: var(--font-label);
+  font-weight: 600;
+  color: var(--muted);
+  margin-right: var(--gap-xs);
+}
+
+/* ── B3 三色校验按钮（绿=通过 / 黄=警告 / 红=阻断） ── */
+.validate-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.validate-btn {
+  font-variant-numeric: tabular-nums;
+}
+.validate-btn--ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
+.validate-btn--warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+.validate-btn--danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.validate-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 60;
+  min-width: 240px;
+  max-width: 380px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.validate-pop--ok { border-left-color: var(--ok); }
+.validate-pop--warn { border-left-color: var(--warn); }
+.validate-pop--danger { border-left-color: var(--danger); }
+.validate-pop--info { border-left-color: #1f6fb2; }
+.validate-line { padding: 1px 0; }
+.validate-line--error { color: var(--danger); font-weight: 600; }
+.validate-line--warn { color: var(--warn); }

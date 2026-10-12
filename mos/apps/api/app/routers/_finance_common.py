@@ -13,20 +13,19 @@ from app.models_domain import Invoice
 from app.models_finance_ext import CreditNote
 
 
-from app.models_wave1 import Company, ExchangeRate
+from app.models_wave1 import Company
+from app.services.invoice_types import VALID_INVOICE_TYPES
+
 
 def _alive(status: str | None) -> bool:
     return status != "deleted"
 
 
-# New invoice input is restricted to these types; legacy free-text rows stay readable.
+# New invoice input is restricted to the canonical registry (codes + legacy
+# aliases); legacy free-text rows stay readable. See services/invoice_types.py.
 DEFAULT_VAR_LIMIT = 100000.0
 
-INVOICE_TYPES = {
-    "freight", "hire", "demurrage", "despatch", "bunker",
-    "port_disbursement", "port_da", "tc_hire", "broker_commission",
-    "carbon_allowance", "eu_ets", "credit_note", "other",
-}
+INVOICE_TYPES = set(VALID_INVOICE_TYPES)
 
 DEFAULT_VAR_LIMIT = 100000.0
 
@@ -38,21 +37,31 @@ def _base_currency(db: Session, tenant_id: UUID) -> str:
     return (comp.base_currency if comp and comp.base_currency else "USD")
 
 
-def _resolve_fx_rate(db: Session, tenant_id: UUID, currency: str, base_ccy: str) -> Decimal | None:
-    """Latest tenant (or global) rate converting 1 unit of `currency` into `base_ccy`."""
-    if currency == base_ccy:
-        return Decimal("1")
-    row = db.scalars(
-        select(ExchangeRate)
-        .where(
-            ExchangeRate.base_currency == currency,
-            ExchangeRate.quote_currency == base_ccy,
-            (ExchangeRate.tenant_id == tenant_id) | (ExchangeRate.tenant_id.is_(None)),
-        )
-        .order_by(ExchangeRate.rate_date.desc())
-        .limit(1)
-    ).first()
-    return Decimal(str(row.rate)) if row else None
+def _resolve_fx_rate(
+    db: Session,
+    tenant_id: UUID,
+    currency: str,
+    base_ccy: str,
+    *,
+    invoice_type: str | None = None,
+    context_date: date | None = None,
+) -> Decimal | None:
+    """Latest tenant (or global) rate converting 1 unit of `currency` into `base_ccy`.
+
+    Additive: when an active FxDateRule exists for ``invoice_type`` and a
+    ``context_date`` is provided, the rate is taken as of that date. Without a
+    rule row the historical default (absolute latest rate) is unchanged.
+    """
+    from app.services.fx_date_rules import resolve_fx_rate
+
+    return resolve_fx_rate(
+        db,
+        tenant_id,
+        currency,
+        base_ccy,
+        invoice_type=invoice_type,
+        context_date=context_date,
+    )
 
 
 def _days_to_timebar(time_bar: date | None) -> int | None:

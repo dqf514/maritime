@@ -1,14 +1,22 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { SavedViews } from "@/components/SavedViews";
+import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { StateView } from "@/components/StateView";
 import { apiGet } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { fmt } from "@/lib/fmt";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
+import { useToast } from "@/components/ToastProvider";
 
 type MarketPosition = {
   id: string;
@@ -41,10 +49,14 @@ function unwrapList(data: unknown): Record<string, unknown>[] {
 
 function MarketPositionsWorkspace() {
   const { t } = useI18n();
+  const toast = useToast();
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
+  const filterCommodity = typeof query.commodity === "string" ? query.commodity : "";
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
   const [rows, setRows] = useState<MarketPosition[]>([]);
-  const [filterCommodity, setFilterCommodity] = useState("");
+  const rowCtx = useContextMenu<MarketPosition>();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,6 +110,25 @@ function MarketPositionsWorkspace() {
     return { longTotal, shortTotal, netTotal, pnlTotal };
   }, [filtered]);
 
+  function copyId(id: string) {
+    void navigator.clipboard.writeText(id);
+    toast.success(t("ctx.copied_id", "ID copied"));
+  }
+
+  function exportPositions(list: MarketPosition[]) {
+    downloadCsv(
+      "market_positions",
+      ["id", "route", "commodity", "period", "long_qty", "short_qty", "net_qty", "avg_price", "market_price", "unrealized_pnl", "var_95"],
+      list.map((r) => [r.id, r.route, r.commodity, r.period, r.long_qty, r.short_qty, r.net_qty, r.avg_price, r.market_price, r.unrealized_pnl, r.var_95]),
+      { emptyGuard: t("export.empty_confirm", "No rows to export. Export anyway?") },
+    );
+  }
+
+  const menuItems = (r: MarketPosition): ContextMenuItem[] => [
+    { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyId(r.id) },
+    { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportPositions([r]) },
+  ];
+
   const cols = useMemo<ColumnDef<MarketPosition>[]>(
     () => [
       { key: "route", title: t("page.market_pos.route", "Route"), width: 120, sortable: true, sticky: true },
@@ -105,39 +136,39 @@ function MarketPositionsWorkspace() {
       { key: "period", title: t("page.market_pos.period", "Period"), width: 120, sortable: true },
       {
         key: "long_qty", title: t("page.market_pos.long", "Long"), width: 100, align: "right", agg: "sum",
-        value: (r) => r.long_qty, render: (v) => fmt(num(v)),
+        value: (r) => r.long_qty, render: (v) => <Num v={num(v)} digits={2} />,
       },
       {
         key: "short_qty", title: t("page.market_pos.short", "Short"), width: 100, align: "right", agg: "sum",
-        value: (r) => r.short_qty, render: (v) => fmt(num(v)),
+        value: (r) => r.short_qty, render: (v) => <Num v={num(v)} digits={2} />,
       },
       {
         key: "net_qty", title: t("page.market_pos.net", "Net"), width: 100, align: "right", agg: "sum",
         value: (r) => r.net_qty,
         render: (v) => {
           const n = num(v);
-          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}>{fmt(n)}</span>;
+          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}><Num v={n} digits={2} /></span>;
         },
       },
       {
         key: "avg_price", title: t("page.market_pos.avg_price", "Avg price"), width: 100, align: "right", agg: "avg",
-        value: (r) => r.avg_price, render: (v) => fmt(num(v)),
+        value: (r) => r.avg_price, render: (v) => <Num v={num(v)} digits={3} />,
       },
       {
         key: "market_price", title: t("page.market_pos.mkt_price", "Mkt price"), width: 100, align: "right", agg: "avg",
-        value: (r) => r.market_price, render: (v) => fmt(num(v)),
+        value: (r) => r.market_price, render: (v) => <Num v={num(v)} digits={3} />,
       },
       {
         key: "unrealized_pnl", title: t("page.market_pos.unrealized", "Unrealized P&L"), width: 130, align: "right", agg: "sum",
         value: (r) => r.unrealized_pnl,
         render: (v) => {
           const n = num(v);
-          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}>{fmt(n)}</span>;
+          return <span className={n >= 0 ? "pnl-pos" : "pnl-neg"}><Num v={n} digits={2} /></span>;
         },
       },
       {
         key: "var_95", title: t("page.market_pos.var", "VaR 95%"), width: 100, align: "right",
-        value: (r) => r.var_95, render: (v) => fmt(num(v)),
+        value: (r) => r.var_95, render: (v) => <Num v={num(v)} digits={2} />,
       },
     ],
     [t],
@@ -146,12 +177,11 @@ function MarketPositionsWorkspace() {
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.trading", "Trading & Risk"), href: "/trading" }, { label: t("page.market_pos.title", "Market Positions") }]}
         title={t("page.market_pos.title", "Market Positions")}
         subtitle={t("page.market_pos.sub", "Consolidated view of paper and physical positions across all books.")}
         actions={
-          <button type="button" className="btn btn-sm" onClick={load}>
-            {t("common.refresh", "Refresh")}
-          </button>
+          <SavedViews storageKey="market_pos_list" onApply={(q) => router.replace(`/market-positions${q}`)} />
         }
       />
 
@@ -174,19 +204,28 @@ function MarketPositionsWorkspace() {
         </div>
       </div>
 
-      <div className="trading-toolbar">
+      <Toolbar
+        filterCount={filterCommodity ? 1 : 0}
+        onClearFilters={() => setQuery({ commodity: null })}
+        right={<span className="hint">{t("page.market_pos.count", "{n} positions", { n: filtered.length })}</span>}
+      >
+        <button type="button" className="btn btn-sm" onClick={load} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
         <span className="field-inline">
           {t("page.market_pos.filter_commodity", "Commodity")}
-          <select value={filterCommodity} onChange={(e) => setFilterCommodity(e.target.value)}>
+          <select
+            className="input input-sm"
+            value={filterCommodity}
+            onChange={(e) => setQuery({ commodity: e.target.value || null })}
+          >
             <option value="">{t("common.all", "All")}</option>
             {commodities.map((c) => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
         </span>
-        <div className="spacer" />
-        <span className="hint">{t("page.market_pos.count", "{n} positions", { n: filtered.length })}</span>
-      </div>
+      </Toolbar>
 
       <StateView loading={loading} error={loadErr} empty={!loading && !loadErr && filtered.length === 0} onRetry={load}>
         <div className="trading-grid-wrap">
@@ -194,9 +233,11 @@ function MarketPositionsWorkspace() {
             columns={cols}
             data={filtered}
             rowKey={(r) => r.id}
+            onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
             storageKey="market_positions"
             emptyText={t("common.empty", "No records")}
           />
+          <ContextMenu controller={rowCtx} items={menuItems} />
         </div>
       </StateView>
     </AppShell>

@@ -1,10 +1,22 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Toolbar } from "@/components/Toolbar";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type Pool = {
@@ -16,28 +28,76 @@ type Pool = {
 };
 type Vessel = { id: string; name: string };
 
-export default function PoolPage() {
+function PoolPageInner() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
   const [pools, setPools] = useState<Pool[]>([]);
   const [vessels, setVessels] = useState<Vessel[]>([]);
   const [name, setName] = useState("");
-  const [selected, setSelected] = useState<string>("");
+  const [creating, setCreating] = useState(false);
+  const [savingPool, setSavingPool] = useState(false);
+  const selected = typeof query.pool === "string" ? query.pool : "";
+  const setSelected = (id: string) => setQuery({ pool: id || null });
   const [vesselId, setVesselId] = useState("");
   const [points, setPoints] = useState("1");
   const [periodLabel, setPeriodLabel] = useState("2026-Q3");
   const [totalResult, setTotalResult] = useState("1000000");
   const [err, setErr] = useState("");
 
+  useListHotkeys(() => {
+    setName("");
+    setCreating(true);
+  });
+
+  const vesselCtx = useContextMenu<Pool["vessels"][number]>();
+  const periodCtx = useContextMenu<Pool["periods"][number]>();
+
+  function exportVessels(selected: Pool["vessels"][number][]) {
+    downloadCsv(
+      "pool-vessels",
+      ["id", "vessel_id", "vessel_name", "points"],
+      selected.map((r) => [r.id, r.vessel_id, vessels.find((x) => x.id === r.vessel_id)?.name || r.vessel_id, r.points]),
+    );
+  }
+
+  function exportPeriods(selected: Pool["periods"][number][]) {
+    downloadCsv(
+      "pool-periods",
+      ["id", "label", "total_pool_result", "status", "distribution"],
+      selected.map((r) => [r.id, r.label, r.total_pool_result, r.status, JSON.stringify(r.distribution)]),
+    );
+  }
+
+  function vesselMenuItems(target: Pool["vessels"][number]): ContextMenuItem[] {
+    return [
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.id) },
+      { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportVessels([target]) },
+      { key: "div", divider: true, label: "" },
+      { key: "leave", label: t("page.pool.leave", "Leave"), onClick: () => removeVessel(target.id) },
+    ];
+  }
+
+  function periodMenuItems(target: Pool["periods"][number]): ContextMenuItem[] {
+    return [
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.id) },
+      { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportPeriods([target]) },
+      ...(target.status !== "settled"
+        ? [{ key: "settle", label: t("page.pool.settle", "Settle"), onClick: () => settle(target.id) } as ContextMenuItem]
+        : []),
+    ];
+  }
+
   const load = useCallback(async () => {
     const [p, v] = await Promise.all([apiGet("/api/v1/pools"), apiGet("/api/v1/masterdata/vessels").catch(() => [])]);
     setPools(p);
     setVessels(v);
     if (!selected && p[0]?.id) setSelected(p[0].id);
-  }, [selected]);
+  }, [selected, setSelected]);
 
   useEffect(() => {
-    load().catch(() => setErr(t("common.failed", "加载失败")));
+    load().catch(() => setErr(t("common.failed", "Failed")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -67,15 +127,18 @@ export default function PoolPage() {
 
   async function createPool(e: FormEvent) {
     e.preventDefault();
-    setErr("");
+    setSavingPool(true);
     try {
       const res = await apiPost(`/api/v1/pools?name=${encodeURIComponent(name)}`);
-      toast.success(t("page.pool.created", "船池已创建"));
+      toast.success(t("page.pool.created", "Pool created"));
       setName("");
+      setCreating(false);
       await load();
       setSelected(res.id);
     } catch (ex: any) {
-      setErr(String(ex?.detail?.message || ex?.message || ex));
+      toast.error(String(ex?.detail?.message || ex?.message || ex));
+    } finally {
+      setSavingPool(false);
     }
   }
 
@@ -86,15 +149,15 @@ export default function PoolPage() {
     if (!selected || !vesselId) return;
     try {
       await apiPost(`/api/v1/pools/${selected}/vessels?vessel_id=${vesselId}&points=${Number(points) || 1}`);
-      toast.success(t("page.pool.vessel_ok", "已加入船池"));
+      toast.success(t("page.pool.vessel_ok", "Vessel added to pool"));
       await load();
     } catch (ex: any) {
       const code = ex?.detail?.code || ex?.code;
       if (code === "VESSEL_ALREADY_IN_POOL") {
-        setErr(t("page.pool.already_in", "该船已在当前船池中，不能重复加入"));
+        setErr(t("page.pool.already_in", "Vessel is already in this pool"));
       } else if (code === "VESSEL_IN_OTHER_POOL") {
         setErr(
-          t("page.pool.in_other", "该船已在其他船池「{name}」中，请先退出后再加入", {
+          t("page.pool.in_other", "Vessel is already in pool {name}. Leave it before joining.", {
             name: ex?.detail?.pool_name || "",
           }),
         );
@@ -109,7 +172,7 @@ export default function PoolPage() {
     setErr("");
     try {
       await apiDelete(`/api/v1/pools/${selected}/vessels/${membershipId}`);
-      toast.success(t("page.pool.left", "已退出船池"));
+      toast.success(t("page.pool.left", "Left the pool"));
       await load();
     } catch (ex: any) {
       setErr(String(ex?.detail?.message || ex?.message || ex));
@@ -124,7 +187,7 @@ export default function PoolPage() {
       await apiPost(
         `/api/v1/pools/${selected}/periods?label=${encodeURIComponent(periodLabel)}&total_pool_result=${Number(totalResult) || 0}`,
       );
-      toast.success(t("page.pool.period_ok", "期间分配已生成"));
+      toast.success(t("page.pool.period_ok", "Period distribution generated"));
       await load();
     } catch (ex: any) {
       setErr(String(ex?.detail?.message || ex?.message || ex));
@@ -135,36 +198,95 @@ export default function PoolPage() {
     setErr("");
     try {
       await apiPost(`/api/v1/pools/periods/${periodId}/settle`);
-      toast.success(t("page.pool.settled", "期间已结算"));
+      toast.success(t("page.pool.settled", "Period settled"));
       await load();
     } catch (ex: any) {
       setErr(String(ex?.detail?.message || ex?.message || ex));
     }
   }
 
+  const vesselColumns: ColumnDef<Pool["vessels"][number]>[] = [
+    {
+      key: "vessel_name",
+      title: t("page.pool.vessel", "Vessel"),
+      minWidth: 160,
+      value: (r) => vessels.find((x) => x.id === r.vessel_id)?.name || r.vessel_id.slice(0, 8),
+    },
+    {
+      key: "points",
+      title: t("page.pool.points", "Points"),
+      width: 90,
+      align: "right",
+      value: (r) => r.points,
+      render: (v) => <Num v={v as number} digits={2} />,
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 90,
+      align: "right",
+      render: (_v, r) => (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeVessel(r.id)}>
+          {t("page.pool.leave", "Leave")}
+        </button>
+      ),
+    },
+  ];
+
+  const periodColumns: ColumnDef<Pool["periods"][number]>[] = [
+    { key: "label", title: t("page.pool.label", "Label"), minWidth: 120, value: (r) => r.label },
+    {
+      key: "total_pool_result",
+      title: t("page.pool.total", "Pool total result"),
+      width: 130,
+      align: "right",
+      value: (r) => r.total_pool_result,
+      render: (v) => <Num v={v as number} digits={2} />,
+    },
+    { key: "status", title: t("common.status", "Status"), width: 100, value: (r) => r.status },
+    {
+      key: "distribution",
+      title: t("page.pool.distribution", "Distribution"),
+      minWidth: 180,
+      value: (r) => JSON.stringify(r.distribution),
+      render: (v) => <code style={{ fontSize: "0.75rem" }}>{String(v)}</code>,
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 90,
+      align: "right",
+      render: (_v, r) =>
+        r.status !== "settled" ? (
+          <button type="button" className="btn btn-sm" onClick={() => settle(r.id)}>
+            {t("page.pool.settle", "Settle")}
+          </button>
+        ) : null,
+    },
+  ];
+
   return (
     <AppShell>
       <PageHeader
-        title={t("page.pool.title", "船舶池")}
-        subtitle={t("page.pool.sub", "入池船舶、期间结果与按点分配结算。同一船舶不可重复入池，也不可同时在多个池中。")}
+        breadcrumb={[{ label: t("nav.pool", "Pooling") }]}
+        title={t("page.pool.title", "Pooling")}
+        subtitle={t("page.pool.sub", "Pool vessels, period results and points-based distribution.")}
+        actions={<SavedViews storageKey="pool_list" onApply={(q) => router.replace(`/pool${q}`)} />}
       />
+      <StatusLegend statuses={["open", "calculating", "settled"]} />
+      <Toolbar>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
+          {t("page.pool.create", "Create pool")}
+        </button>
+        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => setErr(t("common.failed", "Failed")))} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
       {err ? <p className="flash-err">{err}</p> : null}
-
-      <form className="panel" onSubmit={createPool}>
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
-          <label>
-            {t("common.name", "名称")}
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </label>
-          <button className="btn btn-primary" type="submit">
-            {t("page.pool.create", "创建船池")}
-          </button>
-        </div>
-      </form>
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <label>
-          {t("page.pool.select", "当前船池")}
+          {t("page.pool.select", "Current pool")}
           <select value={selected} onChange={(e) => setSelected(e.target.value)}>
             {pools.map((p) => (
               <option key={p.id} value={p.id}>
@@ -178,13 +300,13 @@ export default function PoolPage() {
       {current ? (
         <>
           <form className="panel" style={{ marginTop: "1rem" }} onSubmit={addVessel}>
-            <h3 style={{ marginTop: 0 }}>{t("page.pool.add_vessel", "加入船舶")}</h3>
+            <h3 style={{ marginTop: 0 }}>{t("page.pool.add_vessel", "Add vessel")}</h3>
             <div className="form-grid">
               <label>
-                {t("page.estimates.vessel", "船舶")}
+                {t("page.estimates.vessel", "Vessel")}
                 <select value={vesselId} onChange={(e) => setVesselId(e.target.value)} disabled={!availableVessels.length}>
                   {!availableVessels.length ? (
-                    <option value="">{t("page.pool.no_available", "无可加入船舶（均已在池中）")}</option>
+                    <option value="">{t("page.pool.no_available", "No vessels available (all already in pools)")}</option>
                   ) : (
                     availableVessels.map((v) => (
                       <option key={v.id} value={v.id}>
@@ -195,92 +317,83 @@ export default function PoolPage() {
                 </select>
               </label>
               <label>
-                {t("page.pool.points", "点数")}
+                {t("page.pool.points", "Points")}
                 <input value={points} onChange={(e) => setPoints(e.target.value)} />
               </label>
             </div>
             <button className="btn btn-primary" type="submit" disabled={!availableVessels.length || !vesselId}>
-              {t("common.add", "加入")}
+              {t("common.add", "Add")}
             </button>
-            <table className="table" style={{ marginTop: "1rem" }}>
-              <thead>
-                <tr>
-                  <th>{t("page.pool.vessel", "船舶")}</th>
-                  <th>{t("page.pool.points", "点数")}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {current.vessels.map((v) => (
-                  <tr key={v.id}>
-                    <td>{vessels.find((x) => x.id === v.vessel_id)?.name || v.vessel_id.slice(0, 8)}</td>
-                    <td>{v.points}</td>
-                    <td>
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeVessel(v.id)}>
-                        {t("page.pool.leave", "退出")}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {!current.vessels.length ? (
-                  <tr>
-                    <td colSpan={3} className="muted">
-                      {t("common.none", "无")}
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+            <div style={{ marginTop: "1rem" }}>
+              <DataGrid<Pool["vessels"][number]>
+                columns={vesselColumns}
+                data={current.vessels}
+                rowKey={(r) => r.id}
+                onRowContextMenu={(row, _i, e) => vesselCtx.open(row)(e)}
+                storageKey="pool_vessels_grid"
+                showFooter={false}
+                emptyText={t("common.none", "None")}
+              />
+            </div>
           </form>
 
           <form className="panel" style={{ marginTop: "1rem" }} onSubmit={createPeriod}>
-            <h3 style={{ marginTop: 0 }}>{t("page.pool.period", "结算期间")}</h3>
+            <h3 style={{ marginTop: 0 }}>{t("page.pool.period", "Settlement period")}</h3>
             <div className="form-grid">
               <label>
-                {t("page.pool.label", "期间标签")}
+                {t("page.pool.label", "Label")}
                 <input value={periodLabel} onChange={(e) => setPeriodLabel(e.target.value)} />
               </label>
               <label>
-                {t("page.pool.total", "池总结果")}
+                {t("page.pool.total", "Pool total result")}
                 <input value={totalResult} onChange={(e) => setTotalResult(e.target.value)} />
               </label>
             </div>
             <button className="btn btn-primary" type="submit">
-              {t("page.pool.distribute", "计算分配")}
+              {t("page.pool.distribute", "Calculate distribution")}
             </button>
-            <table className="table" style={{ marginTop: "1rem" }}>
-              <thead>
-                <tr>
-                  <th>{t("page.pool.label", "期间标签")}</th>
-                  <th>{t("page.pool.total", "池总结果")}</th>
-                  <th>{t("common.status", "状态")}</th>
-                  <th>{t("page.pool.distribution", "分配")}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {current.periods.map((p) => (
-                  <tr key={p.id}>
-                    <td>{p.label}</td>
-                    <td>{p.total_pool_result.toLocaleString()}</td>
-                    <td>{p.status}</td>
-                    <td>
-                      <code style={{ fontSize: "0.75rem" }}>{JSON.stringify(p.distribution)}</code>
-                    </td>
-                    <td>
-                      {p.status !== "settled" ? (
-                        <button type="button" className="btn btn-sm" onClick={() => settle(p.id)}>
-                          {t("page.pool.settle", "结算")}
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div style={{ marginTop: "1rem" }}>
+              <DataGrid<Pool["periods"][number]>
+                columns={periodColumns}
+                data={current.periods}
+                rowKey={(r) => r.id}
+                onRowContextMenu={(row, _i, e) => periodCtx.open(row)(e)}
+                storageKey="pool_periods_grid"
+                showFooter={false}
+                emptyText={t("common.none", "None")}
+              />
+            </div>
           </form>
         </>
       ) : null}
+
+      <RecordModal
+        open={creating}
+        title={t("page.pool.create_title", "New pool")}
+        onClose={() => setCreating(false)}
+        onSave={createPool}
+        canDelete={false}
+        saving={savingPool}
+        size="md"
+      >
+        <div className="form-grid">
+          <label className="field">
+            <span>{t("common.name", "Name")}</span>
+            <input className="input" value={name} required onChange={(e) => setName(e.target.value)} />
+          </label>
+        </div>
+      </RecordModal>
+
+      <ContextMenu controller={vesselCtx} items={vesselMenuItems} />
+      <ContextMenu controller={periodCtx} items={periodMenuItems} />
     </AppShell>
+  );
+}
+
+export default function PoolPage() {
+  return (
+    <Suspense fallback={null}>
+      <PoolPageInner />
+    </Suspense>
   );
 }

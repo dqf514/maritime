@@ -6,6 +6,8 @@ import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
 import { RecordModal } from "@/components/RecordModal";
 import { StateView } from "@/components/StateView";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef as GridColumnDef } from "@/components/grid/types";
 import { API_BASE, apiDelete, apiGet, apiPatch, apiPost, apiUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -93,6 +95,58 @@ export function CertOverview({ onOpenVessel }: { onOpenVessel: (vesselId: string
     load();
   }, [load]);
 
+  const certColumns: GridColumnDef<VesselCert>[] = [
+    { key: "vessel_name", title: t("ship.cert.col_vessel", "Vessel"), width: 140, value: (c) => c.vessel_name || "—" },
+    {
+      key: "cert",
+      title: t("ship.cert.col_cert", "Certificate"),
+      minWidth: 200,
+      value: (c) => c.cert_name,
+      render: (_v, c) => (
+        <>
+          <strong>{c.cert_name}</strong>
+          <div className="muted">{c.cert_code}</div>
+        </>
+      ),
+    },
+    { key: "issued_on", title: t("ship.cert.col_issued", "Issued"), width: 100, value: (c) => c.issued_on || "—" },
+    { key: "expires_on", title: t("ship.cert.col_expires", "Expires"), width: 100, value: (c) => c.expires_on || "—" },
+    {
+      key: "days",
+      title: t("ship.cert.col_days", "Days left"),
+      width: 100,
+      align: "right",
+      value: (c) => certDays(c),
+      render: (_v, c) => {
+        const days = certDays(c);
+        if (days == null) return "—";
+        if (days < 0) return <span className="overdue">{t("ship.cert.expired_days", "Expired {n}d ago", { n: -days })}</span>;
+        return days;
+      },
+    },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (c) => c.status,
+      render: (_v, c) => <span className={`pill ${c.status}`}>{t(`ship.cert.status_${c.status}`, c.status)}</span>,
+    },
+    {
+      key: "version",
+      title: t("ship.cert.col_version", "Current file"),
+      minWidth: 160,
+      value: (c) => c.current_file?.file_name || "",
+      render: (_v, c) =>
+        c.current_file ? (
+          <span title={c.current_file.file_name}>
+            v{c.current_file.version_no} · {c.current_file.file_name}
+          </span>
+        ) : (
+          <span className="muted">{t("ship.cert.no_file", "Not uploaded")}</span>
+        ),
+    },
+  ];
+
   return (
     <div className="panel">
       <div className="desk-toolbar cert-filter-bar">
@@ -120,56 +174,14 @@ export function CertOverview({ onOpenVessel }: { onOpenVessel: (vesselId: string
         emptyText={t("ship.cert.empty", "没有符合条件的证书")}
         onRetry={load}
       >
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>{t("ship.cert.col_vessel", "船舶")}</th>
-              <th>{t("ship.cert.col_cert", "证书")}</th>
-              <th>{t("ship.cert.col_issued", "签发日期")}</th>
-              <th>{t("ship.cert.col_expires", "到期日期")}</th>
-              <th>{t("ship.cert.col_days", "剩余天数")}</th>
-              <th>{t("common.status", "状态")}</th>
-              <th>{t("ship.cert.col_version", "当前版本")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((c) => {
-              const days = certDays(c);
-              return (
-                <tr key={c.id} onClick={() => c.vessel_id && onOpenVessel(c.vessel_id)}>
-                  <td>{c.vessel_name || "—"}</td>
-                  <td>
-                    <strong>{c.cert_name}</strong>
-                    <div className="muted">{c.cert_code}</div>
-                  </td>
-                  <td>{c.issued_on || "—"}</td>
-                  <td>{c.expires_on || "—"}</td>
-                  <td>
-                    {days == null ? (
-                      "—"
-                    ) : days < 0 ? (
-                      <span className="overdue">{t("ship.cert.expired_days", "已过期 {n} 天", { n: -days })}</span>
-                    ) : (
-                      days
-                    )}
-                  </td>
-                  <td>
-                    <span className={`pill ${c.status}`}>{t(`ship.cert.status_${c.status}`, c.status)}</span>
-                  </td>
-                  <td>
-                    {c.current_file ? (
-                      <span title={c.current_file.file_name}>
-                        v{c.current_file.version_no} · {c.current_file.file_name}
-                      </span>
-                    ) : (
-                      <span className="muted">{t("ship.cert.no_file", "未上传")}</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <DataGrid<VesselCert>
+          columns={certColumns}
+          data={rows}
+          rowKey={(c) => c.id}
+          onRowClick={(c) => c.vessel_id && onOpenVessel(c.vessel_id)}
+          storageKey="ship_cert_grid"
+          emptyText={t("ship.cert.empty", "没有符合条件的证书")}
+        />
       </StateView>
     </div>
   );

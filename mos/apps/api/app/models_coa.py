@@ -36,6 +36,9 @@ from app.db import Base
 COA_RATE_BASES = ("per_voyage", "per_mt", "lumpsum")
 COA_QTY_UNITS = ("mt", "bbl")
 COA_STATUSES = ("draft", "active", "completed", "cancelled")
+# bill_by: which quantity basis the freight is billed on
+#   weight → mt (deadweight), measure → m3/cbm (measurement), volume → bbl
+COA_BILL_BY = ("weight", "measure", "volume")
 
 
 class CoaContract(Base):
@@ -56,9 +59,13 @@ class CoaContract(Base):
     rate: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
     cargo_spec: Mapped[str | None] = mapped_column(Text)
+    # Cargo CP terms (billable quantity basis + MOL window + overage premium)
+    bill_by: Mapped[str | None] = mapped_column(String(16))  # weight|measure|volume
+    tolerance_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # ±pct MOL on total_qty / leg qty
+    overage_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # rate uplift % beyond tolerance max
     status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)  # draft|active|completed|cancelled
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -80,7 +87,7 @@ class CoaItinerary(Base):
     allocated_qty: Mapped[Decimal] = mapped_column(Numeric(18, 3), default=Decimal("0"), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class CoaAllocation(Base):

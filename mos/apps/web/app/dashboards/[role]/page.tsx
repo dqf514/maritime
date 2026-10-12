@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -213,66 +214,72 @@ export default function RoleDashboardPage() {
   const wall = (
     <div ref={rootRef} className={`dash-wall ${fullscreen ? "is-fs" : ""}`}>
       <header className="dash-top">
-        <div>
-          <p className="dash-eyebrow">MariOS · {role}</p>
-          <div className="dash-title-row" ref={switcherRef}>
-            <h1>{snap?.title || t("page.dash.loading", "Loading wall…")}</h1>
-            {screens.length > 1 ? (
-              <div className={`dash-switcher ${menuOpen ? "open" : ""}`}>
-                <button
-                  type="button"
-                  className="dash-switcher-btn"
-                  aria-haspopup="listbox"
-                  aria-expanded={menuOpen}
-                  aria-label={t("page.dash.switch", "切换数据看板")}
-                  onClick={() => setMenuOpen((o) => !o)}
-                >
-                  <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden>
-                    <path fill="currentColor" d="M5.3 7.3a1 1 0 0 1 1.4 0L10 10.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 0-1.4z" />
-                  </svg>
+        <PageHeader
+          left={<p className="dash-eyebrow">MariOS · {role}</p>}
+          breadcrumb={[
+            { label: t("nav.dashboards", "Live dashboards"), href: "/dashboards" },
+            { label: snap?.title || role },
+          ]}
+          title={snap?.title || t("page.dash.loading", "Loading wall…")}
+          subtitle={snap?.subtitle}
+          actions={
+            <>
+              {screens.length > 1 ? (
+                <div className={`dash-switcher ${menuOpen ? "open" : ""}`} ref={switcherRef}>
+                  <button
+                    type="button"
+                    className="dash-switcher-btn"
+                    aria-haspopup="listbox"
+                    aria-expanded={menuOpen}
+                    aria-label={t("page.dash.switch", "Switch dashboard")}
+                    onClick={() => setMenuOpen((o) => !o)}
+                  >
+                    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden>
+                      <path fill="currentColor" d="M5.3 7.3a1 1 0 0 1 1.4 0L10 10.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 0-1.4z" />
+                    </svg>
+                  </button>
+                  {menuOpen ? (
+                    <ul className="dash-switcher-menu" role="listbox">
+                      {screens.map((s) => (
+                        <li key={s.role} role="option" aria-selected={s.role === role}>
+                          <button
+                            type="button"
+                            className={s.role === role ? "active" : ""}
+                            onClick={() => switchScreen(s.href, s.role)}
+                          >
+                            <i style={{ background: s.accent }} />
+                            <span>
+                              <strong>{s.title}</strong>
+                              <small>{s.subtitle}</small>
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="dash-top-actions">
+                <div className="dash-clock">
+                  <strong>{clock}</strong>
+                  <span>{headerMeta}</span>
+                </div>
+                <button type="button" className="dash-btn" onClick={load}>
+                  {t("page.dash.refresh", "Refresh")}
                 </button>
-                {menuOpen ? (
-                  <ul className="dash-switcher-menu" role="listbox">
-                    {screens.map((s) => (
-                      <li key={s.role} role="option" aria-selected={s.role === role}>
-                        <button
-                          type="button"
-                          className={s.role === role ? "active" : ""}
-                          onClick={() => switchScreen(s.href, s.role)}
-                        >
-                          <i style={{ background: s.accent }} />
-                          <span>
-                            <strong>{s.title}</strong>
-                            <small>{s.subtitle}</small>
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
+                <button type="button" className="dash-btn primary" onClick={toggleFs}>
+                  {fullscreen ? t("page.dash.exit_fs", "Exit fullscreen") : t("page.dash.fullscreen", "Fullscreen")}
+                </button>
+                <Link href="/dashboards" className="dash-btn">
+                  {t("page.dash.all", "All walls")}
+                </Link>
+                <Link href="/home" className="dash-btn">
+                  {t("page.dash.workbench", "Workbench")}
+                </Link>
               </div>
-            ) : null}
-          </div>
-          <p>{snap?.subtitle}</p>
-        </div>
-        <div className="dash-top-actions">
-          <div className="dash-clock">
-            <strong>{clock}</strong>
-            <span>{headerMeta}</span>
-          </div>
-          <button type="button" className="dash-btn" onClick={load}>
-            {t("page.dash.refresh", "刷新")}
-          </button>
-          <button type="button" className="dash-btn primary" onClick={toggleFs}>
-            {fullscreen ? t("page.dash.exit_fs", "退出全屏") : t("page.dash.fullscreen", "全屏")}
-          </button>
-          <Link href="/dashboards" className="dash-btn">
-            {t("page.dash.all", "全部数据看板")}
-          </Link>
-          <Link href="/home" className="dash-btn">
-            {t("page.dash.workbench", "工作台")}
-          </Link>
-        </div>
+            </>
+          }
+        />
       </header>
 
       {error ? <p className="dash-error">{error}</p> : null}
@@ -282,7 +289,7 @@ export default function RoleDashboardPage() {
           <article key={k.label} className={`dash-kpi tone-${k.tone || "neutral"}`}>
             <span>
               {k.label}
-              {k.synthetic ? <small className="dash-kpi-demo">{t("page.dash.synthetic", "演示")}</small> : null}
+              {k.synthetic ? <small className="dash-kpi-demo">{t("page.dash.synthetic", "Demo")}</small> : null}
             </span>
             <strong>
               {k.value}

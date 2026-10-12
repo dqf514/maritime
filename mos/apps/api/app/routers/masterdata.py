@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -14,14 +15,18 @@ from app.schemas_wave1 import (
     CounterpartyContactOut,
     CounterpartyIn,
     CounterpartyOut,
+    CounterpartyUpdate,
     ExchangeRateIn,
     ExchangeRateOut,
     PortIn,
     PortOut,
     VesselIn,
     VesselOut,
+    VesselUpdate,
 )
 from app.security import AuthContext, require_module
+from app.services.field_perms import assert_fields_writable, filter_read, get_field_modes
+from app.services.optimistic_lock import assert_fresh
 from app.services.recycle import soft_delete
 
 router = APIRouter(prefix="/masterdata", tags=["Master Data"])
@@ -89,19 +94,28 @@ def get_vessel(
     row = db.get(Vessel, vessel_id)
     if not row or row.tenant_id != auth.tenant_id or row.deleted_at:
         raise HTTPException(404, "Vessel not found")
+    modes = get_field_modes(db, auth.tenant_id, "vessel", auth.roles)
+    payload = VesselOut.model_validate(row, from_attributes=True).model_dump(mode="json")
+    filtered = filter_read(payload, modes)
+    # hidden 字段需从 JSON 中消失：绕过 response_model（其会用默认值补齐缺省字段）
+    if len(filtered) != len(payload):
+        return JSONResponse(content=filtered)
     return VesselOut.model_validate(row, from_attributes=True)
 
 
 @router.patch("/vessels/{vessel_id}", response_model=VesselOut)
 def update_vessel(
     vessel_id: UUID,
-    body: VesselIn,
+    body: VesselUpdate,
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
     row = db.get(Vessel, vessel_id)
     if not row or row.tenant_id != auth.tenant_id or row.deleted_at:
         raise HTTPException(404, "Vessel not found")
+    assert_fresh(row, body.expected_updated_at)
+    payload_fields = set(body.model_fields_set) - {"expected_updated_at"} or set(body.model_dump().keys())
+    assert_fields_writable(db, auth.tenant_id, "vessel", auth.roles, payload_fields)
     for k, v in body.model_dump().items():
         setattr(row, k, v)
     row.updated_at = datetime.now(timezone.utc)
@@ -244,19 +258,27 @@ def get_counterparty(
     row = db.get(Counterparty, party_id)
     if not row or row.tenant_id != auth.tenant_id or row.deleted_at:
         raise HTTPException(404, "Counterparty not found")
+    modes = get_field_modes(db, auth.tenant_id, "counterparty", auth.roles)
+    payload = CounterpartyOut.model_validate(row, from_attributes=True).model_dump(mode="json")
+    filtered = filter_read(payload, modes)
+    if len(filtered) != len(payload):
+        return JSONResponse(content=filtered)
     return CounterpartyOut.model_validate(row, from_attributes=True)
 
 
 @router.patch("/counterparties/{party_id}", response_model=CounterpartyOut)
 def update_counterparty(
     party_id: UUID,
-    body: CounterpartyIn,
+    body: CounterpartyUpdate,
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
     row = db.get(Counterparty, party_id)
     if not row or row.tenant_id != auth.tenant_id or row.deleted_at:
         raise HTTPException(404, "Counterparty not found")
+    assert_fresh(row, body.expected_updated_at)
+    payload_fields = set(body.model_fields_set) - {"expected_updated_at"} or set(body.model_dump().keys())
+    assert_fields_writable(db, auth.tenant_id, "counterparty", auth.roles, payload_fields)
     for k, v in body.model_dump().items():
         setattr(row, k, v)
     row.updated_at = datetime.now(timezone.utc)

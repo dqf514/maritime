@@ -56,6 +56,7 @@ def _batch_out(row: PaymentBatch) -> dict[str, Any]:
         "approval_user_id": str(row.approval_user_id) if row.approval_user_id else None,
         "approved_at": row.approved_at.isoformat() if row.approved_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 

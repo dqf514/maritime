@@ -4,14 +4,22 @@
 // 报表数字统一走 fmt 千分位格式化；日记账支持草稿→过账→冲销。
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { SavedViews } from "@/components/SavedViews";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Toolbar } from "@/components/Toolbar";
+import { Tabs, type TabItem } from "@/components/Tabs";
 import { StateView } from "@/components/StateView";
 import { useToast } from "@/components/ToastProvider";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { fmt } from "@/lib/fmt";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -27,6 +35,7 @@ type Account = {
   parent_code: string | null;
   currency: string;
   is_active: boolean;
+  updated_at?: string | null;
 };
 
 type Journal = {
@@ -38,6 +47,7 @@ type Journal = {
   total_credit: number;
   status: string;
   posted_at: string | null;
+  updated_at?: string | null;
   entries: Array<{ account_code?: string; account?: string; debit: string | number; credit: string | number; reference?: string; description?: string }>;
 };
 
@@ -56,11 +66,19 @@ const money = (v: number | null | undefined) => (v == null ? "—" : fmt(v));
 function GlPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
   const { query, setQuery } = useListQuery();
   const tab: Tab = TAB_IDS.includes(query.tab ?? "") ? (query.tab as Tab) : "accounts";
   const setTab = (id: Tab) => setQuery({ tab: id === "accounts" ? null : id });
 
-  const [period, setPeriod] = useState(currentPeriod());
+  const [period, setPeriodState] = useState(typeof query.period === "string" && query.period ? query.period : currentPeriod());
+  const setPeriod = useCallback(
+    (p: string) => {
+      setPeriodState(p);
+      setQuery({ period: p || null }, { resetPage: true });
+    },
+    [setQuery],
+  );
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [journals, setJournals] = useState<Journal[]>([]);
   const [stmt, setStmt] = useState<Record<string, unknown> | null>(null);
@@ -84,6 +102,10 @@ function GlPage() {
     credit_account: "",
     credit: "",
   });
+
+  // R4 行右键菜单（与工具栏同源 handler）
+  const accCtx = useContextMenu<Account>();
+  const jrCtx = useContextMenu<Journal>();
 
   const loadAccounts = useCallback(async () => {
     const pg = await apiGet("/api/v1/gl/accounts");
@@ -221,6 +243,13 @@ function GlPage() {
       { key: "parent_code", title: t("page.gl.parent", "Parent"), render: (v) => (v ? String(v) : "—") },
       { key: "currency", title: t("common.currency", "Currency") },
       { key: "is_active", title: t("common.active", "Active"), render: (v) => (v ? "✓" : "—") },
+      {
+        key: "updated_at",
+        title: t("list.last_modified", "Last modified"),
+        width: 135,
+        value: (r) => r.updated_at ?? null,
+        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
     ],
     [t],
   );
@@ -230,9 +259,30 @@ function GlPage() {
       { key: "period", title: t("page.gl.period", "Period") },
       { key: "journal_type", title: t("common.type", "Type") },
       { key: "description", title: t("common.description", "Description"), render: (v) => (v ? String(v) : "—") },
-      { key: "total_debit", title: t("page.gl.debit", "Debit"), align: "right", agg: "sum", render: (v) => money(v as number) },
-      { key: "total_credit", title: t("page.gl.credit", "Credit"), align: "right", agg: "sum", render: (v) => money(v as number) },
+      {
+        key: "total_debit",
+        title: t("page.gl.debit", "Debit"),
+        align: "right",
+        agg: "sum",
+        value: (r) => r.total_debit,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "total_credit",
+        title: t("page.gl.credit", "Credit"),
+        align: "right",
+        agg: "sum",
+        value: (r) => r.total_credit,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
       { key: "status", title: t("common.status", "Status") },
+      {
+        key: "updated_at",
+        title: t("list.last_modified", "Last modified"),
+        width: 135,
+        value: (r) => r.updated_at ?? null,
+        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
     ],
     [t],
   );
@@ -246,7 +296,8 @@ function GlPage() {
         title: t("page.gl.balance", "Balance"),
         align: "right",
         agg: "sum",
-        render: (v) => money(v as number),
+        value: (r) => r.balance,
+        render: (v) => <Num v={v as number} digits={2} />,
       },
     ],
     [t],
@@ -256,12 +307,92 @@ function GlPage() {
     () => [
       { key: "account_code", title: t("page.gl.code", "Code"), sticky: true },
       { key: "account_name", title: t("common.name", "Name") },
-      { key: "debit", title: t("page.gl.debit", "Debit"), align: "right", agg: "sum", render: (v) => money(v as number) },
-      { key: "credit", title: t("page.gl.credit", "Credit"), align: "right", agg: "sum", render: (v) => money(v as number) },
-      { key: "balance", title: t("page.gl.balance", "Balance"), align: "right", render: (v) => money(v as number) },
+      {
+        key: "debit",
+        title: t("page.gl.debit", "Debit"),
+        align: "right",
+        agg: "sum",
+        value: (r) => r.debit ?? 0,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "credit",
+        title: t("page.gl.credit", "Credit"),
+        align: "right",
+        agg: "sum",
+        value: (r) => r.credit ?? 0,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "balance",
+        title: t("page.gl.balance", "Balance"),
+        align: "right",
+        value: (r) => r.balance,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
     ],
     [t],
   );
+
+  function copyId(id: string) {
+    void navigator.clipboard?.writeText(id).then(() => {
+      toast.success(t("common.copied", "Copied"));
+    });
+  }
+
+  function exportAccounts(rows: Account[]) {
+    downloadCsv(
+      "gl-accounts",
+      ["id", "account_code", "account_name", "account_type", "parent_code", "currency", "is_active"],
+      rows.map((r) => [r.id, r.account_code, r.account_name, r.account_type, r.parent_code ?? "", r.currency, r.is_active ? "1" : "0"]),
+    );
+  }
+
+  function exportJournals(rows: Journal[]) {
+    downloadCsv(
+      "gl-journals",
+      ["id", "period", "journal_type", "description", "total_debit", "total_credit", "status"],
+      rows.map((r) => [r.id, r.period, r.journal_type, r.description ?? "", r.total_debit, r.total_credit, r.status]),
+    );
+  }
+
+  const accountMenuItems = (row: Account): ContextMenuItem[] => [
+    { key: "open", label: t("common.open", "Open"), onClick: () => openAccount(row) },
+    { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => copyId(row.id) },
+    {
+      key: "export",
+      label: t("common.export_csv", "Export CSV"),
+      onClick: () => exportAccounts([row]),
+    },
+  ];
+
+  const journalMenuItems = (row: Journal): ContextMenuItem[] => [
+    { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => copyId(row.id) },
+    {
+      key: "export",
+      label: t("common.export_csv", "Export CSV"),
+      onClick: () => exportJournals([row]),
+    },
+    { key: "div", divider: true, label: "" },
+    ...(row.status === "draft"
+      ? [
+          {
+            key: "post",
+            label: t("page.gl.post", "Post"),
+            onClick: () => postJournal(row.id),
+          } as ContextMenuItem,
+        ]
+      : []),
+    ...(row.status === "posted"
+      ? [
+          {
+            key: "reverse",
+            label: t("page.gl.reverse", "Reverse"),
+            onClick: () => reverseJournal(row.id),
+          } as ContextMenuItem,
+        ]
+      : []),
+  ];
 
   // 报表数据整形
   const stmtRows = useMemo<StmtRow[]>(() => {
@@ -319,42 +450,42 @@ function GlPage() {
     return null;
   }, [stmt, tab, t]);
 
-  const tabs: Array<{ id: Tab; label: string }> = [
-    { id: "accounts", label: t("page.gl.tab_accounts", "Chart of Accounts") },
-    { id: "journals", label: t("page.gl.tab_journals", "Journal Entries") },
-    { id: "trial", label: t("page.gl.tab_trial", "Trial Balance") },
-    { id: "balance", label: t("page.gl.tab_balance", "Balance Sheet") },
-    { id: "income", label: t("page.gl.tab_income", "Income Statement") },
-    { id: "cashflow", label: t("page.gl.tab_cashflow", "Cashflow") },
+  const tabs: TabItem[] = [
+    { key: "accounts", label: t("page.gl.tab_accounts", "Chart of Accounts") },
+    { key: "journals", label: t("page.gl.tab_journals", "Journal Entries") },
+    { key: "trial", label: t("page.gl.tab_trial", "Trial Balance") },
+    { key: "balance", label: t("page.gl.tab_balance", "Balance Sheet") },
+    { key: "income", label: t("page.gl.tab_income", "Income Statement") },
+    { key: "cashflow", label: t("page.gl.tab_cashflow", "Cashflow") },
   ];
 
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[
+          { label: t("nav.finance", "Finance"), href: "/finance" },
+          { label: t("page.gl.title", "GL management") },
+        ]}
         title={t("page.gl.title", "GL management")}
         subtitle={t("page.gl.sub", "Chart of accounts, journals, trial balance and financial statements.")}
+        actions={<SavedViews storageKey="finance_gl" onApply={(q) => router.replace(`/finance/gl${q}`)} />}
       />
 
-      <div className="desk-tabs">
-        {tabs.map((tb) => (
-          <button key={tb.id} type="button" className={`desk-tab${tab === tb.id ? " active" : ""}`} onClick={() => setTab(tb.id)}>
-            {tb.label}
-          </button>
-        ))}
-      </div>
+      <Tabs items={tabs} value={tab} onChange={(k) => setTab(k as Tab)} variant="line" />
 
       {tab === "accounts" ? (
         <div className="panel">
-          <div className="desk-toolbar" style={{ marginTop: 0 }}>
+          <Toolbar>
             <button className="btn btn-primary btn-sm" type="button" onClick={() => openAccount(null)}>
               {t("page.gl.new_account", "New account")}
             </button>
-          </div>
+          </Toolbar>
           <DataGrid<Account>
             columns={accountCols}
             data={accounts}
             rowKey={(r) => r.id}
             onRowClick={(r) => openAccount(r)}
+            onRowContextMenu={(row, _i, e) => accCtx.open(row)(e)}
             storageKey="gl.accounts"
             emptyText={t("common.empty", "No records")}
           />
@@ -363,19 +494,24 @@ function GlPage() {
 
       {tab === "journals" ? (
         <div className="panel">
-          <div className="desk-toolbar" style={{ marginTop: 0 }}>
-            <label>
-              {t("page.gl.period", "Period")}
-              <input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" style={{ width: 110 }} />
-            </label>
+          <Toolbar
+            right={
+              <label>
+                {t("page.gl.period", "Period")}
+                <input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" style={{ width: 110 }} />
+              </label>
+            }
+          >
             <button className="btn btn-primary btn-sm" type="button" onClick={() => setJrOpen(true)}>
               {t("page.gl.new_journal", "New journal")}
             </button>
-          </div>
+            <StatusLegend statuses={["draft", "posted", "reversed"]} />
+          </Toolbar>
           <DataGrid<Journal>
             columns={journalCols}
             data={journals}
             rowKey={(r) => r.id}
+            onRowContextMenu={(row, _i, e) => jrCtx.open(row)(e)}
             storageKey="gl.journals"
             emptyText={t("common.empty", "No records")}
           />
@@ -404,15 +540,18 @@ function GlPage() {
 
       {["trial", "balance", "income", "cashflow"].includes(tab) ? (
         <div className="panel">
-          <div className="desk-toolbar" style={{ marginTop: 0 }}>
-            <label>
-              {t("page.gl.period", "Period")}
-              <input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" style={{ width: 110 }} />
-            </label>
+          <Toolbar
+            right={
+              <label>
+                {t("page.gl.period", "Period")}
+                <input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" style={{ width: 110 }} />
+              </label>
+            }
+          >
             <button className="btn btn-primary btn-sm" type="button" onClick={() => loadStatement()}>
               {t("common.refresh", "Refresh")}
             </button>
-          </div>
+          </Toolbar>
           {stmtSummary ? (
             <div className="desk-toolbar" style={{ justifyContent: "flex-start", gap: "var(--gap-lg)" }}>
               {stmtSummary.map((s, i) => (
@@ -433,6 +572,9 @@ function GlPage() {
           </StateView>
         </div>
       ) : null}
+
+      <ContextMenu controller={accCtx} items={accountMenuItems} />
+      <ContextMenu controller={jrCtx} items={journalMenuItems} />
 
       <RecordModal
         open={accOpen}

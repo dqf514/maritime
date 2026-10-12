@@ -1,13 +1,21 @@
 "use client";
 
+import { Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { PageHeader } from "@/components/PageHeader";
 import { PageGuide } from "@/components/PageGuide";
+import { SavedViews } from "@/components/SavedViews";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Tabs, type TabItem } from "@/components/Tabs";
+import { Toolbar } from "@/components/Toolbar";
 import { StateView } from "@/components/StateView";
 import { apiGet, type ExceptionItem, type ExceptionScan } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 
 type SeverityFilter = "all" | "critical" | "warning";
 
@@ -25,16 +33,34 @@ const KIND_FALLBACKS: Record<string, string> = {
   dq_issue: "数据质量问题",
 };
 
-export default function ExceptionsPage() {
+function ExceptionsPageInner() {
   const { t, locale } = useI18n();
   const router = useRouter();
+  const { query, setQuery } = useListQuery();
+  const severity: SeverityFilter = query.severity === "critical" || query.severity === "warning" ? query.severity : "all";
+  const kind = typeof query.kind === "string" && query.kind ? query.kind : "all";
   const [scan, setScan] = useState<ExceptionScan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [severity, setSeverity] = useState<SeverityFilter>("all");
-  const [kind, setKind] = useState("all");
   const [scannedAt, setScannedAt] = useState<Date | null>(null);
   const [now, setNow] = useState(0);
+  const rowCtx = useContextMenu<ExceptionItem>();
+
+  function exportRows(selected: ExceptionItem[]) {
+    downloadCsv(
+      "exceptions",
+      ["kind", "severity", "title", "detail", "value", "entity_type", "entity_id", "detected_at"],
+      selected.map((r) => [r.kind, r.severity, r.title, r.detail, r.value, r.entity_type, r.entity_id, r.detected_at]),
+    );
+  }
+
+  function rowMenuItems(target: ExceptionItem): ContextMenuItem[] {
+    return [
+      { key: "open", label: t("common.open", "Open"), onClick: () => target.href && router.push(target.href) },
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.entity_id) },
+      { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportRows([target]) },
+    ];
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,7 +70,7 @@ export default function ExceptionsPage() {
       setScannedAt(new Date());
       setNow(Date.now());
     } catch (e: any) {
-      setError(e?.message || t("common.failed", "加载失败"));
+      setError(e?.message || t("common.failed", "Failed"));
     } finally {
       setLoading(false);
     }
@@ -74,9 +100,9 @@ export default function ExceptionsPage() {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "";
     const diff = (now || d.getTime()) - d.getTime();
-    if (diff < 60_000) return t("notify.just_now", "刚刚");
-    if (diff < 3_600_000) return t("notify.minutes_ago", "{n} 分钟前", { n: Math.floor(diff / 60_000) });
-    if (diff < 86_400_000) return t("notify.hours_ago", "{n} 小时前", { n: Math.floor(diff / 3_600_000) });
+    if (diff < 60_000) return t("notify.just_now", "Just now");
+    if (diff < 3_600_000) return t("notify.minutes_ago", "{n} minutes ago", { n: Math.floor(diff / 60_000) });
+    if (diff < 86_400_000) return t("notify.hours_ago", "{n} hours ago", { n: Math.floor(diff / 3_600_000) });
     return d.toLocaleDateString(locale.startsWith("zh") ? "zh-CN" : "en-US", { month: "2-digit", day: "2-digit" });
   }
 
@@ -85,10 +111,11 @@ export default function ExceptionsPage() {
   return (
     <AppShell>
       <PageHeader
-        title={t("page.exceptions.title", "异常管理中心")}
-        subtitle={`${t("page.exceptions.sub", "跨模块业务异常扫描，点击条目直达处理页面。")}${
+        breadcrumb={[{ label: t("nav.exceptions", "Exceptions") }]}
+        title={t("page.exceptions.title", "Exception centre")}
+        subtitle={`${t("page.exceptions.sub", "Cross-module business exceptions — click a row to jump to the handling page.")}${
           scannedAt
-            ? ` · ${t("page.exceptions.scanned_at", "扫描于 {time}", {
+            ? ` · ${t("page.exceptions.scanned_at", "Scanned at {time}", {
                 time: scannedAt.toLocaleTimeString(locale.startsWith("zh") ? "zh-CN" : "en-US"),
               })}`
             : ""
@@ -96,65 +123,68 @@ export default function ExceptionsPage() {
         actions={
           <>
             <PageGuide pageKey="exceptions" />
-            <button type="button" className="btn btn-ghost" onClick={load} disabled={loading}>
-              {t("page.exceptions.refresh", "刷新")}
-            </button>
+            <SavedViews storageKey="exceptions_list" onApply={(q) => router.replace(`/exceptions${q}`)} />
           </>
         }
       />
-
-      <StateView loading={loading && !scan} error={error} empty={false} onRetry={load}>
-        <div className="exc-summary">
-          <span className="exc-badge critical">
-            {t("page.exceptions.critical_n", "严重 {n}", { n: summary?.critical ?? 0 })}
-          </span>
-          <span className="exc-badge warning">
-            {t("page.exceptions.warning_n", "提醒 {n}", { n: summary?.warning ?? 0 })}
-          </span>
-          <span className="exc-badge total">{t("page.exceptions.total_n", "共 {n} 项", { n: summary?.total ?? 0 })}</span>
-        </div>
-
-        <div className="page-tabs" role="tablist">
-          {(["all", "critical", "warning"] as SeverityFilter[]).map((s) => (
-            <button
-              key={s}
-              type="button"
-              role="tab"
-              aria-selected={severity === s}
-              className={`page-tab ${severity === s ? "active" : ""}`}
-              onClick={() => setSeverity(s)}
-            >
-              {s === "all"
-                ? t("page.exceptions.all", "全部")
-                : s === "critical"
-                  ? t("page.exceptions.critical", "严重")
-                  : t("page.exceptions.warning", "提醒")}
-            </button>
-          ))}
+      <Toolbar
+        filterCount={(severity !== "all" ? 1 : 0) + (kind !== "all" ? 1 : 0)}
+        onClearFilters={() => setQuery({ severity: null, kind: null })}
+        right={
           <select
-            className="exc-kind-select"
+            className="input input-sm"
             value={kind}
-            onChange={(e) => setKind(e.target.value)}
-            aria-label={t("page.exceptions.kind_filter", "异常类型")}
+            onChange={(e) => setQuery({ kind: e.target.value === "all" ? null : e.target.value })}
+            aria-label={t("page.exceptions.kind_filter", "Kind")}
           >
-            <option value="all">{t("page.exceptions.kind_all", "全部类型")}</option>
+            <option value="all">{t("page.exceptions.kind_all", "All kinds")}</option>
             {kinds.map((k) => (
               <option key={k} value={k}>
                 {kindLabel(k)}
               </option>
             ))}
           </select>
+        }
+      >
+        <button type="button" className="btn btn-sm" onClick={load} disabled={loading} title={t("common.refresh", "Refresh")}>
+          ↻
+        </button>
+      </Toolbar>
+
+      <StateView loading={loading && !scan} error={error} empty={false} onRetry={load}>
+        <div className="exc-summary">
+          <span className="exc-badge critical">
+            {t("page.exceptions.critical_n", "Critical {n}", { n: summary?.critical ?? 0 })}
+          </span>
+          <span className="exc-badge warning">
+            {t("page.exceptions.warning_n", "Warning {n}", { n: summary?.warning ?? 0 })}
+          </span>
+          <span className="exc-badge total">{t("page.exceptions.total_n", "{n} total", { n: summary?.total ?? 0 })}</span>
         </div>
+
+        <Tabs
+          items={
+            [
+              { key: "all", label: t("page.exceptions.all", "All") },
+              { key: "critical", label: t("page.exceptions.critical", "Critical") },
+              { key: "warning", label: t("page.exceptions.warning", "Warning") },
+            ] satisfies TabItem[]
+          }
+          value={severity}
+          onChange={(k) => setQuery({ severity: k === "all" ? null : k, kind: kind === "all" ? null : kind })}
+          variant="pill"
+        />
 
         <StateView
           loading={false}
           empty={!items.length}
           emptyText={
             severity === "all" && kind === "all"
-              ? t("page.exceptions.empty", "未发现异常，业务运行正常")
-              : t("page.exceptions.empty_filtered", "当前筛选条件下没有异常")
+              ? t("page.exceptions.empty", "No exceptions detected. All clear.")
+              : t("page.exceptions.empty_filtered", "No exceptions match the current filters")
           }
         >
+          <StatusLegend statuses={["critical", "warning"]} />
           <div className="exc-list">
             {items.map((item: ExceptionItem, i) => (
               <button
@@ -162,6 +192,7 @@ export default function ExceptionsPage() {
                 type="button"
                 className={`exc-row ${item.severity}`}
                 onClick={() => item.href && router.push(item.href)}
+                onContextMenu={rowCtx.open(item)}
               >
                 <span className="exc-row-bar" aria-hidden />
                 <span className="exc-row-main">
@@ -180,6 +211,16 @@ export default function ExceptionsPage() {
           </div>
         </StateView>
       </StateView>
+
+      <ContextMenu controller={rowCtx} items={rowMenuItems} />
     </AppShell>
+  );
+}
+
+export default function ExceptionsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ExceptionsPageInner />
+    </Suspense>
   );
 }

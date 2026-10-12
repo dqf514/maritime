@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import date, datetime
@@ -37,6 +38,19 @@ from app.services.tenant_guard import scoped_get, scoped_query
 router = APIRouter(tags=["Exports"])
 
 MAX_ROWS = 5000
+
+# D6 公式注入防护：= + @ 制表/回车开头，或非纯数字的 - 开头 → 加撇号（与 lib/csv.ts 同规则）
+_FORMULA_PREFIX = re.compile(r"^[=+@\t\r]")
+
+
+def _guard_cell(value: Any) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+    if _FORMULA_PREFIX.match(value) or (
+        value.startswith("-") and not re.fullmatch(r"-\d+(?:\.\d+)?", value)
+    ):
+        return "'" + value
+    return value
 
 
 def _d(value: date | datetime | None) -> str:
@@ -213,9 +227,9 @@ def export_csv(
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\r\n")
     writer.writerow(headers)
-    writer.writerows(rows)
+    writer.writerows([[_guard_cell(c) for c in row] for row in rows])
     content = "\ufeff" + buf.getvalue()
-    filename = f"{entity}_{date.today().strftime('%Y%m%d')}.csv"
+    filename = f"{entity}_{date.today().strftime('%Y%m%d_%H%M%S')}.csv"
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",

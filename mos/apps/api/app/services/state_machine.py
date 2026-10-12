@@ -36,7 +36,9 @@ CHARTER_TRANSITIONS = {
 VOYAGE_TRANSITIONS = {
     "planned": {"in_progress", "cancelled"},
     "in_progress": {"completed", "cancelled"},
-    "completed": set(),
+    # completed 可重开（reopen，IMOS 批量操作同款）：回 in_progress 并清 completed_at；
+    # cancelled 保持终态。
+    "completed": {"in_progress"},
     "cancelled": set(),
 }
 
@@ -196,4 +198,24 @@ CONNECTOR_TRANSITIONS = {
     "active": {"error", "deleted"},
     "error": {"active", "deleted"},
     "deleted": set(),
+}
+
+# C3-P2 期间关账：open ⇄ closed（AccountingPeriod.status）。
+PERIOD_TRANSITIONS = {
+    "open": {"closed"},
+    "closed": {"open"},
+}
+
+# C3-P2 月度计提 MACR：draft→posted→reversed。过账后只可冲销/重建，不可删除
+# （删除拦截见 services/period_close.assert_macr_deletable → 409 MACR_LOCKED）。
+ACCRUAL_TRANSITIONS = {
+    "draft": {"posted"},
+    "posted": {"reversed"},
+    "reversed": set(),
+}
+
+JOURNAL_TRANSITIONS = {
+    "draft": {"posted"},
+    "posted": {"reversed"},
+    "reversed": set(),
 }

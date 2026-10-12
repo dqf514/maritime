@@ -5,8 +5,11 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { DataTable, type ColumnDef } from "@/components/DataTable";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
 import { DateTimeInput } from "@/components/DateInput";
+import { Num } from "@/components/Num";
 import { useToast } from "@/components/ToastProvider";
 import { apiDelete, apiGet, apiList, apiPost } from "@/lib/api";
 import { fmt } from "@/lib/fmt";
@@ -49,6 +52,7 @@ export function LaytimePanel() {
   const [sofPortCallId, setSofPortCallId] = useState("");
   const [sofAllowed, setSofAllowed] = useState("");
   const [sofTerms, setSofTerms] = useState("");
+  const ctx = useContextMenu<Laytime>();
 
   const loadList = useCallback(async () => {
     const pg = await apiList<Laytime>("/api/v1/laytimes", { limit, offset: (page - 1) * limit });
@@ -208,7 +212,7 @@ export function LaytimePanel() {
         </>
       ),
     },
-    { key: "results.amount", title: t("common.amount", "Amount"), align: "right", render: (v) => fmt(v as number) },
+    { key: "results.amount", title: t("common.amount", "Amount"), align: "right", value: (r) => r.results?.amount ?? null, render: (v) => <Num v={v as number | null} digits={2} /> },
     {
       key: "actions",
       title: "",
@@ -236,6 +240,28 @@ export function LaytimePanel() {
       ),
     },
   ];
+
+  const menuItems = (row: Laytime): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = [
+      {
+        key: "open",
+        label: t("page.finance.lt_export", "计算书 / 打印"),
+        onClick: () => router.push(`/finance/laytimes/${row.id}`),
+      },
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(row.id) },
+      { key: "div", divider: true, label: "" },
+    ];
+    if (row.status === "draft" || row.status === "calculated") {
+      items.push({ key: "calc", label: t("page.estimates.calculate", "Calculate"), onClick: () => calc(row.id) });
+    }
+    if (row.status === "calculated") {
+      items.push({ key: "finalize", label: t("page.finance.finalize", "Finalize"), onClick: () => finalize(row.id) });
+    }
+    if (row.status === "finalized" || row.status === "calculated") {
+      items.push({ key: "claim", label: t("page.finance.create_claim", "Create claim"), onClick: () => claimFrom(row) });
+    }
+    return items;
+  };
 
   return (
     <>
@@ -342,19 +368,39 @@ export function LaytimePanel() {
             </button>
           </div>
         ) : null}
-        <DataTable<Laytime>
+        <DataGrid<Laytime>
           data={rows}
           columns={cols}
-          paginatable
+          rowKey={(r) => r.id}
           storageKey="finance.laytimes"
-          total={total}
-          page={page}
-          onPageChange={(p, l) => setQuery({ page: p > 1 ? p : null, limit: l === 50 ? null : l })}
           emptyText={t("common.empty", "No records")}
-          selectedIds={new Set(selected ? [selected] : [])}
           onRowClick={(r) => setSelected(r.id)}
+          onRowContextMenu={(row, _i, e) => ctx.open(row)(e)}
         />
+        <div className="desk-toolbar">
+          <button
+            className="btn btn-sm btn-ghost"
+            type="button"
+            disabled={page <= 1}
+            onClick={() => setQuery({ page: page > 2 ? page - 1 : null }, { resetPage: false })}
+          >
+            ←
+          </button>
+          <span className="muted">
+            {page} / {Math.max(1, Math.ceil(total / limit))}
+          </span>
+          <button
+            className="btn btn-sm btn-ghost"
+            type="button"
+            disabled={page * limit >= total}
+            onClick={() => setQuery({ page: page + 1 }, { resetPage: false })}
+          >
+            →
+          </button>
+        </div>
       </div>
+
+      <ContextMenu controller={ctx} items={menuItems} />
 
       <ConfirmDialog
         open={confirmDel}

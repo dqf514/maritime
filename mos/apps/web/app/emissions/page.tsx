@@ -1,10 +1,16 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { StatusLegend } from "@/components/StatusLegend";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -17,6 +23,7 @@ type Row = {
   co2_mt: number;
   cii_rating: string | null;
   period: string | null;
+  updated_at?: string | null;
 };
 type Ref = { id: string; name?: string; voyage_no?: string };
 
@@ -55,8 +62,7 @@ export default function EmissionsPage() {
     load().catch(() => setErr(t("common.failed", "Failed")));
   }, [load, t]);
 
-  async function calc(e: FormEvent) {
-    e.preventDefault();
+  async function calc() {
     try {
       const res = await apiPost("/api/v1/emissions/fueleu-calc", {
         voyage_id: form.voyage_id || null,
@@ -87,9 +93,82 @@ export default function EmissionsPage() {
     }
   }
 
+  const ctx = useContextMenu<Row>();
+
+  function exportRows(selected: Row[]) {
+    downloadCsv(
+      "emission-records",
+      ["id", "voyage_id", "vessel_id", "fo_mt", "do_mt", "co2_mt", "cii_rating", "period"],
+      selected.map((r) => [r.id, r.voyage_id ?? "", r.vessel_id ?? "", r.fo_mt, r.do_mt, r.co2_mt, r.cii_rating ?? "", r.period ?? ""]),
+    );
+  }
+
+  function menuItems(target: Row): ContextMenuItem[] {
+    return [
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.id) },
+      { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportRows([target]) },
+    ];
+  }
+
+  const columns: ColumnDef<Row>[] = [
+    {
+      key: "id",
+      title: "ID",
+      width: 110,
+      value: (r) => r.id.slice(0, 8),
+      render: (v) => String(v),
+    },
+    {
+      key: "fo_mt",
+      title: "FO",
+      width: 90,
+      align: "right",
+      value: (r) => r.fo_mt,
+      render: (v) => <Num v={v as number} digits={3} />,
+    },
+    {
+      key: "do_mt",
+      title: "DO",
+      width: 90,
+      align: "right",
+      value: (r) => r.do_mt,
+      render: (v) => <Num v={v as number} digits={3} />,
+    },
+    {
+      key: "co2_mt",
+      title: "CO₂",
+      width: 90,
+      align: "right",
+      value: (r) => r.co2_mt,
+      render: (v) => <Num v={v as number} digits={3} />,
+    },
+    {
+      key: "cii_rating",
+      title: "CII",
+      width: 80,
+      value: (r) => r.cii_rating || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+    {
+      key: "period",
+      title: "Period",
+      minWidth: 110,
+      value: (r) => r.period || "",
+      render: (v) => (v ? String(v) : "—"),
+    },
+    {
+      key: "updated_at",
+      title: t("list.last_modified", "Last modified"),
+      width: 135,
+      value: (r) => r.updated_at ?? null,
+      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+    },
+  ];
+
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.emissions", "Emissions / FuelEU") }]}
         title={t("page.emissions.title", "Emissions / FuelEU")}
         subtitle={t("page.emissions.sub", "Voyage emissions, EU ETS exposure and FuelEU intensity checks.")}
         actions={
@@ -105,7 +184,7 @@ export default function EmissionsPage() {
       />
       {err ? <p className="flash-err">{err}</p> : null}
 
-      <form className="panel" onSubmit={calc}>
+      <section className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.emissions.calc", "FuelEU / ETS calculator")}</h3>
         <div className="form-grid">
           <label>
@@ -159,10 +238,10 @@ export default function EmissionsPage() {
             <input value={form.ets_price_eur} onChange={(e) => setForm({ ...form, ets_price_eur: e.target.value })} />
           </label>
         </div>
-        <button className="btn btn-primary" type="submit">
+        <button className="btn btn-primary" type="button" onClick={() => void calc()}>
           {t("page.emissions.run", "Calculate compliance cost")}
         </button>
-      </form>
+      </section>
 
       {result ? (
         <div className="panel" style={{ marginTop: "1rem" }}>
@@ -172,12 +251,12 @@ export default function EmissionsPage() {
               EU share: <strong>{String(result.eu_share)}</strong>{" "}
               <span className="badge badge-warn">
                 {result.eu_share_source === "manual"
-                  ? t("page.emissions.share_manual", "手动 manual")
-                  : t("page.emissions.share_auto", "自动 auto")}
+                  ? t("page.emissions.share_manual", "Manual")
+                  : t("page.emissions.share_auto", "Auto")}
               </span>
               {result.borne_by === "charterer" ? (
                 <span className="badge badge-pass" style={{ marginLeft: "0.4rem" }}>
-                  {t("page.emissions.borne_charterer", "由租家承担")}
+                  {t("page.emissions.borne_charterer", "Borne by charterer")}
                 </span>
               ) : null}
             </p>
@@ -185,7 +264,7 @@ export default function EmissionsPage() {
           {result.eeoi != null ? (
             <p style={{ margin: "0 0 0.5rem" }}>
               EEOI: <strong>{Number(result.eeoi).toExponential(4)}</strong>{" "}
-              <span className="muted">{t("page.emissions.eeoi_unit", "吨CO₂/吨海里")}</span>
+              <span className="muted">{t("page.emissions.eeoi_unit", "tCO2/ton-nm")}</span>
             </p>
           ) : null}
           <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.85rem" }}>{JSON.stringify(result, null, 2)}</pre>
@@ -194,31 +273,19 @@ export default function EmissionsPage() {
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <h3 style={{ marginTop: 0 }}>{t("page.emissions.records", "Emission records")}</h3>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>FO</th>
-              <th>DO</th>
-              <th>CO₂</th>
-              <th>CII</th>
-              <th>Period</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>{r.id.slice(0, 8)}</td>
-                <td>{r.fo_mt}</td>
-                <td>{r.do_mt}</td>
-                <td>{r.co2_mt}</td>
-                <td>{r.cii_rating || "—"}</td>
-                <td>{r.period || "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <StatusLegend statuses={["A", "B", "C", "D", "E"]} />
+        <DataGrid<Row>
+          columns={columns}
+          data={rows}
+          rowKey={(r) => r.id}
+          onRowContextMenu={(row, _i, e) => ctx.open(row)(e)}
+          storageKey="emissions_records_grid"
+          showFooter={false}
+          emptyText={t("common.empty", "No records")}
+        />
       </div>
+
+      <ContextMenu controller={ctx} items={menuItems} />
     </AppShell>
   );
 }

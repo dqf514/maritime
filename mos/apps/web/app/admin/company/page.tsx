@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ImageCropModal } from "@/components/ImageCropModal";
 import { PageHeader } from "@/components/PageHeader";
+import { Toolbar } from "@/components/Toolbar";
 import { apiGet, apiPut, apiUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -34,6 +35,30 @@ const TEXT_FIELDS: (keyof Profile)[] = [
   "brand_secondary",
 ];
 
+const FIELD_LABELS: Record<keyof Profile, string> = {
+  legal_name: "page.company.legal_name",
+  display_name: "page.company.display_name",
+  logo_url: "page.company.logo",
+  website: "page.company.website",
+  tax_no: "page.company.tax_no",
+  address: "page.company.address",
+  phone: "page.company.phone",
+  brand_primary: "page.company.brand_primary",
+  brand_secondary: "page.company.brand_secondary",
+};
+
+const FIELD_FALLBACKS: Record<keyof Profile, string> = {
+  legal_name: "Legal name",
+  display_name: "Display name",
+  logo_url: "logo",
+  website: "Website",
+  tax_no: "Tax no",
+  address: "Address",
+  phone: "Phone",
+  brand_primary: "Brand primary",
+  brand_secondary: "Brand secondary",
+};
+
 export default function CompanyBrandPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -56,7 +81,7 @@ export default function CompanyBrandPage() {
   useEffect(() => {
     apiGet("/api/v1/admin/company-profile")
       .then((p) => setForm((f) => ({ ...f, ...p })))
-      .catch(() => toast.success(t("page.company.admin_required", "Tenant admin required")));
+      .catch(() => toast.error(t("page.company.admin_required", "Tenant admin required")));
   }, [t]);
 
   async function save(e: FormEvent) {
@@ -99,16 +124,34 @@ export default function CompanyBrandPage() {
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.admin", "Administration") }]}
         title={t("page.company.title", "Company & brand")}
         subtitle={t("page.company.sub", "Tenant company profile shown in shell and documents.")}
       />
-      <form className="panel" onSubmit={(e) => save(e).catch(() => toast.success(t("common.failed", "Failed")))}>
+      <Toolbar>
+        <button type="submit" className="btn btn-primary" form="company-profile-form">
+          {t("page.company.save", "Save profile")}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() =>
+            apiGet("/api/v1/admin/company-profile")
+              .then((p) => setForm((f) => ({ ...f, ...p })))
+              .catch(() => toast.error(t("page.company.admin_required", "Tenant admin required")))
+          }
+          title={t("common.refresh", "Refresh")}
+        >
+          ↻
+        </button>
+      </Toolbar>
+      <form id="company-profile-form" className="panel" onSubmit={(e) => save(e).catch(() => toast.error(t("common.failed", "Failed")))}>
         {/* ── Logo upload ── */}
         <div className="company-logo-row">
           <div className="company-logo-preview">
             {form.logo_url ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={form.logo_url} alt="logo" />
+              <img src={form.logo_url} alt={t("page.company.logo", "logo")} />
             ) : (
               <span className="company-logo-placeholder">?</span>
             )}
@@ -150,7 +193,7 @@ export default function CompanyBrandPage() {
         <div className="kv-grid">
           {TEXT_FIELDS.map((k) => (
             <label key={k}>
-              {String(k).replaceAll("_", " ")}
+              {t(FIELD_LABELS[k], FIELD_FALLBACKS[k])}
               <input
                 value={form[k] || ""}
                 onChange={(e) => setForm({ ...form, [k]: e.target.value })}
@@ -158,9 +201,6 @@ export default function CompanyBrandPage() {
             </label>
           ))}
         </div>
-        <button className="btn btn-primary" type="submit" style={{ marginTop: "1rem" }}>
-          {t("page.company.save", "Save profile")}
-        </button>
       </form>
 
       <ImageCropModal

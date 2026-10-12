@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { PageGuide } from "@/components/PageGuide";
+import { Tabs } from "@/components/Tabs";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid/types";
 import { CertOverview, VesselCertificates } from "@/components/ShipCertificates";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -27,6 +30,7 @@ type FleetRow = {
   open_work_orders: number;
   open_defects: number;
   expiring_certs: number;
+  updated_at?: string | null;
 };
 
 type Fleet = {
@@ -66,7 +70,7 @@ export default function ShipManagementPage() {
   const [certAlerts, setCertAlerts] = useState<CertAlert[]>([]);
 
   useEffect(() => {
-    apiGet("/api/v1/ship/fleet").then(setFleet).catch(() => toast.success(t("page.ship.module_required", "Ship management module required")));
+    apiGet("/api/v1/ship/fleet").then(setFleet).catch(() => toast.error(t("page.ship.module_required", "Ship management module required")));
     apiGet("/api/v1/ship/integrations/adapters").then(setAdapters).catch(() => undefined);
     apiGet("/api/v1/ship/integrations/sync-logs").then(setLogs).catch(() => undefined);
     apiGet("/api/v1/ship/crew/cert-alerts?days=60")
@@ -85,7 +89,7 @@ export default function ShipManagementPage() {
       setDetail(await apiGet(`/api/v1/ship/vessels/${id}`));
     } catch (e: any) {
       setDetail(null);
-      toast.success(e?.message || t("common.failed", "Failed"));
+      toast.error(e?.message || t("common.failed", "Failed"));
     }
   }
 
@@ -117,11 +121,11 @@ export default function ShipManagementPage() {
     try {
       const res = await apiPatch(`/api/v1/ship/work-orders/${selWo.id}`, { status: target });
       setWoWarnings(Array.isArray(res?.warnings) ? res.warnings.map((w: unknown) => String(w)) : []);
-      toast.success(t("page.ship.wo_moved", "工单状态 → {target}", { target }));
+      toast.success(t("page.ship.wo_moved", "Work order status → {target}", { target }));
       setSelWo((prev: any) => (prev ? { ...prev, status: res?.status || target } : prev));
       await refreshDetail();
     } catch (e: any) {
-      toast.success(e?.message || t("common.failed", "Failed"));
+      toast.error(e?.message || t("common.failed", "Failed"));
     } finally {
       setBusy(false);
     }
@@ -129,18 +133,18 @@ export default function ShipManagementPage() {
 
   async function addWoSpare() {
     if (!selWo || !woPart || !(Number(woQty) > 0)) {
-      toast.success(t("page.ship.spare_need", "请选择备件并填写数量"));
+      toast.success(t("page.ship.spare_need", "Select a spare part and enter quantity"));
       return;
     }
     setBusy(true);
     try {
       const res = await apiPost(`/api/v1/ship/work-orders/${selWo.id}/spares`, { part_id: woPart, qty: Number(woQty) });
       setWoWarnings(Array.isArray(res?.warnings) ? res.warnings.map((w: unknown) => String(w)) : []);
-      toast.success(t("page.ship.spare_ok", "备件消耗已登记"));
+      toast.success(t("page.ship.spare_ok", "Spare consumption logged"));
       const rows = await apiGet(`/api/v1/ship/work-orders/${selWo.id}/spares`).catch(() => []);
       setWoSpares(Array.isArray(rows) ? rows : []);
     } catch (e: any) {
-      toast.success(e?.message || t("common.failed", "Failed"));
+      toast.error(e?.message || t("common.failed", "Failed"));
     } finally {
       setBusy(false);
     }
@@ -158,10 +162,10 @@ export default function ShipManagementPage() {
         .map((r) => ({ code: r.code.trim(), expires_on: r.expires_on || null }));
       if (editingCrew) {
         await apiPatch(`/api/v1/ship/crew/${editingCrew.id}`, { certificates });
-        toast.success(t("page.ship.crew_certs_ok", "船员证书已更新"));
+        toast.success(t("page.ship.crew_certs_ok", "Crew certificates updated"));
       } else {
         if (!crewName.trim() || !crewRank.trim()) {
-          toast.success(t("page.ship.crew_need", "请填写船员姓名与职务"));
+          toast.success(t("page.ship.crew_need", "Enter crew name and rank"));
           setBusy(false);
           return;
         }
@@ -171,7 +175,7 @@ export default function ShipManagementPage() {
           rank: crewRank.trim(),
           certificates,
         });
-        toast.success(t("page.ship.crew_ok", "船员已登记"));
+        toast.success(t("page.ship.crew_ok", "Crew registered"));
       }
       setCrewName("");
       setCrewRank("");
@@ -180,7 +184,7 @@ export default function ShipManagementPage() {
       await refreshDetail();
       await refreshCertAlerts();
     } catch (e: any) {
-      toast.success(e?.message || t("common.failed", "Failed"));
+      toast.error(e?.message || t("common.failed", "Failed"));
     } finally {
       setBusy(false);
     }
@@ -204,13 +208,154 @@ export default function ShipManagementPage() {
       setFleet(await apiGet("/api/v1/ship/fleet"));
       setLogs(await apiGet("/api/v1/ship/integrations/sync-logs"));
     } catch (e: any) {
-      toast.success(e?.message || t("page.ship.inbound_fail", "Inbound sync failed"));
+      toast.error(e?.message || t("page.ship.inbound_fail", "Inbound sync failed"));
     }
   }
+
+  const fleetColumns = useMemo<ColumnDef<FleetRow>[]>(
+    () => [
+      {
+        key: "name",
+        title: t("page.ship.col_vessel", "Vessel"),
+        width: 220,
+        value: (r) => r.name,
+        render: (_v, r) => (
+          <div>
+            <strong>
+              <Link
+                href={`/ship/vessels/${r.vessel_id}`}
+                onClick={(e) => e.stopPropagation()}
+                style={{ color: "inherit", textDecoration: "none" }}
+              >
+                {r.name}
+              </Link>
+            </strong>
+            <div className="muted">
+              {r.imo} · {r.flag} ·{" "}
+              <Link href={`/ship/vessels/${r.vessel_id}`} onClick={(e) => e.stopPropagation()}>
+                {t("page.ship.vessel_card", "Vessel card")}
+              </Link>
+            </div>
+          </div>
+        ),
+      },
+      {
+        key: "technical_status",
+        title: t("common.status", "Status"),
+        width: 110,
+        value: (r) => r.technical_status,
+      },
+      {
+        key: "management_mode",
+        title: t("page.ship.col_mode", "Mode"),
+        width: 110,
+        value: (r) => r.management_mode,
+      },
+      {
+        key: "open_work_orders",
+        title: t("page.ship.col_wo", "WO"),
+        width: 70,
+        value: (r) => r.open_work_orders,
+      },
+      {
+        key: "open_defects",
+        title: t("page.ship.col_def", "Def"),
+        width: 70,
+        value: (r) => r.open_defects,
+      },
+      {
+        key: "expiring_certs",
+        title: t("page.ship.col_cert", "Cert"),
+        width: 70,
+        value: (r) => r.expiring_certs,
+      },
+      {
+        key: "next_drydock",
+        title: t("page.ship.col_drydock", "Drydock"),
+        width: 110,
+        value: (r) => r.next_drydock,
+        render: (v) => String(v || "—"),
+      },
+      {
+        key: "updated_at",
+        title: t("list.last_modified", "Last modified"),
+        width: 135,
+        value: (r) => r.updated_at ?? null,
+        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
+    ],
+    [t],
+  );
+
+  const spareColumns = useMemo<ColumnDef<any>[]>(
+    () => [
+      {
+        key: "part_no",
+        title: t("page.ship.part_no", "Part no"),
+        width: 140,
+        value: (r: any) => r.part_no || r.part_id?.slice(0, 8),
+      },
+      {
+        key: "description",
+        title: t("page.ship.part_desc", "Description"),
+        width: 200,
+        value: (r: any) => r.description,
+        render: (v) => String(v || "—"),
+      },
+      {
+        key: "qty",
+        title: t("page.ship.spare_qty", "Qty"),
+        width: 80,
+        align: "right",
+        value: (r: any) => r.qty,
+      },
+    ],
+    [t],
+  );
+
+  const certAlertColumns = useMemo<ColumnDef<CertAlert>[]>(
+    () => [
+      {
+        key: "crew_name",
+        title: t("page.ship.crew_name", "Crew"),
+        width: 150,
+        value: (r) => r.crew_name,
+      },
+      {
+        key: "code",
+        title: t("page.ship.cert_code", "Cert"),
+        width: 130,
+        value: (r) => r.code,
+      },
+      {
+        key: "expires_on",
+        title: t("page.ship.cert_expires", "Expires"),
+        width: 120,
+        value: (r) => r.expires_on,
+      },
+      {
+        key: "days_left",
+        title: t("page.ship.days_left", "Days left"),
+        width: 110,
+        align: "right",
+        value: (r) => r.days_left,
+        render: (v, r) =>
+          r.days_left < 0 ? (
+            <span style={{ color: "var(--danger)", fontWeight: 600 }}>
+              {t("page.ship.expired", "Expired")} ({r.days_left})
+            </span>
+          ) : (
+            r.days_left
+          ),
+      },
+    ],
+    [t],
+  );
 
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.ship", "Ship management") }]}
         title={t("page.ship.title", "Ship management")}
         subtitle={t("page.ship.sub", "Technical fleet for owners & managers — certificates, PMS, crew, defects.")}
         actions={
@@ -228,26 +373,16 @@ export default function ShipManagementPage() {
         }
       />
 
-      <div className="page-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "fleet"}
-          className={`page-tab ${tab === "fleet" ? "active" : ""}`}
-          onClick={() => setTab("fleet")}
-        >
-          {t("page.ship.tab_fleet", "舰队")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "certs"}
-          className={`page-tab ${tab === "certs" ? "active" : ""}`}
-          onClick={() => setTab("certs")}
-        >
-          {t("page.ship.tab_certs", "证书总览")}
-        </button>
-      </div>
+      <Tabs
+        items={[
+          { key: "fleet", label: t("page.ship.tab_fleet", "Fleet") },
+          { key: "certs", label: t("page.ship.tab_certs", "Certificates overview") },
+        ]}
+        value={tab}
+        onChange={(k) => setTab(k as "fleet" | "certs")}
+        variant="line"
+
+      />
 
       {tab === "certs" ? (
         <CertOverview
@@ -280,48 +415,15 @@ export default function ShipManagementPage() {
       <div className="ship-layout">
         <div className="panel">
           <h2>{t("page.ship.fleet", "Technical fleet")}</h2>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>{t("page.ship.col_vessel", "Vessel")}</th>
-                <th>{t("common.status", "Status")}</th>
-                <th>{t("page.ship.col_mode", "Mode")}</th>
-                <th>{t("page.ship.col_wo", "WO")}</th>
-                <th>{t("page.ship.col_def", "Def")}</th>
-                <th>{t("page.ship.col_cert", "Cert")}</th>
-                <th>{t("page.ship.col_drydock", "Drydock")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(fleet?.vessels || []).map((v) => (
-                <tr key={v.vessel_id} className={selected === v.vessel_id ? "active" : ""} onClick={() => openVessel(v.vessel_id)}>
-                  <td>
-                    <strong>
-                      <Link
-                        href={`/ship/vessels/${v.vessel_id}`}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ color: "inherit", textDecoration: "none" }}
-                      >
-                        {v.name}
-                      </Link>
-                    </strong>
-                    <div className="muted">
-                      {v.imo} · {v.flag} ·{" "}
-                      <Link href={`/ship/vessels/${v.vessel_id}`} onClick={(e) => e.stopPropagation()}>
-                        {t("page.ship.vessel_card", "Vessel card")}
-                      </Link>
-                    </div>
-                  </td>
-                  <td>{v.technical_status}</td>
-                  <td>{v.management_mode}</td>
-                  <td>{v.open_work_orders}</td>
-                  <td>{v.open_defects}</td>
-                  <td>{v.expiring_certs}</td>
-                  <td>{v.next_drydock || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataGrid<FleetRow>
+            columns={fleetColumns}
+            data={fleet?.vessels || []}
+            rowKey={(r) => String(r.vessel_id)}
+            storageKey="ship_fleet"
+            emptyText={t("common.empty", "No records")}
+            showFooter={false}
+            onRowClick={(r) => openVessel(r.vessel_id)}
+          />
         </div>
 
         <div className="panel">
@@ -351,12 +453,12 @@ export default function ShipManagementPage() {
                     </h3>
                     {selWo.status === "open" ? (
                       <button className="btn btn-sm" type="button" disabled={busy} onClick={() => woTransition("in_progress")}>
-                        {t("page.ship.wo_start", "开工")}
+                        {t("page.ship.wo_start", "Start work")}
                       </button>
                     ) : null}
                     {selWo.status === "in_progress" || selWo.status === "open" ? (
                       <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => woTransition("done")}>
-                        {t("page.ship.wo_done", "转 done")}
+                        {t("page.ship.wo_done", "Mark done")}
                       </button>
                     ) : null}
                   </div>
@@ -369,37 +471,27 @@ export default function ShipManagementPage() {
                       ))}
                     </div>
                   ) : null}
-                  <h3 style={{ fontSize: "0.95rem" }}>{t("page.ship.spares", "备件消耗 Spares")}</h3>
+                  <h3 style={{ fontSize: "0.95rem" }}>{t("page.ship.spares", "Spares")}</h3>
                   {woSpares.length ? (
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>{t("page.ship.part_no", "Part no")}</th>
-                          <th>{t("page.ship.part_desc", "Description")}</th>
-                          <th>{t("page.ship.spare_qty", "Qty")}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {woSpares.map((s: any) => (
-                          <tr key={s.id}>
-                            <td>{s.part_no || s.part_id?.slice(0, 8)}</td>
-                            <td>{s.description || "—"}</td>
-                            <td>{s.qty}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <DataGrid
+                      columns={spareColumns}
+                      data={woSpares}
+                      rowKey={(r: any, i: number) => String(r.id ?? i)}
+                      storageKey="ship_wo_spares"
+                      emptyText={t("common.empty", "No records")}
+                      showFooter={false}
+                    />
                   ) : (
-                    <p className="muted" style={{ margin: "0.25rem 0" }}>{t("page.ship.no_spares", "暂无备件登记")}</p>
+                    <p className="muted" style={{ margin: "0.25rem 0" }}>{t("page.ship.no_spares", "No spare parts logged")}</p>
                   )}
                   <div className="form-grid" style={{ marginTop: "0.5rem" }}>
                     <label>
-                      {t("page.ship.part", "备件")}
+                      {t("page.ship.part", "Spare parts")}
                       <select value={woPart} onChange={(e) => setWoPart(e.target.value)}>
                         <option value="">{t("common.select", "Select…")}</option>
                         {(detail.spares || []).map((s: any) => (
                           <option key={s.id} value={s.id}>
-                            {s.part_no} · {s.description || ""} ({t("page.ship.on_hand", "在库")} {s.qty_on_hand})
+                            {s.part_no} · {s.description || ""} ({t("page.ship.on_hand", "On hand")} {s.qty_on_hand})
                           </option>
                         ))}
                       </select>
@@ -410,7 +502,7 @@ export default function ShipManagementPage() {
                     </label>
                     <div style={{ display: "flex", alignItems: "end" }}>
                       <button className="btn btn-sm" type="button" disabled={busy} onClick={addWoSpare}>
-                        {t("page.ship.add_spare", "登记消耗")}
+                        {t("page.ship.add_spare", "Log consumption")}
                       </button>
                     </div>
                   </div>
@@ -429,7 +521,7 @@ export default function ShipManagementPage() {
                         setCertRows([]);
                       }}
                     >
-                      {t("page.ship.edit_certs", "证书")}
+                      {t("page.ship.edit_certs", "Certificates")}
                     </button>
                   </li>
                 ))}
@@ -437,17 +529,17 @@ export default function ShipManagementPage() {
               <div className="desk-section" style={{ margin: "0.5rem 0" }}>
                 <h3 style={{ marginTop: 0, fontSize: "0.95rem" }}>
                   {editingCrew
-                    ? t("page.ship.edit_crew_certs", "编辑证书 · {name}", { name: editingCrew.full_name })
-                    : t("page.ship.new_crew", "登记船员")}
+                    ? t("page.ship.edit_crew_certs", "Edit certificates · {name}", { name: editingCrew.full_name })
+                    : t("page.ship.new_crew", "Add crew")}
                 </h3>
                 {!editingCrew ? (
                   <div className="form-grid">
                     <label>
-                      {t("page.ship.crew_name", "姓名")}
+                      {t("page.ship.crew_name", "Crew")}
                       <input value={crewName} onChange={(e) => setCrewName(e.target.value)} />
                     </label>
                     <label>
-                      {t("page.ship.crew_rank", "职务")}
+                      {t("page.ship.crew_rank", "Rank")}
                       <input value={crewRank} onChange={(e) => setCrewRank(e.target.value)} placeholder="C/O" />
                     </label>
                   </div>
@@ -455,26 +547,26 @@ export default function ShipManagementPage() {
                 {certRows.map((r, i) => (
                   <div key={i} className="form-grid" style={{ marginTop: "0.5rem" }}>
                     <label>
-                      {t("page.ship.cert_code", "证书代码")}
+                      {t("page.ship.cert_code", "Cert")}
                       <input value={r.code} onChange={(e) => setCert(i, "code", e.target.value)} placeholder="STCW-II/1" />
                     </label>
                     <label>
-                      {t("page.ship.cert_expires", "到期日")}
+                      {t("page.ship.cert_expires", "Expires")}
                       <input type="date" value={r.expires_on} onChange={(e) => setCert(i, "expires_on", e.target.value)} />
                     </label>
                     <div style={{ display: "flex", alignItems: "end" }}>
                       <button className="btn btn-danger btn-sm" type="button" onClick={() => setCertRows((prev) => prev.filter((_, x) => x !== i))}>
-                        {t("common.delete", "删除")}
+                        {t("common.delete", "Delete")}
                       </button>
                     </div>
                   </div>
                 ))}
                 <div className="desk-toolbar" style={{ marginTop: "0.5rem" }}>
                   <button className="btn btn-sm" type="button" onClick={() => setCertRows((prev) => [...prev, { code: "", expires_on: "" }])}>
-                    {t("page.ship.add_cert", "添加证书")}
+                    {t("page.ship.add_cert", "Add certificate")}
                   </button>
                   <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={saveCrew}>
-                    {editingCrew ? t("common.save", "保存") : t("common.create", "Create")}
+                    {editingCrew ? t("common.save", "Save") : t("common.create", "Create")}
                   </button>
                   {editingCrew ? (
                     <button
@@ -485,7 +577,7 @@ export default function ShipManagementPage() {
                         setCertRows([]);
                       }}
                     >
-                      {t("common.cancel", "取消")}
+                      {t("common.cancel", "Cancel")}
                     </button>
                   ) : null}
                 </div>
@@ -498,36 +590,18 @@ export default function ShipManagementPage() {
       </div>
 
       <div className="panel">
-        <h2>{t("page.ship.cert_alerts", "船员证书预警（60 天）")}</h2>
+        <h2>{t("page.ship.cert_alerts", "Crew certificate alerts (60 days)")}</h2>
         {certAlerts.length ? (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>{t("page.ship.crew_name", "船员")}</th>
-                <th>{t("page.ship.cert_code", "证书")}</th>
-                <th>{t("page.ship.cert_expires", "到期日")}</th>
-                <th>{t("page.ship.days_left", "剩余天数")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {certAlerts.map((a, i) => (
-                <tr key={`${a.crew_id}-${a.code}-${i}`}>
-                  <td>{a.crew_name}</td>
-                  <td>{a.code}</td>
-                  <td>{a.expires_on}</td>
-                  <td>
-                    {a.days_left < 0 ? (
-                      <span style={{ color: "var(--danger)", fontWeight: 600 }}>{t("page.ship.expired", "已过期")} ({a.days_left})</span>
-                    ) : (
-                      a.days_left
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataGrid<CertAlert>
+            columns={certAlertColumns}
+            data={certAlerts}
+            rowKey={(r, i) => `${r.crew_id}-${r.code}-${i}`}
+            storageKey="ship_cert_alerts"
+            emptyText={t("common.empty", "No records")}
+            showFooter={false}
+          />
         ) : (
-          <p className="muted">{t("page.ship.no_cert_alerts", "60 天内无到期船员证书")}</p>
+          <p className="muted">{t("page.ship.no_cert_alerts", "No crew certificates expiring within 60 days")}</p>
         )}
       </div>
 

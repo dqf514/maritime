@@ -48,6 +48,8 @@ import app.models_trading  # noqa: E402, F401
 import app.models_pooling  # noqa: E402, F401
 import app.models_lightering  # noqa: E402, F401
 import app.models_reference_ext  # noqa: E402, F401
+import app.models_interface  # noqa: E402, F401
+import app.models_field_perms  # noqa: E402, F401
 from app.main import app as fastapi_app  # noqa: E402
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo  # noqa: E402
 from app.seed_demo_flow import seed_full_demo_flow  # noqa: E402

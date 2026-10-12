@@ -4,19 +4,28 @@
 // 左栏表目录（按 kind 过滤）+ 右栏行编辑 DataGrid / 运价矩阵（装港×卸港）
 // + 定价模板（多表绑定报价配方）。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { SavedViews } from "@/components/SavedViews";
+import { StatusLegend } from "@/components/StatusLegend";
+import { Toolbar } from "@/components/Toolbar";
+import { useListHotkeys } from "@/components/useListHotkeys";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
 import { RecordModal } from "@/components/RecordModal";
 import { DateInput } from "@/components/DateInput";
 import { StateView } from "@/components/StateView";
+import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { useToast } from "@/components/ToastProvider";
 import { apiDelete, apiList, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv, parseCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 
 const RATE_KINDS = ["freight_matrix", "surcharge", "demurrage_rate", "laytime_hours_rate", "bunker_surcharge"] as const;
 const RATE_UNITS = ["per_mt", "lumpsum", "per_day", "per_hour", "pct"] as const;
@@ -54,13 +63,16 @@ type PricingTemplate = {
 
 type DimPair = { k: string; v: string };
 
-export default function RatesPage() {
+function RatesPage() {
   const { t } = useI18n();
   const toast = useToast();
+  const router = useRouter();
+  const { query, setQuery } = useListQuery();
+  const kindFilter = query.kind ?? "";
+  const view: "rows" | "matrix" = query.view === "matrix" ? "matrix" : "rows";
 
   // —— 表目录 ——
   const [tables, setTables] = useState<RateTable[]>([]);
-  const [kindFilter, setKindFilter] = useState("");
   const [tablesLoading, setTablesLoading] = useState(true);
   const [tablesErr, setTablesErr] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -69,7 +81,6 @@ export default function RatesPage() {
   const [rows, setRows] = useState<RateRow[]>([]);
   const [rowsLoading, setRowsLoading] = useState(false);
   const [rowsErr, setRowsErr] = useState("");
-  const [view, setView] = useState<"rows" | "matrix">("rows");
 
   // —— 新建表弹窗 ——
   const [tableModal, setTableModal] = useState(false);
@@ -111,6 +122,9 @@ export default function RatesPage() {
   });
 
   const selected = useMemo(() => tables.find((x) => x.id === selectedId) ?? null, [tables, selectedId]);
+
+  const rowCtx = useContextMenu<RateRow>();
+  const tplCtx = useContextMenu<PricingTemplate>();
 
   // —— 加载 ——
   const loadTables = useCallback(async () => {
@@ -244,6 +258,58 @@ export default function RatesPage() {
     },
     [selectedId, loadRows, toast, t],
   );
+
+  function validateTable(): ValidateIssue[] {
+    const issues: ValidateIssue[] = [];
+    if (!tableForm.name.trim()) issues.push({ level: "error", message: t("page.rates.err_name", "Table name is required") });
+    if (tableForm.valid_from && tableForm.valid_to && tableForm.valid_from >= tableForm.valid_to)
+      issues.push({ level: "error", message: t("page.rates.err_date_order", "Valid from must be earlier than valid to") });
+    if (!/^[A-Z]{3}$/.test((tableForm.currency || "").toUpperCase()))
+      issues.push({ level: "warn", message: t("page.rates.warn_currency", "Currency should be a 3-letter ISO code") });
+    return issues;
+  }
+
+  function validateRow(): ValidateIssue[] {
+    const issues: ValidateIssue[] = [];
+    const v = Number(rowForm.value);
+    if (!Number.isFinite(v)) issues.push({ level: "error", message: t("page.rates.err_value", "Rate value must be a number") });
+    else if (v < 0) issues.push({ level: "error", message: t("page.rates.err_negative", "Rate value must not be negative") });
+    if (!rowForm.dims.some((d) => d.k.trim() && d.v.trim()))
+      issues.push({ level: "warn", message: t("page.rates.warn_dims", "No dimension set — row may never match a lookup") });
+    return issues;
+  }
+
+  function copyRowId(r: RateRow) {
+    void navigator.clipboard.writeText(r.id);
+    toast.success(t("ctx.copied_id", "ID copied"));
+  }
+
+  function exportRow(r: RateRow) {
+    const dimKeys = Object.keys(r.dims || {});
+    downloadCsv(
+      "rate_row",
+      [...dimKeys, "value", "unit", "priority", "notes"],
+      [[...dimKeys.map((k) => r.dims[k] ?? ""), r.value, r.unit ?? "", r.priority, r.notes ?? ""]],
+    );
+  }
+
+  const rowMenuItems = (r: RateRow): ContextMenuItem[] => [
+    { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyRowId(r) },
+    { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportRow(r) },
+    { key: "d1", label: "", divider: true },
+    { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => void deleteRow(r.id) },
+  ];
+
+  const tplMenuItems = (r: PricingTemplate): ContextMenuItem[] => [
+    { key: "open", label: t("ctx.open", "Open"), onClick: () => openTpl(r) },
+    { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => { void navigator.clipboard.writeText(r.id); toast.success(t("ctx.copied_id", "ID copied")); } },
+    {
+      key: "export",
+      label: t("ctx.export_selected", "Export selected"),
+      onClick: () =>
+        downloadCsv("pricing_template", ["id", "name", "description", "is_active"], [[r.id, r.name, r.description ?? "", r.is_active ? "Y" : "N"]]),
+    },
+  ];
 
   async function createRow() {
     const dims: Record<string, string> = {};
@@ -416,6 +482,7 @@ export default function RatesPage() {
         agg: "sum",
         editor: { type: "number", step: 0.000001 },
         value: (r) => r.value,
+        render: (v) => <Num v={v as number} digits={3} />,
       },
       {
         key: "unit",
@@ -434,6 +501,7 @@ export default function RatesPage() {
         align: "right",
         editor: { type: "number" },
         value: (r) => r.priority,
+        render: (v) => <Num v={v as number} digits={0} />,
       },
       {
         key: "notes",
@@ -463,34 +531,91 @@ export default function RatesPage() {
     ];
   }, [dimKeys, t, deleteRow]);
 
+  const templateColumns: ColumnDef<PricingTemplate>[] = [
+    { key: "name", title: t("common.name", "Name"), minWidth: 140, value: (r) => r.name },
+    {
+      key: "description",
+      title: t("common.description", "Description"),
+      minWidth: 160,
+      value: (r) => r.description || "",
+      render: (_v, r) => <span className="muted">{r.description || "—"}</span>,
+    },
+    {
+      key: "linked_tables",
+      title: t("page.rates.linked_tables", "Linked rate tables"),
+      minWidth: 200,
+      value: (r) =>
+        Object.entries(r.rate_table_refs || {})
+          .map(([role, tid]) => {
+            const name = tables.find((x) => x.id === tid)?.name ?? tid.slice(0, 8);
+            return `${role}: ${name}`;
+          })
+          .join(" · "),
+      render: (v) => String(v) || "—",
+    },
+    {
+      key: "is_active",
+      title: t("common.status", "Status"),
+      width: 100,
+      value: (r) => Boolean(r.is_active),
+      render: (_v, r) => (
+        <span className={`badge ${r.is_active ? "badge-pass" : "badge-fail"}`}>
+          {r.is_active ? t("common.active", "Active") : t("common.inactive", "Inactive")}
+        </span>
+      ),
+    },
+  ];
+
   const kindLabel = (k: string) => t(`page.rates.kind.${k}`, k.replace(/_/g, " "));
+
+  const openCreate = useCallback(() => setTableModal(true), []);
+  useListHotkeys(openCreate);
 
   return (
     <AppShell>
       <PageHeader
+        breadcrumb={[{ label: t("nav.master", "Master data") }]}
         title={t("page.rates.title", "Rate Tables")}
         subtitle={t("page.rates.sub", "运价/费率表与定价模板。选中表后在网格中直接编辑费率行。")}
+        actions={<SavedViews storageKey="md_rates" onApply={(q) => router.replace(`/masterdata/rates${q}`)} />}
       />
 
-      <div className="rates-toolbar">
-        <label className="field-inline" style={{ display: "inline-flex", alignItems: "center", gap: "var(--gap-xs)" }}>
-          <span style={{ fontSize: "var(--font-label)", color: "var(--muted)" }}>
-            {t("page.rates.kind_filter", "Kind")}
-          </span>
-          <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>
-            <option value="">{t("page.rates.all_kinds", "All kinds")}</option>
-            {RATE_KINDS.map((k) => (
-              <option key={k} value={k}>
-                {kindLabel(k)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="spacer" />
-        <button type="button" className="btn btn-primary" onClick={() => setTableModal(true)}>
+      <Toolbar
+        filterCount={kindFilter ? 1 : 0}
+        onClearFilters={() => setQuery({ kind: null, view: null }, { resetPage: true })}
+        right={
+          <>
+            <select
+              className="input input-sm"
+              value={kindFilter}
+              onChange={(e) => setQuery({ kind: e.target.value || null }, { resetPage: true })}
+              aria-label={t("page.rates.kind_filter", "Kind")}
+            >
+              <option value="">{t("page.rates.all_kinds", "All kinds")}</option>
+              {RATE_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {kindLabel(k)}
+                </option>
+              ))}
+            </select>
+            <select
+              className="input input-sm"
+              value={view}
+              onChange={(e) => setQuery({ view: e.target.value === "rows" ? null : e.target.value }, { resetPage: true })}
+              aria-label={t("page.rates.view_mode", "View")}
+            >
+              <option value="rows">{t("page.rates.view_rows", "Rows")}</option>
+              <option value="matrix">{t("page.rates.view_matrix", "Matrix")}</option>
+            </select>
+          </>
+        }
+      >
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.rates.new_table", "New Table")}
         </button>
-      </div>
+      </Toolbar>
+
+      <StatusLegend statuses={["active", "expired", "inactive"]} />
 
       <div className="rates-layout">
         <aside className="panel rates-side-list">
@@ -528,10 +653,10 @@ export default function RatesPage() {
             <div className="spacer" />
             {selected?.kind === "freight_matrix" ? (
               <div className="seg">
-                <button type="button" className={view === "rows" ? "active" : ""} onClick={() => setView("rows")}>
+                <button type="button" className={view === "rows" ? "active" : ""} onClick={() => setQuery({ view: null }, { resetPage: true })}>
                   {t("page.rates.rows_view", "Rows")}
                 </button>
-                <button type="button" className={view === "matrix" ? "active" : ""} onClick={() => setView("matrix")}>
+                <button type="button" className={view === "matrix" ? "active" : ""} onClick={() => setQuery({ view: "matrix" }, { resetPage: true })}>
                   {t("page.rates.matrix_view", "Freight Matrix")}
                 </button>
               </div>
@@ -612,9 +737,11 @@ export default function RatesPage() {
                   rowKey={(r) => r.id}
                   editable
                   onCellSave={saveCell}
+                  onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
                   storageKey={`rates_rows_${selected.id}`}
                   emptyText={t("common.empty", "No records")}
                 />
+                <ContextMenu controller={rowCtx} items={rowMenuItems} />
               </StateView>
             )}
           </div>
@@ -631,46 +758,16 @@ export default function RatesPage() {
                 {t("page.rates.new_template", "New Template")}
               </button>
             </div>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>{t("common.name", "Name")}</th>
-                  <th>{t("common.description", "Description")}</th>
-                  <th>{t("page.rates.linked_tables", "Linked rate tables")}</th>
-                  <th>{t("common.status", "Status")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {templates.map((tpl) => (
-                  <tr key={tpl.id} className="row-openable" onClick={() => openTpl(tpl)}>
-                    <td>{tpl.name}</td>
-                    <td className="muted">{tpl.description || "—"}</td>
-                    <td>
-                      {Object.entries(tpl.rate_table_refs || {}).length
-                        ? Object.entries(tpl.rate_table_refs)
-                            .map(([role, tid]) => {
-                              const name = tables.find((x) => x.id === tid)?.name ?? tid.slice(0, 8);
-                              return `${role}: ${name}`;
-                            })
-                            .join(" · ")
-                        : "—"}
-                    </td>
-                    <td>
-                      <span className={`badge ${tpl.is_active ? "badge-pass" : "badge-fail"}`}>
-                        {tpl.is_active ? t("common.active", "Active") : t("common.inactive", "Inactive")}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {!templates.length ? (
-                  <tr>
-                    <td colSpan={4} className="muted">
-                      {t("common.empty", "No records")}
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+            <DataGrid<PricingTemplate>
+              columns={templateColumns}
+              data={templates}
+              rowKey={(r) => r.id}
+              onRowClick={(r) => openTpl(r)}
+              onRowContextMenu={(r, _i, e) => tplCtx.open(r)(e)}
+              storageKey="rates_templates_grid"
+              emptyText={t("common.empty", "No records")}
+            />
+            <ContextMenu controller={tplCtx} items={tplMenuItems} />
           </div>
         </section>
       </div>
@@ -728,6 +825,11 @@ export default function RatesPage() {
                 value={tableForm.description}
                 onChange={(e) => setTableForm({ ...tableForm, description: e.target.value })}
               />
+            </FieldRow>
+            <FieldRow label={t("validate.label", "Validate")} span={2}>
+              <div className="record-modal-validate">
+                <ValidateButton onValidate={validateTable} />
+              </div>
             </FieldRow>
           </FormSection>
         </FormPanel>
@@ -813,6 +915,11 @@ export default function RatesPage() {
             <FieldRow label={t("page.rates.notes", "Notes")}>
               <input value={rowForm.notes} onChange={(e) => setRowForm({ ...rowForm, notes: e.target.value })} />
             </FieldRow>
+            <FieldRow label={t("validate.label", "Validate")} span={2}>
+              <div className="record-modal-validate">
+                <ValidateButton onValidate={validateRow} />
+              </div>
+            </FieldRow>
           </FormSection>
         </FormPanel>
       </RecordModal>
@@ -893,6 +1000,15 @@ export default function RatesPage() {
         </FormPanel>
       </RecordModal>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <RatesPage />
+    </Suspense>
   );
 }
 
