@@ -263,3 +263,104 @@
   width: 200px;
   min-width: 200px;
 }
+
+/* ── 对比结果右缘滑出面板（无遮罩 — 不遮左侧勾选区） ── */
+.compare-slideover {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  width: min(860px, 72vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -18px 0 50px rgba(11, 31, 42, 0.22);
+  transform: translateX(100%);
+  transition: transform 0.22s ease;
+  visibility: hidden;
+}
+.compare-slideover.open {
+  transform: translateX(0);
+  visibility: visible;
+}
+.compare-slideover-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+  padding: var(--gap-sm) var(--gap-md);
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.compare-slideover-head strong {
+  font-size: var(--font-ui);
+}
+.compare-slideover-head .icon-btn {
+  margin-left: auto;
+}
+.compare-slideover-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--gap-sm) var(--gap-md) var(--gap-md);
+}
+.compare-slideover-body .compare-scroll {
+  max-height: none;
+  border: none;
+}
+
+/* 边缘开关 tab — 面板收起时贴右缘，展开时贴面板左缘 */
+.compare-edge-tab {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 5px;
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background: var(--panel-header-bg);
+  color: var(--ink);
+  font-size: var(--font-label);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: -2px 0 8px rgba(11, 31, 42, 0.12);
+}
+.compare-edge-tab > span:nth-child(2) {
+  writing-mode: vertical-rl;
+  letter-spacing: 0.08em;
+}
+.compare-edge-tab:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.compare-edge-tab.open {
+  right: min(860px, 72vw);
+  border-right: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  box-shadow: 2px 0 8px rgba(11, 31, 42, 0.12);
+}
+.compare-edge-chevron {
+  font-size: 12px;
+  line-height: 1;
+}
+.compare-edge-count {
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9.5px;
+}
+
+@media (max-width: 900px) {
+  .compare-slideover { width: min(860px, 94vw); }
+  .compare-edge-tab.open { right: min(860px, 94vw); }
+}

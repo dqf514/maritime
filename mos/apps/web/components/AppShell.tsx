@@ -11,7 +11,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { DensityToggle } from "@/components/DensityToggle";
 import { Breadcrumb, type BreadcrumbItem } from "@/components/Breadcrumb";
 import { clearLookupCache } from "@/components/LookupSelect";
-import { apiGet, apiLogout, apiMe, readStorage, removeStorage, TOKEN_STORAGE_KEY, type Me } from "@/lib/api";
+import { apiGet, apiLogout, apiMe, assetUrl, readStorage, removeStorage, TOKEN_STORAGE_KEY, type Me } from "@/lib/api";
 import { LanguageSwitcher, useI18n } from "@/lib/i18n";
 
 export type NavSection = {
@@ -121,9 +121,9 @@ export function AppShell({
     ]);
     setMe(m);
     setShell(s);
-    if (b?.icon_url) setIconUrl(b.icon_url);
+    if (b?.icon_url) setIconUrl(assetUrl(b.icon_url));
     if (b?.product_name) setProductName(b.product_name);
-    if (s?.company?.logo_url) setIconUrl(s.company.logo_url);
+    if (s?.company?.logo_url) setIconUrl(assetUrl(s.company.logo_url));
     if (s?.company?.display_name) setProductName(s.company.display_name);
     if (s?.company?.brand_primary && typeof document !== "undefined") {
       document.documentElement.style.setProperty("--brand", s.company.brand_primary);

@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
+import { PublicNav } from "@/components/PublicNav";
 
 import { API_BASE as API } from "@/lib/api";
 
@@ -44,8 +45,9 @@ function MagicLinkPage() {
   return (
     <div className="login-stage">
       <div className="login-stage-bg" aria-hidden />
-      <div className="login-card" style={{ maxWidth: 420, margin: "4rem auto", position: "relative", zIndex: 1 }}>
-        <h1 style={{ marginTop: 0 }}>{t("login.magic_title", "Magic link")}</h1>
+      <PublicNav compact />
+      <div className="login-card login-card-standalone">
+        <h1>{t("login.magic_title", "Magic link")}</h1>
         {error ? (
           <>
             <div className="error">{error}</div>

@@ -288,6 +288,31 @@ export async function apiCommitMigration(jobId: string, proposal_ids: string[]) 
   return apiPost(`/api/v1/settings/dataops/migrations/${jobId}/commit`, { proposal_ids });
 }
 
+/**
+ * 解析存储的品牌/上传图片 URL 到 API 源。
+ * - `/uploads/...`（新约定：后端存相对路径）→ 拼 API 源
+ * - 绝对 `http(s)://…/uploads/...`（旧数据，曾按 api_public_base 拼出，
+ *   部署环境会指向 localhost 而裂图）→ 改写到 API 源
+ * - 其余（`/branding/...` 静态资源、data: 等）原样返回
+ */
+export function assetUrl(url?: string | null): string {
+  if (!url) return "";
+  let u: URL;
+  try {
+    u = new URL(url, API_BASE);
+  } catch {
+    return url;
+  }
+  if (!u.pathname.startsWith("/uploads/")) return url;
+  let origin = API_BASE;
+  try {
+    origin = new URL(API_BASE).origin;
+  } catch {
+    /* keep raw API_BASE */
+  }
+  return `${origin}${u.pathname}${u.search}`;
+}
+
 export async function apiUpload(path: string, form: FormData) {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",

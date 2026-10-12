@@ -168,20 +168,17 @@ async def upload_platform_branding_asset(
     dest_name = f"{kind}{ext}"
     dest = upload_dir / dest_name
     dest.write_bytes(raw)
-    # Cache-bust so portal picks up new file immediately
+    # Cache-bust so portal picks up new file immediately.
+    # 存相对路径：绝对 URL（api_public_base）在部署环境会指向 localhost 而裂图；
+    # 前端 assetUrl() 解析到 API 源。
     public_url = f"/uploads/branding/{dest_name}?v={int(datetime.now(timezone.utc).timestamp())}"
-    # Absolute URL for cross-origin Next.js (API host)
-    from app.config import get_settings
-
-    base = get_settings().api_public_base.rstrip("/")
-    absolute = f"{base}{public_url}"
     row = _ensure_branding(db)
     if kind == "logo":
-        row.logo_url = absolute
+        row.logo_url = public_url
     elif kind == "icon":
-        row.icon_url = absolute
+        row.icon_url = public_url
     else:
-        row.favicon_url = absolute
+        row.favicon_url = public_url
     row.updated_at = datetime.now(timezone.utc)
     db.commit()
     return _branding_out(row)
@@ -792,12 +789,11 @@ async def upload_company_logo(
     upload_dir.mkdir(parents=True, exist_ok=True)
     dest = upload_dir / f"logo{ext}"
     dest.write_bytes(raw)
-    # Cache-bust so shell picks up new file immediately
+    # Cache-bust so shell picks up new file immediately.
+    # 存相对路径（不拼 api_public_base）：绝对 URL 在部署环境（marios.cn）会
+    # 变成 localhost 而图片裂开；前端用 assetUrl() 解析到 API 源。
     stamp = int(datetime.now(timezone.utc).timestamp())
-    from app.config import get_settings
-
-    base = get_settings().api_public_base.rstrip("/")
-    url = f"{base}/uploads/branding/{auth.tenant_id}/logo{ext}?v={stamp}"
+    url = f"/uploads/branding/{auth.tenant_id}/logo{ext}?v={stamp}"
     row = db.scalar(select(TenantCompanyProfile).where(TenantCompanyProfile.tenant_id == auth.tenant_id))
     if not row:
         row = TenantCompanyProfile(tenant_id=auth.tenant_id)

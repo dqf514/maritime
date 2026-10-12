@@ -5,7 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { ImageCropModal } from "@/components/ImageCropModal";
 import { PageHeader } from "@/components/PageHeader";
 import { Toolbar } from "@/components/Toolbar";
-import { apiGet, apiPut, apiUpload } from "@/lib/api";
+import { apiGet, apiPut, apiUpload, assetUrl } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -151,7 +151,7 @@ export default function CompanyBrandPage() {
           <div className="company-logo-preview">
             {form.logo_url ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={form.logo_url} alt={t("page.company.logo", "logo")} />
+              <img src={assetUrl(form.logo_url)} alt={t("page.company.logo", "logo")} />
             ) : (
               <span className="company-logo-placeholder">?</span>
             )}

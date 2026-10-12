@@ -3,8 +3,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { LanguageSwitcher, useI18n } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { apiLogin } from "@/lib/api";
+import { PublicNav } from "@/components/PublicNav";
 
 import { API_BASE } from "@/lib/api";
 
@@ -171,13 +172,7 @@ export default function LoginPage() {
   return (
     <div className="login-stage login-stage-clean" style={{ ["--portal-accent" as string]: accent }}>
       <div className="login-stage-bg" aria-hidden />
-      <header className="login-top">
-        <Link href="/" className="login-top-brand">
-          <img src={brand?.icon_url || "/branding/mark.svg"} alt="" width={24} height={24} />
-          <strong>{name}</strong>
-        </Link>
-        <LanguageSwitcher />
-      </header>
+      <PublicNav brand={brand} compact />
 
       <main className="login-split">
         <aside className="login-brand-pane">

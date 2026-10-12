@@ -286,6 +286,8 @@ function EstimatesPage() {
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareRows, setCompareRows] = useState<Array<{ id: string; title: string; version: number; tce?: number }>>([]);
   const [compareVariants, setCompareVariants] = useState<Array<{ id: string; name: string; subtitle?: string; values: Record<string, unknown> }>>([]);
+  // 对比结果从右缘滑出（无遮罩 — 不挡左侧勾选区），edge tab 作开关
+  const [compareOpen, setCompareOpen] = useState(false);
   const [sensitivity, setSensitivity] = useState<SensitivityRow[]>([]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -635,6 +637,7 @@ function EstimatesPage() {
         }),
       );
       setCompareVariants(variants);
+      setCompareOpen(true);
       toast.success(t("page.estimates.compare_ok", "Compare ready"));
     } catch (e) {
       setErr(String(e));
@@ -1105,18 +1108,55 @@ function EstimatesPage() {
             </div>
           ) : null}
 
-          {compareVariants.length >= 2 ? (
-            <div className="desk-section">
-              <h3>{t("page.estimates.compare_table", "Compare")}</h3>
+        </div>
+      </div>
+
+      {/* 对比结果：右缘滑出面板 — 无遮罩，列表/勾选区保持可操作 */}
+      {compareVariants.length >= 2 ? (
+        <>
+          <button
+            type="button"
+            className={`compare-edge-tab ${compareOpen ? "open" : ""}`}
+            onClick={() => setCompareOpen((v) => !v)}
+            aria-expanded={compareOpen}
+            aria-controls="estimate-compare-panel"
+            title={t("page.estimates.compare_toggle", "Toggle compare panel")}
+          >
+            <span className="compare-edge-chevron" aria-hidden>
+              {compareOpen ? "›" : "‹"}
+            </span>
+            <span>{t("page.estimates.compare_table", "Compare")}</span>
+            <span className="compare-edge-count">{compareVariants.length}</span>
+          </button>
+          <aside
+            id="estimate-compare-panel"
+            className={`compare-slideover ${compareOpen ? "open" : ""}`}
+            aria-hidden={!compareOpen}
+          >
+            <div className="compare-slideover-head">
+              <strong>{t("page.estimates.compare_table", "Compare")}</strong>
+              <span className="muted">
+                {compareVariants.length} {t("compare.variants", "方案")}
+              </span>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setCompareOpen(false)}
+                aria-label={t("common.close", "关闭")}
+              >
+                ×
+              </button>
+            </div>
+            <div className="compare-slideover-body">
               <EstimateCompare
                 variants={compareVariants}
                 fields={COMPARE_FIELDS}
                 highlightBest
               />
             </div>
-          ) : null}
-        </div>
-      </div>
+          </aside>
+        </>
+      ) : null}
       <ConfirmDialog
         open={confirmDel}
         title={t("common.confirm", "确认操作")}

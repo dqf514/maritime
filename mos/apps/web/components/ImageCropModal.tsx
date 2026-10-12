@@ -11,6 +11,15 @@ const SPECS: Record<CropKind, { ratio: number; outW: number; outH: number }> = {
   favicon: { ratio: 1, outW: 64, outH: 64 },
 };
 
+/** 默认选区宽度（= 上限；只能缩小、不能超过，避免图片盖不住选区） */
+function defaultFrameW(kind: CropKind) {
+  return SPECS[kind].ratio >= 3 ? 420 : 280;
+}
+/** 选区最小宽度 — 允许缩小选区（用户反馈：无法缩小选区） */
+function minFrameW(kind: CropKind) {
+  return SPECS[kind].ratio >= 3 ? 160 : 120;
+}
+
 type Props = {
   open: boolean;
   kind: CropKind;
@@ -27,15 +36,18 @@ function clampPan(x: number, y: number, scale: number, imgW: number, imgH: numbe
   return { x: Math.min(0, Math.max(minX, x)), y: Math.min(0, Math.max(minY, y)) };
 }
 
-/** Fixed-ratio crop dialog: drag to pan, slider to zoom, exports PNG via offscreen canvas. */
+/** 定比裁剪：可缩小选区、拖动平移、滑块缩放，导出定尺寸 PNG。 */
 export function ImageCropModal({ open, kind, file, busy, error, onCancel, onConfirm }: Props) {
   const { t } = useI18n();
   const spec = SPECS[kind];
-  const boxW = spec.ratio >= 3 ? 420 : 280;
-  const boxH = Math.round(boxW / spec.ratio);
+  const [frameW, setFrameW] = useState(() => defaultFrameW(kind));
+  const boxW = frameW;
+  const boxH = Math.round(frameW / spec.ratio);
 
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [imgUrl, setImgUrl] = useState("");
+  // base = 默认选区下的 cover 缩放：图片尺度与选区尺寸解耦，
+  // 缩小选区 → 真正缩小所选区域（而不是把图片一起缩小）。
   const [base, setBase] = useState(1);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -48,12 +60,15 @@ export function ImageCropModal({ open, kind, file, busy, error, onCancel, onConf
     setImgUrl(url);
     setImg(null);
     setExportErr("");
+    const w0 = defaultFrameW(kind);
+    const h0 = Math.round(w0 / SPECS[kind].ratio);
+    setFrameW(w0);
     const el = new Image();
     el.onload = () => {
-      const cover = Math.max(boxW / el.naturalWidth, boxH / el.naturalHeight);
+      const cover = Math.max(w0 / el.naturalWidth, h0 / el.naturalHeight);
       setBase(cover);
       setZoom(1);
-      setPan({ x: (boxW - el.naturalWidth * cover) / 2, y: (boxH - el.naturalHeight * cover) / 2 });
+      setPan({ x: (w0 - el.naturalWidth * cover) / 2, y: (h0 - el.naturalHeight * cover) / 2 });
       setImg(el);
     };
     el.onerror = () => setExportErr(t("crop.load_fail", "图片读取失败，请换一张"));
@@ -63,7 +78,14 @@ export function ImageCropModal({ open, kind, file, busy, error, onCancel, onConf
       setImg(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, file]);
+  }, [open, file, kind]);
+
+  // 选区尺寸变化后重新夹紧平移，保证图片始终盖住选区
+  useEffect(() => {
+    if (!img) return;
+    setPan((p) => clampPan(p.x, p.y, base * zoom, img.naturalWidth, img.naturalHeight, boxW, boxH));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxW, boxH]);
 
   useEffect(() => {
     if (!open) return;
@@ -171,21 +193,41 @@ export function ImageCropModal({ open, kind, file, busy, error, onCancel, onConf
               </p>
             )}
           </div>
-          <label style={{ display: "block", marginTop: "0.75rem" }}>
-            {t("crop.zoom", "缩放")}
-            <input
-              type="range"
-              min={1}
-              max={8}
-              step={0.01}
-              value={zoom}
-              onChange={(e) => applyZoom(Number(e.target.value))}
-              style={{ width: "100%" }}
-              disabled={!img}
-            />
-          </label>
-          <p className="muted" style={{ margin: "0.25rem 0 0" }}>
-            {t("crop.hint", "拖动调整位置，滑块缩放。输出 {w}×{h} PNG。", { w: spec.outW, h: spec.outH })}
+          <div className="crop-controls">
+            <label className="crop-control">
+              <span className="crop-control-label">
+                {t("crop.frame", "选区大小")} <span className="crop-control-val">{boxW} × {boxH}</span>
+              </span>
+              <input
+                type="range"
+                min={minFrameW(kind)}
+                max={defaultFrameW(kind)}
+                step={2}
+                value={frameW}
+                onChange={(e) => setFrameW(Number(e.target.value))}
+                disabled={!img}
+              />
+            </label>
+            <label className="crop-control">
+              <span className="crop-control-label">
+                {t("crop.zoom", "缩放")} <span className="crop-control-val">×{zoom.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={1}
+                max={8}
+                step={0.01}
+                value={zoom}
+                onChange={(e) => applyZoom(Number(e.target.value))}
+                disabled={!img}
+              />
+            </label>
+          </div>
+          <p className="crop-out">
+            {t("crop.output", "输出尺寸")} <strong>{spec.outW} × {spec.outH} px</strong> · PNG · {kindLabel}
+          </p>
+          <p className="muted crop-hint">
+            {t("crop.hint2", "拖动调整位置，滑块缩放，选区可缩小；输出为固定尺寸 PNG。")}
           </p>
           {shownErr ? <p className="flash-err">{shownErr}</p> : null}
           <footer className="record-modal-foot">

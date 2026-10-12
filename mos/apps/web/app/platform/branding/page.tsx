@@ -7,7 +7,7 @@ import { ImageCropModal, type CropKind } from "@/components/ImageCropModal";
 import { RecordModal } from "@/components/RecordModal";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
-import { apiGet, apiPost, apiPut, apiUpload } from "@/lib/api";
+import { apiGet, apiPost, apiPut, apiUpload, assetUrl } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -139,8 +139,8 @@ function PlatformBrandingPage() {
 
       <div className="brand-preview panel">
         <div className="brand-preview-row" style={{ display: "flex", gap: "1.25rem", alignItems: "center", flexWrap: "wrap" }}>
-          <img src={form.icon_url} alt="icon" width={64} height={64} />
-          <img src={form.logo_url} alt="logo" style={{ maxHeight: 64, maxWidth: 280 }} />
+          <img src={assetUrl(form.icon_url)} alt="icon" width={64} height={64} />
+          <img src={assetUrl(form.logo_url)} alt="logo" style={{ maxHeight: 64, maxWidth: 280 }} />
         </div>
       </div>
 

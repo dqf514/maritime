@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { LanguageSwitcher, useI18n } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
+import { PublicNav } from "@/components/PublicNav";
 
 type Branding = {
   product_name: string;
@@ -14,7 +15,7 @@ type Branding = {
   hero_subtitle: string;
 };
 
-import { API_BASE } from "@/lib/api";
+import { API_BASE, assetUrl } from "@/lib/api";
 
 const STATS = [
   { value: "7 环", labelKey: "portal.stat.lifecycle", label: { en: "Voyage lifecycle coverage", zh: "航次全生命周期覆盖" } },
@@ -38,7 +39,7 @@ const ZONES = [
     title: { en: "Commercial Operations", zh: "商业运营" },
     en: "Commercial Operations",
     items: [
-      { key: "portal.zone.ops.i1", text: { en: "Voyage estimate & TCE calculation with commission, bunker and carbon costs", zh: "航次估算与 TCE 日收益测算，佣金、油价、碳成本自动算齐" } },
+      { key: "portal.zone.ops.i1", text: { en: "Voyage estimate & TCE calculation — plus a tabbed voyage workspace (Summary / P&L / Cargo / Port calls)", zh: "航次估算与 TCE 日收益测算——另有分页签航次工作台（概要 / 盈亏 / 货物 / 挂靠港）" } },
       { key: "portal.zone.ops.i2", text: { en: "Fixture and clause management with full audit trail", zh: "租约与条款全流程管理，变更审批留痕" } },
       { key: "portal.zone.ops.i3", text: { en: "Demurrage, despatch and performance claims — good weather evaluation, about tolerance analysis, one-click SOF statement", zh: "滞期、速遣与航速绩效索赔——好天气评估、about 容差分析，SOF 一键生成计算书" } },
       { key: "portal.zone.ops.i4", text: { en: "Clause-aware NOR delivery validation, invoicing and multi-currency settlement with live P&L", zh: "NOR 递交条件按条款校验，开票、收款与多币种结算，航次盈亏实时可见" } },
@@ -74,7 +75,7 @@ const ZONES = [
       { key: "portal.zone.analytics.i1", text: { en: "Voyage P&L and reporting — revenue, hire, bunker, port and emissions in one view", zh: "航次盈亏与报表——收入、租金、油耗、港口费、排放一屏算清" } },
       { key: "portal.zone.analytics.i2", text: { en: "Market data: freight rates, bunker prices, distance and ETA services", zh: "市场数据：运价、油价、距离与 ETA 服务随取随用" } },
       { key: "portal.zone.analytics.i3", text: { en: "Emissions & CII: carbon calculator, EU ETS, CII rating and carbon cost allocation", zh: "碳排放与 CII：碳成本测算、EU ETS、CII 评级与碳成本分摊" } },
-      { key: "portal.zone.analytics.i4", text: { en: "Fleet digital twin with what-if simulation on speed and TCE", zh: "船队数字孪生，航速与 TCE 一键推演" } },
+      { key: "portal.zone.analytics.i4", text: { en: "Fleet digital twin, schedule Gantt and what-if simulation on speed and TCE", zh: "船队数字孪生、调度甘特图，航速与 TCE 一键推演" } },
     ],
   },
   {
@@ -84,7 +85,7 @@ const ZONES = [
     items: [
       { key: "portal.zone.gov.i1", text: { en: "Role-based permissions with full audit trail", zh: "权限分级与操作留痕，全程可审计" } },
       { key: "portal.zone.gov.i2", text: { en: "PrintDoc PDF export with company header and one-click Excel export for core lists", zh: "PrintDoc 公司抬头专业打印导出，核心清单一键导出 Excel" } },
-      { key: "portal.zone.gov.i3", text: { en: "Ctrl+K OmniSearch, saved views and bulk operations — column visibility, bulk CSV export, inline editing", zh: "Ctrl+K 全局搜索、常用视图与批量操作——列显隐、批量导出 CSV、行内编辑" } },
+      { key: "portal.zone.gov.i3", text: { en: "Excel-like DataGrid with cell editing, copy/paste, aggregation footers, Ctrl+K OmniSearch and saved views", zh: "Excel 式数据表格——单元格编辑、复制粘贴、汇总脚注，Ctrl+K 全局搜索与常用视图" } },
       { key: "portal.zone.gov.i4", text: { en: "Outlook and Teams integration, no workflow change", zh: "Outlook、Teams 直接集成，不换工作方式" } },
     ],
   },
@@ -93,7 +94,7 @@ const ZONES = [
     title: { en: "Data & Integration", zh: "数据与集成" },
     en: "Data & Integration",
     items: [
-      { key: "portal.zone.data.i1", text: { en: "Background jobs and webhooks — async processing and external notifications", zh: "后台作业与 Webhook——异步处理，外部系统实时通知" } },
+      { key: "portal.zone.data.i1", text: { en: "Freight rate matrix, pricing templates and FFA/swap trading with MtM", zh: "运价矩阵、定价模板与 FFA/掉期交易，逐日盯市" } },
       { key: "portal.zone.data.i2", text: { en: "Data quality SelfCheck — automated data health checks with auto-fix", zh: "数据质量 SelfCheck——自动体检，修复销号" } },
       { key: "portal.zone.data.i3", text: { en: "Port cost benchmarking against historical disbursement costs", zh: "港口使费对标历史 PDA 成本，高低一眼看清" } },
       { key: "portal.zone.data.i4", text: { en: "Clause library: 10 system clause templates, tenant custom clauses and parameter materialization", zh: "条款库：10 条系统条款模板、租户自定义条款，参数物化直通计算引擎" } },
@@ -128,22 +129,11 @@ export default function PortalPage() {
 
   return (
     <div className="portal portal-marketing" style={{ ["--portal-accent" as string]: accent }}>
-      <header className="portal-nav portal-nav-slim">
-        <div className="portal-brand">
-          <img src={brand?.icon_url || "/branding/mark.svg"} alt="" width={28} height={28} />
-          <strong>{name}</strong>
-        </div>
-        <div className="portal-nav-actions">
-          <LanguageSwitcher />
-          <Link href="/login" className="btn btn-primary portal-cta">
-            {t("portal.sign_in", "Sign in")}
-          </Link>
-        </div>
-      </header>
+      <PublicNav brand={brand} current="home" />
 
       <section className="land-hero">
         <div className="land-hero-inner">
-          <img className="land-logo" src={brand?.icon_url || "/branding/mark.svg"} alt="" width={64} height={64} />
+          <img className="land-logo" src={assetUrl(brand?.icon_url) || "/branding/mark.svg"} alt="" width={64} height={64} />
           <p className="land-eyebrow">
             {t("portal.hero_eyebrow", "The Operating System for Commercial Shipping")}
           </p>
@@ -217,6 +207,7 @@ export default function PortalPage() {
         </span>
         <span className="land-foot-links">
           <a href="/intro.html">{t("portal.cta_intro", { en: "Learn more", zh: "了解详情" })}</a>
+          <a href="/manual/">{t("portal.nav_manual", { en: "User manual", zh: "操作手册" })}</a>
           <Link href="/login">{t("portal.cta_signin", { en: "Sign in →", zh: "登录 →" })}</Link>
         </span>
       </footer>

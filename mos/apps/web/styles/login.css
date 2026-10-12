@@ -66,9 +66,9 @@
 .login-stage {
   min-height: 100vh;
   position: relative;
-  display: grid;
-  place-items: center;
-  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
   color: #eef3f6;
 }
 .login-stage-bg {
@@ -134,6 +134,28 @@
 }
 .login-foot-link { margin: 0.9rem 0 0; font-size: 0.85rem; }
 .login-foot-link a { color: #9fd4d1; }
+
+/* Standalone auth card under PublicNav (invite / verify / magic / oauth-stub) */
+.login-card-standalone {
+  width: min(440px, calc(100% - 2rem));
+  margin: 1.5rem auto;
+  position: relative;
+  z-index: 1;
+}
+.login-card-standalone h1 { margin-top: 0; }
+.login-card-standalone .btn-primary { width: 100%; }
+.login-card-standalone hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 1rem 0;
+}
+.login-pending {
+  margin: 1.5rem auto;
+  max-width: 440px;
+  padding: 2rem;
+  position: relative;
+  z-index: 1;
+}
 .login-presets-panel {
   background: rgba(0,0,0,0.18);
   border: 1px solid rgba(255,255,255,0.1);

@@ -78,8 +78,9 @@ export function CoaListPanel() {
     setLoading(true);
     setErr("");
     try {
+      // 路由为 /coa/contracts（裸 /coa 不存在 → 404 "Error: Not Found"）
       const [c, ch, p] = await Promise.all([
-        apiGet("/api/v1/coa"),
+        apiGet("/api/v1/coa/contracts"),
         apiGet("/api/v1/charters"),
         apiGet("/api/v1/masterdata/counterparties"),
       ]);
@@ -192,7 +193,7 @@ export function CoaListPanel() {
       };
       if (form.coa_no) payload.coa_no = form.coa_no;
       if (form.cargo_spec) payload.cargo_spec = form.cargo_spec;
-      const created = await apiPost("/api/v1/coa", payload);
+      const created = await apiPost("/api/v1/coa/contracts", payload);
       toast.success(t("page.coa.created", "COA created"));
       setOpenCreate(false);
       await load();

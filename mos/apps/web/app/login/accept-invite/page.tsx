@@ -4,6 +4,7 @@ import { FormEvent, Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
+import { PublicNav } from "@/components/PublicNav";
 
 import { API_BASE as API } from "@/lib/api";
 
@@ -36,8 +37,9 @@ function AcceptInvitePage() {
   return (
     <div className="login-stage">
       <div className="login-stage-bg" aria-hidden />
-      <form className="login-card" style={{ maxWidth: 440, margin: "4rem auto", position: "relative", zIndex: 1 }} onSubmit={submit}>
-        <h1 style={{ marginTop: 0 }}>{t("login.invite_title", "Accept invite")}</h1>
+      <PublicNav compact />
+      <form className="login-card login-card-standalone" onSubmit={submit}>
+        <h1>{t("login.invite_title", "Accept invite")}</h1>
         <p className="muted">{t("login.invite_help", "Set your password — email is marked verified on accept.")}</p>
         {error ? <div className="error">{error}</div> : null}
         <label>
@@ -52,7 +54,7 @@ function AcceptInvitePage() {
           {t("login.invite_password", "Password")}
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
         </label>
-        <button className="btn btn-primary" type="submit" style={{ width: "100%" }}>
+        <button className="btn btn-primary" type="submit">
           {t("login.invite_activate", "Activate account")}
         </button>
         <p className="login-foot-link">

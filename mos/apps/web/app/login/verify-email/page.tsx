@@ -4,6 +4,7 @@ import { FormEvent, Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
+import { PublicNav } from "@/components/PublicNav";
 
 import { API_BASE as API } from "@/lib/api";
 
@@ -46,8 +47,9 @@ function VerifyEmailPage() {
   return (
     <div className="login-stage">
       <div className="login-stage-bg" aria-hidden />
-      <div className="login-card" style={{ maxWidth: 460, margin: "4rem auto", position: "relative", zIndex: 1 }}>
-        <h1 style={{ marginTop: 0 }}>{t("login.verify_title", "Verify email")}</h1>
+      <PublicNav compact />
+      <div className="login-card login-card-standalone">
+        <h1>{t("login.verify_title", "Verify email")}</h1>
         {msg ? <p className="flash">{msg}</p> : null}
         {error ? <div className="error">{error}</div> : null}
         <form onSubmit={request}>
@@ -63,13 +65,13 @@ function VerifyEmailPage() {
             {t("login.verify_request", "Request verification")}
           </button>
         </form>
-        <hr style={{ borderColor: "rgba(255,255,255,0.1)", margin: "1rem 0" }} />
+        <hr />
         <form onSubmit={confirm}>
           <label>
             {t("login.verify_token", "Verification token")}
             <input value={token} onChange={(e) => setToken(e.target.value)} required />
           </label>
-          <button className="btn btn-primary" type="submit" style={{ width: "100%" }}>
+          <button className="btn btn-primary" type="submit">
             {t("login.verify_confirm", "Confirm")}
           </button>
         </form>

@@ -7,18 +7,18 @@
 <meta name="description" content="MariOS 把你每天用的 Excel、邮件和计算器，变成一个为航运生意而生的系统：估算、租约、滞期索赔、结算，一次做对。">
 <style>
 :root{
-  --bg:#050c18;
-  --bg2:#081226;
-  --bg3:#0a1830;
+  --bg:#07111d;
+  --bg2:#0a1628;
+  --bg3:#0d2033;
   --panel:#0c1a33;
-  --panel2:#0e2040;
+  --panel2:#123047;
   --line:rgba(120,170,255,.15);
   --line2:rgba(120,170,255,.26);
   --txt:#edf4fd;
   --muted:#9db1cf;
   --muted2:#7288ab;
-  --cyan:#45d5f2;
-  --cyan2:#2ea8ff;
+  --cyan:#2BB5B0;
+  --cyan2:#1A9B96;
   --gold:#e9bd5c;
   --gold2:#f4d891;
   --good:#4ade80;
@@ -31,23 +31,23 @@ html{scroll-behavior:smooth}
 body{
   background:var(--bg);
   color:var(--txt);
-  font-family:"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",system-ui,-apple-system,sans-serif;
+  font-family:Ubuntu,"Noto Sans CJK SC","Source Han Sans SC","IBM Plex Sans","Segoe UI",sans-serif;
   line-height:1.75;
   font-size:17.5px;
   -webkit-font-smoothing:antialiased;
   overflow-x:hidden;
 }
-::selection{background:rgba(69,213,242,.3)}
+::selection{background:rgba(43,181,176,.3)}
 a{color:inherit;text-decoration:none}
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 30px}
-.en{font-family:"Segoe UI",system-ui,sans-serif}
+.en{font-family:Ubuntu,"IBM Plex Sans","Segoe UI",system-ui,sans-serif}
 
 /* ---------- 背景 ---------- */
 .bg-glow{
   position:fixed;inset:0;z-index:-2;pointer-events:none;
   background:
-    radial-gradient(900px 500px at 10% -5%, rgba(46,168,255,.13), transparent 60%),
-    radial-gradient(820px 520px at 90% 6%, rgba(69,213,242,.09), transparent 60%),
+    radial-gradient(900px 500px at 10% -5%, rgba(26,155,150,.13), transparent 60%),
+    radial-gradient(820px 520px at 90% 6%, rgba(43,181,176,.09), transparent 60%),
     radial-gradient(1000px 720px at 50% 112%, rgba(20,60,130,.22), transparent 65%),
     var(--bg);
 }
@@ -65,14 +65,26 @@ a{color:inherit;text-decoration:none}
 .nav-links{display:flex;gap:30px;margin-left:auto;font-size:15.5px;color:var(--muted)}
 .nav-links a{transition:color .2s}
 .nav-links a:hover{color:var(--cyan)}
-.nav-links a.nav-sys{color:var(--gold);font-weight:600}
-.nav-links a.nav-sys:hover{color:var(--gold2)}
+.nav-links a.active{color:var(--cyan);font-weight:600}
 .nav-cta{
-  padding:11px 24px;border-radius:999px;font-size:15px;font-weight:600;
-  background:linear-gradient(135deg,var(--cyan2),var(--cyan));color:#04121f;
+  padding:11px 24px;border-radius:11px;font-size:15px;font-weight:600;
+  background:var(--cyan2);color:#0b1f2a;
   transition:transform .2s, box-shadow .2s;
 }
-.nav-cta:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(69,213,242,.35)}
+.nav-cta:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(43,181,176,.35)}
+.nav-anchors{
+  display:flex;gap:26px;align-items:center;
+  max-width:var(--maxw);margin:0 auto;padding:9px 30px 11px;
+  font-size:13.5px;color:var(--muted2);
+  background:rgba(5,12,24,.55);
+  border-top:1px solid var(--line);
+  overflow-x:auto;white-space:nowrap;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:none;
+}
+.nav-anchors::-webkit-scrollbar{display:none}
+.nav-anchors a{transition:color .2s}
+.nav-anchors a:hover{color:var(--cyan);text-decoration:underline;text-underline-offset:3px}
 
 /* ---------- Hero ---------- */
 .hero{padding:96px 0 60px}
@@ -80,15 +92,15 @@ a{color:inherit;text-decoration:none}
 .eyebrow{
   display:inline-flex;align-items:center;gap:10px;
   padding:7px 18px;border-radius:999px;font-size:14px;
-  border:1px solid var(--line2);color:var(--gold);
-  background:rgba(233,189,92,.07);margin-bottom:30px;
+  border:1px solid rgba(43,181,176,.35);color:var(--cyan);
+  background:rgba(43,181,176,.08);margin-bottom:30px;
 }
 h1.hero-title{
   font-size:clamp(40px,5.2vw,62px);line-height:1.18;font-weight:800;
   margin-bottom:26px;
 }
 h1 .grad{
-  background:linear-gradient(120deg,#ffe9b8 0%,var(--gold) 50%,#d99f2b 100%);
+  background:linear-gradient(120deg,#7fdfd9 0%,#2BB5B0 50%,#1A9B96 100%);
   -webkit-background-clip:text;background-clip:text;color:transparent;
 }
 .hero-sub{font-size:clamp(17px,1.9vw,21px);color:var(--muted);max-width:520px;margin-bottom:40px}
@@ -101,9 +113,9 @@ h1 .grad{
 }
 .btn-primary{
   background:linear-gradient(135deg,var(--cyan2),var(--cyan));color:#04121f;
-  box-shadow:0 8px 30px rgba(46,168,255,.28);
+  box-shadow:0 8px 30px rgba(26,155,150,.28);
 }
-.btn-primary:hover{transform:translateY(-2px);box-shadow:0 12px 40px rgba(69,213,242,.4)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 12px 40px rgba(43,181,176,.4)}
 .btn-ghost{border:1px solid var(--line2);color:var(--txt);background:rgba(12,26,51,.5)}
 .btn-ghost:hover{border-color:var(--cyan);color:var(--cyan)}
 .hero-mini{display:flex;gap:26px;margin-top:44px;flex-wrap:wrap;font-size:14px;color:var(--muted2)}
@@ -158,7 +170,7 @@ h2.sec-title{font-size:clamp(30px,3.6vw,44px);font-weight:800;line-height:1.28;m
   border:1px solid var(--line);border-radius:22px;padding:40px 44px;
   transition:border-color .25s;
 }
-.day-step:hover{border-color:rgba(69,213,242,.35)}
+.day-step:hover{border-color:rgba(43,181,176,.35)}
 .day-step:nth-child(even){grid-template-columns:1fr 200px}
 .day-step:nth-child(even) .day-art{order:2}
 .day-art svg{width:100%;height:auto;display:block}
@@ -179,12 +191,12 @@ h2.sec-title{font-size:clamp(30px,3.6vw,44px);font-weight:800;line-height:1.28;m
   padding:34px 30px;display:flex;gap:20px;align-items:flex-start;
   transition:transform .25s, border-color .25s;
 }
-.hl-card:hover{transform:translateY(-4px);border-color:rgba(69,213,242,.4)}
+.hl-card:hover{transform:translateY(-4px);border-color:rgba(43,181,176,.4)}
 .hl-ico{
   flex:none;width:56px;height:56px;border-radius:15px;
   display:flex;align-items:center;justify-content:center;
-  background:linear-gradient(145deg,rgba(69,213,242,.15),rgba(46,168,255,.06));
-  border:1px solid rgba(69,213,242,.28);
+  background:linear-gradient(145deg,rgba(43,181,176,.15),rgba(26,155,150,.06));
+  border:1px solid rgba(43,181,176,.28);
 }
 .hl-card h3{font-size:19px;margin-bottom:8px;line-height:1.5}
 .hl-card p{font-size:15px;color:var(--muted);line-height:1.7}
@@ -214,7 +226,7 @@ h2.sec-title{font-size:clamp(30px,3.6vw,44px);font-weight:800;line-height:1.28;m
   width:52px;height:52px;border-radius:50%;
   background:linear-gradient(135deg,var(--cyan2),var(--cyan));color:#04121f;
   display:flex;align-items:center;justify-content:center;
-  font-size:22px;font-weight:800;box-shadow:0 8px 24px rgba(46,168,255,.35);
+  font-size:22px;font-weight:800;box-shadow:0 8px 24px rgba(26,155,150,.35);
 }
 .start-card h3{font-size:20px;margin-bottom:10px}
 .start-card p{font-size:15.5px;color:var(--muted);line-height:1.75}
@@ -258,6 +270,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 }
 @media (max-width:820px){
   .nav-links{display:none}
+  .nav-anchors{gap:20px;padding:8px 22px 10px;font-size:12.5px}
   .pain-grid,.hl-grid,.start-grid{grid-template-columns:1fr}
   .day-step,.day-step:nth-child(even){grid-template-columns:1fr;gap:26px;padding:32px 28px}
   .day-step:nth-child(even) .day-art{order:0}
@@ -275,12 +288,12 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 <!-- ============ 导航 ============ -->
 <nav class="nav">
   <div class="nav-inner">
-    <a class="brand" href="#top">
+    <a class="brand" href="/">
       <svg width="36" height="36" viewBox="0 0 40 40" fill="none" aria-hidden="true">
         <rect x="1" y="1" width="38" height="38" rx="10" fill="#0c1a33" stroke="rgba(120,170,255,.3)"/>
-        <path d="M6 26 L14 26 L16 20 L24 20 L26 26 L34 26 L31 31 L9 31 Z" fill="#45d5f2" opacity=".9"/>
-        <path d="M15 20 L15 14 L25 14 L25 20" stroke="#e9bd5c" stroke-width="2" fill="none"/>
-        <path d="M4 34 Q10 32 14 34 T24 34 T36 34" stroke="#2ea8ff" stroke-width="1.6" fill="none" opacity=".7"/>
+        <path d="M6 26 L14 26 L16 20 L24 20 L26 26 L34 26 L31 31 L9 31 Z" fill="#2BB5B0" opacity=".9"/>
+        <path d="M15 20 L15 14 L25 14 L25 20" stroke="#7fdfd9" stroke-width="2" fill="none"/>
+        <path d="M4 34 Q10 32 14 34 T24 34 T36 34" stroke="#1A9B96" stroke-width="1.6" fill="none" opacity=".7"/>
       </svg>
       <span>
         <span class="en">MariOS</span><br>
@@ -288,15 +301,18 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
       </span>
     </a>
     <div class="nav-links">
-      <a class="nav-sys" href="/">← 返回首页</a>
-      <a href="#pain">您的烦恼</a>
-      <a href="#day">一天的工作</a>
-      <a href="#highlights">十二大亮点</a>
-      <a href="#trust">放心之选</a>
-      <a href="#start">开始使用</a>
-      <a class="nav-sys" href="/login">登录</a>
+      <a href="/">首页</a>
+      <a class="active" href="/intro.html">产品介绍</a>
+      <a href="/manual/">操作手册</a>
     </div>
-    <a class="nav-cta" href="#contact">预约演示</a>
+    <a class="nav-cta" href="/login">登录</a>
+  </div>
+  <div class="nav-anchors">
+    <a href="#pain">您的烦恼</a>
+    <a href="#day">一天的工作</a>
+    <a href="#highlights">十二大亮点</a>
+    <a href="#trust">放心之选</a>
+    <a href="#start">开始使用</a>
   </div>
 </nav>
 
@@ -342,10 +358,10 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
             <stop offset="0" stop-color="#1b3c6e"/><stop offset="1" stop-color="#0d2242"/>
           </linearGradient>
           <linearGradient id="routeC" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0" stop-color="#2ea8ff"/><stop offset="1" stop-color="#45d5f2"/>
+            <stop offset="0" stop-color="#1A9B96"/><stop offset="1" stop-color="#2BB5B0"/>
           </linearGradient>
           <radialGradient id="glowC" cx=".5" cy=".5" r=".5">
-            <stop offset="0" stop-color="#45d5f2" stop-opacity=".7"/><stop offset="1" stop-color="#45d5f2" stop-opacity="0"/>
+            <stop offset="0" stop-color="#2BB5B0" stop-opacity=".7"/><stop offset="1" stop-color="#2BB5B0" stop-opacity="0"/>
           </radialGradient>
         </defs>
 
@@ -358,28 +374,28 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
         <!-- 跨洋航线 -->
         <path class="anim-dash" d="M150 250 C 220 160, 400 150, 478 236" stroke="url(#routeC)" stroke-width="2.4" fill="none"/>
         <circle cx="150" cy="250" r="20" fill="url(#glowC)"/>
-        <circle cx="150" cy="250" r="5.5" fill="#45d5f2"/>
+        <circle cx="150" cy="250" r="5.5" fill="#2BB5B0"/>
         <circle cx="478" cy="236" r="20" fill="url(#glowC)"/>
-        <circle cx="478" cy="236" r="5.5" fill="#e9bd5c"/>
+        <circle cx="478" cy="236" r="5.5" fill="#7fdfd9"/>
         <!-- 小船图标在航线中点 -->
         <g class="anim-float">
-          <circle cx="314" cy="176" r="17" fill="#0c1a33" stroke="#45d5f2" stroke-width="1.6"/>
-          <path d="M306 180 h16 l-2.4 4.6 h-11.2 Z" fill="#45d5f2"/>
-          <path d="M311 180 v-7 h5 v7" stroke="#e9bd5c" stroke-width="1.6" fill="none"/>
+          <circle cx="314" cy="176" r="17" fill="#0c1a33" stroke="#2BB5B0" stroke-width="1.6"/>
+          <path d="M306 180 h16 l-2.4 4.6 h-11.2 Z" fill="#2BB5B0"/>
+          <path d="M311 180 v-7 h5 v7" stroke="#7fdfd9" stroke-width="1.6" fill="none"/>
         </g>
 
         <!-- 海浪与船 -->
         <g>
           <path d="M0 420 Q 40 410 80 420 T 160 420 T 240 420 T 320 420 T 400 420 T 480 420 T 560 420 T 640 420 L640 520 L0 520 Z" fill="url(#seaC)"/>
-          <path d="M0 436 Q 50 426 100 436 T 200 436 T 300 436 T 400 436 T 500 436 T 600 436" stroke="#2ea8ff" stroke-width="1.4" fill="none" opacity=".35"/>
+          <path d="M0 436 Q 50 426 100 436 T 200 436 T 300 436 T 400 436 T 500 436 T 600 436" stroke="#1A9B96" stroke-width="1.4" fill="none" opacity=".35"/>
         </g>
         <g class="anim-float" style="animation-delay:-2.4s">
           <path d="M250 382 L380 382 L368 410 Q365 416 358 416 L272 416 Q265 416 262 410 Z" fill="url(#hullC)" stroke="rgba(120,200,255,.35)" stroke-width="1.2"/>
-          <rect x="250" y="377" width="130" height="6" rx="3" fill="#2ea8ff" opacity=".85"/>
+          <rect x="250" y="377" width="130" height="6" rx="3" fill="#1A9B96" opacity=".85"/>
           <g stroke="rgba(6,16,32,.5)" stroke-width="1">
-            <rect x="266" y="354" width="26" height="23" rx="2" fill="#2ea8ff"/>
-            <rect x="296" y="354" width="26" height="23" rx="2" fill="#45d5f2"/>
-            <rect x="326" y="354" width="26" height="23" rx="2" fill="#e9bd5c"/>
+            <rect x="266" y="354" width="26" height="23" rx="2" fill="#1A9B96"/>
+            <rect x="296" y="354" width="26" height="23" rx="2" fill="#2BB5B0"/>
+            <rect x="326" y="354" width="26" height="23" rx="2" fill="#7fdfd9"/>
           </g>
           <rect x="352" y="338" width="20" height="39" rx="3" fill="#16406f" stroke="rgba(120,200,255,.3)"/>
           <rect x="355" y="344" width="14" height="6" rx="1.5" fill="#bfe9ff" opacity=".8"/>
@@ -406,9 +422,9 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
             <rect x="490" y="136" width="22" height="16" rx="4"/><rect x="519" y="136" width="22" height="16" rx="4"/><rect x="548" y="136" width="22" height="16" rx="4"/>
             <rect x="490" y="159" width="22" height="16" rx="4"/><rect x="519" y="159" width="22" height="16" rx="4"/>
           </g>
-          <rect x="548" y="159" width="22" height="16" rx="4" fill="#e9bd5c"/>
+          <rect x="548" y="159" width="22" height="16" rx="4" fill="#7fdfd9"/>
           <rect x="490" y="182" width="51" height="16" rx="4" fill="#16406f"/>
-          <rect x="548" y="182" width="22" height="16" rx="4" fill="#45d5f2"/>
+          <rect x="548" y="182" width="22" height="16" rx="4" fill="#2BB5B0"/>
           <text x="530" y="238" text-anchor="middle" font-size="11.5" fill="#7288ab" font-family="inherit">估算，半分钟出结果</text>
         </g>
 
@@ -416,7 +432,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
         <g class="anim-float" style="animation-delay:-4.6s">
           <rect x="42" y="268" width="118" height="90" rx="12" fill="#0c1a33" stroke="rgba(120,170,255,.3)" stroke-width="1.5"/>
           <line x1="72" y1="268" x2="72" y2="358" stroke="rgba(120,170,255,.25)" stroke-width="1.3"/>
-          <path d="M52 290 h12 M52 306 h12 M52 322 h12" stroke="#45d5f2" stroke-width="2" stroke-linecap="round" opacity=".8"/>
+          <path d="M52 290 h12 M52 306 h12 M52 322 h12" stroke="#2BB5B0" stroke-width="2" stroke-linecap="round" opacity=".8"/>
           <path d="M84 290 h64 M84 306 h52 M84 322 h60" stroke="rgba(157,177,207,.55)" stroke-width="2.4" stroke-linecap="round"/>
           <path d="M84 340 h30" stroke="#e9bd5c" stroke-width="2.4" stroke-linecap="round"/>
           <text x="101" y="376" text-anchor="middle" font-size="11.5" fill="#7288ab" font-family="inherit">每票盈亏，随时可查</text>
@@ -502,8 +518,8 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
             <path d="M20 50 Q 50 30 80 46 T 140 40 Q 170 36 184 52" stroke="rgba(120,170,255,.3)" stroke-width="1.4" fill="none"/>
             <path d="M14 96 Q 60 78 110 92 T 186 86" stroke="rgba(120,170,255,.2)" stroke-width="1.3" fill="none"/>
             <g>
-              <circle cx="52" cy="66" r="5" fill="#45d5f2"/>
-              <circle class="anim-pulse" cx="52" cy="66" r="10" stroke="#45d5f2" fill="none"/>
+              <circle cx="52" cy="66" r="5" fill="#2BB5B0"/>
+              <circle class="anim-pulse" cx="52" cy="66" r="10" stroke="#2BB5B0" fill="none"/>
               <rect x="34" y="38" width="52" height="18" rx="6" fill="#0c1a33" stroke="rgba(120,170,255,.3)"/>
               <text x="60" y="51" text-anchor="middle" font-size="9.5" fill="#4ade80" font-family="inherit">+$1.2万</text>
             </g>
@@ -513,7 +529,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
               <text x="134" y="125" text-anchor="middle" font-size="9.5" fill="#e9bd5c" font-family="inherit">在港 2 天</text>
             </g>
             <g>
-              <circle cx="164" cy="58" r="5" fill="#45d5f2"/>
+              <circle cx="164" cy="58" r="5" fill="#2BB5B0"/>
               <rect x="138" y="30" width="52" height="18" rx="6" fill="#0c1a33" stroke="rgba(120,170,255,.3)"/>
               <text x="164" y="43" text-anchor="middle" font-size="9.5" fill="#4ade80" font-family="inherit">+$0.8万</text>
             </g>
@@ -521,7 +537,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
         </div>
         <div>
           <div class="day-time">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#45d5f2" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#45d5f2" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#2BB5B0" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#2BB5B0" stroke-width="1.4" stroke-linecap="round"/></svg>
             早上 8:30 · 打开系统
           </div>
           <h3>您的专属主页：今天该干什么，一屏摆好</h3>
@@ -540,14 +556,14 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
             <text x="38" y="120" font-size="12" fill="#9db1cf" font-family="inherit">日收益 TCE</text>
             <text x="162" y="121" text-anchor="end" font-size="16" font-weight="800" fill="#4ade80" font-family="inherit">$28,450</text>
             <g>
-              <circle cx="162" cy="30" r="16" fill="#0c1a33" stroke="#e9bd5c" stroke-width="1.6"/>
-              <text x="162" y="35" text-anchor="middle" font-size="10" font-weight="800" fill="#e9bd5c" font-family="inherit">30s</text>
+              <circle cx="162" cy="30" r="16" fill="#0c1a33" stroke="#2BB5B0" stroke-width="1.6"/>
+              <text x="162" y="35" text-anchor="middle" font-size="10" font-weight="800" fill="#2BB5B0" font-family="inherit">30s</text>
             </g>
           </svg>
         </div>
         <div>
           <div class="day-time">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#45d5f2" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#45d5f2" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#2BB5B0" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#2BB5B0" stroke-width="1.4" stroke-linecap="round"/></svg>
             上午 10:00 · 租家来询价
           </div>
           <h3>输入航线和货量，30 秒出估算</h3>
@@ -561,7 +577,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
             <rect x="14" y="14" width="86" height="122" rx="10" fill="#0a1830" stroke="rgba(120,170,255,.3)"/>
             <text x="57" y="34" text-anchor="middle" font-size="10.5" font-weight="700" fill="#9db1cf" font-family="inherit">SOF</text>
             <path d="M26 48 h62 M26 62 h62 M26 76 h48 M26 90 h62 M26 104 h40" stroke="rgba(157,177,207,.5)" stroke-width="2.2" stroke-linecap="round"/>
-            <circle cx="26" cy="48" r="2.4" fill="#45d5f2"/><circle cx="26" cy="62" r="2.4" fill="#45d5f2"/>
+            <circle cx="26" cy="48" r="2.4" fill="#2BB5B0"/><circle cx="26" cy="62" r="2.4" fill="#2BB5B0"/>
             <path d="M104 75 h18" stroke="#e9bd5c" stroke-width="2.4" stroke-linecap="round"/>
             <path d="M116 69 l8 6-8 6" stroke="#e9bd5c" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
             <rect x="126" y="14" width="66" height="122" rx="10" fill="#0c1a33" stroke="#e9bd5c" stroke-width="1.5"/>
@@ -573,7 +589,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
         </div>
         <div>
           <div class="day-time">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#45d5f2" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#45d5f2" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#2BB5B0" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#2BB5B0" stroke-width="1.4" stroke-linecap="round"/></svg>
             下午 2:00 · 船在港作业
           </div>
           <h3>代理发来 SOF，一键生成滞期计算书</h3>
@@ -599,7 +615,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
         </div>
         <div>
           <div class="day-time">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#45d5f2" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#45d5f2" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#2BB5B0" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#2BB5B0" stroke-width="1.4" stroke-linecap="round"/></svg>
             下午 4:00 · 系统弹出红灯
           </div>
           <h3>索赔时效还剩 14 天，自动提醒</h3>
@@ -616,8 +632,8 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
             <g>
               <rect x="24"  y="96" width="22" height="30" rx="4" fill="#16406f"/>
               <rect x="54"  y="82" width="22" height="44" rx="4" fill="#1b508a"/>
-              <rect x="84"  y="70" width="22" height="56" rx="4" fill="#2ea8ff"/>
-              <rect x="114" y="58" width="22" height="68" rx="4" fill="#45d5f2"/>
+              <rect x="84"  y="70" width="22" height="56" rx="4" fill="#1A9B96"/>
+              <rect x="114" y="58" width="22" height="68" rx="4" fill="#2BB5B0"/>
               <rect x="144" y="48" width="22" height="78" rx="4" fill="#e9bd5c"/>
             </g>
             <path d="M30 60 Q 80 46 160 40" stroke="#4ade80" stroke-width="2" fill="none" stroke-linecap="round"/>
@@ -626,7 +642,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
         </div>
         <div>
           <div class="day-time">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#45d5f2" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#45d5f2" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.4" stroke="#2BB5B0" stroke-width="1.4"/><path d="M8 4.8V8l2.2 2.2" stroke="#2BB5B0" stroke-width="1.4" stroke-linecap="round"/></svg>
             傍晚 6:00 · 航次结束
           </div>
           <h3>发票、红冲、收款、汇兑，一次结清</h3>
@@ -649,7 +665,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 
       <div class="hl-card reveal">
         <div class="hl-ico">
-          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><path d="M6 4h14M6 22h14M8 4c0 6 5 6 5 9s-5 3-5 9M18 4c0 6-5 6-5 9s5 3 5 9" stroke="#e9bd5c" stroke-width="1.7" stroke-linecap="round"/></svg>
+          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><path d="M6 4h14M6 22h14M8 4c0 6 5 6 5 9s-5 3-5 9M18 4c0 6-5 6-5 9s5 3 5 9" stroke="#7fdfd9" stroke-width="1.7" stroke-linecap="round"/></svg>
         </div>
         <div>
           <h3>滞期费，一分钱不丢</h3>
@@ -659,7 +675,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 
       <div class="hl-card reveal">
         <div class="hl-ico">
-          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="4" y="3" width="18" height="20" rx="3" stroke="#45d5f2" stroke-width="1.7"/><path d="M8 8h10M8 12h4" stroke="#45d5f2" stroke-width="1.6" stroke-linecap="round"/><path d="M8 17l2.4-2.4 2.2 2.2 3.6-4" stroke="#e9bd5c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="4" y="3" width="18" height="20" rx="3" stroke="#2BB5B0" stroke-width="1.7"/><path d="M8 8h10M8 12h4" stroke="#2BB5B0" stroke-width="1.6" stroke-linecap="round"/><path d="M8 17l2.4-2.4 2.2 2.2 3.6-4" stroke="#7fdfd9" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
         <div>
           <h3>估算 3 分钟变 30 秒</h3>
@@ -669,7 +685,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 
       <div class="hl-card reveal">
         <div class="hl-ico">
-          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="9.5" stroke="#45d5f2" stroke-width="1.7"/><path d="M4 13h18M13 3.5c3 2.6 4.5 5.8 4.5 9.5s-1.5 6.9-4.5 9.5c-3-2.6-4.5-5.8-4.5-9.5S10 6.1 13 3.5Z" stroke="#45d5f2" stroke-width="1.4"/><path d="M9 14.5c1.6 1.8 4.6 2 6.5.2" stroke="#4ade80" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="9.5" stroke="#2BB5B0" stroke-width="1.7"/><path d="M4 13h18M13 3.5c3 2.6 4.5 5.8 4.5 9.5s-1.5 6.9-4.5 9.5c-3-2.6-4.5-5.8-4.5-9.5S10 6.1 13 3.5Z" stroke="#2BB5B0" stroke-width="1.4"/><path d="M9 14.5c1.6 1.8 4.6 2 6.5.2" stroke="#4ade80" stroke-width="1.6" stroke-linecap="round"/></svg>
         </div>
         <div>
           <h3>碳成本自动算</h3>
@@ -679,7 +695,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 
       <div class="hl-card reveal">
         <div class="hl-ico">
-          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="3" y="6" width="20" height="14" rx="3" stroke="#45d5f2" stroke-width="1.7"/><path d="M4 8l9 6.5L22 8" stroke="#e9bd5c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="3" y="6" width="20" height="14" rx="3" stroke="#2BB5B0" stroke-width="1.7"/><path d="M4 8l9 6.5L22 8" stroke="#7fdfd9" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
         <div>
           <h3>不用换邮箱</h3>
@@ -699,7 +715,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 
       <div class="hl-card reveal">
         <div class="hl-ico">
-          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><path d="M13 3l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z" stroke="#45d5f2" stroke-width="1.7" stroke-linejoin="round"/><path d="M13 9v5" stroke="#e9bd5c" stroke-width="1.8" stroke-linecap="round"/><circle cx="13" cy="17" r="1.3" fill="#e9bd5c"/></svg>
+          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><path d="M13 3l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z" stroke="#2BB5B0" stroke-width="1.7" stroke-linejoin="round"/><path d="M13 9v5" stroke="#7fdfd9" stroke-width="1.8" stroke-linecap="round"/><circle cx="13" cy="17" r="1.3" fill="#7fdfd9"/></svg>
         </div>
         <div>
           <h3>数据在您自己手里</h3>
@@ -719,7 +735,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 
       <div class="hl-card reveal">
         <div class="hl-ico">
-          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="5" y="3" width="16" height="20" rx="3" stroke="#45d5f2" stroke-width="1.7"/><circle cx="13" cy="10" r="3" stroke="#e9bd5c" stroke-width="1.6"/><path d="M8 17c1.4-2.2 8.6-2.2 10 0" stroke="#e9bd5c" stroke-width="1.6" stroke-linecap="round"/><path d="M8.5 20.5h9" stroke="#45d5f2" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="5" y="3" width="16" height="20" rx="3" stroke="#2BB5B0" stroke-width="1.7"/><circle cx="13" cy="10" r="3" stroke="#7fdfd9" stroke-width="1.6"/><path d="M8 17c1.4-2.2 8.6-2.2 10 0" stroke="#7fdfd9" stroke-width="1.6" stroke-linecap="round"/><path d="M8.5 20.5h9" stroke="#2BB5B0" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>
         <div>
           <h3>证书到期提前 30 天提醒</h3>
@@ -739,7 +755,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 
       <div class="hl-card reveal">
         <div class="hl-ico">
-          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="5" y="9" width="15" height="12" rx="4.5" stroke="#45d5f2" stroke-width="1.7"/><circle cx="9.8" cy="15" r="1.5" fill="#e9bd5c"/><circle cx="15.2" cy="15" r="1.5" fill="#e9bd5c"/><path d="M8.6 18.6h7.8" stroke="#45d5f2" stroke-width="1.5" stroke-linecap="round" opacity=".7"/><path d="M12.5 9V6" stroke="#45d5f2" stroke-width="1.6" stroke-linecap="round"/><circle cx="12.5" cy="4.6" r="1.5" fill="#e9bd5c"/><path d="M22.2 4.2l.7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z" fill="#45d5f2"/></svg>
+          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="5" y="9" width="15" height="12" rx="4.5" stroke="#2BB5B0" stroke-width="1.7"/><circle cx="9.8" cy="15" r="1.5" fill="#7fdfd9"/><circle cx="15.2" cy="15" r="1.5" fill="#7fdfd9"/><path d="M8.6 18.6h7.8" stroke="#2BB5B0" stroke-width="1.5" stroke-linecap="round" opacity=".7"/><path d="M12.5 9V6" stroke="#2BB5B0" stroke-width="1.6" stroke-linecap="round"/><circle cx="12.5" cy="4.6" r="1.5" fill="#7fdfd9"/><path d="M22.2 4.2l.7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z" fill="#2BB5B0"/></svg>
         </div>
         <div>
           <h3>AI 智能助手</h3>
@@ -749,7 +765,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 
       <div class="hl-card reveal">
         <div class="hl-ico">
-          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="4" y="3" width="18" height="20" rx="3" stroke="#45d5f2" stroke-width="1.7"/><path d="M8 8h6" stroke="#45d5f2" stroke-width="1.6" stroke-linecap="round"/><path d="M8 13.2l1.8 1.8 3-3.2" stroke="#e9bd5c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 18.6l1.8 1.8 3-3.2" stroke="#e9bd5c" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 13.2h3M16 18.6h3" stroke="#45d5f2" stroke-width="1.5" stroke-linecap="round" opacity=".7"/></svg>
+          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><rect x="4" y="3" width="18" height="20" rx="3" stroke="#2BB5B0" stroke-width="1.7"/><path d="M8 8h6" stroke="#2BB5B0" stroke-width="1.6" stroke-linecap="round"/><path d="M8 13.2l1.8 1.8 3-3.2" stroke="#7fdfd9" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 18.6l1.8 1.8 3-3.2" stroke="#7fdfd9" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 13.2h3M16 18.6h3" stroke="#2BB5B0" stroke-width="1.5" stroke-linecap="round" opacity=".7"/></svg>
         </div>
         <div>
           <h3>条款库管好细节</h3>
@@ -759,7 +775,7 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
 
       <div class="hl-card reveal">
         <div class="hl-ico">
-          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><path d="M21 5c-9 .5-14 5-14 11 0 2 .5 3.6 1.2 5C15 20 20.5 13 21 5Z" stroke="#4ade80" stroke-width="1.7" stroke-linejoin="round"/><path d="M7.5 20.5c1.6-4.6 5.2-9 10.2-12.2" stroke="#45d5f2" stroke-width="1.6" stroke-linecap="round"/><circle cx="20.8" cy="18.6" r="1.4" fill="#e9bd5c"/></svg>
+          <svg width="28" height="28" viewBox="0 0 26 26" fill="none"><path d="M21 5c-9 .5-14 5-14 11 0 2 .5 3.6 1.2 5C15 20 20.5 13 21 5Z" stroke="#4ade80" stroke-width="1.7" stroke-linejoin="round"/><path d="M7.5 20.5c1.6-4.6 5.2-9 10.2-12.2" stroke="#2BB5B0" stroke-width="1.6" stroke-linecap="round"/><circle cx="20.8" cy="18.6" r="1.4" fill="#7fdfd9"/></svg>
         </div>
         <div>
           <h3>碳排监控不漏账</h3>
@@ -888,18 +904,25 @@ footer{border-top:1px solid var(--line);padding:48px 0 56px}
   <div class="wrap">
     <div class="foot-inner">
       <div class="foot-brand">
-        <a class="brand" href="#top">
+        <a class="brand" href="/">
           <svg width="32" height="32" viewBox="0 0 40 40" fill="none" aria-hidden="true">
             <rect x="1" y="1" width="38" height="38" rx="10" fill="#0c1a33" stroke="rgba(120,170,255,.3)"/>
-            <path d="M6 26 L14 26 L16 20 L24 20 L26 26 L34 26 L31 31 L9 31 Z" fill="#45d5f2" opacity=".9"/>
-            <path d="M15 20 L15 14 L25 14 L25 20" stroke="#e9bd5c" stroke-width="2" fill="none"/>
-            <path d="M4 34 Q10 32 14 34 T24 34 T36 34" stroke="#2ea8ff" stroke-width="1.6" fill="none" opacity=".7"/>
+            <path d="M6 26 L14 26 L16 20 L24 20 L26 26 L34 26 L31 31 L9 31 Z" fill="#2BB5B0" opacity=".9"/>
+            <path d="M15 20 L15 14 L25 14 L25 20" stroke="#7fdfd9" stroke-width="2" fill="none"/>
+            <path d="M4 34 Q10 32 14 34 T24 34 T36 34" stroke="#1A9B96" stroke-width="1.6" fill="none" opacity=".7"/>
           </svg>
           <span><span class="en">MariOS</span><br><span class="brand-sub">航运生意，一个系统管好</span></span>
         </a>
         <p>为船东、租家、Operator 与船舶管理公司而做：航次估算、租约、滞期索赔、燃油与结算，一个系统全管好。</p>
       </div>
       <div class="foot-cols">
+        <div class="foot-col">
+          <h4>站内导航</h4>
+          <a href="/">首页</a>
+          <a href="/intro.html">产品介绍</a>
+          <a href="/manual/">操作手册</a>
+          <a href="/login">登录</a>
+        </div>
         <div class="foot-col">
           <h4>看看产品</h4>
           <a href="#pain">您的烦恼</a>

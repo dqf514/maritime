@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { API_BASE } from "@/lib/api";
+import { PublicNav } from "@/components/PublicNav";
 
 const STUB_ENABLED = process.env.NEXT_PUBLIC_OAUTH_STUB === "1";
 
@@ -48,8 +49,9 @@ function OAuthStubPage() {
     return (
       <div className="login-stage">
         <div className="login-stage-bg" aria-hidden />
-        <div className="login-card" style={{ maxWidth: 440, margin: "4rem auto", position: "relative", zIndex: 1 }}>
-          <h1 style={{ marginTop: 0 }}>{title}</h1>
+        <PublicNav compact />
+        <div className="login-card login-card-standalone">
+          <h1>{title}</h1>
           <p className="muted">{t("login.oauth_stub_disabled", "此登录方式未启用。")}</p>
           <p className="login-foot-link">
             <Link href="/login">{t("login.oauth_stub_back", "← Back")}</Link>
@@ -62,8 +64,9 @@ function OAuthStubPage() {
   return (
     <div className="login-stage">
       <div className="login-stage-bg" aria-hidden />
-      <form className="login-card" style={{ maxWidth: 440, margin: "4rem auto", position: "relative", zIndex: 1 }} onSubmit={complete}>
-        <h1 style={{ marginTop: 0 }}>{title}</h1>
+      <PublicNav compact />
+      <form className="login-card login-card-standalone" onSubmit={complete}>
+        <h1>{title}</h1>
         <p className="muted">
           {t(
             "login.oauth_stub_help",
@@ -80,7 +83,7 @@ function OAuthStubPage() {
           {t("login.oauth_stub_name", "Display name")}
           <input value={name} onChange={(e) => setName(e.target.value)} />
         </label>
-        <button className="btn btn-primary" type="submit" style={{ width: "100%" }}>
+        <button className="btn btn-primary" type="submit">
           {t("login.oauth_stub_continue", "Continue as verified identity")}
         </button>
         <p className="login-foot-link">

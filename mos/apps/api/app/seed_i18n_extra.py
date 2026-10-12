@@ -1273,6 +1273,7 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("page.estimates.compare_need", "app", "Select at least 2 estimates to compare", "请至少选择 2 个航次估算进行对比"),
     ("page.estimates.compare_ok", "app", "Compare ready", "对比已就绪"),
     ("page.estimates.compare_table", "app", "Compare", "对比"),
+    ("page.estimates.compare_toggle", "app", "Toggle compare panel", "开合对比面板"),
     ("page.estimates.counterparty", "app", "Counterparty", "对手方"),
     ("page.estimates.created", "app", "Draft created", "草稿已创建"),
     ("page.estimates.deadweight", "app", "Vessel DWT", "船舶载重吨"),
@@ -2206,8 +2207,11 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("ai.usage.total_tokens", "app", "Total tokens", "Token 总量"),
     ("crop.confirm", "app", "Confirm upload", "确认上传"),
     ("crop.export_fail", "app", "Export failed: {err}", "导出失败：{err}"),
+    ("crop.frame", "app", "Frame size", "选区大小"),
     ("crop.hint", "app", "Drag to reposition, use the slider to zoom. Outputs {w}×{h} PNG.", "拖动调整位置，滑块缩放。输出 {w}×{h} PNG"),
+    ("crop.hint2", "app", "Drag to reposition, sliders to zoom / resize the frame; output is a fixed-size PNG.", "拖动调整位置，滑块缩放、选区可缩小；输出为固定尺寸 PNG。"),
     ("crop.load_fail", "app", "Failed to read image, try another", "图片读取失败，请换一张"),
+    ("crop.output", "app", "Output size", "输出尺寸"),
     ("crop.title", "app", "Crop {kind}", "裁剪 {kind}"),
     ("crop.zoom", "app", "Zoom", "缩放"),
     ("denied.area_unknown", "app", "this area", "该区域"),
@@ -2840,5 +2844,8 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("ws.val.eta_before_laycan", "app", "ETA before laycan: {port} {eta}", "ETA 早于受载期：{port} {eta}"),
     ("ws.val.missing_etd", "app", "Departed port call missing ETD: {port}", "已离港的挂靠缺少 ETD：{port}"),
     ("ws.val.no_ports", "app", "Voyage has no port calls", "航次没有挂靠港"),
+    ("portal.nav_home", "app", "Home", "首页"),
+    ("portal.nav_intro", "app", "Product tour", "产品介绍"),
+    ("portal.nav_manual", "app", "User manual", "操作手册"),
 
 ]

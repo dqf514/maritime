@@ -3,6 +3,7 @@
 import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
+import { PublicNav } from "@/components/PublicNav";
 
 function OAuthDonePage() {
   const sp = useSearchParams();
@@ -21,7 +22,13 @@ function OAuthDonePage() {
     }
   }, [sp, router]);
 
-  return <p style={{ padding: "2rem" }}>{t("login.oauth_done", "Completing sign-in…")}</p>;
+  return (
+    <div className="login-stage">
+      <div className="login-stage-bg" aria-hidden />
+      <PublicNav compact />
+      <p className="login-pending">{t("login.oauth_done", "Completing sign-in…")}</p>
+    </div>
+  );
 }
 
 export default function OAuthDonePageWrapper() {
