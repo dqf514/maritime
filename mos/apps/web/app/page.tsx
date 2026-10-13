@@ -207,7 +207,7 @@ export default function PortalPage() {
         </span>
         <span className="land-foot-links">
           <a href="/intro.html">{t("portal.cta_intro", { en: "Learn more", zh: "了解详情" })}</a>
-          <a href="/manual/">{t("portal.nav_manual", { en: "User manual", zh: "操作手册" })}</a>
+          <a href="/manual">{t("portal.nav_manual", { en: "User manual", zh: "操作手册" })}</a>
           <Link href="/login">{t("portal.cta_signin", { en: "Sign in →", zh: "登录 →" })}</Link>
         </span>
       </footer>

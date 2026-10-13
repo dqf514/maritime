@@ -14,7 +14,7 @@ type PublicNavProps = {
 const LINKS = [
   { id: "home" as const, href: "/", key: "portal.nav_home", fallback: { en: "Home", zh: "首页" } },
   { id: "intro" as const, href: "/intro.html", key: "portal.nav_intro", fallback: { en: "Product tour", zh: "产品介绍" } },
-  { id: "manual" as const, href: "/manual/", key: "portal.nav_manual", fallback: { en: "User manual", zh: "操作手册" } },
+  { id: "manual" as const, href: "/manual", key: "portal.nav_manual", fallback: { en: "User manual", zh: "操作手册" } },
 ];
 
 export function PublicNav({ brand, current, compact }: PublicNavProps) {
