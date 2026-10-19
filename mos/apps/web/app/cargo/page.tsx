@@ -36,7 +36,8 @@ type CargoBookRow = {
   counterparty: string | null;
 };
 
-const STATUS_OPTIONS = ["booked", "loading", "loaded", "in_transit", "discharged", "completed", "cancelled"] as const;
+// 与后端 CARGO_TRANSITIONS 一致：open → booked → nominated → fixed → completed | cancelled
+const STATUS_OPTIONS = ["open", "booked", "nominated", "fixed", "completed", "cancelled"] as const;
 
 function CargoBookWorkspace() {
   const { t } = useI18n();
@@ -138,9 +139,9 @@ function CargoBookWorkspace() {
         key: "status", title: t("common.status", "Status"), width: 100, sortable: true,
         render: (v) => {
           const s = String(v ?? "");
-          const cls = s === "completed" || s === "discharged" ? "badge-pass"
+          const cls = s === "completed" ? "badge-pass"
             : s === "cancelled" ? "badge-fail"
-            : s === "in_transit" || s === "loaded" ? "badge-info"
+            : s === "fixed" || s === "nominated" ? "badge-info"
             : "badge-warn";
           return <span className={`badge ${cls}`}>{s}</span>;
         },

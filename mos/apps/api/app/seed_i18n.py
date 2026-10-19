@@ -284,6 +284,8 @@ def seed_i18n(db: Session) -> None:
         ("settings.title", "System settings", "系统设置"),
         ("settings.sub", "Tenant settings hub for users, security, licenses and integrations.", "租户级配置入口：用户、安全、许可、集成等。"),
         ("page.finance.no", "No.", "编号"),
+        # 历史种子写的是 {days}，组件传 {n}——强刷以治愈已入库的旧值
+        ("ship.cert.days_left", "{n} d left", "剩余 {n} 天"),
     ):
         row_en = db.scalar(select(UiMessage).where(UiMessage.msg_key == key, UiMessage.locale == "en"))
         if row_en:

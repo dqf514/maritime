@@ -4,6 +4,7 @@ Path map (all under ``/api/v1``):
   GET    /cargo                  — list + pagination + filters
   POST   /cargo                  — create (CGO-YYYY-NNNNN doc number)
   GET    /cargo/book             — open cargo grouped by laycan month
+  GET    /cargo-book             — cargo book rows for /cargo page (enriched names)
   GET    /cargo/{id}             — detail
   PATCH  /cargo/{id}             — update
   DELETE /cargo/{id}             — soft delete (recycle bin)
@@ -31,6 +32,7 @@ from app.services.state_machine import CARGO_TRANSITIONS, transition
 from app.services.tenant_guard import scoped_get
 
 from app.models_cargo import Cargo
+from app.models_domain import Voyage
 
 router = APIRouter(tags=["Cargo"])
 
@@ -116,6 +118,62 @@ def create_cargo(body: CargoIn, auth: AuthContext = Depends(require_module("oper
 def cargo_book(auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
     """货盘簿 — open cargo grouped by laycan month (must precede /cargo/{cargo_id})."""
     return cargo_svc.cargo_book_summary(db, auth.tenant_id)
+
+
+@router.get("/cargo-book")
+def cargo_book_rows(
+    status: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """货物台账列表（/cargo 页面契约）——富化港口/船名/对手方显示名。
+
+    页面调的是 /api/v1/cargo-book（此前 404）；行结构按 CargoBookRow 对齐。
+    """
+    from sqlalchemy import select
+
+    from app.models_wave1 import Counterparty, Port, Vessel
+
+    rows, total = cargo_svc.list_cargo(db, auth.tenant_id, status=status, limit=limit, offset=offset)
+    if not rows:
+        return envelope([], total, limit, offset)
+
+    port_ids = {r.load_port_id for r in rows if r.load_port_id} | {r.disch_port_id for r in rows if r.disch_port_id}
+    cp_ids = {r.charterer_id for r in rows if r.charterer_id}
+    voyage_ids = {r.voyage_id for r in rows if r.voyage_id}
+
+    ports = {str(p.id): p.name for p in db.scalars(select(Port).where(Port.id.in_(port_ids)))} if port_ids else {}
+    cps = {str(c.id): c.name for c in db.scalars(select(Counterparty).where(Counterparty.id.in_(cp_ids)))} if cp_ids else {}
+    vessels: dict[str, str] = {}
+    if voyage_ids:
+        for vid, vname in db.execute(
+            select(Voyage.id, Vessel.name).outerjoin(Vessel, Voyage.vessel_id == Vessel.id).where(Voyage.id.in_(voyage_ids))
+        ):
+            vessels[str(vid)] = vname or None  # type: ignore[assignment]
+
+    items = [
+        {
+            "id": str(r.id),
+            "cargo_ref": r.cargo_no,
+            "charter_id": str(r.charter_id) if r.charter_id else None,
+            "voyage_id": str(r.voyage_id) if r.voyage_id else None,
+            "vessel_name": vessels.get(str(r.voyage_id)) if r.voyage_id else None,
+            "cargo_type": r.cargo_type or "",
+            "cargo_qty": float(r.qty) if r.qty is not None else 0.0,
+            "load_port": ports.get(str(r.load_port_id), "") if r.load_port_id else "",
+            "discharge_port": ports.get(str(r.disch_port_id), "") if r.disch_port_id else "",
+            "laycan_from": r.laycan_from.isoformat() if r.laycan_from else None,
+            "laycan_to": r.laycan_to.isoformat() if r.laycan_to else None,
+            "etd": None,
+            "eta": None,
+            "status": r.status,
+            "counterparty": cps.get(str(r.charterer_id)) if r.charterer_id else None,
+        }
+        for r in rows
+    ]
+    return envelope(items, total, limit, offset)
 
 
 @router.get("/cargo/{cargo_id}")

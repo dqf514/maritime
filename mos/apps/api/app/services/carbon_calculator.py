@@ -11,10 +11,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models_domain import EmissionRecord, Voyage
+from app.models_domain import BunkerOrder, EmissionRecord, Voyage
 
 
 FUEL_FACTORS = {
@@ -164,16 +164,22 @@ def calculate_cii_rating(
 
 
 def get_fleet_compliance_summary(db: Session, tenant_id: uuid.UUID) -> dict[str, Any]:
-    """Aggregate compliance metrics across all voyages for the compliance dashboard."""
-    voyage_count = db.execute(
-        text("SELECT COUNT(*) FROM voyages WHERE tenant_id = :tid"),
-        {"tid": str(tenant_id)},
-    ).scalar() or 0
+    """Aggregate compliance metrics across all voyages for the compliance dashboard.
 
-    bunker_total = db.execute(
-        text("SELECT COALESCE(SUM(quantity_mt), 0) FROM bunker_orders WHERE tenant_id = :tid"),
-        {"tid": str(tenant_id)},
-    ).scalar() or 0
+    全部走 ORM：raw text() 里 str(uuid) 带连字符，而 SQLite 的 Uuid 列存的是
+    无连字符 hex，参数永远匹配不上（计数全 0）；ORM 绑定由类型处理器负责格式。
+    """
+    voyage_count = db.scalar(
+        select(func.count()).select_from(Voyage).where(Voyage.tenant_id == tenant_id)
+    ) or 0
+
+    # bunker_orders 没有 quantity_mt 列（模型字段为 qty_ordered / qty_delivered）——
+    # 已交付优先，未交付回落到订购量；列名写错会让 /compliance/summary 直接 500
+    bunker_total = db.scalar(
+        select(func.coalesce(func.sum(func.coalesce(BunkerOrder.qty_delivered, BunkerOrder.qty_ordered)), 0)).where(
+            BunkerOrder.tenant_id == tenant_id
+        )
+    ) or 0
 
     total_co2 = float(bunker_total) * 3.15  # approximate VLSFO factor
     eu_ets = calculate_eu_ets_cost(total_co2)
@@ -185,10 +191,9 @@ def get_fleet_compliance_summary(db: Session, tenant_id: uuid.UUID) -> dict[str,
         cargo_mt=voyage_count * 30000,
     )
 
-    emission_records = db.execute(
-        text("SELECT COUNT(*) FROM emission_records WHERE tenant_id = :tid"),
-        {"tid": str(tenant_id)},
-    ).scalar() or 0
+    emission_records = db.scalar(
+        select(func.count()).select_from(EmissionRecord).where(EmissionRecord.tenant_id == tenant_id)
+    ) or 0
 
     return {
         "voyage_count": voyage_count,
@@ -202,31 +207,41 @@ def get_fleet_compliance_summary(db: Session, tenant_id: uuid.UUID) -> dict[str,
 
 
 def get_voyage_compliance(db: Session, tenant_id: uuid.UUID, voyage_id: uuid.UUID) -> dict[str, Any]:
-    """Compliance breakdown for a single voyage."""
+    """Compliance breakdown for a single voyage.
+
+    旧实现 raw SQL 引用 voyages 不存在的列（vessel_name/cargo_qty/total_costs/
+    load_port_name/disch_port_name），命中即 OperationalError —— 改走 ORM 关联。
+    燃料估算改为该航次加油订单实数（原先 costs/500 的成本列也不存在）。
+    """
+    from app.models_wave1 import Vessel
+
     v = db.execute(
-        text("""
-            SELECT v.voyage_no, v.vessel_name, v.cargo_qty, v.total_costs,
-                   v.load_port_name, v.disch_port_name
-            FROM voyages v WHERE v.id = :vid AND v.tenant_id = :tid
-        """),
-        {"vid": str(voyage_id), "tid": str(tenant_id)},
-    ).fetchone()
+        select(Voyage.voyage_no, Voyage.cargo, Vessel.name, Vessel.dwt)
+        .outerjoin(Vessel, Voyage.vessel_id == Vessel.id)
+        .where(Voyage.id == voyage_id, Voyage.tenant_id == tenant_id)
+    ).first()
 
     if not v:
         return {"error": "Voyage not found"}
 
-    cargo = float(v.cargo_qty or 30000)
-    costs = float(v.total_costs or 0)
-    fuel_est = costs / 500  # rough estimate: $500/MT fuel
-    co2 = fuel_est * 3.15
+    fuel_mt = float(
+        db.scalar(
+            select(
+                func.coalesce(func.sum(func.coalesce(BunkerOrder.qty_delivered, BunkerOrder.qty_ordered)), 0)
+            ).where(BunkerOrder.voyage_id == voyage_id, BunkerOrder.tenant_id == tenant_id)
+        )
+        or 0
+    )
+    cargo = 30000.0  # demo 缺货量数值字段时的兜底运输工作量
+    co2 = fuel_mt * 3.15
 
-    emissions = calculate_voyage_emissions(fuel_est, "VLSFO", 3000, cargo)
+    emissions = calculate_voyage_emissions(fuel_mt, "VLSFO", 3000, cargo)
     eu_ets = calculate_eu_ets_cost(co2)
-    fueleu = calculate_fueleu_compliance(fuel_est, "VLSFO", 3000, cargo)
+    fueleu = calculate_fueleu_compliance(fuel_mt, "VLSFO", 3000, cargo)
 
     return {
         "voyage_no": v.voyage_no,
-        "vessel_name": v.vessel_name,
+        "vessel_name": v.name,
         "emissions": emissions,
         "eu_ets": eu_ets,
         "fueleu": fueleu,

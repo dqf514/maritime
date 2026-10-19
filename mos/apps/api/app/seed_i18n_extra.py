@@ -735,7 +735,7 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("ship.cert.no_files", "app", "No files uploaded yet.", "尚未上传文件。"),
     ("ship.cert.upload_ok", "app", "File uploaded (v{n}).", "文件已上传（v{n}）。"),
     ("ship.cert.upload_fail", "app", "Upload failed", "上传失败"),
-    ("ship.cert.days_left", "app", "{days} d left", "剩余 {days} 天"),
+    ("ship.cert.days_left", "app", "{n} d left", "剩余 {n} 天"),  # ShipCertificates.tsx 传 {n}
     ("ship.cert.expired", "app", "Expired {days} d ago", "已过期 {days} 天"),
     # notifications
     ("notify.title", "app", "Notifications", "通知"),

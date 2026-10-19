@@ -274,7 +274,7 @@ export default function SchedulePage() {
       } else if (charterId) {
         router.push(`/charters/${charterId}`);
       } else if (block.block_type === "cargo") {
-        router.push("/operations/cargo-book");
+        router.push("/cargo");
       }
     },
     [router],
