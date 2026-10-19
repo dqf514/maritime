@@ -47,8 +47,9 @@ def seed_full_demo_flow(db: Session) -> None:
     if not tenant:
         return
 
-    # Marker: already seeded full flow
+    # Marker: already seeded full flow — 仍补种扩展数据（幂等）
     if db.scalar(select(Estimate).where(Estimate.tenant_id == tenant.id, Estimate.title == "SEED SGSIN→NLRTM Capesize")):
+        _seed_demo_flow_extra(db, tenant)
         return
 
     now = _now()
@@ -113,7 +114,7 @@ def seed_full_demo_flow(db: Session) -> None:
 
     v1, v2, v3, v4 = vessels["9000001"], vessels["9000002"], vessels["9000003"], vessels["9000004"]
 
-    # Estimates
+    # Estimates — results 同时含展示键与 P&L 引擎键（total_revenue/voyage_cost/tce）
     est_data = [
         (
             "SEED SGSIN→NLRTM Capesize",
@@ -121,7 +122,7 @@ def seed_full_demo_flow(db: Session) -> None:
             cps["Nordic Grain Traders"],
             "working",
             {"load_port": "SGSIN", "disch_port": "NLRTM", "cargo_mt": 75000, "freight_usd": 1850000},
-            {"tce_usd_day": 16850, "voyage_days": 42, "pnl_usd": 420000},
+            {"tce_usd_day": 16850, "voyage_days": 42, "pnl_usd": 420000, "total_revenue": 1850000, "voyage_cost": 1430000, "tce": 16850},
         ),
         (
             "CNTXG→JPYOK coal",
@@ -129,7 +130,7 @@ def seed_full_demo_flow(db: Session) -> None:
             cps["Pacific Steel Mills"],
             "draft",
             {"load_port": "CNTXG", "disch_port": "JPYOK", "cargo_mt": 52000, "freight_usd": 920000},
-            {"tce_usd_day": 14200, "voyage_days": 18, "pnl_usd": 180000},
+            {"tce_usd_day": 14200, "voyage_days": 18, "pnl_usd": 180000, "total_revenue": 920000, "voyage_cost": 740000, "tce": 14200},
         ),
         (
             "BRSSZ→AUBNE grains TCT",
@@ -137,7 +138,7 @@ def seed_full_demo_flow(db: Session) -> None:
             cps["Nordic Grain Traders"],
             "submitted",
             {"duration_days": 90, "hire_usd_day": 15500},
-            {"tce_usd_day": 15100, "voyage_days": 90, "pnl_usd": 310000},
+            {"tce_usd_day": 15100, "voyage_days": 90, "pnl_usd": 310000, "total_revenue": 1395000, "voyage_cost": 1085000, "tce": 15100},
         ),
     ]
     estimates = []
@@ -642,5 +643,337 @@ def seed_full_demo_flow(db: Session) -> None:
                 last_health={"ok": True, "message": "seeded"},
             )
         )
+
+    db.commit()
+    _seed_demo_flow_extra(db, tenant)
+
+
+def _seed_demo_flow_extra(db: Session, tenant) -> None:
+    """二次补种：付款批次 / GL / 应计 / COA / 期租 / 费率表 / 排期块 / MariLink / 排放。
+
+    幂等：每组数据以自然键存在性为闸门；Estimate.results 的引擎键则无条件补齐。
+    """
+    from app.models_coa import CoaContract, CoaItinerary
+    from app.models_domain import (
+        Charter,
+        EmissionRecord,
+        Estimate,
+        Payment,
+        PaymentBatch,
+        ScheduleBlock,
+        Voyage,
+        VoyageAccrual,
+    )
+    from app.models_gl import (
+        AccountingPeriod,
+        BusinessRule,
+        ChartOfAccount,
+        PeriodJournal,
+    )
+    from app.models_rates import RateTable, RateTableRow
+    from app.models_shipshore import ShipForm, ShipReport, ShipTerminal
+    from app.models_time_charter import TimeCharterContract
+    from app.models_wave1 import Counterparty, Port, Vessel
+
+    now = _now()
+    today = date.today()
+    period_ym = now.strftime("%Y-%m")
+
+    vessels = {v.imo: v for v in db.scalars(select(Vessel).where(Vessel.tenant_id == tenant.id)).all()}
+    ports = {p.unlocode: p for p in db.scalars(select(Port)).all()}
+    cps = {c.name: c for c in db.scalars(select(Counterparty).where(Counterparty.tenant_id == tenant.id)).all()}
+    voyages = {v.voyage_no: v for v in db.scalars(select(Voyage).where(Voyage.tenant_id == tenant.id)).all()}
+    if not vessels:
+        return
+    v1, v2, v3, v4 = vessels.get("9000001"), vessels.get("9000002"), vessels.get("9000003"), vessels.get("9000004")
+    voy1, voy3 = voyages.get("VOY-2407"), voyages.get("VOY-2405")
+
+    # ── 1. P&L 引擎键补齐（存量行 results 缺 total_revenue/voyage_cost/tce → Estimate 列全 0）──
+    engine_keys = {
+        "SEED SGSIN→NLRTM Capesize": {"total_revenue": 1850000, "voyage_cost": 1430000, "tce": 16850},
+        "CNTXG→JPYOK coal": {"total_revenue": 920000, "voyage_cost": 740000, "tce": 14200},
+        "BRSSZ→AUBNE grains TCT": {"total_revenue": 1395000, "voyage_cost": 1085000, "tce": 15100},
+    }
+    for title, extra in engine_keys.items():
+        est = db.scalar(select(Estimate).where(Estimate.tenant_id == tenant.id, Estimate.title == title))
+        if est is not None:
+            res = dict(est.results or {})
+            if any(res.get(k) is None for k in extra):
+                res.update(extra)
+                est.results = res
+    db.flush()
+
+    # ── 2. 付款批次（demo 空表：batch + 关联一笔已存在的付款）──
+    if not db.scalar(select(PaymentBatch).where(PaymentBatch.tenant_id == tenant.id)):
+        p_jp = db.scalar(select(Payment).where(
+            Payment.tenant_id == tenant.id, Payment.reference == "WIRE-JP-4410"
+        ))
+        batch = PaymentBatch(
+            tenant_id=tenant.id,
+            batch_number="PB-2026-0001",
+            batch_date=today - timedelta(days=11),
+            status="completed",
+            total_amount=Decimal("2100000"),
+            currency="USD",
+            payment_count=1 if p_jp else 0,
+            bank_charge_mode="sender",
+            approved_at=now - timedelta(days=11),
+            meta={"source": "seed"},
+        )
+        db.add(batch)
+        db.flush()
+        if p_jp:
+            p_jp.batch_id = batch.id
+
+    # ── 3. GL：科目表 + 规则 + 期间 + 已过账日记账 ──
+    if not db.scalar(select(ChartOfAccount).where(ChartOfAccount.tenant_id == tenant.id)):
+        coa_rows = [
+            ("1000", "Cash & banks", "asset", None),
+            ("1200", "Accounts receivable", "asset", None),
+            ("2000", "Accounts payable", "liability", None),
+            ("4000", "Freight revenue", "revenue", None),
+            ("4010", "Demurrage revenue", "revenue", None),
+            ("4100", "Time charter hire revenue", "revenue", None),
+            ("5000", "Bunker cost", "expense", None),
+            ("5100", "Port & disbursement cost", "expense", None),
+            ("5200", "Commission", "expense", None),
+            ("5900", "Other voyage cost", "expense", None),
+        ]
+        for code, name, atype, parent in coa_rows:
+            db.add(ChartOfAccount(tenant_id=tenant.id, account_code=code, account_name=name, account_type=atype, parent_code=parent))
+        db.flush()
+        rules = [
+            ("Freight → revenue", "invoice", "freight", "1200", "4000"),
+            ("Bunker → expense", "bunker", "bunker", "5000", "2000"),
+            ("Port cost → expense", "voyage", "port", "5100", "2000"),
+            ("Commission → expense", "voyage", "commission", "5200", "2000"),
+        ]
+        for name, etype, cat, debit, credit in rules:
+            db.add(BusinessRule(tenant_id=tenant.id, rule_name=name, entity_type=etype, expense_category=cat, debit_account=debit, credit_account=credit))
+    for p in (period_ym, (now - timedelta(days=40)).strftime("%Y-%m")):
+        if not db.scalar(select(AccountingPeriod).where(AccountingPeriod.tenant_id == tenant.id, AccountingPeriod.period == p)):
+            db.add(AccountingPeriod(tenant_id=tenant.id, period=p, status="closed" if p != period_ym else "open",
+                                    closed_at=now - timedelta(days=1) if p != period_ym else None))
+    if not db.scalar(select(PeriodJournal).where(PeriodJournal.tenant_id == tenant.id)):
+        entries = [
+            {"account": "1200", "debit": 1850000, "credit": 0, "reference": "INV-2407-FRT", "description": "Freight billed"},
+            {"account": "4000", "debit": 0, "credit": 1850000, "reference": "INV-2407-FRT", "description": "Freight revenue"},
+            {"account": "5000", "debit": 433275, "credit": 0, "reference": "BNK-2407", "description": "VLSFO 795mt @ 545"},
+            {"account": "2000", "debit": 0, "credit": 433275, "reference": "BNK-2407", "description": "Bunker payable"},
+            {"account": "5100", "debit": 44850, "credit": 0, "reference": "FDA-2407", "description": "Load port disbursement"},
+            {"account": "2000", "debit": 0, "credit": 44850, "reference": "FDA-2407", "description": "Port payable"},
+        ]
+        db.add(PeriodJournal(
+            tenant_id=tenant.id, period=period_ym, journal_type="voyage",
+            description="VOY-2407 accrual & billing (seed)", entries=entries,
+            total_debit=Decimal("2328125"), total_credit=Decimal("2328125"),
+            status="posted", posted_at=now,
+        ))
+
+    # ── 4. 航次应计（status=posted → P&L Posted 列）──
+    if voy1 and not db.scalar(select(VoyageAccrual).where(VoyageAccrual.tenant_id == tenant.id, VoyageAccrual.voyage_id == voy1.id)):
+        for line, amt, notes in (
+            ("freight", Decimal("1850000"), "INV-2407-FRT"),
+            ("bunker", Decimal("433275"), "BNK-2407 795mt@545"),
+            ("port", Decimal("44850"), "FDA load port"),
+            ("commission", Decimal("23125"), "1.25% address commission"),
+        ):
+            db.add(VoyageAccrual(tenant_id=tenant.id, voyage_id=voy1.id, period_ym=period_ym,
+                                 line_type=line, amount=amt, status="posted", notes=notes))
+    if voy3 and not db.scalar(select(VoyageAccrual).where(VoyageAccrual.tenant_id == tenant.id, VoyageAccrual.voyage_id == voy3.id)):
+        for line, amt, notes in (
+            ("freight", Decimal("2100000"), "INV-2405-FRT"),
+            ("port", Decimal("38000"), "disch port estimate"),
+        ):
+            db.add(VoyageAccrual(tenant_id=tenant.id, voyage_id=voy3.id, period_ym=(now - timedelta(days=30)).strftime("%Y-%m"),
+                                 line_type=line, amount=amt, status="posted", notes=notes))
+
+    # ── 5. COA 合同（Charter parent + CoaContract + itineraries）──
+    if not db.scalar(select(CoaContract).where(CoaContract.tenant_id == tenant.id)):
+        ch_coa = Charter(
+            tenant_id=tenant.id, charter_no="CP-COA-2601", charter_type="coa", status="active",
+            vessel_id=v1.id if v1 else None,
+            counterparty_id=cps.get("Nordic Grain Traders").id if cps.get("Nordic Grain Traders") else None,
+            laycan_from=today, laycan_to=today + timedelta(days=180),
+            clauses={"description": "COA parent fixture (seed)"},
+        )
+        db.add(ch_coa)
+        db.flush()
+        coa = CoaContract(
+            tenant_id=tenant.id, coa_no="COA-2026-0001", charter_id=ch_coa.id,
+            total_qty=Decimal("300000"), qty_unit="mt",
+            period_from=today, period_to=today + timedelta(days=360),
+            rate_basis="per_mt", rate=Decimal("11.50"), currency="USD",
+            cargo_spec="Coal / grains parcels 50kt ±5%", bill_by="weight",
+            tolerance_pct=Decimal("5"), overage_pct=Decimal("10"), status="active",
+        )
+        db.add(coa)
+        db.flush()
+        txg = ports.get("CNTXG"); jpyok = ports.get("JPYOK"); brssz = ports.get("BRSSZ"); aubne = ports.get("AUBNE")
+        legs = [
+            (1, txg.id if txg else None, jpyok.id if jpyok else None, Decimal("100000"), Decimal("50000")),
+            (2, txg.id if txg else None, jpyok.id if jpyok else None, Decimal("100000"), Decimal("0")),
+            (3, brssz.id if brssz else None, aubne.id if aubne else None, Decimal("100000"), Decimal("0")),
+        ]
+        for seq, lp, dp, qty, alloc in legs:
+            db.add(CoaItinerary(tenant_id=tenant.id, coa_contract_id=coa.id, seq=seq,
+                                load_port_id=lp, disch_port_id=dp, qty=qty, allocated_qty=alloc,
+                                notes="seed lifting leg"))
+
+    # ── 6. 期租合同（Charter tc parent + TimeCharterContract）──
+    if not db.scalar(select(TimeCharterContract).where(TimeCharterContract.tenant_id == tenant.id)):
+        ng = cps.get("Nordic Grain Traders")
+        ch_tc = Charter(
+            tenant_id=tenant.id, charter_no="CP-TC-2602", charter_type="tct", status="active",
+            vessel_id=v4.id if v4 else None,
+            counterparty_id=ng.id if ng else None,
+            hire_per_day=Decimal("15500"), commission_pct=Decimal("1.25"),
+            laycan_from=today + timedelta(days=5), laycan_to=today + timedelta(days=15),
+            clauses={"duration_days": 90},
+        )
+        db.add(ch_tc)
+        db.flush()
+        db.add(TimeCharterContract(
+            tenant_id=tenant.id, charter_id=ch_tc.id, contract_type="tci",
+            vessel_id=v4.id, counterparty_id=ng.id,
+            delivery_port="Singapore", delivery_date=today + timedelta(days=10),
+            redelivery_port="Brisbane", redelivery_date=today + timedelta(days=100),
+            hire_rate=Decimal("15500"), hire_currency="USD", payment_frequency="monthly",
+            cancel_date=today + timedelta(days=3), status="active",
+        ))
+
+    # ── 7. 费率表 ──
+    if not db.scalar(select(RateTable).where(RateTable.tenant_id == tenant.id)):
+        rt = RateTable(
+            tenant_id=tenant.id, name="SEED Freight Matrix", kind="freight_matrix",
+            currency="USD", valid_from=today - timedelta(days=90), valid_to=today + timedelta(days=270),
+            description="Capesize coal/grain FIOS matrix (seed)", is_active=True,
+        )
+        db.add(rt)
+        db.flush()
+        matrix = [
+            ({"load_port": "SGSIN", "disch_port": "NLRTM", "cargo_type": "iron_ore"}, Decimal("24.67"), 10),
+            ({"load_port": "CNTXG", "disch_port": "JPYOK", "cargo_type": "coal"}, Decimal("11.80"), 10),
+            ({"load_port": "BRSSZ", "disch_port": "AUBNE", "cargo_type": "grains"}, Decimal("18.40"), 10),
+            ({"cargo_type": "coal"}, Decimal("12.50"), 1),  # fallback row
+        ]
+        for dims, value, prio in matrix:
+            db.add(RateTableRow(tenant_id=tenant.id, rate_table_id=rt.id, dims=dims, value=value, unit="per_mt", priority=prio))
+        sur = RateTable(
+            tenant_id=tenant.id, name="SEED Bunker Surcharges", kind="bunker_surcharge",
+            currency="USD", valid_from=today - timedelta(days=90), valid_to=today + timedelta(days=270),
+            description="VLSFO/LSGO differentials (seed)", is_active=True,
+        )
+        db.add(sur)
+        db.flush()
+        for dims, value, prio in (
+            ({"grade": "VLSFO", "port": "SGSIN"}, Decimal("545.00"), 10),
+            ({"grade": "HSFO", "port": "NLRTM"}, Decimal("480.00"), 10),
+            ({"grade": "LSGO", "port": "SGSIN"}, Decimal("690.00"), 5),
+        ):
+            db.add(RateTableRow(tenant_id=tenant.id, rate_table_id=sur.id, dims=dims, value=value, unit="lumpsum", priority=prio))
+
+    # ── 8. 排期块（航次/修理/停租 → 调度甘特图）──
+    if not db.scalar(select(ScheduleBlock).where(ScheduleBlock.tenant_id == tenant.id)):
+        blocks = []
+        if voy1 and v2:
+            blocks.append(ScheduleBlock(
+                tenant_id=tenant.id, vessel_id=v2.id, block_type="voyage",
+                title="VOY-2407 SGSIN→NLRTM", start_at=now - timedelta(days=12), end_at=now + timedelta(days=12),
+                voyage_id=voy1.id, hard_conflict=False,
+            ))
+        voy2 = voyages.get("VOY-2408")
+        if voy2 and v1:
+            blocks.append(ScheduleBlock(
+                tenant_id=tenant.id, vessel_id=v1.id, block_type="voyage",
+                title="VOY-2408 CNTXG→JPYOK", start_at=today + timedelta(days=6), end_at=today + timedelta(days=24),
+                voyage_id=voy2.id, hard_conflict=False,
+            ))
+        if v3:
+            blocks.append(ScheduleBlock(
+                tenant_id=tenant.id, vessel_id=v3.id, block_type="offhire",
+                title="ATLANTIC PEARL off-hire survey", start_at=today - timedelta(days=40), end_at=today - timedelta(days=37),
+                hard_conflict=False,
+            ))
+        if v4:
+            blocks.append(ScheduleBlock(
+                tenant_id=tenant.id, vessel_id=v4.id, block_type="repair",
+                title="INDIAN MONSOON drydock window", start_at=today + timedelta(days=20), end_at=today + timedelta(days=35),
+                hard_conflict=False,
+            ))
+        db.add_all(blocks)
+
+    # ── 9. MariLink（终端 + 表单模板 + 报文实例）──
+    if v2 and not db.scalar(select(ShipTerminal).where(ShipTerminal.tenant_id == tenant.id)):
+        term = ShipTerminal(
+            tenant_id=tenant.id, vessel_id=v2.id, terminal_key="SEED-TERM-9000002",
+            device_info={"ua": "MariOS-PWA", "os": "seed"}, sw_version="1.0.0",
+            last_sync_at=now - timedelta(hours=6), last_position={"lat": 25.1, "lon": 55.0, "speed": 13.0},
+            status="active",
+        )
+        db.add(term)
+        db.flush()
+        f_noon = ShipForm(
+            tenant_id=tenant.id, form_type="noon_report", form_name="Daily noon report",
+            schema_json={"type": "object", "required": ["speed", "rob_fo"]},
+            fields_json=[
+                {"key": "speed", "label": "Speed (kn)", "type": "number"},
+                {"key": "rob_fo", "label": "ROB FO (mt)", "type": "number"},
+                {"key": "remarks", "label": "Remarks", "type": "text"},
+            ],
+            auto_import=True, target_model="noon_report", is_active=True, sort_order=1,
+        )
+        f_arr = ShipForm(
+            tenant_id=tenant.id, form_type="arrival_notice", form_name="Arrival notice",
+            schema_json={"type": "object", "required": ["eta"]},
+            fields_json=[{"key": "eta", "label": "ETA", "type": "datetime"}, {"key": "pilot", "label": "Pilot boarded", "type": "boolean"}],
+            auto_import=False, is_active=True, sort_order=2,
+        )
+        db.add_all([f_noon, f_arr])
+        db.flush()
+        db.add_all([
+            ShipReport(
+                tenant_id=tenant.id, terminal_id=term.id, form_id=f_noon.id,
+                voyage_id=voy1.id if voy1 else None, form_type="noon_report",
+                report_ref="NR-SEED-001", submitted_at=now - timedelta(days=1),
+                submitted_by="Capt. James Ong / Master",
+                data_json={"speed": 12.8, "rob_fo": 612, "remarks": "Fair weather, on schedule"},
+                position={"lat": 25.1, "lon": 55.0}, status="submitted",
+            ),
+            ShipReport(
+                tenant_id=tenant.id, terminal_id=term.id, form_id=f_noon.id,
+                voyage_id=voy1.id if voy1 else None, form_type="noon_report",
+                report_ref="NR-SEED-000", submitted_at=now - timedelta(days=2),
+                submitted_by="Capt. James Ong / Master",
+                data_json={"speed": 13.1, "rob_fo": 640, "remarks": "Slight head sea"},
+                position={"lat": 22.4, "lon": 58.9}, status="approved",
+                reviewed_at=now - timedelta(days=2), imported_model="noon_report",
+            ),
+            ShipReport(
+                tenant_id=tenant.id, terminal_id=term.id, form_id=f_arr.id,
+                voyage_id=voy1.id if voy1 else None, form_type="arrival_notice",
+                report_ref="AN-SEED-001", submitted_at=now - timedelta(hours=8),
+                submitted_by="Rotterdam Agency BV / Agent",
+                data_json={"eta": (now + timedelta(days=8)).isoformat(), "pilot": False},
+                status="review",
+            ),
+        ])
+
+    # ── 10. 排放记录（emissions 页 demo 空表）──
+    if not db.scalar(select(EmissionRecord).where(EmissionRecord.tenant_id == tenant.id)):
+        rows = []
+        if voy1 and v2:
+            rows.append(EmissionRecord(tenant_id=tenant.id, voyage_id=voy1.id, vessel_id=v2.id,
+                                       fo_mt=Decimal("630.000"), do_mt=Decimal("30.000"), co2_mt=Decimal("2058.690"),
+                                       cii_rating="C", period=period_ym))
+        if voy3 and v3:
+            rows.append(EmissionRecord(tenant_id=tenant.id, voyage_id=voy3.id, vessel_id=v3.id,
+                                       fo_mt=Decimal("540.000"), do_mt=Decimal("28.000"), co2_mt=Decimal("1771.168"),
+                                       cii_rating="B", period=(now - timedelta(days=30)).strftime("%Y-%m")))
+        if v1:
+            rows.append(EmissionRecord(tenant_id=tenant.id, vessel_id=v1.id,
+                                       fo_mt=Decimal("410.000"), do_mt=Decimal("18.000"), co2_mt=Decimal("1334.108"),
+                                       cii_rating="A", period=period_ym))
+        db.add_all(rows)
 
     db.commit()

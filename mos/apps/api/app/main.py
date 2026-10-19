@@ -342,13 +342,23 @@ async def lifespan(_app: FastAPI):
     if settings.job_worker_enabled:
         from app.services.job_queue import run_worker
         from app.services.report_scheduler import install_scheduler, register_handlers
+        from app.services.backup_scheduler import (
+            install_scheduler as install_backup_scheduler,
+            register_handlers as register_backup_handlers,
+        )
 
         register_handlers()
+        register_backup_handlers()
         try:
             with SessionLocal() as db:
                 install_scheduler(db)
         except Exception:
             log.exception("report schedule bootstrap failed")
+        try:
+            with SessionLocal() as db:
+                install_backup_scheduler(db)
+        except Exception:
+            log.exception("backup schedule bootstrap failed")
         job_thread = threading.Thread(target=run_worker, args=(job_stop,), name="marios-jobs", daemon=True)
         job_thread.start()
     yield

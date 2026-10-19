@@ -141,6 +141,26 @@ class BackupJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class BackupSchedule(Base):
+    """自动备份计划（每租户一行）— 由 backup_scheduler 周期 tick 驱动全量租户备份。"""
+
+    __tablename__ = "backup_schedules"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False, unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    frequency: Mapped[str] = mapped_column(Text, default="daily")  # daily | weekly
+    hour_utc: Mapped[int] = mapped_column(Integer, default=2)  # 0–23
+    weekday: Mapped[int] = mapped_column(Integer, default=0)  # 0=Mon … 6=Sun (weekly only)
+    keep_last: Mapped[int] = mapped_column(Integer, default=14)  # 保留最近 N 份自动备份
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class MigrationJob(Base):
     __tablename__ = "migration_jobs"
 

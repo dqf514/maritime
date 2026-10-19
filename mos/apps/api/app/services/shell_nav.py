@@ -298,6 +298,21 @@ def _role_match(user_roles: list[str], allowed: list[str]) -> bool:
     return any(r in allowed for r in user_roles)
 
 
+def _granted(item: dict[str, Any], roles: list[str], *, module_id: str | None = None) -> bool:
+    """统一的条目授权规则（菜单可见性与路径 ACL 共用，B1 一致性修复）。
+
+    - Platform 模块（及 roles 仅 platform_admin 的条目）只认 platform_admin；
+    - tenant_admin 视为租户内全业务角色（twin / analytics / finance / ship 等
+      不再锁定，菜单与可达性一致）；
+    - 其余按条目 roles 匹配。
+    """
+    if module_id == "platform" or set(item["roles"]) == {"platform_admin"}:
+        return _role_match(roles, item["roles"])
+    if "tenant_admin" in roles:
+        return True
+    return _role_match(roles, item["roles"])
+
+
 def _primary_role(user_roles: list[str]) -> str:
     for r in (
         "platform_admin",
@@ -336,7 +351,7 @@ def _filter_items(items: list[dict[str, Any]], roles: list[str]) -> list[dict[st
         if item["id"] in seen:
             continue
         seen.add(item["id"])
-        if _role_match(roles, item["roles"]):
+        if _granted(item, roles):
             visible.append(_entry(item))
         else:
             locked.append(_entry(item, locked=True))
@@ -344,8 +359,11 @@ def _filter_items(items: list[dict[str, Any]], roles: list[str]) -> list[dict[st
 
 
 def _filter_module_items(module: dict[str, Any], roles: list[str]) -> list[dict[str, Any]]:
-    """Module items preserving catalogue order; role-mismatched entries are locked (B1)."""
-    module_ok = _role_match(roles, module["roles"])
+    """Module items preserving catalogue order; role-mismatched entries are locked (B1).
+
+    授权判断只走 ``_granted``（与 search_acl 同一规则）：不再叠加模块级 roles
+    门槛 —— 条目级 roles 已是最终判定，双门槛会造成"菜单锁定但路径可达"的不一致。
+    """
     item_ids = module["item_ids"]
     # 模块条目可能来自任一目录（platform 模块的 plat_* 在 NAV_PLATFORM）。
     # NAV_ADMIN_DESK 与 NAV_DESK 有同名 id（角色更宽），先到先得以 NAV_DESK 为准。
@@ -358,7 +376,7 @@ def _filter_module_items(module: dict[str, Any], roles: list[str]) -> list[dict[
         item = catalog.get(iid)
         if not item:
             continue
-        if module_ok and _role_match(roles, item["roles"]):
+        if _granted(item, roles, module_id=module["id"]):
             out.append(_entry(item))
         else:
             out.append(_entry(item, locked=True))

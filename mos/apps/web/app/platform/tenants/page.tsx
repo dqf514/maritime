@@ -41,6 +41,15 @@ type OfficeCfg = {
   has_secret: boolean;
 };
 
+type BackupRow = {
+  id: string;
+  status: string;
+  trigger: string;
+  storage_path: string | null;
+  created_at: string | null;
+  total_rows?: number;
+};
+
 function PlatformTenantsPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -67,6 +76,13 @@ function PlatformTenantsPage() {
   const [oclear, setOclear] = useState(false);
   const [otest, setOtest] = useState<{ ok: boolean; text: string } | null>(null);
   const [otestBusy, setOtestBusy] = useState(false);
+  // 租户数据运维（一键备份 / 恢复 / 清理）
+  const [backups, setBackups] = useState<BackupRow[]>([]);
+  const [dbBusy, setDbBusy] = useState(false);
+  const [dbMsg, setDbMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purgeConfirmText, setPurgeConfirmText] = useState("");
+  const [purgeIncludeUsers, setPurgeIncludeUsers] = useState(false);
 
   async function load() {
     setRows(await apiGet("/api/v1/platform/tenants"));
@@ -98,10 +114,75 @@ function PlatformTenantsPage() {
       });
       setOclear(false);
       setOtest(null);
+      // 数据运维：备份记录
+      setDbMsg(null);
+      setPurgeOpen(false);
+      setPurgeConfirmText("");
+      setPurgeIncludeUsers(false);
+      setBackups(await apiGet(`/api/v1/platform/tenants/${row.id}/backups`).catch(() => []));
     } catch {
       toast.error(t("common.failed", "加载失败"));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function tenantBackup() {
+    if (!selected) return;
+    setDbBusy(true);
+    setDbMsg(null);
+    try {
+      const res: BackupRow & { total_rows?: number } = await apiPost(`/api/v1/platform/tenants/${selected.id}/backup`);
+      setBackups(await apiGet(`/api/v1/platform/tenants/${selected.id}/backups`));
+      setDbMsg({
+        ok: true,
+        text: t("page.tenants.backup_done", "备份完成：{n} 行 → {p}", { n: res.total_rows ?? 0, p: res.storage_path || "" }),
+      });
+    } catch {
+      setDbMsg({ ok: false, text: t("page.tenants.backup_failed", "备份失败") });
+    } finally {
+      setDbBusy(false);
+    }
+  }
+
+  async function tenantRestore(row: BackupRow) {
+    if (!selected || !row.storage_path) return;
+    setDbBusy(true);
+    setDbMsg(null);
+    try {
+      const res = await apiPost(`/api/v1/platform/tenants/${selected.id}/restore`, { storage_path: row.storage_path });
+      setDbMsg({
+        ok: true,
+        text: t("page.tenants.restore_done", "恢复完成：新插入 {n} 行（已存在主键跳过）", { n: res.inserted_total ?? 0 }),
+      });
+    } catch {
+      setDbMsg({ ok: false, text: t("page.tenants.restore_failed", "恢复失败") });
+    } finally {
+      setDbBusy(false);
+    }
+  }
+
+  async function tenantPurge() {
+    if (!selected) return;
+    setDbBusy(true);
+    setDbMsg(null);
+    try {
+      const res = await apiPost(`/api/v1/platform/tenants/${selected.id}/purge`, {
+        confirm: purgeConfirmText,
+        backup_first: true,
+        include_users: purgeIncludeUsers,
+      });
+      setPurgeOpen(false);
+      setPurgeConfirmText("");
+      setBackups(await apiGet(`/api/v1/platform/tenants/${selected.id}/backups`));
+      setDbMsg({
+        ok: true,
+        text: t("page.tenants.purge_done", "已清理 {n} 行业务数据（清理前已自动备份）", { n: res.deleted_total ?? 0 }),
+      });
+    } catch {
+      setDbMsg({ ok: false, text: t("page.tenants.purge_failed", "清理失败（确认代码需与租户代码一致）") });
+    } finally {
+      setDbBusy(false);
     }
   }
 
@@ -554,6 +635,120 @@ function PlatformTenantsPage() {
               ) : null}
             </div>
           ) : null}
+
+          <h3 style={{ marginTop: "1.5rem" }}>{t("page.tenants.dataops", "数据管理（备份 / 恢复 / 清理）")}</h3>
+          <p className="muted">
+            {t(
+              "page.tenants.dataops_sub",
+              "一键全量备份该租户全部业务数据；清理用于清除测试数据（自动先备份，保留租户/用户/许可底座）。",
+            )}
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+            <button className="btn btn-primary" type="button" disabled={dbBusy} onClick={() => tenantBackup()}>
+              {t("page.tenants.backup_now", "立即备份")}
+            </button>
+            <button
+              className="btn btn-danger"
+              type="button"
+              disabled={dbBusy}
+              onClick={() => {
+                setPurgeOpen(true);
+                setPurgeConfirmText("");
+                setPurgeIncludeUsers(false);
+              }}
+            >
+              {t("page.tenants.purge_open", "清理租户数据…")}
+            </button>
+            {dbBusy ? <span className="muted">{t("common.working", "处理中…")}</span> : null}
+          </div>
+          {dbMsg ? (
+            <p className="flash" style={{ color: dbMsg.ok ? "var(--ok)" : "var(--danger)" }}>
+              {dbMsg.text}
+            </p>
+          ) : null}
+          {purgeOpen ? (
+            <div className="panel" style={{ marginTop: "0.75rem", borderColor: "var(--danger)" }}>
+              <p style={{ marginTop: 0 }}>
+                {t(
+                  "page.tenants.purge_confirm_hint",
+                  "将清空 {code} 的全部业务数据（估价/租约/航次/财务/船舶等）。请输入租户代码以确认：",
+                  { code: selected.code },
+                )}
+              </p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                <input
+                  value={purgeConfirmText}
+                  onChange={(e) => setPurgeConfirmText(e.target.value)}
+                  placeholder={selected.code}
+                  style={{ maxWidth: 220 }}
+                />
+                <label style={{ display: "flex", gap: "0.35rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={purgeIncludeUsers}
+                    onChange={(e) => setPurgeIncludeUsers(e.target.checked)}
+                  />
+                  {t("page.tenants.purge_include_users", "同时删除用户")}
+                </label>
+                <button
+                  className="btn btn-danger"
+                  type="button"
+                  disabled={dbBusy || purgeConfirmText !== selected.code}
+                  onClick={() => tenantPurge()}
+                >
+                  {t("page.tenants.purge_run", "确认清理")}
+                </button>
+                <button className="btn btn-ghost" type="button" disabled={dbBusy} onClick={() => setPurgeOpen(false)}>
+                  {t("common.cancel", "取消")}
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {backups.length > 0 ? (
+            <table className="table" style={{ marginTop: "0.75rem" }}>
+              <thead>
+                <tr>
+                  <th>{t("page.tenants.backup_trigger", "触发")}</th>
+                  <th>{t("page.tenants.backup_time", "时间")}</th>
+                  <th>{t("page.tenants.backup_path", "文件")}</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {backups.slice(0, 8).map((b) => (
+                  <tr key={b.id}>
+                    <td>
+                      <span className={b.trigger === "manual" ? "badge badge-info" : "badge"}>
+                        {b.trigger === "platform_purge"
+                          ? t("page.tenants.trigger_purge", "清理前自动")
+                          : b.trigger === "auto"
+                            ? t("page.tenants.trigger_auto", "自动")
+                            : b.trigger}
+                      </span>
+                    </td>
+                    <td>{b.created_at ? new Date(b.created_at).toLocaleString() : "-"}</td>
+                    <td>
+                      <code style={{ fontSize: "0.75rem" }}>{b.storage_path}</code>
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        disabled={dbBusy || !b.storage_path}
+                        onClick={() => tenantRestore(b)}
+                      >
+                        {t("page.tenants.restore", "恢复")}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="muted" style={{ marginTop: "0.75rem" }}>
+              {t("page.tenants.no_backups", "暂无备份记录")}
+            </p>
+          )}
         </div>
       ) : (
         <p className="muted">{t("page.tenants.pick", "请选择上方租户行，以编辑资料与许可证。")}</p>

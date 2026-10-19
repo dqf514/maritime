@@ -638,6 +638,119 @@ def platform_set_license(
     return {"module_code": body.module_code, "status": body.status}
 
 
+# ── 租户数据运维：一键备份 / 恢复 / 清理（商务交付：测试数据清理） ──
+
+
+def _platform_tenant_or_404(db: Session, tenant_id: UUID) -> Tenant:
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant or tenant.code == "sys":
+        raise HTTPException(404, "Tenant not found")
+    return tenant
+
+
+def _backup_job_out(job) -> dict:
+    return {
+        "id": str(job.id),
+        "status": job.status,
+        "trigger": job.trigger,
+        "storage_path": job.storage_path,
+        "checksum": job.checksum,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "error": job.error,
+    }
+
+
+@router.post("/platform/tenants/{tenant_id}/backup")
+def platform_backup_tenant(
+    tenant_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """全量备份租户数据（所有带 tenant_id 的业务表 → JSON + BackupJob 记录）。"""
+    from app.services.tenant_backup import dump_tenant, write_backup_file
+
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    payload = dump_tenant(db, tenant.id, created_by=auth.user_id, trigger="platform")
+    job = write_backup_file(db, tenant.id, payload, created_by=auth.user_id)
+    return {**_backup_job_out(job), "row_counts": payload["row_counts"], "total_rows": payload["total_rows"]}
+
+
+@router.get("/platform/tenants/{tenant_id}/backups")
+def platform_list_tenant_backups(
+    tenant_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    from app.services.tenant_backup import list_tenant_backups
+
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    return [_backup_job_out(j) for j in list_tenant_backups(db, tenant.id)]
+
+
+class TenantRestoreIn(BaseModel):
+    storage_path: str  # backups/tenant/<tid>/<job>.json
+
+
+@router.post("/platform/tenants/{tenant_id}/restore")
+def platform_restore_tenant(
+    tenant_id: UUID,
+    body: TenantRestoreIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """从备份文件恢复（已存在主键跳过，不覆盖现有行）。"""
+    from app.services.tenant_backup import load_backup_payload, restore_tenant
+
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    rel = body.storage_path.replace("\\", "/").strip("/")
+    if not rel.startswith(f"backups/tenant/{tenant.id}/") or ".." in rel:
+        raise HTTPException(400, detail={"code": "INVALID_BACKUP_PATH"})
+    try:
+        payload = load_backup_payload(rel)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "BACKUP_NOT_FOUND"})
+    if payload.get("tenant_id") != str(tenant.id):
+        raise HTTPException(400, detail={"code": "BACKUP_TENANT_MISMATCH"})
+    result = restore_tenant(db, tenant.id, payload)
+    return {"id": str(tenant.id), "code": tenant.code, **result}
+
+
+class TenantPurgeIn(BaseModel):
+    confirm: str  # 必须等于租户 code，防误点
+    backup_first: bool = True
+    include_users: bool = False
+
+
+@router.post("/platform/tenants/{tenant_id}/purge")
+def platform_purge_tenant(
+    tenant_id: UUID,
+    body: TenantPurgeIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """一键清理租户业务数据（默认先自动备份；保留租户/用户/许可底座）。
+
+    ``include_users=True`` 连用户与身份一起删除（角色行保留，仅清人员）。
+    """
+    from app.services.tenant_backup import dump_tenant, purge_tenant, write_backup_file
+
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    if body.confirm != tenant.code:
+        raise HTTPException(400, detail={"code": "CONFIRM_MISMATCH", "message": "confirm must equal tenant code"})
+    backup_job = None
+    if body.backup_first:
+        payload = dump_tenant(db, tenant.id, created_by=auth.user_id, trigger="platform_purge")
+        backup_job = write_backup_file(db, tenant.id, payload, created_by=auth.user_id)
+    result = purge_tenant(db, tenant.id, include_users=body.include_users)
+    return {
+        "id": str(tenant.id),
+        "code": tenant.code,
+        "backup": _backup_job_out(backup_job) if backup_job else None,
+        **result,
+    }
+
+
 class TenantUpdateIn(BaseModel):
     name: str | None = None
     profile_tier: str | None = None

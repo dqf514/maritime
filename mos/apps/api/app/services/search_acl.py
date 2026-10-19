@@ -16,6 +16,7 @@ from app.services.shell_nav import (
     NAV_DESK,
     NAV_MASTER,
     NAV_PLATFORM,
+    _granted,
     _role_match,
     build_navigation,
 )
@@ -263,9 +264,15 @@ def _module_ok(licensed: set[str] | None, module_code: str | None) -> bool:
 
 
 def _nav_catalog() -> list[dict[str, Any]]:
-    """Flatten nav definitions with roles."""
+    """Flatten nav definitions with roles (module_id preserved for platform gating)."""
     out: list[dict[str, Any]] = []
-    for group in (NAV_DESK, NAV_ADMIN_DESK, NAV_MASTER, NAV_ADMIN, NAV_PLATFORM):
+    for group, module_id in (
+        (NAV_DESK, None),
+        (NAV_ADMIN_DESK, None),
+        (NAV_MASTER, None),
+        (NAV_ADMIN, None),
+        (NAV_PLATFORM, "platform"),
+    ):
         for item in group:
             meta = NAV_HIT_META.get(item["id"], {})
             out.append(
@@ -273,6 +280,7 @@ def _nav_catalog() -> list[dict[str, Any]]:
                     "id": item["id"],
                     "href": item["href"],
                     "roles": item["roles"],
+                    "module_id": module_id,
                     "title": meta.get("title") or item["label"],
                     "keywords": meta.get("keywords") or [item["label"].lower()],
                     "module": meta.get("module") or "shell",
@@ -295,9 +303,9 @@ def allowed_omni_hits(db: Session, *, tenant_id, roles: list[str]) -> list[Searc
             seen.add(key)
 
     for item in _nav_catalog():
-        if not _role_match(roles, item["roles"]):
+        if not _granted(item, roles, module_id=item.get("module_id")):
             continue
-        # tenant_admin-only admin desk entries already have roles; business desks need match
+        # 与导航同一授权规则（_granted）；此处仅叠加模块许可门槛
         if not _module_ok(licensed, item.get("license")):
             continue
         oid = f"nav.{item['id']}"

@@ -4,7 +4,7 @@ import hashlib
 import secrets
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -306,95 +306,15 @@ def create_backup(
     auth: AuthContext = Depends(require_module("dataops")),
     db: Session = Depends(get_db),
 ):
-    import json
-    from pathlib import Path
+    """全量租户数据备份（所有业务表行级 JSON dump）。
 
-    from app.models_saas import OrgUnit, TenantCompanyProfile, UserOrgMembership, WorkflowDefinition
-    from app.models_identity import TenantAuthPolicy
+    Wave-0 的配置摘要备份已由全量 dump 取代；文件仍写
+    ``data/backups/<tenant>/<job>.json``（不在 /uploads 静态挂载下）。
+    """
+    from app.services.tenant_backup import dump_tenant, write_backup_file
 
-    job_id = uuid4()
-    rel = f"backups/{auth.tenant_id}/{job_id}.json"
-    # Backups live outside the public /uploads static mount
-    root = Path(__file__).resolve().parent.parent / "data"
-    path = root / rel
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    users = db.scalars(select(User).where(User.tenant_id == auth.tenant_id, User.status != "deleted")).all()
-    units = db.scalars(select(OrgUnit).where(OrgUnit.tenant_id == auth.tenant_id, OrgUnit.status != "deleted")).all()
-    memberships = db.scalars(
-        select(UserOrgMembership).where(UserOrgMembership.user_id.in_([u.id for u in users] or [uuid4()]))
-    ).all()
-    workflows = db.scalars(select(WorkflowDefinition).where(WorkflowDefinition.tenant_id == auth.tenant_id)).all()
-    company = db.scalar(select(TenantCompanyProfile).where(TenantCompanyProfile.tenant_id == auth.tenant_id))
-    policy = db.scalar(select(TenantAuthPolicy).where(TenantAuthPolicy.tenant_id == auth.tenant_id))
-    licenses = db.scalars(
-        select(TenantModuleLicense).where(TenantModuleLicense.tenant_id == auth.tenant_id, TenantModuleLicense.status == "active")
-    ).all()
-
-    payload = {
-        "version": 1,
-        "tenant_id": str(auth.tenant_id),
-        "created_at": datetime.now().astimezone().isoformat(),
-        "created_by": str(auth.user_id),
-        "users": [{"id": str(u.id), "email": u.email, "full_name": u.full_name, "status": u.status} for u in users],
-        "org_units": [
-            {
-                "id": str(u.id),
-                "code": u.code,
-                "name": u.name,
-                "parent_id": str(u.parent_id) if u.parent_id else None,
-                "unit_type": u.unit_type,
-                "manager_user_id": str(u.manager_user_id) if u.manager_user_id else None,
-            }
-            for u in units
-        ],
-        "memberships": [
-            {"user_id": str(m.user_id), "org_unit_id": str(m.org_unit_id), "is_primary": m.is_primary} for m in memberships
-        ],
-        "workflows": [
-            {
-                "code": w.code,
-                "name": w.name,
-                "entity_type": w.entity_type,
-                "steps": w.steps,
-                "enabled": w.enabled,
-            }
-            for w in workflows
-        ],
-        "company": {
-            "display_name": company.display_name if company else None,
-            "legal_name": company.legal_name if company else None,
-            "brand_primary": company.brand_primary if company else None,
-        }
-        if company
-        else None,
-        "auth_policy": {
-            "password_enabled": policy.password_enabled,
-            "microsoft_enabled": policy.microsoft_enabled,
-            "google_enabled": policy.google_enabled,
-            "allowed_domains": policy.allowed_domains,
-            "invite_only": policy.invite_only,
-        }
-        if policy
-        else None,
-        "licenses": [{"module_code": l.module_code, "status": l.status} for l in licenses],
-    }
-    raw = json.dumps(payload, ensure_ascii=False, indent=2)
-    path.write_text(raw, encoding="utf-8")
-    checksum = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-    job = BackupJob(
-        tenant_id=auth.tenant_id,
-        status="completed",
-        trigger="manual",
-        storage_path=rel,
-        checksum=checksum,
-        created_by=auth.user_id,
-        finished_at=datetime.now().astimezone(),
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+    payload = dump_tenant(db, auth.tenant_id, created_by=auth.user_id, trigger="manual")
+    job = write_backup_file(db, auth.tenant_id, payload, created_by=auth.user_id)
     return BackupJobOut(
         id=job.id,
         status=job.status,
@@ -431,6 +351,77 @@ def list_backups(
         )
         for r in rows
     ]
+
+
+# ── 自动备份设置（每租户一行；由 backup_scheduler 周期 tick 执行） ──
+
+
+def _schedule_out(s) -> dict:
+    return {
+        "enabled": s.enabled,
+        "frequency": s.frequency,
+        "hour_utc": s.hour_utc,
+        "weekday": s.weekday,
+        "keep_last": s.keep_last,
+        "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+        "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,
+    }
+
+
+@router.get("/settings/dataops/backup-schedule", tags=["DataOps"])
+def get_backup_schedule(
+    auth: AuthContext = Depends(require_module("dataops")),
+    db: Session = Depends(get_db),
+):
+    from app.models import BackupSchedule
+
+    row = db.scalar(select(BackupSchedule).where(BackupSchedule.tenant_id == auth.tenant_id))
+    if not row:
+        # 未配置时返回默认值（disabled），前端据此渲染表单
+        return {
+            "enabled": False,
+            "frequency": "daily",
+            "hour_utc": 2,
+            "weekday": 0,
+            "keep_last": 14,
+            "last_run_at": None,
+            "next_run_at": None,
+        }
+    return _schedule_out(row)
+
+
+class BackupScheduleIn(BaseModel):
+    enabled: bool
+    frequency: str  # daily | weekly
+    hour_utc: int = Field(ge=0, le=23)
+    weekday: int = Field(ge=0, le=6, default=0)
+    keep_last: int = Field(ge=1, le=365, default=14)
+
+
+@router.put("/settings/dataops/backup-schedule", tags=["DataOps"])
+def put_backup_schedule(
+    body: BackupScheduleIn,
+    auth: AuthContext = Depends(require_module("dataops")),
+    db: Session = Depends(get_db),
+):
+    from app.models import BackupSchedule
+    from app.services.backup_scheduler import compute_next_run
+
+    if body.frequency not in ("daily", "weekly"):
+        raise HTTPException(422, detail={"code": "INVALID_FREQUENCY"})
+    row = db.scalar(select(BackupSchedule).where(BackupSchedule.tenant_id == auth.tenant_id))
+    if not row:
+        row = BackupSchedule(tenant_id=auth.tenant_id)
+        db.add(row)
+    row.enabled = body.enabled
+    row.frequency = body.frequency
+    row.hour_utc = body.hour_utc
+    row.weekday = body.weekday
+    row.keep_last = body.keep_last
+    row.next_run_at = compute_next_run(row, datetime.now(timezone.utc)) if body.enabled else None
+    db.commit()
+    db.refresh(row)
+    return _schedule_out(row)
 
 
 @router.post("/settings/dataops/migrations", response_model=MigrationJobOut, tags=["DataOps"])

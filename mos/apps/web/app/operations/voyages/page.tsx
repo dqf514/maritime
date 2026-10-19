@@ -211,9 +211,12 @@ function VoyagesPageInner() {
   useEffect(() => {
     load()
       .then((v) => {
-        if (v[0]) {
-          setSelectedId(v[0].id);
-          return loadPortCalls(v[0].id);
+        // 深链 ?v=<id> 优先，不被列表首条覆盖；无深链才默认选中首条
+        const deep = selectedId && v.some((x: Voyage) => x.id === selectedId) ? selectedId : null;
+        const pick = deep || v[0]?.id || null;
+        if (pick) {
+          if (pick !== selectedId) setSelectedId(pick);
+          return loadPortCalls(pick);
         }
       })
       .catch(() => setErr(t("common.failed", "Failed")));
@@ -831,7 +834,8 @@ function VoyagesPageInner() {
 
       {err ? <p className="flash-err">{err}</p> : null}
 
-      <div className="desk-split">
+      {/* 宽屏下左栏 240px 过窄（航次列挤成一团）— 本页放宽到 340px */}
+      <div className="desk-split" style={{ gridTemplateColumns: "minmax(300px, 340px) minmax(0, 1fr)" }}>
         <div className="panel desk-list">
           <h3 style={{ margin: "0.85rem 1rem 0.35rem", fontSize: "0.95rem" }}>{t("page.voyages.list", "Voyages")}</h3>
           <p className="muted" style={{ padding: "0 1rem", marginTop: 0, fontSize: "0.8rem" }}>
