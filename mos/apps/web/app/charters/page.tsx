@@ -11,6 +11,7 @@ import { PageGuide } from "@/components/PageGuide";
 import { PageHeader } from "@/components/PageHeader";
 import { PartyPicker } from "@/components/DataPicker";
 import { RecordModal } from "@/components/RecordModal";
+import { FormPanel, FormSection } from "@/components/form/FormPanel";
 import { Tabs, type TabItem } from "@/components/Tabs";
 import { CoaListPanel } from "@/components/charters/CoaListPanel";
 import { TcListPanel } from "@/components/charters/TcListPanel";
@@ -458,118 +459,134 @@ function ChartersPage() {
         saving={busy}
         size="xl"
       >
-        <label>
-          {t("page.charters.contract_type", "Contract type")}
-          <select value={docKind} onChange={(e) => setDocKind(e.target.value as DocKind)}>
-            <option value="voyage_fixture">{t("page.charters.fixture_voyage", "Voyage Fixture")}</option>
-            <option value="head">{t("page.charters.fixture_head", "Head Fixture")}</option>
-            <option value="relet">{t("page.charters.fixture_relet", "Relet Fixture")}</option>
-            <option value="master_contract">{t("page.charters.master_contract", "Master Contract")}</option>
-          </select>
-        </label>
-        {docKind !== "master_contract" ? (
-          <>
+        {/* 多列分组布局 — 与 New TC contract / COA 新建弹窗保持一致 */}
+        <FormPanel columns={2}>
+          <FormSection title={t("page.tc.terms.basic", "Contract")} dense>
             <label>
-              {t("page.charters.type", "Charter type")}
-              <select value={charterType} onChange={(e) => setCharterType(e.target.value)}>
-                <option value="voyage">voyage</option>
-                <option value="time">time</option>
-                <option value="tct">tct</option>
-                <option value="coa">coa</option>
-                <option value="bb">bb</option>
+              {t("page.charters.contract_type", "Contract type")}
+              <select value={docKind} onChange={(e) => setDocKind(e.target.value as DocKind)}>
+                <option value="voyage_fixture">{t("page.charters.fixture_voyage", "Voyage Fixture")}</option>
+                <option value="head">{t("page.charters.fixture_head", "Head Fixture")}</option>
+                <option value="relet">{t("page.charters.fixture_relet", "Relet Fixture")}</option>
+                <option value="master_contract">{t("page.charters.master_contract", "Master Contract")}</option>
               </select>
             </label>
+            {docKind !== "master_contract" ? (
+              <>
+                <label>
+                  {t("page.charters.type", "Charter type")}
+                  <select value={charterType} onChange={(e) => setCharterType(e.target.value)}>
+                    <option value="voyage">voyage</option>
+                    <option value="time">time</option>
+                    <option value="tct">tct</option>
+                    <option value="coa">coa</option>
+                    <option value="bb">bb</option>
+                  </select>
+                </label>
+                <label>
+                  {t("page.charters.direction", "Direction")}
+                  <select value={direction} onChange={(e) => setDirection(e.target.value)}>
+                    <option value="out">out</option>
+                    <option value="in">in</option>
+                  </select>
+                </label>
+                <label>
+                  {t("page.charters.master_contract", "Master Contract")}
+                  <select value={masterContractId} onChange={(e) => setMasterContractId(e.target.value)}>
+                    <option value="">{t("common.none", "None")}</option>
+                    {masters.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.contract_no} — {m.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : null}
+          </FormSection>
+          {docKind === "master_contract" ? (
+            <FormSection title={t("page.charters.master_contract", "Master Contract")} dense>
+              <label>
+                {t("page.charters.mc_title", "Contract title")}
+                <input value={mcTitle} onChange={(e) => setMcTitle(e.target.value)} placeholder="COA 2026 …" />
+              </label>
+              <label>
+                {t("page.charters.mc_contract_type", "Master contract type")}
+                <select value={mcType} onChange={(e) => setMcType(e.target.value)}>
+                  <option value="voyage_coa">voyage_coa</option>
+                  <option value="time_charter">time_charter</option>
+                  <option value="bareboat">bareboat</option>
+                </select>
+              </label>
+              <label>
+                {t("page.charters.mc_total_qty", "Total qty")}
+                <input type="number" step="any" value={mcQty} onChange={(e) => setMcQty(e.target.value)} />
+              </label>
+              <label>
+                {t("page.charters.mc_period_from", "Period from")}
+                <DateInput value={mcFrom} onChange={setMcFrom} />
+              </label>
+              <label>
+                {t("page.charters.mc_period_to", "Period to")}
+                <DateInput value={mcTo} onChange={setMcTo} />
+              </label>
+            </FormSection>
+          ) : null}
+          <FormSection title={t("page.tc.terms.parties", "Parties & vessel")} dense>
             <label>
-              {t("page.charters.direction", "Direction")}
-              <select value={direction} onChange={(e) => setDirection(e.target.value)}>
-                <option value="out">out</option>
-                <option value="in">in</option>
-              </select>
+              {t("page.estimates.counterparty", "Counterparty")}
+              <PartyPicker value={partyId} onChange={setPartyId} />
             </label>
-            <label>
-              {t("page.charters.master_contract", "Master Contract")}
-              <select value={masterContractId} onChange={(e) => setMasterContractId(e.target.value)}>
-                <option value="">{t("common.none", "None")}</option>
-                {masters.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.contract_no} — {m.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </>
-        ) : (
-          <>
-            <label>
-              {t("page.charters.mc_title", "Contract title")}
-              <input value={mcTitle} onChange={(e) => setMcTitle(e.target.value)} placeholder="COA 2026 …" />
-            </label>
-            <label>
-              {t("page.charters.mc_contract_type", "Master contract type")}
-              <select value={mcType} onChange={(e) => setMcType(e.target.value)}>
-                <option value="voyage_coa">voyage_coa</option>
-                <option value="time_charter">time_charter</option>
-                <option value="bareboat">bareboat</option>
-              </select>
-            </label>
-            <label>
-              {t("page.charters.mc_total_qty", "Total qty")}
-              <input type="number" step="any" value={mcQty} onChange={(e) => setMcQty(e.target.value)} />
-            </label>
-            <label>
-              {t("page.charters.mc_period_from", "Period from")}
-              <DateInput value={mcFrom} onChange={setMcFrom} />
-            </label>
-            <label>
-              {t("page.charters.mc_period_to", "Period to")}
-              <DateInput value={mcTo} onChange={setMcTo} />
-            </label>
-          </>
-        )}
-        <label>
-          {t("page.estimates.counterparty", "Counterparty")}
-          <PartyPicker value={partyId} onChange={setPartyId} />
-        </label>
-        {docKind !== "master_contract" ? (
-          <>
-            <label>
-              {t("page.estimates.vessel", "Vessel")}
-              <select value={vesselId} onChange={(e) => setVesselId(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                {vessels.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {t("page.charters.laycan_from", "Laycan from")}
-              <DateInput value={laycanFrom} onChange={setLaycanFrom} />
-            </label>
-            <label>
-              {t("page.charters.laycan_to", "Laycan to")}
-              <DateInput value={laycanTo} onChange={setLaycanTo} />
-            </label>
-            <label>
-              {t("page.estimates.commission", "Commission %")}
-              <input type="number" step="any" value={commission} onChange={(e) => setCommission(e.target.value)} />
-            </label>
-            <label>
-              {t("page.estimates.freight_rate", "Freight rate")}
-              <input type="number" step="any" value={freightRate} onChange={(e) => setFreightRate(e.target.value)} />
-            </label>
-            <label>
-              {t("page.estimates.cargo_qty", "Cargo qty")}
-              <input type="number" step="any" value={cargoQty} onChange={(e) => setCargoQty(e.target.value)} />
-            </label>
-            <TermInputs value={terms} onChange={setTerm} showTc={isTc(charterType)} />
-            <label style={{ gridColumn: "1 / -1" }}>
-              {t("page.charters.clauses", "Clauses / notes")}
-              <input value={clausesNotes} onChange={(e) => setClausesNotes(e.target.value)} placeholder="CP notes" />
-            </label>
-          </>
-        ) : null}
+            {docKind !== "master_contract" ? (
+              <label>
+                {t("page.estimates.vessel", "Vessel")}
+                <select value={vesselId} onChange={(e) => setVesselId(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  {vessels.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </FormSection>
+          {docKind !== "master_contract" ? (
+            <>
+              <FormSection title={t("page.charters.sec_laycan", "Laycan & freight")} dense>
+                <label>
+                  {t("page.charters.laycan_from", "Laycan from")}
+                  <DateInput value={laycanFrom} onChange={setLaycanFrom} />
+                </label>
+                <label>
+                  {t("page.charters.laycan_to", "Laycan to")}
+                  <DateInput value={laycanTo} onChange={setLaycanTo} />
+                </label>
+                <label>
+                  {t("page.estimates.commission", "Commission %")}
+                  <input type="number" step="any" value={commission} onChange={(e) => setCommission(e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.freight_rate", "Freight rate")}
+                  <input type="number" step="any" value={freightRate} onChange={(e) => setFreightRate(e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.cargo_qty", "Cargo qty")}
+                  <input type="number" step="any" value={cargoQty} onChange={(e) => setCargoQty(e.target.value)} />
+                </label>
+              </FormSection>
+              <FormSection title={t("page.charters.sec_cp_terms", "CP terms")} dense>
+                <TermInputs value={terms} onChange={setTerm} showTc={isTc(charterType)} />
+              </FormSection>
+              <FormSection title={t("page.charters.clauses", "Clauses / notes")} dense>
+                <label style={{ gridColumn: "1 / -1" }}>
+                  {t("page.charters.clauses", "Clauses / notes")}
+                  <input value={clausesNotes} onChange={(e) => setClausesNotes(e.target.value)} placeholder="CP notes" />
+                </label>
+              </FormSection>
+            </>
+          ) : null}
+        </FormPanel>
       </RecordModal>
     </AppShell>
   );

@@ -294,3 +294,81 @@
   gap: var(--gap-xs);
   flex-shrink: 0;
 }
+
+/* ── 页头收藏快捷链接（原面包屑槽位） ── */
+.page-fav-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-xs);
+  min-height: 18px;
+}
+.page-fav-empty {
+  color: var(--muted);
+  font-size: var(--font-label);
+  opacity: 0.75;
+}
+.page-fav-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  padding: 0 3px 0 9px;
+  background: var(--surface);
+  font-size: var(--font-label);
+  line-height: 1.5;
+  cursor: grab;
+  max-width: 220px;
+}
+.page-fav-chip.dragging {
+  opacity: 0.45;
+}
+.page-fav-link {
+  color: var(--ink);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
+}
+.page-fav-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.page-fav-x {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+.page-fav-x:hover {
+  background: rgba(192, 57, 43, 0.12);
+  color: var(--danger);
+}
+/* ── 页面右上角 ★ 收藏按钮 ── */
+.page-fav-star {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.page-fav-star:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.page-fav-star.active {
+  color: #d9a406;
+}
+.page-fav-star.active:hover {
+  color: #d9a406;
+}

@@ -200,6 +200,22 @@ dl.kv-grid > div { min-width: 0; }
   font-size: var(--font-ui);
   box-sizing: border-box;
 }
+/* 隐藏的原生 date/datetime-local —— 仅供日历按钮 showPicker() 与值回写使用。
+   必须保持可渲染：opacity:0 覆盖层（display:none 会令 showPicker() 抛 InvalidStateError）。 */
+.locale-date-native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
 .locale-date-trigger {
   position: absolute;
   right: 2px;
