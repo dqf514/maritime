@@ -1,9 +1,10 @@
 "use client";
 
-import { FormEvent, Suspense, useCallback, useEffect, useState } from "react";
+import { FormEvent, MouseEvent as ReactMouseEvent, Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { DateTimeInput } from "@/components/DateInput";
+import { DeskSection } from "@/components/DeskSection";
 import { ExportButton } from "@/components/ExportButton";
 import { PageGuide } from "@/components/PageGuide";
 import { PageHeader } from "@/components/PageHeader";
@@ -108,6 +109,39 @@ function VoyagesPageInner() {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignOperator, setReassignOperator] = useState("");
+
+  // 三栏宽度（列表 | 详情 | 船期块），可拖拽并记忆
+  const [leftW, setLeftW] = useState(280);
+  const [rightW, setRightW] = useState(340);
+  useEffect(() => {
+    const l = Number(localStorage.getItem("voyages_split_left"));
+    const r = Number(localStorage.getItem("voyages_split_right"));
+    if (l >= 220 && l <= 480) setLeftW(l);
+    if (r >= 260 && r <= 560) setRightW(r);
+  }, []);
+  useEffect(() => {
+    localStorage.setItem("voyages_split_left", String(leftW));
+  }, [leftW]);
+  useEffect(() => {
+    localStorage.setItem("voyages_split_right", String(rightW));
+  }, [rightW]);
+  function startSplitDrag(side: "left" | "right", e: ReactMouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startL = leftW;
+    const startR = rightW;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      if (side === "left") setLeftW(Math.min(480, Math.max(220, startL + dx)));
+      else setRightW(Math.min(560, Math.max(260, startR - dx)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 
   const [newVoyageNo, setNewVoyageNo] = useState("");
   const [newCargo, setNewCargo] = useState("");
@@ -834,8 +868,11 @@ function VoyagesPageInner() {
 
       {err ? <p className="flash-err">{err}</p> : null}
 
-      {/* 宽屏下左栏 240px 过窄（航次列挤成一团）— 本页放宽到 340px */}
-      <div className="desk-split" style={{ gridTemplateColumns: "minmax(300px, 340px) minmax(0, 1fr)" }}>
+      {/* 三栏工作台：列表 | 详情 | 船期块（底部上移）；分隔条可拖拽改宽 */}
+      <div
+        className="desk-split voy3"
+        style={{ gridTemplateColumns: `${leftW}px 6px minmax(0, 1fr) 6px ${rightW}px` }}
+      >
         <div className="panel desk-list">
           <h3 style={{ margin: "0.85rem 1rem 0.35rem", fontSize: "0.95rem" }}>{t("page.voyages.list", "Voyages")}</h3>
           <p className="muted" style={{ padding: "0 1rem", marginTop: 0, fontSize: "0.8rem" }}>
@@ -851,6 +888,14 @@ function VoyagesPageInner() {
             onRowClick={(r) => selectVoyage(r.id)}
           />
         </div>
+
+        <div
+          className="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("page.voyages.split_hint", "Drag to resize")}
+          onMouseDown={(e) => startSplitDrag("left", e)}
+        />
 
         <div>
           {selected ? (
@@ -890,8 +935,7 @@ function VoyagesPageInner() {
                 </div>
               </div>
 
-              <div className="desk-section">
-                <h3>{t("page.voyages.port_calls", "Port calls")}</h3>
+              <DeskSection title={t("page.voyages.port_calls", "Port calls")}>
                 <DataGrid<PortCall>
                   columns={portCallColumns}
                   data={portCalls}
@@ -951,10 +995,9 @@ function VoyagesPageInner() {
                     </button>
                   </div>
                 </form>
-              </div>
+              </DeskSection>
 
-              <div className="desk-section">
-                <h3>{t("page.voyages.sof", "SOF events")}</h3>
+              <DeskSection title={t("page.voyages.sof", "SOF events")}>
                 <form className="form-grid" onSubmit={addSof}>
                   <label>
                     {t("page.voyages.port_call", "Port call")}
@@ -1009,10 +1052,9 @@ function VoyagesPageInner() {
                     </div>
                   </div>
                 ) : null}
-              </div>
+              </DeskSection>
 
-              <div className="desk-section">
-                <h3>{t("page.voyages.off_hire", "Off-hire")}</h3>
+              <DeskSection title={t("page.voyages.off_hire", "Off-hire")}>
                 <form className="form-grid" onSubmit={addOffHire}>
                   <label>
                     {t("page.voyages.oh_start", "Start at")}
@@ -1042,10 +1084,9 @@ function VoyagesPageInner() {
                     emptyText={t("common.no_data", "No data")}
                   />
                 </div>
-              </div>
+              </DeskSection>
 
-              <div className="desk-section">
-                <h3>{t("page.voyages.noon", "Noon report")}</h3>
+              <DeskSection title={t("page.voyages.noon", "Noon report")}>
                 <form className="form-grid" onSubmit={addNoon}>
                   <label>
                     Lat
@@ -1120,10 +1161,9 @@ function VoyagesPageInner() {
                     </div>
                   </div>
                 ) : null}
-              </div>
+              </DeskSection>
 
-              <div className="desk-section">
-                <h3>{t("page.voyages.twin", "Twin track")}</h3>
+              <DeskSection title={t("page.voyages.twin", "Twin track")}>
                 {twin ? (
                   <>
                     <p className="muted">
@@ -1141,7 +1181,7 @@ function VoyagesPageInner() {
                 ) : (
                   <p className="muted">{t("page.voyages.twin_na", "Twin data unavailable (module or empty).")}</p>
                 )}
-              </div>
+              </DeskSection>
             </div>
           ) : (
             <div className="panel" style={{ marginTop: 0 }}>
@@ -1149,25 +1189,35 @@ function VoyagesPageInner() {
             </div>
           )}
         </div>
-      </div>
 
-      <div className="panel">
-        <h3 style={{ marginTop: 0 }}>{t("page.voyages.schedule", "Schedule blocks")}</h3>
-        {conflicts.length ? (
-          <p className="flash-err">
-            {t("page.voyages.conflicts_n", "{n} hard conflict(s)", { n: conflicts.length })}
-          </p>
-        ) : (
-          <p className="muted">{t("page.voyages.no_conflicts", "No hard conflicts")}</p>
-        )}
-        <DataGrid<Schedule>
-          columns={scheduleColumns}
-          data={schedules}
-          rowKey={(r) => r.id}
-          storageKey="voyages_schedule_grid"
-          showFooter={false}
-          emptyText={t("common.empty", "No records")}
+        <div
+          className="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("page.voyages.split_hint", "Drag to resize")}
+          onMouseDown={(e) => startSplitDrag("right", e)}
         />
+
+        {/* 原底部「船期块」上移为右栏，吸顶独立滚动，⤢ 可局部放大 */}
+        <div className="panel desk-side" style={{ marginTop: 0 }}>
+          <DeskSection title={t("page.voyages.schedule", "Schedule blocks")}>
+            {conflicts.length ? (
+              <p className="flash-err">
+                {t("page.voyages.conflicts_n", "{n} hard conflict(s)", { n: conflicts.length })}
+              </p>
+            ) : (
+              <p className="muted">{t("page.voyages.no_conflicts", "No hard conflicts")}</p>
+            )}
+            <DataGrid<Schedule>
+              columns={scheduleColumns}
+              data={schedules}
+              rowKey={(r) => r.id}
+              storageKey="voyages_schedule_grid"
+              showFooter={false}
+              emptyText={t("common.empty", "No records")}
+            />
+          </DeskSection>
+        </div>
       </div>
 
       <RecordModal

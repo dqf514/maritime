@@ -120,6 +120,51 @@
 }
 .desk-section { margin-top: 1rem; }
 .desk-section h3 { margin: 0 0 0.65rem; font-size: 1rem; }
+/* 区块标题行：标题 + 放大（⤢ 局部放大为 modal） */
+.desk-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.desk-section-head h3 { margin: 0 0 0.65rem; font-size: 1rem; }
+.desk-section-head .icon-btn { margin-bottom: 0.45rem; font-size: 0.95rem; }
+
+/* 三栏工作台（列表 | 详情 | 船期块）：分隔条可拖拽改宽 */
+.splitter {
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+  align-self: stretch;
+  min-height: 120px;
+}
+.splitter::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 1px;
+  background: var(--border);
+}
+.splitter:hover::after,
+.splitter.dragging::after {
+  width: 2px;
+  left: 1px;
+  background: var(--accent, #4c9f98);
+}
+/* 右栏（船期块）：吸顶 + 独立滚动 */
+.desk-side {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  position: sticky;
+  top: 0;
+  min-width: 0;
+}
+@media (max-width: 1100px) {
+  .desk-split.voy3 { grid-template-columns: 1fr !important; }
+  .desk-split.voy3 .splitter { display: none; }
+}
 
 .compact-list { list-style: none; margin: 0; padding: 0; }
 .compact-list li { padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
