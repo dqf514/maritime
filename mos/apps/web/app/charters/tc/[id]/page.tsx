@@ -293,7 +293,9 @@ export default function TcWorkspacePage() {
           setOffHire(events);
         } else if (which === "surveys") {
           if (charterId) {
-            setSurveys(await apiGet(`/api/v1/charters/${charterId}/surveys`));
+            // 接口返回 { items: [...] } 信封（与 /scheduling 等一致），需解包
+            const res = await apiGet(`/api/v1/charters/${charterId}/surveys`);
+            setSurveys(Array.isArray(res) ? res : res?.items || []);
           }
         } else if (which === "children") {
           setChildren(await apiGet(`/api/v1/tc/contracts/${contractId}/children`));

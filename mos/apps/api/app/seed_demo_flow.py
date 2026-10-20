@@ -652,7 +652,14 @@ def _seed_demo_flow_extra(db: Session, tenant) -> None:
     """二次补种：付款批次 / GL / 应计 / COA / 期租 / 费率表 / 排期块 / MariLink / 排放。
 
     幂等：每组数据以自然键存在性为闸门；Estimate.results 的引擎键则无条件补齐。
+    测试套件置 SEED_DEMO_EXTRA=0 跳过（tests/conftest.py）：这些补种数据与
+    test_exposure / test_finance_depth / test_p1_finance / test_cargo_scheduling
+    的固定键（2026-09 期间、科目 1000/4000、租约列表精确断言）冲突。
     """
+    import os
+
+    if os.environ.get("SEED_DEMO_EXTRA", "1") == "0":
+        return
     from app.models_coa import CoaContract, CoaItinerary
     from app.models_domain import (
         Charter,

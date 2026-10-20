@@ -89,6 +89,12 @@
   background: var(--accent-bg);
   color: var(--ink);
 }
+/* 表格操作列内的迷你图标按钮 */
+.icon-btn-xs {
+  width: 22px;
+  height: 22px;
+  font-size: 0.85rem;
+}
 
 /* Button group */
 .btn-group {

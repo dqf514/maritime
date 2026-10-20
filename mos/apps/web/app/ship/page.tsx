@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { PageGuide } from "@/components/PageGuide";
 import { Tabs } from "@/components/Tabs";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
+import { DeskSection } from "@/components/DeskSection";
 import { CertOverview, VesselCertificates } from "@/components/ShipCertificates";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -68,6 +69,39 @@ export default function ShipManagementPage() {
   const [certRows, setCertRows] = useState<CertRow[]>([]);
   const [editingCrew, setEditingCrew] = useState<{ id: string; full_name: string } | null>(null);
   const [certAlerts, setCertAlerts] = useState<CertAlert[]>([]);
+
+  // 三栏工作台：船队列表 | 船舶技术卡 | 证书告警/接口（分隔条可拖拽，localStorage 记忆）
+  const [leftW, setLeftW] = useState(340);
+  const [rightW, setRightW] = useState(320);
+  useEffect(() => {
+    const l = Number(localStorage.getItem("ship_split_left"));
+    const r = Number(localStorage.getItem("ship_split_right"));
+    if (l >= 260 && l <= 560) setLeftW(l);
+    if (r >= 260 && r <= 520) setRightW(r);
+  }, []);
+  useEffect(() => {
+    localStorage.setItem("ship_split_left", String(leftW));
+  }, [leftW]);
+  useEffect(() => {
+    localStorage.setItem("ship_split_right", String(rightW));
+  }, [rightW]);
+  function startSplitDrag(side: "left" | "right", e: ReactMouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startL = leftW;
+    const startR = rightW;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      if (side === "left") setLeftW(Math.min(560, Math.max(260, startL + dx)));
+      else setRightW(Math.min(520, Math.max(260, startR - dx)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 
   useEffect(() => {
     apiGet("/api/v1/ship/fleet").then(setFleet).catch(() => toast.error(t("page.ship.module_required", "Ship management module required")));
@@ -217,7 +251,7 @@ export default function ShipManagementPage() {
       {
         key: "name",
         title: t("page.ship.col_vessel", "Vessel"),
-        width: 220,
+        // 不定宽：与其余列均分栏宽，窄栏下不出现横向滚动条
         value: (r) => r.name,
         render: (_v, r) => (
           <div>
@@ -239,49 +273,31 @@ export default function ShipManagementPage() {
           </div>
         ),
       },
+      // 窄列表（默认 340px 栏）：仅数字列定宽，名称/状态均分剩余 → 无横向滚动条。
+      // Mode / Drydock / Last-modified 明细见中栏技术卡与船舶档案页。
       {
         key: "technical_status",
         title: t("common.status", "Status"),
-        width: 110,
+        width: 64,
         value: (r) => r.technical_status,
-      },
-      {
-        key: "management_mode",
-        title: t("page.ship.col_mode", "Mode"),
-        width: 110,
-        value: (r) => r.management_mode,
       },
       {
         key: "open_work_orders",
         title: t("page.ship.col_wo", "WO"),
-        width: 70,
+        width: 34,
         value: (r) => r.open_work_orders,
       },
       {
         key: "open_defects",
         title: t("page.ship.col_def", "Def"),
-        width: 70,
+        width: 34,
         value: (r) => r.open_defects,
       },
       {
         key: "expiring_certs",
         title: t("page.ship.col_cert", "Cert"),
-        width: 70,
+        width: 36,
         value: (r) => r.expiring_certs,
-      },
-      {
-        key: "next_drydock",
-        title: t("page.ship.col_drydock", "Drydock"),
-        width: 110,
-        value: (r) => r.next_drydock,
-        render: (v) => String(v || "—"),
-      },
-      {
-        key: "updated_at",
-        title: t("list.last_modified", "Last modified"),
-        width: 135,
-        value: (r) => r.updated_at ?? null,
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
       },
     ],
     [t],
@@ -315,28 +331,26 @@ export default function ShipManagementPage() {
 
   const certAlertColumns = useMemo<ColumnDef<CertAlert>[]>(
     () => [
+      // 右栏窄网格（默认 320px 栏）：仅天数列定宽，其余均分 → 无横向滚动条
       {
         key: "crew_name",
         title: t("page.ship.crew_name", "Crew"),
-        width: 150,
         value: (r) => r.crew_name,
       },
       {
         key: "code",
         title: t("page.ship.cert_code", "Cert"),
-        width: 130,
         value: (r) => r.code,
       },
       {
         key: "expires_on",
         title: t("page.ship.cert_expires", "Expires"),
-        width: 120,
         value: (r) => r.expires_on,
       },
       {
         key: "days_left",
         title: t("page.ship.days_left", "Days left"),
-        width: 110,
+        width: 48,
         align: "right",
         value: (r) => r.days_left,
         render: (v, r) =>
@@ -412,8 +426,12 @@ export default function ShipManagementPage() {
         </div>
       </div>
 
-      <div className="ship-layout">
-        <div className="panel">
+      {/* 三栏工作台：船队列表 | 技术卡 | 证书告警/接口；分隔条可拖拽改宽，右栏吸顶独立滚动 */}
+      <div
+        className="desk-split voy3"
+        style={{ gridTemplateColumns: `${leftW}px 6px minmax(0, 1fr) 6px ${rightW}px` }}
+      >
+        <div className="panel desk-list">
           <h2>{t("page.ship.fleet", "Technical fleet")}</h2>
           <DataGrid<FleetRow>
             columns={fleetColumns}
@@ -425,6 +443,14 @@ export default function ShipManagementPage() {
             onRowClick={(r) => openVessel(r.vessel_id)}
           />
         </div>
+
+        <div
+          className="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("page.voyages.split_hint", "Drag to resize")}
+          onMouseDown={(e) => startSplitDrag("left", e)}
+        />
 
         <div className="panel">
           <h2>{detail?.vessel?.name || t("page.ship.select", "Select a vessel")}</h2>
@@ -587,46 +613,55 @@ export default function ShipManagementPage() {
             <p className="muted">{t("page.ship.select_hint", "Click a vessel to open technical card.")}</p>
           )}
         </div>
-      </div>
 
-      <div className="panel">
-        <h2>{t("page.ship.cert_alerts", "Crew certificate alerts (60 days)")}</h2>
-        {certAlerts.length ? (
-          <DataGrid<CertAlert>
-            columns={certAlertColumns}
-            data={certAlerts}
-            rowKey={(r, i) => `${r.crew_id}-${r.code}-${i}`}
-            storageKey="ship_cert_alerts"
-            emptyText={t("common.empty", "No records")}
-            showFooter={false}
-          />
-        ) : (
-          <p className="muted">{t("page.ship.no_cert_alerts", "No crew certificates expiring within 60 days")}</p>
-        )}
-      </div>
+        <div
+          className="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("page.voyages.split_hint", "Drag to resize")}
+          onMouseDown={(e) => startSplitDrag("right", e)}
+        />
 
-      <div className="panel">
-        <h2>{t("page.ship.adapters", "External ship management adapters")}</h2>
-        <p className="page-sub">{t("page.ship.adapters_sub", "Reserved interfaces for SpecTec / ABS NS / ShipNet / generic webhook.")}</p>
-        <div className="adapter-grid">
-          {adapters.map((a) => (
-            <div key={a.code} className="adapter-card">
-              <strong>{a.name}</strong>
-              <div className="muted">{a.code}</div>
-              <div className="pill">{a.status}</div>
-              <div className="muted">{a.capabilities.join(" · ")}</div>
+        {/* 右栏 = 监控/上下文区（证书告警 + 外部接口）：原底部整幅面板上移，吸顶独立滚动，⤢ 可局部放大 */}
+        <div className="panel desk-side">
+          <DeskSection title={t("page.ship.cert_alerts", "Crew certificate alerts (60 days)")}>
+            {certAlerts.length ? (
+              <DataGrid<CertAlert>
+                columns={certAlertColumns}
+                data={certAlerts}
+                rowKey={(r, i) => `${r.crew_id}-${r.code}-${i}`}
+                storageKey="ship_cert_alerts"
+                emptyText={t("common.empty", "No records")}
+                showFooter={false}
+              />
+            ) : (
+              <p className="muted">{t("page.ship.no_cert_alerts", "No crew certificates expiring within 60 days")}</p>
+            )}
+          </DeskSection>
+
+          <DeskSection title={t("page.ship.adapters", "External ship management adapters")}>
+            <p className="page-sub">{t("page.ship.adapters_sub", "Reserved interfaces for SpecTec / ABS NS / ShipNet / generic webhook.")}</p>
+            <div className="adapter-grid">
+              {adapters.map((a) => (
+                <div key={a.code} className="adapter-card">
+                  <strong>{a.name}</strong>
+                  <div className="muted">{a.code}</div>
+                  <div className="pill">{a.status}</div>
+                  <div className="muted">{a.capabilities.join(" · ")}</div>
+                </div>
+              ))}
             </div>
-          ))}
+            <h3>{t("page.ship.sync_logs", "Recent sync logs")}</h3>
+            <ul className="compact-list">
+              {logs.slice(0, 8).map((l) => (
+                <li key={l.id}>
+                  [{l.direction}] {l.entity_type} — {l.status} {l.message || ""}
+                </li>
+              ))}
+              {!logs.length ? <li className="muted">{t("page.ship.sync_empty", "No sync yet — use Simulate PMS inbound.")}</li> : null}
+            </ul>
+          </DeskSection>
         </div>
-        <h3>{t("page.ship.sync_logs", "Recent sync logs")}</h3>
-        <ul className="compact-list">
-          {logs.slice(0, 8).map((l) => (
-            <li key={l.id}>
-              [{l.direction}] {l.entity_type} — {l.status} {l.message || ""}
-            </li>
-          ))}
-          {!logs.length ? <li className="muted">{t("page.ship.sync_empty", "No sync yet — use Simulate PMS inbound.")}</li> : null}
-        </ul>
       </div>
         </>
       )}

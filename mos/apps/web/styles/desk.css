@@ -153,13 +153,19 @@
   left: 1px;
   background: var(--accent, #4c9f98);
 }
-/* 右栏（船期块）：吸顶 + 独立滚动 */
+/* 右栏（船期块/证书告警）：吸顶 + 独立滚动 */
 .desk-side {
   max-height: calc(100vh - 220px);
   overflow-y: auto;
   position: sticky;
   top: 0;
   min-width: 0;
+  margin-top: 0;
+}
+/* 船队列表窄栏标题 */
+.desk-list > h2 {
+  margin: 0.75rem 1rem 0.4rem;
+  font-size: 1rem;
 }
 @media (max-width: 1100px) {
   .desk-split.voy3 { grid-template-columns: 1fr !important; }

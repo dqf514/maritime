@@ -562,7 +562,7 @@ function VoyagesPageInner() {
     {
       key: "_pick",
       title: "☑",
-      width: 36,
+      width: 28,
       align: "center",
       value: (r) => picked.has(r.id),
       render: (_v, r) => (
@@ -575,39 +575,40 @@ function VoyagesPageInner() {
         />
       ),
     },
+    // 窄列表：仅勾选/操作列定宽，其余列均分剩余宽度 → 任何栏宽下都不出现横向滚动条
     {
       key: "voyage_no",
       title: t("page.voyages.no", "No"),
-      minWidth: 120,
       value: (r) => r.voyage_no,
     },
     {
       key: "cargo",
       title: t("page.voyages.cargo", "Cargo"),
-      minWidth: 110,
       value: (r) => r.cargo || "",
       render: (v) => (v ? String(v) : "—"),
     },
-    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    { key: "status", title: t("common.status", "Status"), value: (r) => r.status },
     {
       key: "updated_at",
-      title: t("list.last_modified", "Last modified"),
-      width: 135,
+      title: t("list.last_modified", "Modified"),
       value: (r) => r.updated_at ?? null,
-      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+      // 窄列表：只显示 MM-DD HH:mm（省略年份与秒）
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ").slice(5, 16) : "—"),
     },
     {
       key: "_actions",
       title: "",
-      width: 110,
-      align: "right",
+      width: 26,
+      align: "center",
       render: (_v, r) => (
         <Link
           href={`/operations/voyages/${r.id}/workspace`}
-          className="btn btn-ghost btn-sm"
+          className="icon-btn icon-btn-xs"
+          title={t("page.voyages.view360", "360° view")}
+          aria-label={t("page.voyages.view360", "360° view")}
           onClick={(e) => e.stopPropagation()}
         >
-          {t("page.voyages.view360", "360° view")}
+          ⤢
         </Link>
       ),
     },
@@ -1054,38 +1055,6 @@ function VoyagesPageInner() {
                 ) : null}
               </DeskSection>
 
-              <DeskSection title={t("page.voyages.off_hire", "Off-hire")}>
-                <form className="form-grid" onSubmit={addOffHire}>
-                  <label>
-                    {t("page.voyages.oh_start", "Start at")}
-                    <DateTimeInput value={ohStart} onChange={setOhStart} />
-                  </label>
-                  <label>
-                    {t("page.voyages.oh_reason", "Reason")}
-                    <input value={ohReason} onChange={(e) => setOhReason(e.target.value)} />
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                    <input type="checkbox" checked={ohDeduct} onChange={(e) => setOhDeduct(e.target.checked)} />
-                    {t("page.voyages.oh_deduct", "Deduct hire")}
-                  </label>
-                  <div style={{ display: "flex", alignItems: "end" }}>
-                    <button className="btn btn-sm" type="submit" disabled={busy}>
-                      {t("page.voyages.oh_open", "Open off-hire")}
-                    </button>
-                  </div>
-                </form>
-                <div style={{ marginTop: "0.75rem" }}>
-                  <DataGrid<OffHire>
-                    columns={offHireColumns}
-                    data={offHires}
-                    rowKey={(r) => r.id}
-                    storageKey="voyages_offhire_grid"
-                    showFooter={false}
-                    emptyText={t("common.no_data", "No data")}
-                  />
-                </div>
-              </DeskSection>
-
               <DeskSection title={t("page.voyages.noon", "Noon report")}>
                 <form className="form-grid" onSubmit={addNoon}>
                   <label>
@@ -1162,26 +1131,6 @@ function VoyagesPageInner() {
                   </div>
                 ) : null}
               </DeskSection>
-
-              <DeskSection title={t("page.voyages.twin", "Twin track")}>
-                {twin ? (
-                  <>
-                    <p className="muted">
-                      L{twin.level} · {twin.noon_track?.length || 0} noon points · {twin.port_calls?.length || 0} port calls
-                    </p>
-                    <DataGrid<NoonPoint>
-                      columns={noonTrackColumns}
-                      data={(twin.noon_track || []).map((n, i) => ({ ...n, key: `noon-${i}` }))}
-                      rowKey={(r) => r.key}
-                      storageKey="voyages_noon_track_grid"
-                      showFooter={false}
-                      emptyText={t("page.voyages.no_track", "No noon track yet")}
-                    />
-                  </>
-                ) : (
-                  <p className="muted">{t("page.voyages.twin_na", "Twin data unavailable (module or empty).")}</p>
-                )}
-              </DeskSection>
             </div>
           ) : (
             <div className="panel" style={{ marginTop: 0 }}>
@@ -1198,8 +1147,8 @@ function VoyagesPageInner() {
           onMouseDown={(e) => startSplitDrag("right", e)}
         />
 
-        {/* 原底部「船期块」上移为右栏，吸顶独立滚动，⤢ 可局部放大 */}
-        <div className="panel desk-side" style={{ marginTop: 0 }}>
+        {/* 右栏 = 监控/上下文区（顺手习惯：对照船期看轨迹，异常时开停租）；吸顶独立滚动，⤢ 可局部放大 */}
+        <div className="panel desk-side">
           <DeskSection title={t("page.voyages.schedule", "Schedule blocks")}>
             {conflicts.length ? (
               <p className="flash-err">
@@ -1216,6 +1165,58 @@ function VoyagesPageInner() {
               showFooter={false}
               emptyText={t("common.empty", "No records")}
             />
+          </DeskSection>
+
+          <DeskSection title={t("page.voyages.twin", "Twin track")}>
+            {twin ? (
+              <>
+                <p className="muted">
+                  L{twin.level} · {twin.noon_track?.length || 0} noon points · {twin.port_calls?.length || 0} port calls
+                </p>
+                <DataGrid<NoonPoint>
+                  columns={noonTrackColumns}
+                  data={(twin.noon_track || []).map((n, i) => ({ ...n, key: `noon-${i}` }))}
+                  rowKey={(r) => r.key}
+                  storageKey="voyages_noon_track_grid"
+                  showFooter={false}
+                  emptyText={t("page.voyages.no_track", "No noon track yet")}
+                />
+              </>
+            ) : (
+              <p className="muted">{t("page.voyages.twin_na", "Twin data unavailable (module or empty).")}</p>
+            )}
+          </DeskSection>
+
+          <DeskSection title={t("page.voyages.off_hire", "Off-hire")}>
+            <form className="form-grid" onSubmit={addOffHire}>
+              <label>
+                {t("page.voyages.oh_start", "Start at")}
+                <DateTimeInput value={ohStart} onChange={setOhStart} />
+              </label>
+              <label>
+                {t("page.voyages.oh_reason", "Reason")}
+                <input value={ohReason} onChange={(e) => setOhReason(e.target.value)} />
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                <input type="checkbox" checked={ohDeduct} onChange={(e) => setOhDeduct(e.target.checked)} />
+                {t("page.voyages.oh_deduct", "Deduct hire")}
+              </label>
+              <div style={{ display: "flex", alignItems: "end" }}>
+                <button className="btn btn-sm" type="submit" disabled={busy}>
+                  {t("page.voyages.oh_open", "Open off-hire")}
+                </button>
+              </div>
+            </form>
+            <div style={{ marginTop: "0.75rem" }}>
+              <DataGrid<OffHire>
+                columns={offHireColumns}
+                data={offHires}
+                rowKey={(r) => r.id}
+                storageKey="voyages_offhire_grid"
+                showFooter={false}
+                emptyText={t("common.no_data", "No data")}
+              />
+            </div>
           </DeskSection>
         </div>
       </div>

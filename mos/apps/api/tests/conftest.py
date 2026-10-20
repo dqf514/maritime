@@ -15,6 +15,8 @@ os.environ["LICENSE_DEV_UNLOCK"] = "all"
 os.environ["JWT_SECRET"] = "test-secret"
 # Demo data is seeded by the db_engine fixture; rate limiting is exercised in test_security_fixes.py
 os.environ["SEED_DEMO"] = "true"
+# 跳过 demo 二次补种（GL/期租/排期块等）——与固定键断言的测试冲突
+os.environ["SEED_DEMO_EXTRA"] = "0"
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 os.environ["JOB_WORKER_ENABLED"] = "false"
 os.environ["MARIOS_LLM_OFF"] = "1"  # 测试零网络：LLM 抽取熔断（mock 除外）
