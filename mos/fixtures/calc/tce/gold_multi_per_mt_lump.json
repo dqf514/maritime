@@ -1,0 +1,27 @@
+{
+  "expect": {
+    "tce": 56458.33,
+    "voyage_cost": 130000.0
+  },
+  "id": "gold_multi_per_mt_lump",
+  "inputs": {
+    "bunker_port_tpd": 5,
+    "bunker_price": 500,
+    "bunker_sea_tpd": 25,
+    "cargoes": [
+      {
+        "freight_basis": "per_mt",
+        "freight_rate": 12,
+        "qty": 50000
+      },
+      {
+        "freight_basis": "lump_sum",
+        "lump_sum_freight": 250000,
+        "qty": 30000
+      }
+    ],
+    "commission_pct": 5,
+    "port_days": 2,
+    "sea_days": 10
+  }
+}

@@ -44,6 +44,19 @@ type EstResults = {
   emissions_cost?: number;
   cargo_qty_min?: number;
   cargo_qty_max?: number;
+  cargo_count?: number;
+  parcel_qty_total?: number;
+  cargoes?: Array<{
+    index: number;
+    qty: number;
+    freight_basis: string;
+    base_freight: number;
+    cargo_type?: string;
+    load_port?: string;
+    disch_port?: string;
+    differentials_total?: number;
+  }>;
+  inputs_enriched?: Record<string, string>;
   warnings?: Array<{ code: string; message: string }>;
 };
 type Estimate = {
@@ -161,7 +174,34 @@ type LegRow = {
 
 type PriceRow = { grade: string; price: string };
 
+// 多货估算（IMOS parity）：每票货独立计价；空白字段继承顶层输入
+type CargoRow = {
+  qty: string;
+  freight_basis: string; // "" = 继承顶层
+  freight_rate: string;
+  lump_sum_freight: string;
+  ws_flat: string;
+  ws_pct: string;
+  cargo_type: string;
+  load_port: string;
+  disch_port: string;
+};
+
 const EMPTY_LEG: LegRow = { from_port: "", to_port: "", distance_nm: "", speed_kn: "", port_days: "", cargo_qty: "" };
+
+const EMPTY_CARGO: CargoRow = {
+  qty: "",
+  freight_basis: "",
+  freight_rate: "",
+  lump_sum_freight: "",
+  ws_flat: "",
+  ws_pct: "",
+  cargo_type: "",
+  load_port: "",
+  disch_port: "",
+};
+
+const CARGO_BASES = ["per_mt", "lump_sum", "worldscale", "ws_differential"];
 
 const DRY_BULK: Partial<InputFields> = {
   cargo_qty: "50000",
@@ -214,6 +254,7 @@ function inputsFromEst(inputs: Record<string, number | string> | undefined): Inp
 
 type PayloadExtras = {
   legs?: Array<Record<string, number | string>>;
+  cargoes?: Array<Record<string, unknown>>;
   bunker_grade?: string;
   bunker_eca_grade?: string;
   bunker_prices?: Record<string, number>;
@@ -231,6 +272,7 @@ function buildPayload(fields: InputFields, extras?: PayloadExtras): Record<strin
     delete out.sea_days;
     delete out.port_days;
   }
+  if (extras?.cargoes?.length) out.cargoes = extras.cargoes;
   if (extras?.bunker_grade) out.bunker_grade = extras.bunker_grade;
   if (extras?.bunker_eca_grade) out.bunker_eca_grade = extras.bunker_eca_grade;
   if (extras?.bunker_prices && Object.keys(extras.bunker_prices).length) out.bunker_prices = extras.bunker_prices;
@@ -250,6 +292,26 @@ function legRowsFromEst(inputs: Record<string, unknown> | undefined): LegRow[] {
       speed_kn: s(o.speed_kn),
       port_days: s(o.port_days),
       cargo_qty: s(o.cargo_qty),
+    };
+  });
+}
+
+function cargoRowsFromEst(inputs: Record<string, unknown> | undefined): CargoRow[] {
+  const raw = inputs?.cargoes;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((c) => {
+    const o = (c || {}) as Record<string, unknown>;
+    const s = (v: unknown) => (v === undefined || v === null ? "" : String(v));
+    return {
+      qty: s(o.qty),
+      freight_basis: s(o.freight_basis),
+      freight_rate: s(o.freight_rate),
+      lump_sum_freight: s(o.lump_sum_freight),
+      ws_flat: s(o.ws_flat),
+      ws_pct: s(o.ws_pct),
+      cargo_type: s(o.cargo_type),
+      load_port: s(o.load_port),
+      disch_port: s(o.disch_port),
     };
   });
 }
@@ -279,6 +341,7 @@ function EstimatesPage() {
   const [partyId, setPartyId] = useState("");
   const [fields, setFields] = useState<InputFields>(EMPTY_INPUTS);
   const [legRows, setLegRows] = useState<LegRow[]>([]);
+  const [cargoRows, setCargoRows] = useState<CargoRow[]>([]);
   const [bunkerGrade, setBunkerGrade] = useState("VLSFO");
   const [bunkerEcaGrade, setBunkerEcaGrade] = useState("MGO");
   const [priceRows, setPriceRows] = useState<PriceRow[]>([]);
@@ -350,6 +413,7 @@ function EstimatesPage() {
     setFields(inputsFromEst(est.inputs));
     const inp = (est.inputs || {}) as Record<string, unknown>;
     setLegRows(legRowsFromEst(inp));
+    setCargoRows(cargoRowsFromEst(inp));
     setBunkerGrade(typeof inp.bunker_grade === "string" ? inp.bunker_grade : "VLSFO");
     setBunkerEcaGrade(typeof inp.bunker_eca_grade === "string" ? inp.bunker_eca_grade : "MGO");
     const bp = inp.bunker_prices;
@@ -383,11 +447,34 @@ function EstimatesPage() {
       const p = num(r.price);
       if (r.grade && p !== undefined) bunker_prices[r.grade] = p;
     });
-    return { legs, bunker_grade: bunkerGrade, bunker_eca_grade: bunkerEcaGrade, bunker_prices };
+    // 多货：仅有货量的票货才提交（空行忽略）；空白计价字段继承顶层
+    const cargoes = cargoRows
+      .filter((c) => num(c.qty) !== undefined && (num(c.qty) ?? 0) > 0)
+      .map((c) => {
+        const cargo: Record<string, unknown> = { qty: Number(c.qty) };
+        if (c.freight_basis.trim()) cargo.freight_basis = c.freight_basis.trim();
+        const fr = num(c.freight_rate);
+        if (fr !== undefined) cargo.freight_rate = fr;
+        const ls = num(c.lump_sum_freight);
+        if (ls !== undefined) cargo.lump_sum_freight = ls;
+        const wf = num(c.ws_flat);
+        if (wf !== undefined) cargo.ws_flat = wf;
+        const wp = num(c.ws_pct);
+        if (wp !== undefined) cargo.ws_pct = wp;
+        if (c.cargo_type.trim()) cargo.cargo_type = c.cargo_type.trim();
+        if (c.load_port.trim()) cargo.load_port = c.load_port.trim();
+        if (c.disch_port.trim()) cargo.disch_port = c.disch_port.trim();
+        return cargo;
+      });
+    return { legs, cargoes, bunker_grade: bunkerGrade, bunker_eca_grade: bunkerEcaGrade, bunker_prices };
   }
 
   function setLeg(idx: number, key: keyof LegRow, value: string) {
     setLegRows((prev) => prev.map((l, i) => (i === idx ? { ...l, [key]: value } : l)));
+  }
+
+  function setCargo(idx: number, key: keyof CargoRow, value: string) {
+    setCargoRows((prev) => prev.map((c, i) => (i === idx ? { ...c, [key]: value } : c)));
   }
 
   function setPrice(idx: number, key: keyof PriceRow, value: string) {
@@ -406,6 +493,7 @@ function EstimatesPage() {
       const extras = preset ? undefined : currentExtras();
       if (preset) {
         setLegRows([]);
+        setCargoRows([]);
         setPriceRows([]);
       }
       const est: Estimate = await apiPost("/api/v1/estimates", {
@@ -927,6 +1015,71 @@ function EstimatesPage() {
           </div>
 
           <div className="desk-section">
+            <h3>{t("page.estimates.cargoes", "多货 Parcels")}</h3>
+            <p className="muted editor-hint">
+              {t(
+                "page.estimates.cargoes_hint",
+                "每票货独立计价（per MT / Lump / WS）；空白字段继承上方顶层输入。填一票以上即按多货模式计总运费。",
+              )}
+            </p>
+            {cargoRows.map((cargo, i) => (
+              <div key={i} className="form-grid editor-row">
+                <label>
+                  {t("page.estimates.cargo_qty", "Cargo qty")}
+                  <input type="number" step="any" value={cargo.qty} onChange={(e) => setCargo(i, "qty", e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.cargo_basis", "Freight basis")}
+                  <select value={cargo.freight_basis} onChange={(e) => setCargo(i, "freight_basis", e.target.value)}>
+                    <option value="">{t("page.estimates.cargo_basis_inherit", "继承顶层")}</option>
+                    {CARGO_BASES.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  {t("page.estimates.cargo_rate", "Rate / MT")}
+                  <input type="number" step="any" value={cargo.freight_rate} onChange={(e) => setCargo(i, "freight_rate", e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.cargo_lump", "Lump sum")}
+                  <input type="number" step="any" value={cargo.lump_sum_freight} onChange={(e) => setCargo(i, "lump_sum_freight", e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.cargo_ws_flat", "WS flat")}
+                  <input type="number" step="any" value={cargo.ws_flat} onChange={(e) => setCargo(i, "ws_flat", e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.cargo_ws_pct", "WS %")}
+                  <input type="number" step="any" value={cargo.ws_pct} onChange={(e) => setCargo(i, "ws_pct", e.target.value)} />
+                </label>
+                <label>
+                  {t("page.estimates.cargo_type", "Cargo type")}
+                  <input value={cargo.cargo_type} onChange={(e) => setCargo(i, "cargo_type", e.target.value)} placeholder="Coal" />
+                </label>
+                <label>
+                  {t("page.estimates.leg_from", "From")}
+                  <input value={cargo.load_port} onChange={(e) => setCargo(i, "load_port", e.target.value)} placeholder="CNTXG" />
+                </label>
+                <label>
+                  {t("page.estimates.leg_to", "To")}
+                  <input value={cargo.disch_port} onChange={(e) => setCargo(i, "disch_port", e.target.value)} placeholder="NLRTM" />
+                </label>
+                <div className="editor-actions">
+                  <button className="btn btn-danger btn-sm" type="button" onClick={() => setCargoRows((prev) => prev.filter((_, x) => x !== i))}>
+                    {t("common.delete", "删除")}
+                  </button>
+                </div>
+              </div>
+            ))}
+            <button className="btn btn-sm" type="button" onClick={() => setCargoRows((prev) => [...prev, { ...EMPTY_CARGO }])}>
+              {t("page.estimates.add_cargo", "添加票货")}
+            </button>
+          </div>
+
+          <div className="desk-section">
             <h3>{t("page.estimates.bunker_pricing", "燃油价格（多牌号）")}</h3>
             <div className="form-grid">
               <label>
@@ -1076,6 +1229,46 @@ function EstimatesPage() {
                 </div>
               ) : null}
             </div>
+            {results.cargoes?.length ? (
+              <div className="editor-block">
+                <p className="muted editor-caption">
+                  {t("page.estimates.cargo_breakdown", "票货明细")} · {t("page.estimates.cargo_count", "票数")}{" "}
+                  {results.cargo_count} · {t("page.estimates.parcel_qty_total", "总货量")} {fmt(results.parcel_qty_total)} MT
+                </p>
+                <table className="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>{t("page.estimates.cargo_qty", "Cargo qty")}</th>
+                      <th>{t("page.estimates.cargo_basis", "Freight basis")}</th>
+                      <th>{t("page.estimates.base_freight", "Base freight")}</th>
+                      <th>{t("page.estimates.cargo_type", "Cargo type")}</th>
+                      <th>{t("page.estimates.leg_from", "From")}</th>
+                      <th>{t("page.estimates.leg_to", "To")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.cargoes.map((c) => (
+                      <tr key={c.index}>
+                        <td>{c.index + 1}</td>
+                        <td>{fmt(c.qty)}</td>
+                        <td>{c.freight_basis}</td>
+                        <td>{fmt(c.base_freight)}</td>
+                        <td>{c.cargo_type || "—"}</td>
+                        <td>{c.load_port || "—"}</td>
+                        <td>{c.disch_port || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            {results.inputs_enriched && Object.keys(results.inputs_enriched).length ? (
+              <p className="muted enriched-note" title={JSON.stringify(results.inputs_enriched)}>
+                {t("page.estimates.enriched_note", "已按船舶档案/燃油区/行情自动补全")}：{" "}
+                {Object.keys(results.inputs_enriched).join(" · ")}
+              </p>
+            ) : null}
             {results.warnings?.length ? (
               <div style={{ marginTop: "0.75rem" }}>
                 {results.warnings.map((w, i) => (

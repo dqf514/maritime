@@ -257,9 +257,19 @@ def seed_wave1_demo(db: Session) -> None:
     if not db.scalar(select(Port).limit(1)):
         db.add_all(
             [
-                Port(unlocode="SGSIN", name="Singapore", country="SG", timezone="Asia/Singapore"),
-                Port(unlocode="NLRTM", name="Rotterdam", country="NL", timezone="Europe/Amsterdam"),
-                Port(unlocode="CNTXG", name="Tianjin Xingang", country="CN", timezone="Asia/Shanghai"),
+                Port(
+                    unlocode="SGSIN", name="Singapore", country="SG", timezone="Asia/Singapore",
+                    latitude=Decimal("1.265"), longitude=Decimal("103.82"),
+                ),
+                Port(
+                    unlocode="NLRTM", name="Rotterdam", country="NL", timezone="Europe/Amsterdam",
+                    latitude=Decimal("51.925"), longitude=Decimal("4.479"),
+                    is_eu=True,  # EU/EEA — drives EU ETS share inference (estimate_enrich)
+                ),
+                Port(
+                    unlocode="CNTXG", name="Tianjin Xingang", country="CN", timezone="Asia/Shanghai",
+                    latitude=Decimal("38.98"), longitude=Decimal("117.78"),
+                ),
             ]
         )
 

@@ -1,0 +1,41 @@
+{
+  "expect": {
+    "tce": 244674.38,
+    "voyage_cost": 111705.0
+  },
+  "id": "gold_multi_ws_diff",
+  "inputs": {
+    "brokerage_pct": 1.25,
+    "bunker_price": 480,
+    "bunker_sea_tpd": 22,
+    "cargoes": [
+      {
+        "differentials": [
+          {
+            "amount": 0.8,
+            "basis": "per_mt",
+            "label": "FFA"
+          }
+        ],
+        "freight_basis": "worldscale",
+        "qty": 60000,
+        "ws_flat": 30,
+        "ws_pct": 100
+      },
+      {
+        "differentials": [
+          {
+            "amount": -1.5,
+            "basis": "per_mt",
+            "label": "rebate"
+          }
+        ],
+        "freight_basis": "per_mt",
+        "freight_rate": 18,
+        "qty": 20000
+      }
+    ],
+    "commission_pct": 5,
+    "sea_days": 8
+  }
+}

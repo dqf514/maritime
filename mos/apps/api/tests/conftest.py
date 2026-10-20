@@ -90,6 +90,10 @@ def db_engine():
         seed_i18n(db)
         bootstrap_ops_catalog(db)
         seed_reference_catalog(db)
+        # 预置燃油区（ECA/EU ETS 多边形）—— estimate_enrich 测试依赖
+        from app.services.fuel_zone_service import seed_preset_zones
+
+        seed_preset_zones(db)
         seed_clause_pack(db)
         seed_report_datasets(db)
         seed_config_flag_presets(db)

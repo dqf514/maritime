@@ -328,6 +328,11 @@ async def lifespan(_app: FastAPI):
             seed_clause_pack(db)
             seed_report_datasets(db)
             seed_config_flag_presets(db)
+            # 预置燃油区（ECA / EU ETS 多边形）—— estimate_enrich 的 ECA 天数
+            # 与 EU 份额推断依赖这些区划；幂等（按 zone_name 去重）。
+            from app.services.fuel_zone_service import seed_preset_zones
+
+            seed_preset_zones(db)
             # Demo tenants & users only when explicitly enabled (SEED_DEMO=true)
             if settings.seed_demo:
                 seed_if_empty(db)

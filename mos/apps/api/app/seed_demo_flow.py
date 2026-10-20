@@ -90,6 +90,8 @@ def seed_full_demo_flow(db: Session) -> None:
                 consumption_sea=Decimal(sea),
                 consumption_port=Decimal(portc),
                 status="active",
+                # IMOS 对齐业务分组：示例船队里放一条“船管”以展示分组维度
+                fleet_group="ship_management" if imo == "9000004" else "mother_vessel",
             )
             db.add(v)
             db.flush()
@@ -460,7 +462,7 @@ def seed_full_demo_flow(db: Session) -> None:
             ),
         ]
     )
-    for i, (sym, val) in enumerate([("BDI", 1680), ("BCI", 2450), ("VLSFO_SG", 545), ("HSFO_RTM", 480)]):
+    for i, (sym, val) in enumerate([("BDI", 1680), ("BCI", 2450), ("VLSFO_SG", 545), ("HSFO_RTM", 480), ("EUA", 73.5)]):
         qdate = today - timedelta(days=i)
         exists = db.scalar(
             select(MarketQuote).where(

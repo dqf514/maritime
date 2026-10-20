@@ -85,6 +85,10 @@ class Vessel(Base):
     design_speed: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     tank_capacity_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     status: Mapped[str] = mapped_column(Text, default="active")
+    # —— IMOS 对齐的业务分组（Track 2）：船舶按经营性质归组，而非按管理处室 ——
+    # mother_vessel 母船/租入船队 | ship_management 船管 | tugs_barges 拖轮驳船 |
+    # flf 灵便重吊(Fleetline) | other 其他。默认母船队，避免存量数据失焦。
+    fleet_group: Mapped[str] = mapped_column(Text, default="mother_vessel")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

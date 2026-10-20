@@ -1,0 +1,22 @@
+{
+  "expect": {
+    "tce": 72933.33,
+    "voyage_cost": 124800.0
+  },
+  "id": "gold_multi_inherit_basis",
+  "inputs": {
+    "bunker_price": 520,
+    "bunker_sea_tpd": 20,
+    "cargoes": [
+      {
+        "qty": 40000
+      },
+      {
+        "qty": 60000
+      }
+    ],
+    "freight_basis": "per_mt",
+    "freight_rate": 10,
+    "sea_days": 12
+  }
+}

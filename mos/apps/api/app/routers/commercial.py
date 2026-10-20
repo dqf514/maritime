@@ -63,6 +63,17 @@ def _alive(status: str | None) -> bool:
     return status != "deleted"
 
 
+def _est_inputs(est: Estimate) -> dict:
+    """inputs 拷贝，并注入行上的 vessel_id（驱动 estimate_enrich 主数据补全）。
+
+    inputs 里显式带的 vessel_id 优先（克隆/模板场景可能指向别船）。
+    """
+    inputs = dict(est.inputs or {})
+    if est.vessel_id and not inputs.get("vessel_id"):
+        inputs["vessel_id"] = est.vessel_id
+    return inputs
+
+
 class EstimateIn(BaseModel):
     title: str
     mode: str = "voyage"
@@ -497,7 +508,7 @@ def estimate_column_view(
         results = est.results or {}
         if not results:
             try:
-                results = compute_estimate(est.inputs or {}, db=db, tenant_id=auth.tenant_id)
+                results = compute_estimate(_est_inputs(est), db=db, tenant_id=auth.tenant_id)
             except ValueError:
                 results = {}
         values: dict = {
@@ -536,7 +547,7 @@ def estimate_benchmark(
         results = r.results or {}
         if not results:
             try:
-                results = compute_estimate(r.inputs or {}, db=db, tenant_id=auth.tenant_id)
+                results = compute_estimate(_est_inputs(r), db=db, tenant_id=auth.tenant_id)
             except ValueError:
                 continue
         tce = results.get("tce")
@@ -671,7 +682,7 @@ def calculate_estimate(estimate_id: UUID, auth: AuthContext = Depends(require_mo
     if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Estimate not found")
     try:
-        row.results = compute_estimate(row.inputs or {}, db=db, tenant_id=auth.tenant_id)
+        row.results = compute_estimate(_est_inputs(row), db=db, tenant_id=auth.tenant_id)
     except ValueError as exc:
         raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     row.status = "calculated"
@@ -748,7 +759,7 @@ def estimate_to_charter(estimate_id: UUID, auth: AuthContext = Depends(require_m
         raise HTTPException(404, "Estimate not found")
     if not est.results:
         try:
-            est.results = compute_estimate(est.inputs or {}, db=db, tenant_id=auth.tenant_id)
+            est.results = compute_estimate(_est_inputs(est), db=db, tenant_id=auth.tenant_id)
         except ValueError as exc:
             raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     basis_map = {"rate": "per_mt", "lump_sum": "lumpsum", "worldscale": "worldscale"}

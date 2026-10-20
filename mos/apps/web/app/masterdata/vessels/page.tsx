@@ -26,8 +26,12 @@ type Vessel = {
   flag: string | null;
   vessel_type: string | null;
   status: string;
+  fleet_group?: string;
   updated_at?: string | null;
 };
+
+// IMOS 对齐的业务分组（母船队 / 船管 / 拖驳 / 灵便重吊）
+const FLEET_GROUPS = ["mother_vessel", "ship_management", "tugs_barges", "flf", "other"] as const;
 
 function VesselsPage() {
   const { t } = useI18n();
@@ -39,7 +43,7 @@ function VesselsPage() {
   const [rows, setRows] = useState<Vessel[]>([]);
   const [open, setOpen] = useState<Vessel | null>(null);
   const [creating, setCreating] = useState(false);
-  const [edit, setEdit] = useState({ name: "", imo: "", flag: "", vessel_type: "", status: "active" });
+  const [edit, setEdit] = useState({ name: "", imo: "", flag: "", vessel_type: "", status: "active", fleet_group: "mother_vessel" });
   const [saving, setSaving] = useState(false);
 
   async function load() {
@@ -53,7 +57,7 @@ function VesselsPage() {
   function openCreate() {
     setCreating(true);
     setOpen(null);
-    setEdit({ name: "", imo: "", flag: "", vessel_type: "", status: "active" });
+    setEdit({ name: "", imo: "", flag: "", vessel_type: "", status: "active", fleet_group: "mother_vessel" });
   }
 
   useListHotkeys(openCreate);
@@ -72,6 +76,7 @@ function VesselsPage() {
       flag: r.flag || "",
       vessel_type: r.vessel_type || "",
       status: r.status || "active",
+      fleet_group: r.fleet_group || "mother_vessel",
     });
   }
 
@@ -82,6 +87,7 @@ function VesselsPage() {
       flag: edit.flag || null,
       vessel_type: edit.vessel_type || null,
       status: edit.status,
+      fleet_group: edit.fleet_group || "mother_vessel",
     };
   }
 
@@ -125,6 +131,7 @@ function VesselsPage() {
           (r.imo || "").toLowerCase().includes(needle) ||
           (r.flag || "").toLowerCase().includes(needle) ||
           (r.vessel_type || "").toLowerCase().includes(needle) ||
+          (r.fleet_group || "").toLowerCase().includes(needle) ||
           (r.status || "").toLowerCase().includes(needle)
         );
       })
@@ -160,6 +167,13 @@ function VesselsPage() {
       width: 130,
       value: (r) => r.vessel_type || "",
       render: (_v, r) => r.vessel_type || "—",
+    },
+    {
+      key: "fleet_group",
+      title: t("page.vessels.fleet_group", "Fleet group"),
+      width: 140,
+      value: (r) => r.fleet_group || "mother_vessel",
+      render: (_v, r) => t(`page.vessels.group.${r.fleet_group || "mother_vessel"}`, r.fleet_group || "mother_vessel"),
     },
     {
       key: "flag",
@@ -275,6 +289,19 @@ function VesselsPage() {
         <label>
           {t("page.vessels.flag", "Flag")}
           <LookupSelect dataset="countries" value={edit.flag} onChange={(v) => setEdit({ ...edit, flag: v })} />
+        </label>
+        <label>
+          {t("page.vessels.fleet_group", "Fleet group")}
+          <select
+            value={edit.fleet_group}
+            onChange={(e) => setEdit({ ...edit, fleet_group: e.target.value })}
+          >
+            {FLEET_GROUPS.map((g) => (
+              <option key={g} value={g}>
+                {t(`page.vessels.group.${g}`, g)}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           {t("common.status", "Status")}

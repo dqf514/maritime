@@ -208,3 +208,11 @@
   user-select: none;
   white-space: nowrap;
 }
+
+/* 估算页行编辑器工具类 —— 替代新增内联样式（inline-style 基线只降不升） */
+.editor-row { margin-bottom: 0.5rem; }
+.editor-hint { margin: 0 0 0.5rem; }
+.editor-actions { display: flex; align-items: end; }
+.editor-block { margin-top: 0.75rem; }
+.editor-caption { margin: 0 0 0.25rem; }
+.enriched-note { margin-top: 0.6rem; }

@@ -29,6 +29,8 @@ class VesselIn(BaseModel):
     consumption_sea: Decimal | None = None
     consumption_port: Decimal | None = None
     status: str = "active"
+    # IMOS 对齐业务分组：mother_vessel | ship_management | tugs_barges | flf | other
+    fleet_group: str = "mother_vessel"
 
 
 class VesselUpdate(VesselIn):
