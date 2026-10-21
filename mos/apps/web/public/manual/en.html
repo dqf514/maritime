@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MariOS End-to-End Operations Manual</title>
+  <style>
+    :root {
+      --sea-deep: #0B1F2A;
+      --sea-mid: #123047;
+      --accent: #1A9B96;
+      --accent-soft: #2BB5B0;
+      --foam: #eef3f6;
+      --ink: #0f1c28;
+      --muted: #5a6e7d;
+      --border: #d7e0e6;
+      --ok: #1e7a46;
+      --warn: #b7791f;
+      --surface: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Ubuntu, "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--foam);
+      line-height: 1.55;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .site-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      height: 40px;
+      padding: 0 20px;
+      background: var(--sea-deep);
+      color: #e8f1f5;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .site-header .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      color: #e8f1f5;
+      font-size: 0.9rem;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .site-header .brand:hover { color: #fff; text-decoration: none; }
+    .site-header .brand img { width: 22px; height: 22px; display: block; }
+    .site-header .brand-sep { color: #9eb2bf; }
+    .site-header .brand-sub { color: #9eb2bf; font-size: 0.85rem; }
+    .site-nav {
+      display: flex;
+      align-items: center;
+      gap: 0.15rem;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .site-nav a {
+      color: #9eb2bf;
+      padding: 0.25rem 0.55rem;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .site-nav a:hover { color: #fff; text-decoration: none; }
+    .site-nav a[aria-current="page"] { color: var(--accent); }
+    .site-nav a.nav-pill {
+      background: var(--accent);
+      color: #0b1f2a;
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .site-nav a.nav-pill:hover { color: #0b1f2a; filter: brightness(1.08); }
+    .layout {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    .toc {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      overflow: auto;
+      background: var(--sea-deep);
+      color: #e8f1f5;
+      padding: 1.25rem 1rem 2rem;
+    }
+    .toc-label { display: block; font-size: 0.7rem; color: #7a93a3; letter-spacing: 0.08em; margin-bottom: 0.25rem; }
+    .toc strong { display: block; font-size: 0.95rem; margin-bottom: 0.85rem; letter-spacing: 0.02em; }
+    .toc a {
+      display: block;
+      color: #9eb2bf;
+      font-size: 0.86rem;
+      padding: 0.35rem 0.45rem;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .toc a:hover { background: rgba(255,255,255,0.06); color: #fff; }
+    .main { padding: 1.5rem 2rem 3rem; max-width: 920px; }
+    header.hero {
+      background: linear-gradient(160deg, var(--sea-deep), var(--sea-mid));
+      color: #eef3f6;
+      border-radius: 16px;
+      padding: 1.5rem 1.6rem;
+      margin-bottom: 1.5rem;
+    }
+    header.hero h1 { margin: 0 0 0.4rem; font-size: 1.65rem; letter-spacing: -0.02em; }
+    header.hero p { margin: 0; color: #b7c7d2; max-width: 40em; }
+    .badge {
+      display: inline-block;
+      margin-top: 0.85rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      background: rgba(43,181,176,0.22);
+      color: #9ef0ea;
+    }
+    h2 {
+      margin: 2rem 0 0.75rem;
+      font-size: 1.25rem;
+      color: var(--sea-deep);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.4rem;
+    }
+    h3 { margin: 1.25rem 0 0.45rem; font-size: 1.05rem; }
+    p, li { font-size: 0.95rem; }
+    .muted { color: var(--muted); }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.15rem;
+      margin: 0.75rem 0;
+    }
+    .verdict {
+      border-left: 4px solid var(--accent);
+      background: #f3fbfa;
+    }
+    .warn-box {
+      border-left: 4px solid var(--warn);
+      background: #fff8ea;
+    }
+    .ok-box {
+      border-left: 4px solid var(--ok);
+      background: #eef8f1;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      background: var(--surface);
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    th, td {
+      text-align: left;
+      padding: 0.65rem 0.7rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { background: #f3f7f9; color: var(--sea-mid); font-size: 0.82rem; }
+    .step {
+      counter-increment: step;
+      position: relative;
+      padding-left: 2.4rem;
+      margin: 1rem 0;
+    }
+    .steps { counter-reset: step; }
+    .step::before {
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1.7rem;
+      height: 1.7rem;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      font-size: 0.85rem;
+      display: grid;
+      place-items: center;
+    }
+    .step h3 { margin-top: 0; }
+    code, .path {
+      font-family: "Ubuntu Mono", Consolas, monospace;
+      font-size: 0.86em;
+      background: #e8eef2;
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      align-items: center;
+      margin: 0.75rem 0 1rem;
+    }
+    .flow span {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.4rem 0.65rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .flow i { color: var(--muted); font-style: normal; }
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      .toc { position: relative; height: auto; max-height: none; }
+    }
+    @media (max-width: 820px) {
+      .site-header { padding: 0 12px; gap: 0.5rem; }
+      .site-nav { overflow-x: auto; max-width: 62vw; }
+    }
+    @media print {
+      .site-header, .toc { display: none; }
+      .layout { display: block; }
+      .main { max-width: none; padding: 0; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">
+      <img src="/branding/mark.svg" width="22" height="22" alt="" />
+      <strong>MariOS</strong>
+      <span class="brand-sep" aria-hidden="true">·</span>
+      <span class="brand-sub">Operations Manual</span>
+    </a>
+    <nav class="site-nav" aria-label="Site navigation">
+      <a href="/">Home</a>
+      <a href="/intro.html">Product tour</a>
+      <a href="/manual/en.html" aria-current="page">Manual</a>
+      <a href="/manual/index.html" hreflang="zh">中文</a>
+      <a href="/login" class="nav-pill">Sign in</a>
+    </nav>
+  </header>
+  <div class="layout">
+    <nav class="toc" aria-label="On this page">
+      <span class="toc-label">On this page</span>
+      <strong>MariOS Operations Manual</strong>
+      <a href="#verdict">1. Can it run the full workflow?</a>
+      <a href="#accounts">2. Demo accounts</a>
+      <a href="#chain">3. Commercial end-to-end chain</a>
+      <a href="#ops">4. Voyage operations</a>
+      <a href="#finance">5. Laytime &amp; finance</a>
+      <a href="#tech">6. Ship management &amp; dashboards</a>
+      <a href="#admin">7. Administration &amp; platform</a>
+      <a href="#test">8. End-to-end test results</a>
+      <a href="#limits">9. Limits &amp; recommendations</a>
+    </nav>
+
+    <article class="main">
+      <header class="hero">
+        <h1>MariOS End-to-End Operations Manual</h1>
+        <p>A day-in-the-life walkthrough for shipping companies: from estimating and fixtures, through voyage execution, laytime and claims, to finance settlement and management dashboards. Local demo entry <code style="background:rgba(255,255,255,.12);color:#fff">http://localhost:3000</code>.</p>
+        <span class="badge">Manual · in sync with the API end-to-end test suite · local time</span>
+      </header>
+
+      <section id="verdict">
+        <h2>1. Can the current system run the full daily workflow?</h2>
+        <div class="card verdict">
+          <p><strong>Verdict: yes for pilot / PoC / training-grade daily desk work — not yet as the single core production system of a large shipping company.</strong></p>
+          <p class="muted" style="margin-bottom:0">
+            The commercial trunk (estimate → charter → voyage → laytime/claims → bunkers → invoices &amp; payments) is wired through in the product desk and the automated test suite;
+            deep email workflows, hard ERP integration, hard conflict rules on the vessel Gantt, situational AI and some report drill-downs remain demo-grade or need more depth.
+          </p>
+        </div>
+        <div class="flow" aria-label="Main chain">
+          <span>Estimate TCE</span><i>→</i>
+          <span>CP approval</span><i>→</i>
+          <span>Voyage execution</span><i>→</i>
+          <span>SOF / noon</span><i>→</i>
+          <span>Laytime</span><i>→</i>
+          <span>Claims / invoices</span><i>→</i>
+          <span>Payments / GL</span><i>→</i>
+          <span>P&amp;L / dashboards</span>
+        </div>
+      </section>
+
+      <section id="accounts">
+        <h2>2. Demo accounts (tenant <code>demo</code>)</h2>
+        <p class="muted">Shared password <code>Demo1234!</code>. Platform operations tenant <code>sys</code> / <code>ops@marios.platform</code> / <code>Ops1234!</code>.</p>
+        <table>
+          <thead>
+            <tr><th>Email</th><th>Role</th><th>Suggested walkthrough</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>charterer@demo.marios</code></td><td>Chartering</td><td>Estimates · charters · email review</td></tr>
+            <tr><td><code>ops@demo.marios</code></td><td>Operations</td><td>Voyages · port calls / noon / SOF · twin</td></tr>
+            <tr><td><code>demurrage@demo.marios</code></td><td>Demurrage</td><td>Finance desk · laytime · claims</td></tr>
+            <tr><td><code>finance@demo.marios</code></td><td>Finance</td><td>Invoices · payments · voyage P&amp;L · aging</td></tr>
+            <tr><td><code>tech@demo.marios</code></td><td>Technical</td><td>Ship management · certificates / PMS</td></tr>
+            <tr><td><code>mgmt@demo.marios</code></td><td>Management</td><td>Workbench · dashboards</td></tr>
+            <tr><td><code>admin@demo.marios</code></td><td>Tenant admin</td><td>Control plane · users &amp; security · Office</td></tr>
+          </tbody>
+        </table>
+        <p>Switch <strong>中文 | EN</strong> in the top bar; global search <strong>Ctrl+K</strong>; help: “Knowledge Centre” at the bottom of the sidebar.</p>
+      </section>
+
+      <section id="chain" class="steps">
+        <h2>3. Commercial end-to-end workflow (chartering view)</h2>
+
+        <div class="step">
+          <h3>Sign in and open the workbench</h3>
+          <ol>
+            <li>Open <span class="path">/login</span>, tenant code <code>demo</code>, sign in with a chartering account.</li>
+            <li>Land on the <span class="path">/home</span> workbench and confirm the role shortcuts and widgets.</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>Master data check</h3>
+          <ol>
+            <li>Open the vessel / port / counterparty master data pages; make sure there are usable vessels, load &amp; discharge ports and charterers.</li>
+            <li>If a counterparty's sanctions status is blocked, the charter cannot be activated (compliance gate).</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>Voyage estimate</h3>
+          <ol>
+            <li>Go to <span class="path">/estimates</span> and create an estimate: pick vessel and counterparty, fill quantity, freight/lumpsum, commissions, voyage days, bunkers and port costs.</li>
+            <li>Hit <strong>Calculate</strong> to get TCE; clone scenarios for <strong>comparison</strong> and sensitivity.</li>
+            <li>When happy, run <strong>To CP</strong> to generate a draft charter.</li>
+          </ol>
+          <p class="muted">Page: <span class="path">/estimates</span></p>
+        </div>
+
+        <div class="step">
+          <h3>Charter approval and activation</h3>
+          <ol>
+            <li>Go to <span class="path">/charters</span> and open the charter created from the estimate.</li>
+            <li>State flow: <code>draft</code> → <code>pending_approval</code> → <code>active</code> (no skipping).</li>
+            <li>Once active, the system can link and generate the voyage (depending on seed and chain configuration).</li>
+            <li>For COA scenarios, record liftings on the charter desk.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="ops" class="steps">
+        <h2>4. Voyage operations (operator view)</h2>
+        <div class="step">
+          <h3>Departure and port calls</h3>
+          <ol>
+            <li>Sign in with an operations account and open <span class="path">/operations/voyages</span>.</li>
+            <li>Move the voyage to in-progress; add load / discharge port calls (order, ETA, agents…).</li>
+            <li>Enter noon reports (position, speed, ROB, next-port ETA); the system can flag ETA deviation.</li>
+            <li>Register SOF events (e.g. NOR) under the port call — use the <strong>local timezone</strong>.</li>
+          </ol>
+        </div>
+        <div class="step">
+          <h3>Fleet twin</h3>
+          <ol>
+            <li>Open <span class="path">/twin</span> for fleet situation awareness; run what-if simulations (demo grade).</li>
+          </ol>
+        </div>
+        <p class="muted">The system also tracks EU ETS emissions and CII rating; carbon cost can be auto-allocated per voyage.</p>
+      </section>
+
+      <section id="finance" class="steps">
+        <h2>5. Laytime, claims and finance</h2>
+        <div class="step">
+          <h3>Laytime and demurrage claims</h3>
+          <ol>
+            <li>Sign in with demurrage or finance and open <span class="path">/finance</span>.</li>
+            <li>Create a laytime statement: link voyage / port calls, enter allowed time, turnaround, demurrage rate and time slices (including excluded time).</li>
+            <li>After <strong>Calculate → Finalize</strong>, raise a demurrage claim and run negotiate / settle.</li>
+          </ol>
+          <p>Clause library: 10 standard charter-party clause templates ship in (SHINC, SHEX, WWD, WWDSHEX…); charterer-specific clauses can be saved and are auto-applied at calculation time.</p>
+          <p class="muted" style="margin-bottom:0">Statements print straight to PDF (with company letterhead) and batch-export to Excel.</p>
+        </div>
+        <div class="step">
+          <h3>Port disbursements, bunkers, invoices</h3>
+          <ol>
+            <li>Port disbursements: draft PDA → submit → approve → FDA (record variance).</li>
+            <li>Bunker orders: inquire → order → deliver, with ROB conservation checks.</li>
+            <li>Freight invoice: draft → pending → issued → partial receipts until paid → supports GL posting.</li>
+            <li>Review dynamic voyage P&amp;L (estimate vs actual vs variance) and AR aging.</li>
+          </ol>
+          <p class="muted">Analytics entry: <span class="path">/analytics</span></p>
+        </div>
+      </section>
+
+      <section id="tech" class="steps">
+        <h2>6. Ship management, approvals and dashboards</h2>
+        <div class="step">
+          <h3>Ship management</h3>
+          <ol>
+            <li>Sign in with a technical account and open <span class="path">/ship</span>: certificates, PMS work orders, defects and crew snapshots (depth varies by license / integration).</li>
+          </ol>
+        </div>
+        <div class="step">
+          <h3>Approval inbox</h3>
+          <ol>
+            <li>Once charters / invoices go pending, process them in <span class="path">/workflows/inbox</span>.</li>
+          </ol>
+        </div>
+        <div class="step">
+          <h3>Dashboards</h3>
+          <ol>
+            <li>Open <span class="path">/dashboards</span> for the role wall; fullscreen and auto-refresh are supported.</li>
+            <li>Fleet Twin supports what-if simulation; the market panel gives freight and bunker price references.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="admin">
+        <h2>7. Tenant administration &amp; platform operations</h2>
+        <div class="card">
+          <h3>Tenant control plane <span class="path">/settings</span></h3>
+          <ul>
+            <li>Company branding, organization, user roles, sign-in security, languages &amp; terminology</li>
+            <li>Permission matrix, workflow definitions, subscription usage</li>
+            <li>SelfCheck, migration wizard, backups, AI Hub, connectors, Office ecosystem, licenses, API keys</li>
+          </ul>
+          <h3>Platform operations <span class="path">/platform</span></h3>
+          <ul>
+            <li>Tenant provisioning, product branding, IdP, language packs, plan usage, health</li>
+            <li>Data &amp; deployment: <span class="path">/platform/ops</span> (data sources, initialization, deploy profiles, monitoring)</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="test">
+        <h2>8. End-to-end automated test results</h2>
+        <div class="card ok-box">
+          <p><strong>Latest run:</strong> full pytest over <code>apps/api/tests</code></p>
+          <p><strong>Result: all green (800+ tests)</strong>, covering:</p>
+          <ul>
+            <li><code>test_full_chain.py</code>: estimate calculation → to-CP → approval &amp; activation → voyage in progress → port calls/noon/SOF → laytime finalize → claims → PDA/FDA → bunkers → invoice receipt &amp; GL → market/emissions/analytics → pool/risk/berth → Twin what-if → SelfCheck → voyage completion</li>
+            <li>Clause library, performance claims, background job queue, webhooks and observability metrics</li>
+            <li>Sanctions blocking, illegal state-machine jumps, identity/SaaS/Office/knowledge-centre/platform ops/smoke surfaces</li>
+          </ul>
+          <p class="muted" style="margin-bottom:0">Note: automation covers API business-chain correctness; do one manual browser walkthrough per role path described in this manual.</p>
+        </div>
+        <h3>Recommended manual walkthrough checklist</h3>
+        <table>
+          <thead><tr><th>#</th><th>Check</th><th>Account</th><th>Expected</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Language switch (portal + signed-in)</td><td>—</td><td>Copy switches, no hydration errors</td></tr>
+            <tr><td>2</td><td>Estimate calculation and To CP</td><td>Chartering</td><td>TCE computed, draft CP created</td></tr>
+            <tr><td>3</td><td>Charter approval &amp; activation</td><td>Chartering / mgmt</td><td>Legal state transitions</td></tr>
+            <tr><td>4</td><td>Port calls + SOF + noon</td><td>Operations</td><td>Timeline visible, local timezone</td></tr>
+            <tr><td>5</td><td>Laytime finalize &amp; claim</td><td>Demurrage</td><td>Correct amounts, settleable</td></tr>
+            <tr><td>6</td><td>Invoice receipts</td><td>Finance</td><td>Partial → paid → GL</td></tr>
+            <tr><td>7</td><td>Control-plane icon cards</td><td>Admin</td><td>Icons + titles clickable, no stray “open →”</td></tr>
+            <tr><td>8</td><td>Role dashboard fullscreen</td><td>Management</td><td>Refresh &amp; fullscreen work</td></tr>
+            <tr><td>9</td><td>Global search Ctrl+K</td><td>Any role</td><td>Finds vessels, charters, voyages and other core data</td></tr>
+            <tr><td>10</td><td>Print / PDF export</td><td>Any role</td><td>Statement with letterhead prints cleanly</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="limits">
+        <h2>9. Limits &amp; adoption recommendations</h2>
+        <div class="card warn-box">
+          <ul>
+            <li><strong>Good for:</strong> process training, pre-sales demos, pilot desks for small teams, parallel verification alongside existing systems.</li>
+            <li><strong>Do not make it the single production core until:</strong> deep email/document closure, ERP posting, schedule visualization conflict strategy, key connectors and audit compliance meet your acceptance criteria.</li>
+            <li>Per-tenant databases can be registered and bound; business sessions currently still use the primary database by default. Cloud “one-click deploy” offerings are mostly template guidance.</li>
+            <li>Knowledge-Centre answers are retrieval-augmented FAQ, not real-time LLM generation.</li>
+          </ul>
+        </div>
+        <p>See <span class="path">docs/user-guide.md</span> and <span class="path">docs/product-capabilities.md</span> in the repository for more; the in-app Knowledge Centre is available after sign-in.</p>
+      </section>
+
+      <footer>
+        <p>© MariOS · This manual is for internal drills and customer training · generated with the automated suite fully green</p>
+        <p>Online: dev environment <a href="/manual/en.html">/manual/en.html</a> · print via browser “Print → PDF”. <a href="/manual/index.html">中文版</a></p>
+      </footer>
+    </article>
+  </div>
+</body>
+</html>

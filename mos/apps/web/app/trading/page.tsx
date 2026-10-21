@@ -576,6 +576,11 @@ function TradingWorkspace() {
                 : t("page.trading.exposure_hint", "Risk exposure and limit monitoring by route/period.")}
           </span>
         )}
+        {tab === "positions" ? (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => router.push("/market-positions")}>
+            {t("page.trading.open_board", "Market positions board →")}
+          </button>
+        ) : null}
       </Toolbar>
 
       {tab === "exposure" && breaches.length ? (

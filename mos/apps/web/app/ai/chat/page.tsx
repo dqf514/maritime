@@ -203,8 +203,8 @@ export default function AiChatPage() {
     <AppShell>
       <PageHeader
         breadcrumb={[{ label: t("nav.ai_chat", "MariAI") }]}
-        title={t("page.ai.title", "MariAI Chat")}
-        subtitle={t("page.ai.sub", "Ask the fleet copilot — estimates, voyages, laytime and market context.")}
+        title={t("page.ai.chat.title", "MariAI Chat")}
+        subtitle={t("page.ai.chat.sub", "Ask the fleet copilot — estimates, voyages, laytime and market context.")}
       />
       <div className="space-y-4">
 

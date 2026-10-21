@@ -82,6 +82,19 @@ EXTRA_OMNI: list[dict[str, Any]] = [
         "license": "ai",
     },
     {
+        # /market-positions 无导航条目，曾被路径 ACL 拦到 /denied ——
+        # 作为交易台的深链补齐（allowed_paths / OmniSearch 同源生效）
+        "hit": SearchHit(
+            id="nav.market_positions",
+            title="Market positions",
+            keywords=["positions", "market", "net position", "持仓", "头寸", "净头寸"],
+            module="trading",
+            href="/market-positions",
+        ),
+        "roles": ["risk", "management", "chartering", "finance", "tenant_admin"],
+        "license": None,
+    },
+    {
         "hit": SearchHit(
             id="nav.reference",
             title="参考数据源",

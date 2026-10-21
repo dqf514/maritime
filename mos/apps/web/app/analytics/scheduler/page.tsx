@@ -387,9 +387,9 @@ export default function ReportSchedulerPage() {
   return (
     <AppShell>
       <PageHeader
-        breadcrumb={[{ label: "Analytics", href: "/analytics" }, { label: t("sched.title", "Scheduled reports") }]}
-        title={t("sched.title", "Scheduled reports")}
-        subtitle={t("sched.sub", "Recurring report generation and email delivery")}
+        breadcrumb={[{ label: t("nav.analytics", "Analytics"), href: "/analytics" }, { label: t("sched.report.title", "Scheduled reports") }]}
+        title={t("sched.report.title", "Scheduled reports")}
+        subtitle={t("sched.report.sub", "Recurring report generation and email delivery")}
       />
       <Toolbar
         filterCount={statusFilter ? 1 : 0}

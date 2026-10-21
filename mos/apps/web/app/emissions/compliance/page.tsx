@@ -81,7 +81,7 @@ export default function CompliancePage() {
       const res = await apiPost(endpoints[calcTab], bodies[calcTab]);
       setCalcResult(res);
     } catch {
-      setCalcResult({ error: "Calculation failed" });
+      setCalcResult({ error: t("page.compliance.calc_failed", "Calculation failed") });
     }
   }
 
@@ -98,33 +98,33 @@ export default function CompliancePage() {
       {/* Fleet compliance summary */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Voyages</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>{t("page.compliance.kpi_voyages", "Voyages")}</div>
           <div style={{ fontSize: 24, fontWeight: 700 }}>{summary?.voyage_count ?? "—"}</div>
         </div>
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Total CO2 (tonnes)</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>{t("page.compliance.kpi_co2", "Total CO2 (tonnes)")}</div>
           <div style={{ fontSize: 24, fontWeight: 700 }}>{summary?.total_co2_tonnes.toLocaleString() ?? "—"}</div>
         </div>
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>EU ETS Cost</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>{t("page.compliance.kpi_euets", "EU ETS Cost")}</div>
           <div style={{ fontSize: 24, fontWeight: 700 }}>
             {summary ? `$${summary.eu_ets.cost_usd.toLocaleString()}` : "—"}
           </div>
           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-            {summary ? `${summary.eu_ets.coverage_pct}% coverage` : ""}
+            {summary ? t("page.compliance.coverage", "{n}% coverage", { n: summary.eu_ets.coverage_pct }) : ""}
           </div>
         </div>
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>FuelEU Status</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>{t("page.compliance.kpi_fueleu", "FuelEU Status")}</div>
           <div style={{ fontSize: 24, fontWeight: 700, color: summary?.fueleu.compliant ? "var(--success, #16a34a)" : "var(--danger, #dc2626)" }}>
-            {summary?.fueleu.compliant ? "Compliant" : "Non-compliant"}
+            {summary?.fueleu.compliant ? t("page.compliance.compliant", "Compliant") : t("page.compliance.non_compliant", "Non-compliant")}
           </div>
           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-            {summary ? `${summary.fueleu.intensity_gco2_mj} vs ${summary.fueleu.limit_gco2_mj} gCO2e/MJ` : ""}
+            {summary ? t("page.compliance.fueleu_line", "{a} vs {b} gCO2e/MJ", { a: summary.fueleu.intensity_gco2_mj, b: summary.fueleu.limit_gco2_mj }) : ""}
           </div>
         </div>
         <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Bunker Consumed</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>{t("page.compliance.kpi_bunker", "Bunker Consumed")}</div>
           <div style={{ fontSize: 24, fontWeight: 700 }}>
             {summary ? `${summary.total_bunker_mt.toLocaleString()} MT` : "—"}
           </div>
@@ -133,7 +133,7 @@ export default function CompliancePage() {
 
       {/* Calculator */}
       <div className="card" style={{ padding: 20 }}>
-        <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 600 }}>Compliance Calculator</h3>
+        <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 600 }}>{t("page.compliance.calc_title", "Compliance Calculator")}</h3>
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
           {(["emissions", "euets", "fueleu", "cii"] as const).map((tab) => (
             <button
@@ -141,7 +141,13 @@ export default function CompliancePage() {
               className={`btn btn-sm ${calcTab === tab ? "btn-primary" : ""}`}
               onClick={() => { setCalcTab(tab); setCalcResult(null); }}
             >
-              {tab === "emissions" ? "CO2 Emissions" : tab === "euets" ? "EU ETS" : tab === "fueleu" ? "FuelEU" : "CII Rating"}
+              {tab === "emissions"
+                ? t("page.compliance.tab_emissions", "CO2 Emissions")
+                : tab === "euets"
+                  ? t("page.compliance.tab_euets", "EU ETS")
+                  : tab === "fueleu"
+                    ? t("page.compliance.tab_fueleu", "FuelEU")
+                    : t("page.compliance.tab_cii", "CII Rating")}
             </button>
           ))}
         </div>
@@ -150,11 +156,11 @@ export default function CompliancePage() {
           {(calcTab === "emissions" || calcTab === "fueleu") && (
             <>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Fuel consumption (MT)</label>
+                <label style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("page.compliance.fuel_consumption", "Fuel consumption (MT)")}</label>
                 <input className="input" type="number" value={fuelMt} onChange={(e) => setFuelMt(e.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Fuel type</label>
+                <label style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("page.compliance.fuel_type", "Fuel type")}</label>
                 <select className="input" value={fuelType} onChange={(e) => setFuelType(e.target.value)}>
                   {Object.keys(fuelFactors).length > 0
                     ? Object.keys(fuelFactors).map((f) => <option key={f} value={f}>{f}</option>)
@@ -162,45 +168,45 @@ export default function CompliancePage() {
                 </select>
               </div>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Distance (NM)</label>
+                <label style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("page.compliance.distance", "Distance (NM)")}</label>
                 <input className="input" type="number" value={distanceNm} onChange={(e) => setDistanceNm(e.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Cargo (MT)</label>
+                <label style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("page.compliance.cargo", "Cargo (MT)")}</label>
                 <input className="input" type="number" value={cargoMt} onChange={(e) => setCargoMt(e.target.value)} />
               </div>
             </>
           )}
           {(calcTab === "euets" || calcTab === "cii") && (
             <div>
-              <label style={{ fontSize: 12, color: "var(--text-muted)" }}>CO2 (tonnes)</label>
+              <label style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("page.compliance.co2_tonnes", "CO2 (tonnes)")}</label>
               <input className="input" type="number" value={co2Tonnes} onChange={(e) => setCo2Tonnes(e.target.value)} />
             </div>
           )}
           {calcTab === "euets" && (
             <div style={{ fontSize: 12, color: "var(--text-muted)", alignSelf: "end" }}>
-              CO2 price: EUR 80/t (2025). Phase-in: 70% coverage.
+              {t("page.compliance.co2_price_note", "CO2 price: EUR 80/t (2025). Phase-in: 70% coverage.")}
             </div>
           )}
           {calcTab === "cii" && (
             <div>
-              <label style={{ fontSize: 12, color: "var(--text-muted)" }}>DWT</label>
+              <label style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("page.compliance.dwt", "DWT")}</label>
               <input className="input" type="number" value={dwt} onChange={(e) => setDwt(e.target.value)} />
             </div>
           )}
           {calcTab === "cii" && (
             <div>
-              <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Distance (NM)</label>
+              <label style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("page.compliance.distance", "Distance (NM)")}</label>
               <input className="input" type="number" value={distanceNm} onChange={(e) => setDistanceNm(e.target.value)} />
             </div>
           )}
         </div>
 
-        <button className="btn btn-primary" onClick={calculate}>Calculate</button>
+        <button className="btn btn-primary" onClick={calculate}>{t("page.compliance.calculate", "Calculate")}</button>
 
         {calcResult && (
           <div style={{ marginTop: 16, padding: 16, background: "var(--bg-secondary)", borderRadius: 8 }}>
-            <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600 }}>Result</h4>
+            <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600 }}>{t("page.compliance.result", "Result")}</h4>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
               {Object.entries(calcResult).map(([key, val]) => (
                 <div key={key}>
@@ -220,14 +226,14 @@ export default function CompliancePage() {
       {/* Fuel factors reference */}
       {Object.keys(fuelFactors).length > 0 && (
         <div className="card" style={{ padding: 20, marginTop: 24 }}>
-          <h3 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 600 }}>Emission Factors by Fuel Type</h3>
+          <h3 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 600 }}>{t("page.compliance.factors_title", "Emission Factors by Fuel Type")}</h3>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "var(--bg-secondary)" }}>
-                  <th style={{ padding: "8px 12px", textAlign: "left", borderBottom: "1px solid var(--border)" }}>Fuel</th>
-                  <th style={{ padding: "8px 12px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>CO2 Factor (t/t)</th>
-                  <th style={{ padding: "8px 12px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>Energy Density (MJ/kg)</th>
+                  <th style={{ padding: "8px 12px", textAlign: "left", borderBottom: "1px solid var(--border)" }}>{t("page.compliance.col_fuel", "Fuel")}</th>
+                  <th style={{ padding: "8px 12px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>{t("page.compliance.col_co2_factor", "CO2 Factor (t/t)")}</th>
+                  <th style={{ padding: "8px 12px", textAlign: "right", borderBottom: "1px solid var(--border)" }}>{t("page.compliance.col_energy", "Energy Density (MJ/kg)")}</th>
                 </tr>
               </thead>
               <tbody>

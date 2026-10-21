@@ -169,6 +169,8 @@ UI_MESSAGES_PARITY: list[tuple[str, str, str, str]] = [
     ("page.vessels.edit", "app", "Edit vessel", "编辑船舶"),
     ("page.vessels.create_fail", "app", "Create failed", "创建失败"),
     ("page.parties.edit", "app", "Edit counterparty", "编辑对手方"),
+    # EXTRA 里旧值为 "Add party/添加 party"，力更正为与 page.parties.edit 对齐的口径
+    ("page.parties.add", "app", "Add counterparty", "新建对手方"),
     ("page.parties.sanctions", "app", "Sanctions status", "制裁状态"),
     ("page.tenants.tz", "app", "Default time zone", "默认时区"),
     ("page.tenants.locale", "app", "Default language", "默认语言"),

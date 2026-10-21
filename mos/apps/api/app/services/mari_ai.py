@@ -1112,7 +1112,8 @@ def list_conversations(
     )
     if agent_name:
         stmt = stmt.where(AIConversation.agent_name == agent_name)
-    return list(db.scalars(stmt).limit(50).all())
+    # limit 必须加在 select 上：ScalarResult 没有 .limit()（旧写法直接 500）
+    return list(db.scalars(stmt.limit(50)).all())
 
 
 def get_conversation(db: Session, conv_id: UUID, tenant_id: UUID) -> AIConversation | None:

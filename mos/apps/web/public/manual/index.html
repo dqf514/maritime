@@ -248,6 +248,7 @@
       <a href="/">首页</a>
       <a href="/intro.html">产品介绍</a>
       <a href="/manual" aria-current="page">操作手册</a>
+      <a href="/manual/en.html" hreflang="en">English</a>
       <a href="/login" class="nav-pill">登录</a>
     </nav>
   </header>
@@ -442,7 +443,7 @@
         <h2>8. 全链路自动化测试结果</h2>
         <div class="card ok-box">
           <p><strong>本次执行：</strong> <code>apps/api/tests</code> 全量 pytest</p>
-          <p><strong>结果：384 passed</strong>（62 个测试文件 / 384 个测试函数），含：</p>
+          <p><strong>结果：全量 pytest 全绿（800+ 个测试，覆盖 90+ 个测试文件）</strong>，含：</p>
           <ul>
             <li><code>test_full_chain.py</code>：估算计算 → 转租约 → 审批激活 → 航次进行 → 挂靠/午报/SOF → Laytime 定稿 → 索赔 → PDA/FDA → 燃油 → 发票收款与 GL → 市场/排放/分析 → Pool/Risk/Berth → Twin what-if → SelfCheck → 航次完成</li>
             <li>条款库、性能索赔（performance claims）、后台作业队列（job queue）、Webhooks、可观测性指标等新特性的覆盖</li>
@@ -482,7 +483,7 @@
       </section>
 
       <footer>
-        <p>© MariOS · 本手册供内部演练与客户培训使用 · 生成时 pytest <strong>384 passed</strong></p>
+        <p>© MariOS · 本手册供内部演练与客户培训使用 · 生成时 pytest <strong>全量 800+ 全绿</strong></p>
         <p>在线打开：开发环境 <a href="/manual">/manual</a> · 打印可用浏览器「打印 → PDF」。</p>
       </footer>
     </article>

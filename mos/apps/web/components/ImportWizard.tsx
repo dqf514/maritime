@@ -258,7 +258,7 @@ export function ImportWizard({ entity, onDone }: Props) {
             )}
           </p>
           <div className="muted" style={{ fontSize: "var(--font-label)" }}>
-            {t("imp.columns", "Columns for {entity}:", { entity: LABELS[entity] })}{" "}
+            {t("imp.columns", "Columns for {entity}:", { entity: t(`imp.entity_${entity}`, LABELS[entity]) })}{" "}
             <code>{SAMPLE[entity].split("\n")[0]}</code>
           </div>
           <label className="field">
@@ -374,7 +374,7 @@ export function ImportWizard({ entity, onDone }: Props) {
           {t(
             "imp.confirm_body",
             "Create {n} {entity} rows? Invalid rows are skipped. This cannot be undone from here.",
-            { n: validCount, entity: LABELS[entity] },
+            { n: validCount, entity: t(`imp.entity_${entity}`, LABELS[entity]) },
           )}
         </p>
         {invalidCount > 0 && (

@@ -80,7 +80,7 @@ function MarketDataPageInner() {
 
   async function seedDemo() {
     const result = await apiPost("/api/v1/market-data/seed-demo", {});
-    toast.success(t("market.seeded", `Seeded ${result.seeded} data points`));
+    toast.success(t("market.seeded", "Seeded {n} data points", { n: result.seeded }));
     await load();
   }
 
