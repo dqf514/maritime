@@ -19,6 +19,7 @@ from app.security import AuthContext, get_current_auth, require_api_scope, requi
 from app.services.graph_client import GraphError, admin_consent_url, exchange_code_for_tokens, graph_mode_resolved
 from app.services.identity import soft_sign_state, verify_signed_state
 from app.services.ms_config import resolve_ms_config
+from app.services.recycle import soft_delete
 from app.services import office_hub as hub
 
 router = APIRouter(prefix="/office", tags=["Office Ecosystem"])
@@ -416,7 +417,11 @@ def list_webhooks(
     auth: AuthContext = Depends(require_module("integration")),
     db: Session = Depends(get_db),
 ):
-    rows = db.scalars(select(WebhookEndpoint).where(WebhookEndpoint.tenant_id == auth.tenant_id)).all()
+    rows = db.scalars(
+        select(WebhookEndpoint).where(
+            WebhookEndpoint.tenant_id == auth.tenant_id, WebhookEndpoint.status != "deleted"
+        )
+    ).all()
     return [
         {
             "id": str(r.id),
@@ -467,6 +472,70 @@ def test_webhook(
     )
     db.commit()
     return {"delivery_id": str(delivery.id), "status": delivery.status, "response_code": delivery.response_code}
+
+
+class WebhookUpdateIn(BaseModel):
+    name: str | None = None
+    target_url: str | None = None
+    events: list[str] | None = None
+    status: str | None = None
+
+
+@router.patch("/webhooks/{webhook_id}")
+def update_webhook(
+    webhook_id: UUID,
+    body: WebhookUpdateIn,
+    auth: AuthContext = Depends(require_module("integration")),
+    db: Session = Depends(get_db),
+):
+    """Partial update — only explicitly provided fields (model_fields_set). Secret not patchable (rotate separately)."""
+    row = db.get(WebhookEndpoint, webhook_id)
+    if not row or row.tenant_id != auth.tenant_id or row.status == "deleted":
+        raise HTTPException(404, "Webhook not found")
+    fields = body.model_fields_set
+    if "name" in fields and body.name is not None:
+        row.name = body.name
+    if "target_url" in fields and body.target_url is not None:
+        row.target_url = body.target_url
+    if "events" in fields and body.events is not None:
+        row.events = body.events
+    if "status" in fields and body.status is not None:
+        if body.status not in ("active", "paused", "deleted"):
+            raise HTTPException(422, "status must be active|paused")
+        if body.status == "deleted":
+            raise HTTPException(422, "use DELETE to remove a webhook")
+        row.status = body.status
+    db.commit()
+    return {
+        "id": str(row.id),
+        "name": row.name,
+        "target_url": row.target_url,
+        "events": row.events,
+        "status": row.status,
+        "secret_prefix": (row.secret or "")[:8],
+    }
+
+
+@router.delete("/webhooks/{webhook_id}")
+def delete_webhook(
+    webhook_id: UUID,
+    auth: AuthContext = Depends(require_module("integration")),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete a webhook endpoint (recycle bin). Config row — in-use delivery history is fine."""
+    row = db.get(WebhookEndpoint, webhook_id)
+    if not row or row.tenant_id != auth.tenant_id or row.status == "deleted":
+        raise HTTPException(404, "Webhook not found")
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="webhook_endpoint",
+        row=row,
+        title=row.name,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 @router.get("/addons")

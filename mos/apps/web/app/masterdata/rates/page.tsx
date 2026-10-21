@@ -18,6 +18,7 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
 import { RecordModal } from "@/components/RecordModal";
+import { RowActions } from "@/components/RowActions";
 import { DateInput } from "@/components/DateInput";
 import { StateView } from "@/components/StateView";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
@@ -225,15 +226,24 @@ function RatesPage() {
       try {
         if (colKey.startsWith("dim.")) {
           const k = colKey.slice(4);
+          const prev = row.dims[k] ?? "";
+          const next = value === null || value === undefined ? "" : String(value);
+          if (prev === next) return;
           const dims: Record<string, string> = { ...row.dims };
           if (value === null || value === undefined || value === "") delete dims[k];
           else dims[k] = String(value);
           await apiPatch(`/api/v1/rates/tables/${selectedId}/rows/${rowId}`, { dims });
         } else if (colKey === "value" || colKey === "priority") {
+          const next = value === null || value === "" ? 0 : Number(value);
+          if (next === (row as unknown as Record<string, number>)[colKey]) return;
           await apiPatch(`/api/v1/rates/tables/${selectedId}/rows/${rowId}`, {
-            [colKey]: value === null || value === "" ? 0 : Number(value),
+            [colKey]: next,
           });
         } else {
+          const prev = (row as unknown as Record<string, unknown>)[colKey];
+          const prevStr = prev === null || prev === undefined ? "" : String(prev);
+          const nextStr = value === null || value === undefined ? "" : String(value);
+          if (prevStr === nextStr) return;
           await apiPatch(`/api/v1/rates/tables/${selectedId}/rows/${rowId}`, {
             [colKey]: value === null || value === "" ? null : value,
           });
@@ -309,6 +319,8 @@ function RatesPage() {
       onClick: () =>
         downloadCsv("pricing_template", ["id", "name", "description", "is_active"], [[r.id, r.name, r.description ?? "", r.is_active ? "Y" : "N"]]),
     },
+    { key: "d1", label: "", divider: true },
+    { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => void deleteTemplate(r.id) },
   ];
 
   async function createRow() {
@@ -460,6 +472,17 @@ function RatesPage() {
     }
   }
 
+  async function deleteTemplate(id: string) {
+    try {
+      await apiDelete(`/api/v1/rates/templates/${id}`);
+      toast.success(t("page.rates.template_deleted", "Template deleted"));
+      if (tplEditingId === id) setTplModal(false);
+      await loadTemplates();
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
   // —— 行网格列（dims 拍平成列） ——
   const dimKeys = useMemo(() => collectDimKeys(rows), [rows]);
   const columns = useMemo<ColumnDef<RateRow>[]>(() => {
@@ -562,6 +585,19 @@ function RatesPage() {
         <span className={`badge ${r.is_active ? "badge-pass" : "badge-fail"}`}>
           {r.is_active ? t("common.active", "Active") : t("common.inactive", "Inactive")}
         </span>
+      ),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 64,
+      align: "center",
+      render: (_v, r) => (
+        <RowActions
+          onEdit={() => openTpl(r)}
+          onDelete={() => deleteTemplate(r.id)}
+          label={r.name}
+        />
       ),
     },
   ];
@@ -930,7 +966,8 @@ function RatesPage() {
         title={tplEditingId ? t("page.rates.edit_template", "Edit Template") : t("page.rates.new_template", "New Template")}
         onClose={() => setTplModal(false)}
         onSave={saveTpl}
-        canDelete={false}
+        canDelete={!!tplEditingId}
+        onDelete={tplEditingId ? () => deleteTemplate(tplEditingId) : undefined}
         saving={tplSaving}
         size="lg"
       >

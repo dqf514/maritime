@@ -6,10 +6,11 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { LookupSelect } from "@/components/LookupSelect";
 import { Num } from "@/components/Num";
+import { RowActions } from "@/components/RowActions";
 import { useToast } from "@/components/ToastProvider";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 type VoyageRef = { id: string; voyage_no: string };
@@ -78,10 +79,67 @@ export function AccrualsPanel() {
     }
   }
 
+  // 行内编辑（失焦保存；值未变化不发请求；仅草稿可改）
+  async function onCellSave(rowId: string, colKey: string, value: unknown, row: Accrual) {
+    if (row.status !== "draft") return;
+    const src = row as unknown as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "amount") {
+      const n = value === null || value === "" ? null : Number(value);
+      if (n === null || isNaN(n) || n < 0) return;
+      if (Number(src.amount ?? -1) === n) return;
+      payload = { amount: n };
+    } else {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      if (value === "" && (colKey === "voyage_id" || colKey === "notes")) payload = { [colKey]: null };
+      else if (value === "") return; // period/line_type 非空列不允许空串
+      else payload = { [colKey]: value };
+    }
+    try {
+      await apiPatch(`/api/v1/finance/accruals/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function remove(id: string) {
+    try {
+      await apiDelete(`/api/v1/finance/accruals/${id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   const cols = useMemo<ColumnDef<Accrual>[]>(
     () => [
-      { key: "period_ym", title: t("page.finance.period", "Period YYYY-MM"), width: 110 },
-      { key: "line_type", title: t("common.type", "类型"), width: 110 },
+      {
+        key: "period_ym",
+        title: t("page.finance.period", "Period YYYY-MM"),
+        width: 110,
+        value: (r) => r.period_ym,
+        editor: {
+          type: "text",
+          validate: (v) =>
+            /^\d{4}-\d{2}$/.test(String(v ?? "")) ? null : t("page.finance.accrual_period_fmt", "Format YYYY-MM"),
+        },
+      },
+      {
+        key: "line_type",
+        title: t("common.type", "类型"),
+        width: 110,
+        value: (r) => r.line_type,
+        editor: {
+          type: "select",
+          options: ["freight", "hire", "commission", "bunker", "port", "other"].map((x) => ({
+            value: x,
+            label: x,
+          })),
+        },
+      },
       {
         key: "voyage_id",
         title: t("page.voyages.list", "Voyages"),
@@ -90,6 +148,10 @@ export function AccrualsPanel() {
           r.voyage_id
             ? voyages.find((x) => x.id === r.voyage_id)?.voyage_no || r.voyage_id.slice(0, 8)
             : "—",
+        editor: {
+          type: "select",
+          options: voyages.map((x) => ({ value: x.id, label: x.voyage_no })),
+        },
       },
       {
         key: "amount",
@@ -101,27 +163,33 @@ export function AccrualsPanel() {
             <Num v={v as number} digits={2} /> {r.currency}
           </>
         ),
+        editor: { type: "number", step: 0.01 },
       },
       { key: "status", title: t("common.status", "Status"), width: 90 },
       {
         key: "actions",
         title: "",
-        width: 90,
+        width: 120,
         value: () => "",
-        render: (_v, r) =>
-          r.status === "draft" ? (
-            <button
-              className="btn btn-primary btn-sm"
-              type="button"
-              disabled={busy}
-              onClick={(e) => {
-                e.stopPropagation();
-                post(r.id);
-              }}
-            >
-              {t("page.finance.post", "Post")}
-            </button>
-          ) : null,
+        render: (_v, r) => (
+          <span className="row-actions" onClick={(e) => e.stopPropagation()}>
+            {r.status === "draft" ? (
+              <button
+                className="btn btn-primary btn-sm"
+                type="button"
+                disabled={busy}
+                onClick={() => post(r.id)}
+              >
+                {t("page.finance.post", "Post")}
+              </button>
+            ) : null}
+            <RowActions
+              canDelete={r.status === "draft"}
+              onDelete={() => remove(r.id)}
+              label={`${r.period_ym} ${r.line_type}`}
+            />
+          </span>
+        ),
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -187,6 +255,8 @@ export function AccrualsPanel() {
           onRowContextMenu={(row, _i, e) => ctx.open(row)(e)}
           storageKey="finance_accruals_grid"
           showFooter={false}
+          editable
+          onCellSave={onCellSave}
           emptyText={t("common.empty", "No records")}
         />
       </div>

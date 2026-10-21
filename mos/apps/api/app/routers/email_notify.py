@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,7 @@ from app.db import get_db
 from app.models_wave1 import EmailAccount, EmailMessage, EmailThread, Notification
 from app.schemas_wave1 import EmailAccountIn, EmailAccountOut, EmailMessageOut, NotificationOut
 from app.security import AuthContext, get_current_auth, require_module
+from app.services.recycle import soft_delete
 
 router = APIRouter(tags=["Email & Notify"])
 
@@ -18,7 +20,11 @@ def list_accounts(
     auth: AuthContext = Depends(require_module("email")),
     db: Session = Depends(get_db),
 ):
-    rows = db.scalars(select(EmailAccount).where(EmailAccount.tenant_id == auth.tenant_id)).all()
+    rows = db.scalars(
+        select(EmailAccount).where(
+            EmailAccount.tenant_id == auth.tenant_id, EmailAccount.status != "deleted"
+        )
+    ).all()
     return [EmailAccountOut.model_validate(r, from_attributes=True) for r in rows]
 
 
@@ -33,6 +39,82 @@ def create_account(
     db.commit()
     db.refresh(row)
     return EmailAccountOut.model_validate(row, from_attributes=True)
+
+
+class EmailAccountUpdate(BaseModel):
+    """All-optional PATCH body — model_fields_set marks explicitly provided fields
+    (including secret keys inside ``config``) so omitted secrets are never overwritten."""
+
+    provider: str | None = None
+    email: EmailStr | None = None
+    display_name: str | None = None
+    config: dict | None = None
+    status: str | None = None
+
+
+@router.patch("/email/accounts/{account_id}", response_model=EmailAccountOut)
+def update_account(
+    account_id: UUID,
+    body: EmailAccountUpdate,
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """Partial update. No test-connection revalidation on patch.
+
+    Secret/config keys apply only when explicitly provided (model_fields_set);
+    an omitted ``config`` leaves stored credentials untouched.
+    """
+    row = db.get(EmailAccount, account_id)
+    if not row or row.tenant_id != auth.tenant_id or row.status == "deleted":
+        raise HTTPException(404, "Account not found")
+    fields = body.model_fields_set
+    if "provider" in fields and body.provider is not None:
+        row.provider = body.provider
+    if "email" in fields and body.email is not None and body.email != row.email:
+        dup = db.scalar(
+            select(EmailAccount).where(
+                EmailAccount.tenant_id == auth.tenant_id,
+                EmailAccount.email == body.email,
+                EmailAccount.id != account_id,
+            )
+        )
+        if dup:
+            raise HTTPException(409, "Email already linked to another account")
+        row.email = body.email
+    if "display_name" in fields:
+        row.display_name = body.display_name
+    if "config" in fields and body.config is not None:
+        # explicit config payload replaces config (secrets included only if sent)
+        row.config = body.config
+    if "status" in fields and body.status is not None:
+        if body.status not in ("active", "paused", "deleted"):
+            raise HTTPException(422, "status must be active|paused")
+        row.status = body.status
+    db.commit()
+    db.refresh(row)
+    return EmailAccountOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/email/accounts/{account_id}")
+def delete_account(
+    account_id: UUID,
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete an email account (recycle bin). Config row — messages/threads keep their FK."""
+    row = db.get(EmailAccount, account_id)
+    if not row or row.tenant_id != auth.tenant_id or row.status == "deleted":
+        raise HTTPException(404, "Account not found")
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="email_account",
+        row=row,
+        title=row.email,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 @router.post("/email/accounts/{account_id}/sync")

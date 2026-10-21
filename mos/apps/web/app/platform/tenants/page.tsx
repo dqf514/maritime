@@ -12,7 +12,7 @@ import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
-import { apiGet, apiPost, apiPut, generateTempPassword } from "@/lib/api";
+import { apiDelete, apiGet, apiPost, apiPut, generateTempPassword } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
@@ -235,14 +235,27 @@ function PlatformTenantsPage() {
 
   async function setStatus(id: string, status: string) {
     if (status === "suspended") {
+      // 停用走 DELETE（后端 deactivate，数据保留）；文案强调可恢复、不丢数据
       setConfirm({
         message: t("page.tenants.confirm_suspend", "暂停租户后，该租户全部用户将立即无法登录（数据保留）。确认暂停？"),
         danger: true,
-        action: () => applyStatus(id, status).catch(() => toast.error(t("common.failed", "失败"))),
+        action: () => deactivateTenant(id).catch(() => toast.error(t("common.failed", "失败"))),
       });
       return;
     }
     await applyStatus(id, status);
+  }
+
+  /** DELETE /platform/tenants/{id} = deactivate（status→suspended，数据保留，可再启用） */
+  async function deactivateTenant(id: string) {
+    try {
+      await apiDelete(`/api/v1/platform/tenants/${id}`);
+      toast.success(t("page.tenants.deactivated", "租户已停用（数据保留）"));
+      await load();
+      if (selected?.id === id) await openTenant({ ...selected, status: "suspended" });
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "失败"));
+    }
   }
 
   async function applyStatus(id: string, status: string) {
@@ -250,6 +263,9 @@ function PlatformTenantsPage() {
     await load();
     if (selected?.id === id) await openTenant({ ...selected, status });
   }
+
+  /** 最后一个 active 租户不可停用（后端 LAST_ACTIVE_TENANT 409）；提前隐藏按钮 */
+  const activeCount = rows.filter((r) => r.status === "active").length;
 
   async function saveEdit(e: FormEvent) {
     e.preventDefault();
@@ -392,9 +408,11 @@ function PlatformTenantsPage() {
           <button
             className="btn"
             type="button"
+            disabled={activeCount <= 1}
+            title={activeCount <= 1 ? t("page.tenants.last_active_hint", "Cannot deactivate the last active tenant") : undefined}
             onClick={(e) => { e.stopPropagation(); setStatus(r.id, "suspended").catch(() => toast.error(t("common.failed", "失败"))); }}
           >
-            {t("common.suspend", "暂停")}
+            {t("page.tenants.deactivate", "Deactivate")}
           </button>
         ) : (
           <button

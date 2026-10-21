@@ -78,6 +78,16 @@ class AlertRulePatch(BaseModel):
     description: str | None = None
 
 
+class DeployProfilePatch(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+    cloud_provider: str | None = None
+    region: str | None = None
+    description: str | None = None
+    template: dict | None = None
+    status: str | None = None
+
+
 @router.get("/overview")
 def ops_overview(auth: AuthContext = Depends(require_roles("platform_admin")), db: Session = Depends(get_db)):
     _ = auth
@@ -306,6 +316,41 @@ def create_deploy_profile(
     return ops.profile_to_public(row)
 
 
+@router.patch("/deploy/profiles/{profile_id}")
+def patch_deploy_profile(
+    profile_id: UUID,
+    body: DeployProfilePatch,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    row = db.get(PlatformDeploymentProfile, profile_id)
+    if not row:
+        raise HTTPException(status_code=404, detail={"code": "PROFILE_NOT_FOUND", "message": "部署档案不存在"})
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return ops.profile_to_public(row)
+
+
+@router.delete("/deploy/profiles/{profile_id}")
+def delete_deploy_profile(
+    profile_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    row = db.get(PlatformDeploymentProfile, profile_id)
+    if not row:
+        raise HTTPException(status_code=404, detail={"code": "PROFILE_NOT_FOUND", "message": "部署档案不存在"})
+    if row.is_builtin:
+        raise HTTPException(status_code=409, detail={"code": "IN_USE", "message": "内置部署档案不可删除"})
+    db.delete(row)
+    db.commit()
+    return {"ok": True, "id": str(profile_id)}
+
+
 @router.post("/deploy/profiles/{profile_id}/apply")
 def apply_deploy_profile(
     profile_id: UUID,
@@ -375,3 +420,18 @@ def patch_alert(
     db.commit()
     db.refresh(row)
     return ops.alert_to_public(row)
+
+
+@router.delete("/monitor/alerts/{rule_id}")
+def delete_alert(
+    rule_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    row = db.get(AlertRule, rule_id)
+    if not row:
+        raise HTTPException(status_code=404, detail={"code": "RULE_NOT_FOUND", "message": "规则不存在"})
+    db.delete(row)
+    db.commit()
+    return {"ok": True, "id": str(rule_id)}

@@ -187,6 +187,22 @@ class AccountGroupIn(BaseModel):
     account_type: str
 
 
+class AccountGroupPatch(BaseModel):
+    group_name: str | None = None
+    account_type: str | None = None
+    is_active: bool | None = None
+
+
+def _account_group_out(row: AccountGroup) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "group_code": row.group_code,
+        "group_name": row.group_name,
+        "account_type": row.account_type,
+        "is_active": bool(row.is_active),
+    }
+
+
 @router.get("/gl/account-groups")
 def list_account_groups(
     auth: AuthContext = Depends(require_module("finance")),
@@ -224,13 +240,43 @@ def create_account_group(
     db.add(row)
     db.commit()
     db.refresh(row)
-    return {
-        "id": str(row.id),
-        "group_code": row.group_code,
-        "group_name": row.group_name,
-        "account_type": row.account_type,
-        "is_active": bool(row.is_active),
-    }
+    return _account_group_out(row)
+
+
+@router.patch("/gl/account-groups/{group_id}")
+def patch_account_group(
+    group_id: UUID,
+    body: AccountGroupPatch,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, AccountGroup, group_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "ACCOUNT_GROUP_NOT_FOUND", "message": str(group_id)})
+    if "account_type" in body.model_fields_set and body.account_type is not None and body.account_type not in ACCOUNT_TYPES:
+        raise HTTPException(422, detail={"code": "BAD_ACCOUNT_TYPE", "message": f"expected one of {ACCOUNT_TYPES}"})
+    for field in ("group_name", "account_type", "is_active"):
+        if field in body.model_fields_set:
+            val = getattr(body, field)
+            if val is not None:
+                setattr(row, field, val)
+    db.commit()
+    db.refresh(row)
+    return _account_group_out(row)
+
+
+@router.delete("/gl/account-groups/{group_id}")
+def delete_account_group(
+    group_id: UUID,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, AccountGroup, group_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "ACCOUNT_GROUP_NOT_FOUND", "message": str(group_id)})
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 # —— 会计期间 ————————————————————————————————————————————————
@@ -239,6 +285,12 @@ def create_account_group(
 class PeriodIn(BaseModel):
     period: str
     status: str = "open"
+
+
+class PeriodPatch(BaseModel):
+    """开账期间可改标识码；closed 期间一律 409（关账/重开走 /close /open）。"""
+
+    period: str | None = None
 
 
 @router.get("/gl/periods")
@@ -287,6 +339,85 @@ def create_period(
     db.commit()
     db.refresh(row)
     return {"id": str(row.id), "period": row.period, "status": row.status}
+
+
+@router.patch("/gl/periods/{period_id}")
+def patch_period(
+    period_id: UUID,
+    body: PeriodPatch,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """开账期间可改标识码；closed 期间锁定 → 409。改码前须无引用该期间的分录。"""
+    row = scoped_get(db, AccountingPeriod, period_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "PERIOD_NOT_FOUND", "message": str(period_id)})
+    if (row.status or "open") != "open":
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Period {row.period} is {row.status}; reopen it before editing"},
+        )
+    if "period" in body.model_fields_set and body.period is not None:
+        try:
+            new_period = fs.norm_period(body.period)
+        except ValueError as exc:
+            raise HTTPException(422, detail={"code": "BAD_PERIOD", "message": str(exc)})
+        if new_period != row.period:
+            has_journals = db.scalar(
+                select(PeriodJournal.id)
+                .where(PeriodJournal.tenant_id == auth.tenant_id, PeriodJournal.period == row.period)
+                .limit(1)
+            )
+            if has_journals is not None:
+                raise HTTPException(
+                    409,
+                    detail={
+                        "code": "PERIOD_IN_USE",
+                        "message": f"Period {row.period} has journals; its code cannot change",
+                    },
+                )
+            dup = db.scalars(
+                scoped_query(db, AccountingPeriod, auth.tenant_id).where(
+                    AccountingPeriod.period == new_period,
+                    AccountingPeriod.id != row.id,
+                )
+            ).first()
+            if dup:
+                raise HTTPException(409, detail={"code": "DUPLICATE_PERIOD", "message": new_period})
+            row.period = new_period
+    db.commit()
+    db.refresh(row)
+    return _period_out(row)
+
+
+@router.delete("/gl/periods/{period_id}")
+def delete_period(
+    period_id: UUID,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """删除会计期间：closed 期间不可删（先重开），有分录的期间不可删。"""
+    row = scoped_get(db, AccountingPeriod, period_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "PERIOD_NOT_FOUND", "message": str(period_id)})
+    if (row.status or "open") != "open":
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Period {row.period} is {row.status}; reopen it before deleting"},
+        )
+    has_journals = db.scalar(
+        select(PeriodJournal.id)
+        .where(PeriodJournal.tenant_id == auth.tenant_id, PeriodJournal.period == row.period)
+        .limit(1)
+    )
+    if has_journals is not None:
+        raise HTTPException(
+            409,
+            detail={"code": "PERIOD_IN_USE", "message": f"Period {row.period} has journals and cannot be deleted"},
+        )
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 def _require_period_admin(auth: AuthContext = Depends(require_module("finance"))) -> AuthContext:
@@ -375,6 +506,15 @@ class JournalIn(BaseModel):
     journal_type: str = "non_voyage"
     description: str | None = None
     entries: list[JournalLine] = Field(..., min_length=2)
+
+
+class JournalPatch(BaseModel):
+    """草稿分录可改；posted/reversed 只可冲销 → 409 INVALID_STATE。"""
+
+    period: str | None = None
+    journal_type: str | None = None
+    description: str | None = None
+    entries: list[JournalLine] | None = Field(None, min_length=2)
 
 
 def _normalize_entries(lines: list[JournalLine]) -> list[dict[str, Any]]:
@@ -491,6 +631,49 @@ def get_journal(
     row = scoped_get(db, PeriodJournal, journal_id, auth.tenant_id)
     if row is None:
         raise HTTPException(404, detail={"code": "JOURNAL_NOT_FOUND", "message": str(journal_id)})
+    return _journal_out(row)
+
+
+@router.patch("/gl/journals/{journal_id}")
+def patch_journal(
+    journal_id: UUID,
+    body: JournalPatch,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """改草稿分录。posted/reversed 锁定 → 409；改期/改分录沿用创建时的护栏。"""
+    row = scoped_get(db, PeriodJournal, journal_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "JOURNAL_NOT_FOUND", "message": str(journal_id)})
+    if row.status != "draft":
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Journal is {row.status}, only draft can be edited"},
+        )
+    # C3-P2 期间关账护栏：关账期间不得改分录
+    assert_period_open(db, auth.tenant_id, row.period)
+    fields = body.model_fields_set
+    if "period" in fields and body.period is not None:
+        try:
+            period = fs.norm_period(body.period)
+        except ValueError as exc:
+            raise HTTPException(422, detail={"code": "BAD_PERIOD", "message": str(exc)})
+        assert_period_open(db, auth.tenant_id, period)
+        row.period = period
+    if "journal_type" in fields and body.journal_type is not None:
+        if body.journal_type not in JOURNAL_TYPES:
+            raise HTTPException(422, detail={"code": "BAD_JOURNAL_TYPE", "message": f"expected one of {JOURNAL_TYPES}"})
+        row.journal_type = body.journal_type
+    if "description" in fields:
+        row.description = body.description
+    if "entries" in fields and body.entries is not None:
+        entries = _normalize_entries(body.entries)
+        assert_period_open(db, auth.tenant_id, row.period)
+        row.entries = entries
+        row.total_debit = sum(Decimal(e["debit"]) for e in entries)
+        row.total_credit = sum(Decimal(e["credit"]) for e in entries)
+    db.commit()
+    db.refresh(row)
     return _journal_out(row)
 
 

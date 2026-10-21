@@ -11,7 +11,19 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import ApiKey, User
 from app.models_cargo import Cargo
-from app.models_domain import Charter, Claim, Estimate, Invoice, LaytimeCalc, Voyage
+from app.models_domain import (
+    BunkerOption,
+    BunkerOrder,
+    BunkerRequirement,
+    Charter,
+    Claim,
+    Estimate,
+    Invoice,
+    LaytimeCalc,
+    OffHireEvent,
+    PortCall,
+    Voyage,
+)
 from app.models_saas import OrgUnit
 from app.models_wave1 import ConnectorInstance, Counterparty, Port, Vessel
 from app.security import AuthContext, get_current_auth
@@ -40,6 +52,11 @@ ENTITY_LOOKUP: dict[str, tuple[type, bool]] = {
     "claim": (Claim, True),
     "laytime": (LaytimeCalc, True),
     "cargo": (Cargo, True),
+    "port_call": (PortCall, True),
+    "off_hire_event": (OffHireEvent, True),
+    "bunker_order": (BunkerOrder, True),
+    "bunker_requirement": (BunkerRequirement, True),
+    "bunker_option": (BunkerOption, True),
 }
 
 

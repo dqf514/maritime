@@ -160,6 +160,11 @@ dl.kv-grid > div { min-width: 0; }
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: var(--gap-xs) var(--gap-sm);
 }
+/* 表单行尾的提交按钮槽（贴底对齐） */
+.form-actions {
+  display: flex;
+  align-items: flex-end;
+}
 .check-grid {
   display: grid;
   gap: 1px;

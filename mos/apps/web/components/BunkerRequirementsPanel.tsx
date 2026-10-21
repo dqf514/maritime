@@ -4,8 +4,10 @@
 // 自取数 + 自建表单，挂载在 Bunker desk 页。
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { DataTable, type ColumnDef } from "@/components/DataTable";
-import { apiGet, apiPost } from "@/lib/api";
+import { DataGrid } from "@/components/grid";
+import type { ColumnDef } from "@/components/grid";
+import { RowActions } from "@/components/RowActions";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -162,14 +164,107 @@ export function BunkerRequirementsPanel() {
     }
   }
 
+  // 状态门（与后端一致）：ordered|fulfilled|cancelled 不可改删；option 仅 offered 可改删
+  function reqEditable(r: Requirement) {
+    return r.status !== "ordered" && r.status !== "fulfilled" && r.status !== "cancelled";
+  }
+  function optEditable(r: Option) {
+    return r.status === "offered";
+  }
+
+  // 行内编辑（失焦保存；值未变化不发请求）
+  async function onReqCellSave(rowId: string, colKey: string, value: unknown, row: Requirement) {
+    if (!reqEditable(row)) return;
+    const src = row as unknown as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "qty_required") {
+      const n = value === null || value === "" ? null : Number(value);
+      if (n === null || isNaN(n) || n <= 0) return;
+      if (Number(src.qty_required ?? NaN) === n) return;
+      payload = { qty_required: n };
+    } else {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      if (value === "") return; // fuel_type 非空
+      payload = { [colKey]: value };
+    }
+    try {
+      await apiPatch(`/api/v1/bunker/requirements/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteReq(id: string) {
+    try {
+      await apiDelete(`/api/v1/bunker/requirements/${id}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      if (selected === id) setSelected("");
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function onOptCellSave(rowId: string, colKey: string, value: unknown, row: Option) {
+    if (!optEditable(row)) return;
+    const src = row as unknown as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "qty" || colKey === "price_per_mt") {
+      const n = value === null || value === "" ? null : Number(value);
+      if (n === null || isNaN(n) || n < 0) return;
+      if (Number(src[colKey] ?? NaN) === n) return;
+      payload = { [colKey]: n };
+    } else if (colKey === "supplier_id") {
+      if ((row.supplier_id ?? "") === (value ?? "")) return;
+      if (!value) return;
+      payload = { supplier_id: value };
+    } else {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      if (value === "") return;
+      payload = { [colKey]: value };
+    }
+    try {
+      await apiPatch(`/api/v1/bunker/options/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await loadOptions(selected);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteOpt(id: string) {
+    try {
+      await apiDelete(`/api/v1/bunker/options/${id}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      await loadOptions(selected);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   const reqCols: ColumnDef<Requirement>[] = [
-    { key: "requirement_no", title: t("page.finance.number", "No.") },
-    { key: "fuel_type", title: t("page.bunker.grade", "Grade") },
-    { key: "qty_required", title: t("page.bunker.qty", "Qty (mt)"), align: "right", render: (v) => fmt(v as number) },
-    { key: "status", title: t("common.status", "Status") },
+    { key: "requirement_no", title: t("page.finance.number", "No."), value: (r) => r.requirement_no },
     {
-      key: "id",
+      key: "fuel_type",
+      title: t("page.bunker.grade", "Grade"),
+      value: (r) => r.fuel_type,
+      editor: { type: "text" },
+    },
+    {
+      key: "qty_required",
+      title: t("page.bunker.qty", "Qty (mt)"),
+      align: "right",
+      value: (r) => r.qty_required,
+      render: (v) => fmt(v as number),
+      editor: { type: "number", step: 0.1, min: 0 },
+    },
+    { key: "status", title: t("common.status", "Status"), value: (r) => r.status },
+    {
+      key: "_actions",
       title: t("common.actions", "Actions"),
+      value: () => "",
       render: (_v, row) => (
         <span className="desk-toolbar" style={{ margin: 0 }}>
           {row.status === "draft" || row.status === "approved" ? (
@@ -187,26 +282,67 @@ export function BunkerRequirementsPanel() {
               {t("common.cancel", "Cancel")}
             </button>
           ) : null}
+          <RowActions
+            canEdit={reqEditable(row)}
+            canDelete={reqEditable(row)}
+            onDelete={() => deleteReq(row.id)}
+            label={row.requirement_no}
+          />
         </span>
       ),
     },
   ];
 
   const optCols: ColumnDef<Option>[] = [
-    { key: "supplier_id", title: t("page.bunker.supplier", "Supplier"), render: (v) => String(v).slice(0, 8) },
-    { key: "fuel_type", title: t("page.bunker.grade", "Grade") },
-    { key: "qty", title: t("page.bunker.qty", "Qty (mt)"), align: "right", render: (v) => fmt(v as number) },
-    { key: "price_per_mt", title: t("page.bunker.price", "Price/mt"), align: "right", render: (v) => fmt(v as number) },
-    { key: "status", title: t("common.status", "Status") },
     {
-      key: "id",
+      key: "supplier_id",
+      title: t("page.bunker.supplier", "Supplier"),
+      value: (r) => r.supplier_id,
+      render: (v) => parties.find((p) => p.id === v)?.name || String(v ?? "").slice(0, 8),
+      editor: { type: "select", options: parties.map((p) => ({ value: p.id, label: p.name })) },
+    },
+    {
+      key: "fuel_type",
+      title: t("page.bunker.grade", "Grade"),
+      value: (r) => r.fuel_type,
+      editor: { type: "text" },
+    },
+    {
+      key: "qty",
+      title: t("page.bunker.qty", "Qty (mt)"),
+      align: "right",
+      value: (r) => r.qty,
+      render: (v) => fmt(v as number),
+      editor: { type: "number", step: 0.1, min: 0 },
+    },
+    {
+      key: "price_per_mt",
+      title: t("page.bunker.price", "Price/mt"),
+      align: "right",
+      value: (r) => r.price_per_mt,
+      render: (v) => fmt(v as number),
+      editor: { type: "number", step: 0.01, min: 0 },
+    },
+    { key: "status", title: t("common.status", "Status"), value: (r) => r.status },
+    {
+      key: "_actions",
       title: t("common.actions", "Actions"),
-      render: (_v, row) =>
-        row.status === "offered" ? (
-          <button className="btn btn-sm" type="button" onClick={() => selectOption(row.id)}>
-            {t("page.bunker.opt_select", "Select")}
-          </button>
-        ) : null,
+      value: () => "",
+      render: (_v, row) => (
+        <span className="row-actions">
+          {row.status === "offered" ? (
+            <button className="btn btn-sm" type="button" onClick={() => selectOption(row.id)}>
+              {t("page.bunker.opt_select", "Select")}
+            </button>
+          ) : null}
+          <RowActions
+            canEdit={optEditable(row)}
+            canDelete={optEditable(row)}
+            onDelete={() => deleteOpt(row.id)}
+            label={`${row.fuel_type} ${fmt(row.price_per_mt)}`}
+          />
+        </span>
+      ),
     },
   ];
 
@@ -253,9 +389,14 @@ export function BunkerRequirementsPanel() {
       </form>
 
       <div className="panel">
-        <DataTable
+        <DataGrid<Requirement>
           data={reqs}
           columns={reqCols}
+          rowKey={(r) => r.id}
+          storageKey="bunker_requirements_grid"
+          showFooter={false}
+          editable
+          onCellSave={onReqCellSave}
           emptyText={t("common.empty", "No records")}
           onRowClick={(row) => setSelected(row.id)}
         />
@@ -292,7 +433,16 @@ export function BunkerRequirementsPanel() {
               {t("common.create", "Create")}
             </button>
           </form>
-          <DataTable data={opts} columns={optCols} emptyText={t("common.empty", "No records")} />
+          <DataGrid<Option>
+            data={opts}
+            columns={optCols}
+            rowKey={(r) => r.id}
+            storageKey="bunker_options_grid"
+            showFooter={false}
+            editable
+            onCellSave={onOptCellSave}
+            emptyText={t("common.empty", "No records")}
+          />
         </div>
       ) : null}
     </>

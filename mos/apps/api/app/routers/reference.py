@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -238,6 +239,15 @@ class HolidayIn(BaseModel):
     recurring: bool = False
 
 
+class HolidayPatch(BaseModel):
+    port_unlocode: str | None = None
+    country: str | None = None
+    holiday_date: str | None = None
+    holiday_name: str | None = None
+    holiday_type: str | None = None
+    recurring: bool | None = None
+
+
 @router.get("/ports/holidays")
 def list_port_holidays(
     port_unlocode: str | None = Query(None),
@@ -289,6 +299,70 @@ def add_port_holiday(
     )
 
 
+def _holiday_out(h: PortHoliday) -> HolidayOut:
+    return HolidayOut(
+        id=str(h.id),
+        port_unlocode=h.port_unlocode,
+        country=h.country,
+        holiday_date=h.holiday_date,
+        holiday_name=h.holiday_name,
+        holiday_type=h.holiday_type,
+        recurring=h.recurring,
+    )
+
+
+@router.patch("/ports/holidays/{holiday_id}")
+def update_port_holiday(
+    holiday_id: UUID,
+    body: HolidayPatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """Update a port holiday."""
+    from sqlalchemy.exc import IntegrityError
+
+    holiday = db.get(PortHoliday, holiday_id)
+    if not holiday:
+        raise HTTPException(404, "Port holiday not found")
+    data = body.model_dump(exclude_unset=True)
+    new_unlocode = data.get("port_unlocode", holiday.port_unlocode)
+    new_date = data.get("holiday_date", holiday.holiday_date)
+    if (new_unlocode, new_date) != (holiday.port_unlocode, holiday.holiday_date):
+        clash = db.scalars(
+            select(PortHoliday).where(
+                PortHoliday.port_unlocode == new_unlocode,
+                PortHoliday.holiday_date == new_date,
+                PortHoliday.id != holiday.id,
+            )
+        ).first()
+        if clash:
+            raise HTTPException(409, detail={"code": "HOLIDAY_EXISTS", "message": "Holiday already exists for this port/date"})
+    for k, v in data.items():
+        setattr(holiday, k, v)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, detail={"code": "HOLIDAY_EXISTS", "message": "Holiday already exists for this port/date"})
+    db.refresh(holiday)
+    return _holiday_out(holiday)
+
+
+@router.delete("/ports/holidays/{holiday_id}")
+def delete_port_holiday(
+    holiday_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """Delete a port holiday (hard delete — global reference row, no soft-delete column)."""
+    holiday = db.get(PortHoliday, holiday_id)
+    if not holiday:
+        raise HTTPException(404, "Port holiday not found")
+    db.delete(holiday)
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/ports/{port_unlocode}/is-holiday")
 def check_port_holiday(
     port_unlocode: str,
@@ -324,6 +398,19 @@ class PortRateIn(BaseModel):
     basis: str = "per_call"
     effective_from: str | None = None
     source: str = "manual"
+    notes: str | None = None
+
+
+class PortRatePatch(BaseModel):
+    port_unlocode: str | None = None
+    rate_type: str | None = None
+    amount_usd: float | None = None
+    vessel_size_band: str | None = None
+    currency: str | None = None
+    basis: str | None = None
+    effective_from: str | None = None
+    effective_to: str | None = None
+    source: str | None = None
     notes: str | None = None
 
 
@@ -385,6 +472,78 @@ def add_port_rate(
         source=rate.source,
         notes=rate.notes,
     )
+
+
+def _port_rate_out(r: PortRate) -> PortRateOut:
+    return PortRateOut(
+        id=str(r.id),
+        port_unlocode=r.port_unlocode,
+        rate_type=r.rate_type,
+        vessel_size_band=r.vessel_size_band,
+        amount_usd=float(r.amount_usd),
+        currency=r.currency,
+        basis=r.basis,
+        source=r.source,
+        notes=r.notes,
+    )
+
+
+@router.patch("/ports/rates/{rate_id}")
+def update_port_rate(
+    rate_id: UUID,
+    body: PortRatePatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """Update a port rate reference row."""
+    from decimal import Decimal
+    from sqlalchemy.exc import IntegrityError
+
+    rate = db.get(PortRate, rate_id)
+    if not rate:
+        raise HTTPException(404, "Port rate not found")
+    data = body.model_dump(exclude_unset=True)
+    new_unlocode = data.get("port_unlocode", rate.port_unlocode)
+    new_type = data.get("rate_type", rate.rate_type)
+    new_band = data.get("vessel_size_band", rate.vessel_size_band)
+    if (new_unlocode, new_type, new_band) != (rate.port_unlocode, rate.rate_type, rate.vessel_size_band):
+        clash = db.scalars(
+            select(PortRate).where(
+                PortRate.port_unlocode == new_unlocode,
+                PortRate.rate_type == new_type,
+                PortRate.vessel_size_band == new_band,
+                PortRate.id != rate.id,
+            )
+        ).first()
+        if clash:
+            raise HTTPException(409, detail={"code": "PORT_RATE_EXISTS", "message": "Rate already exists for this port/type/band"})
+    for k, v in data.items():
+        if k == "amount_usd" and v is not None:
+            setattr(rate, k, Decimal(str(v)))
+        else:
+            setattr(rate, k, v)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, detail={"code": "PORT_RATE_EXISTS", "message": "Rate already exists for this port/type/band"})
+    db.refresh(rate)
+    return _port_rate_out(rate)
+
+
+@router.delete("/ports/rates/{rate_id}")
+def delete_port_rate(
+    rate_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """Delete a port rate (hard delete — global reference row, no soft-delete column)."""
+    rate = db.get(PortRate, rate_id)
+    if not rate:
+        raise HTTPException(404, "Port rate not found")
+    db.delete(rate)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/ports/{port_unlocode}/estimate-costs")
@@ -538,6 +697,18 @@ class FuelZoneIn(BaseModel):
     effective_to: str | None = None
 
 
+class FuelZonePatch(BaseModel):
+    zone_name: str | None = None
+    zone_type: str | None = None
+    geometry: dict | None = None
+    fuel_requirements: dict | None = None
+    eu_ets_factor: float | None = None
+    fueleu_limit: float | None = None
+    is_active: bool | None = None
+    effective_from: str | None = None
+    effective_to: str | None = None
+
+
 @router.get("/fuel-zones")
 def list_fuel_zones(
     zone_type: str | None = Query(None),
@@ -595,6 +766,63 @@ def create_fuel_zone(
         effective_to=zone.effective_to,
         updated_at=zone.updated_at.isoformat() if zone.updated_at else None,
     )
+
+
+def _fuel_zone_out(z: FuelZone) -> FuelZoneOut:
+    return FuelZoneOut(
+        id=str(z.id),
+        zone_name=z.zone_name,
+        zone_type=z.zone_type,
+        geometry=z.geometry,
+        fuel_requirements=z.fuel_requirements,
+        eu_ets_factor=float(z.eu_ets_factor) if z.eu_ets_factor else None,
+        fueleu_limit=float(z.fueleu_limit) if z.fueleu_limit else None,
+        is_active=z.is_active,
+        effective_from=z.effective_from,
+        effective_to=z.effective_to,
+        updated_at=z.updated_at.isoformat() if z.updated_at else None,
+    )
+
+
+@router.patch("/fuel-zones/{zone_id}")
+def update_fuel_zone(
+    zone_id: UUID,
+    body: FuelZonePatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """Update a fuel zone."""
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    zone = fz_svc.get_zone(db, zone_id)
+    if not zone:
+        raise HTTPException(404, "Fuel zone not found")
+    data = body.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        if k in ("eu_ets_factor", "fueleu_limit") and v is not None:
+            setattr(zone, k, Decimal(str(v)))
+        else:
+            setattr(zone, k, v)
+    zone.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(zone)
+    return _fuel_zone_out(zone)
+
+
+@router.delete("/fuel-zones/{zone_id}")
+def delete_fuel_zone(
+    zone_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """Delete a fuel zone (hard delete — global reference row, no soft-delete column)."""
+    zone = fz_svc.get_zone(db, zone_id)
+    if not zone:
+        raise HTTPException(404, "Fuel zone not found")
+    db.delete(zone)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/fuel-zones/position")

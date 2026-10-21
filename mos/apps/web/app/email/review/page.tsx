@@ -5,11 +5,12 @@ import { AppShell } from "@/components/AppShell";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { RowActions } from "@/components/RowActions";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -23,7 +24,13 @@ type Msg = {
   parse_result: Record<string, unknown>;
 };
 
-type Account = { id: string; email: string; provider: string; status: string };
+type Account = {
+  id: string;
+  email: string;
+  provider: string;
+  display_name: string | null;
+  status: string;
+};
 
 export default function EmailReviewPage() {
   const { t } = useI18n();
@@ -72,6 +79,29 @@ export default function EmailReviewPage() {
     await load();
   }
 
+  async function onAccountCellSave(rowId: string, colKey: string, value: unknown, row: Account) {
+    const src = row as unknown as Record<string, unknown>;
+    if ((src[colKey] ?? "") === (value ?? "")) return;
+    try {
+      // config only replaced when explicitly sent — never include it here
+      await apiPatch(`/api/v1/email/accounts/${rowId}`, { [colKey]: value === "" ? null : value });
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteAccount(id: string) {
+    try {
+      await apiDelete(`/api/v1/email/accounts/${id}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   function copyMsgId(m: Msg) {
     void navigator.clipboard.writeText(m.id);
     toast.success(t("ctx.copied_id", "ID copied"));
@@ -98,6 +128,51 @@ export default function EmailReviewPage() {
       : []),
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyMsgId(m) },
     { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportMsgs([m]) },
+  ];
+
+  const accountColumns: ColumnDef<Account>[] = [
+    {
+      key: "email",
+      title: t("common.email", "Email"),
+      minWidth: 180,
+      value: (r) => r.email,
+      editor: { type: "text" },
+    },
+    {
+      key: "display_name",
+      title: t("page.email.display_name", "Display name"),
+      minWidth: 140,
+      value: (r) => r.display_name || "",
+      editor: { type: "text" },
+      render: (v) => (v ? String(v) : "—"),
+    },
+    {
+      key: "provider",
+      title: t("page.email.provider", "Provider"),
+      width: 120,
+      value: (r) => r.provider,
+      editor: { type: "text" },
+    },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => r.status,
+      editor: {
+        type: "select",
+        options: [
+          { value: "active", label: t("page.email.status_active", "Active") },
+          { value: "paused", label: t("page.email.status_paused", "Paused") },
+        ],
+      },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 70,
+      align: "right",
+      render: (_v, a) => <RowActions label={a.email} onDelete={() => deleteAccount(a.id)} />,
+    },
   ];
 
   const columns: ColumnDef<Msg>[] = [
@@ -161,6 +236,18 @@ export default function EmailReviewPage() {
         </button>
       </Toolbar>
       <StatusLegend statuses={["pending", "review", "parsed", "failed"]} />
+      <div className="panel">
+        <h3>{t("page.email.accounts", "Mailbox accounts")}</h3>
+        <DataGrid<Account>
+          columns={accountColumns}
+          data={accounts}
+          rowKey={(a) => a.id}
+          editable
+          onCellSave={onAccountCellSave}
+          storageKey="email_accounts_grid"
+          emptyText={t("page.email.no_accounts", "No mailbox accounts")}
+        />
+      </div>
       <div className="panel">
         <DataGrid<Msg>
           columns={columns}

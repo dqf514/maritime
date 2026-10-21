@@ -6,7 +6,8 @@ import { PageHeader } from "@/components/PageHeader";
 import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
-import { apiCreateBackup, apiGet, apiListBackups, apiPut } from "@/lib/api";
+import { RowActions } from "@/components/RowActions";
+import { apiCreateBackup, apiDelete, apiGet, apiListBackups, apiPatch, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -16,6 +17,7 @@ type Backup = {
   trigger: string;
   storage_path?: string;
   created_at: string;
+  error?: string | null;
 };
 
 type Schedule = {
@@ -88,6 +90,31 @@ export default function BackupPage() {
     }
   }
 
+  // 行内批注：值未变化不发请求，避免 blur→reload 打断输入
+  async function onCellSave(rowId: string, colKey: string, value: unknown, row: Backup) {
+    if (colKey !== "error") return;
+    const prev = row.error ?? "";
+    const next = value == null ? "" : String(value);
+    if (prev === next) return;
+    try {
+      await apiPatch(`/api/v1/settings/dataops/backups/${rowId}`, { error: next || null });
+      toast.success(t("common.saved", "Saved"));
+      await refresh();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  async function deleteBackup(row: Backup) {
+    try {
+      await apiDelete(`/api/v1/settings/dataops/backups/${row.id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      await refresh();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
   const columns: ColumnDef<Backup>[] = [
     {
       key: "created_at",
@@ -114,6 +141,27 @@ export default function BackupPage() {
       title: t("page.backup.path", "Path"),
       minWidth: 200,
       value: (r) => r.storage_path || "",
+    },
+    {
+      key: "error",
+      title: t("page.backup.note", "Note"),
+      minWidth: 140,
+      value: (r) => r.error || "",
+      render: (v) => (v ? String(v) : "—"),
+      editor: { type: "text" },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => (
+        <RowActions
+          // queued/running 进行中不可删（后端 IN_USE 409）
+          onDelete={r.status === "queued" || r.status === "running" ? undefined : () => deleteBackup(r)}
+          label={r.storage_path || r.created_at}
+        />
+      ),
     },
   ];
 
@@ -209,6 +257,8 @@ export default function BackupPage() {
         rowKey={(r) => r.id}
         storageKey="settings_dataops_backup_grid"
         emptyText={t("common.no_data", "No data")}
+        editable
+        onCellSave={onCellSave}
       />
     </AppShell>
   );

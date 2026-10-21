@@ -3,7 +3,7 @@
 
 import { ReactNode } from "react";
 
-export type EditorType = "text" | "number" | "date" | "select" | "checkbox";
+export type EditorType = "text" | "number" | "date" | "datetime" | "select" | "checkbox";
 
 export type ColumnEditor = {
   type: EditorType;

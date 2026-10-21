@@ -285,7 +285,10 @@ def list_tc_contracts(
     auth: AuthContext = Depends(require_module("chartering")),
     db: Session = Depends(get_db),
 ):
-    q = select(TimeCharterContract).where(TimeCharterContract.tenant_id == auth.tenant_id)
+    q = select(TimeCharterContract).where(
+        TimeCharterContract.tenant_id == auth.tenant_id,
+        TimeCharterContract.status != "deleted",
+    )
     if contract_type:
         q = q.where(TimeCharterContract.contract_type == contract_type)
     if contract_style:
@@ -378,6 +381,35 @@ def update_tc_contract(
     db.commit()
     db.refresh(c)
     return _contract_out(c)
+
+
+@router.delete("/tc/contracts/{contract_id}")
+def delete_tc_contract(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete a TC contract — draft only; active/completed/cancelled are locked."""
+    from app.services.recycle import soft_delete
+
+    c = _get_tc(db, auth, contract_id)
+    if c.status != "draft":
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"TC contract in status '{c.status}' cannot be deleted", "status": c.status},
+        )
+    soft_delete(db, tenant_id=auth.tenant_id, user_id=auth.user_id, entity_type="time_charter_contract", row=c, title=f"TC {c.contract_type} {c.id}")
+    audit(
+        db,
+        action="tc_contract.delete",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="time_charter",
+        entity_id=c.id,
+        detail={"status": c.status},
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 @router.post("/tc/contracts/{contract_id}/transition", response_model=TCContractOut)
@@ -604,6 +636,7 @@ def list_child_tcs(
         .where(
             TimeCharterContract.tenant_id == auth.tenant_id,
             TimeCharterContract.parent_contract_id == contract_id,
+            TimeCharterContract.status != "deleted",
         )
         .order_by(TimeCharterContract.created_at)
     ).all()

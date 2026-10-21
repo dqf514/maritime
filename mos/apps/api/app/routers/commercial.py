@@ -1169,6 +1169,16 @@ class ClauseIn(BaseModel):
     text: str | None = None
 
 
+class ClauseUpdate(BaseModel):
+    code: str | None = None
+    cp_form: str | None = None
+    category: str | None = None
+    title_en: str | None = None
+    title_zh: str | None = None
+    params: dict | None = None
+    text: str | None = None
+
+
 @router.get("/clauses")
 def get_clauses(
     cp_form: str | None = Query(None),
@@ -1209,6 +1219,45 @@ def create_clause(body: ClauseIn, auth: AuthContext = Depends(require_module("ch
         is_system=False,
     )
     db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": str(row.id), "code": row.code}
+
+
+@router.patch("/clauses/{clause_id}")
+def update_clause(
+    clause_id: UUID,
+    body: ClauseUpdate,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, ClauseTemplate, clause_id, auth.tenant_id)
+    if row is None or row.is_system:
+        raise HTTPException(404, "Clause not found")
+    fields = body.model_fields_set
+    if "code" in fields and body.code is not None:
+        row.code = body.code
+    if "cp_form" in fields:
+        row.cp_form = body.cp_form
+    if "category" in fields and body.category is not None:
+        row.category = body.category
+    if "title_en" in fields and body.title_en is not None:
+        row.title_en = body.title_en
+    if "title_zh" in fields:
+        row.title_zh = body.title_zh
+    if "params" in fields and body.params is not None:
+        row.params = body.params
+    if "text" in fields:
+        row.text = body.text
+    audit(
+        db,
+        action="clause.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="clause_template",
+        entity_id=str(row.id),
+        detail={"fields": sorted(fields)},
+    )
     db.commit()
     db.refresh(row)
     return {"id": str(row.id), "code": row.code}
@@ -2029,10 +2078,94 @@ def list_off_hire(
         raise HTTPException(404, "Voyage not found")
     rows = db.scalars(
         select(OffHireEvent)
-        .where(OffHireEvent.tenant_id == auth.tenant_id, OffHireEvent.voyage_id == voyage_id)
+        .where(
+            OffHireEvent.tenant_id == auth.tenant_id,
+            OffHireEvent.voyage_id == voyage_id,
+            OffHireEvent.status != "deleted",
+        )
         .order_by(OffHireEvent.start_at)
     ).all()
     return [_offhire_out(r) for r in rows]
+
+
+class OffHireUpdate(BaseModel):
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    reason: str | None = None
+    deduct_hire: bool | None = None
+    event_type: str | None = None
+
+
+def _get_alive_offhire(db: Session, tenant_id: UUID, event_id: UUID) -> OffHireEvent:
+    ev = db.get(OffHireEvent, event_id)
+    if not ev or ev.tenant_id != tenant_id or ev.status == "deleted":
+        raise HTTPException(404, "Off-hire event not found")
+    return ev
+
+
+@router.patch("/off-hire/{event_id}", response_model=OffHireOut)
+def update_off_hire(
+    event_id: UUID,
+    body: OffHireUpdate,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    ev = _get_alive_offhire(db, auth.tenant_id, event_id)
+    fields = body.model_fields_set
+    start_at = body.start_at if "start_at" in fields and body.start_at is not None else ev.start_at
+    end_at = body.end_at if "end_at" in fields else ev.end_at
+    if end_at is not None:
+        s = start_at if start_at.tzinfo else start_at.replace(tzinfo=timezone.utc)
+        e = end_at if end_at.tzinfo else end_at.replace(tzinfo=timezone.utc)
+        if e <= s:
+            raise HTTPException(422, detail={"code": "INVALID_OFFHIRE_WINDOW", "message": "end_at must be after start_at"})
+    if "start_at" in fields and body.start_at is not None:
+        ev.start_at = body.start_at
+    if "end_at" in fields:
+        ev.end_at = end_at
+    if "reason" in fields:
+        ev.reason = body.reason
+    if "deduct_hire" in fields and body.deduct_hire is not None:
+        ev.deduct_hire = body.deduct_hire
+    if "event_type" in fields:
+        ev.event_type = body.event_type
+    audit(
+        db,
+        action="off_hire.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="off_hire_event",
+        entity_id=str(ev.id),
+        detail={"fields": sorted(fields)},
+    )
+    db.commit()
+    db.refresh(ev)
+    return _offhire_out(ev)
+
+
+@router.delete("/off-hire/{event_id}")
+def delete_off_hire(
+    event_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    ev = _get_alive_offhire(db, auth.tenant_id, event_id)
+    if ev.status != "open":
+        # 已关闭的停租窗口已进入租金扣减链（hire summary / 租金发票），终态不可删
+        raise HTTPException(
+            409,
+            detail={"code": "OFFHIRE_CLOSED", "message": "Closed off-hire events cannot be deleted"},
+        )
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="off_hire_event",
+        row=ev,
+        title=ev.reason or "Off-hire",
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 @router.get("/charters/{charter_id}/hire-summary")
@@ -2173,6 +2306,21 @@ class TCContractIn(BaseModel):
     cancel_date: date | None = None
 
 
+class TCContractUpdate(BaseModel):
+    charter_id: UUID | None = None
+    contract_type: Literal["tci", "tco"] | None = None
+    vessel_id: UUID | None = None
+    counterparty_id: UUID | None = None
+    delivery_port: str | None = None
+    delivery_date: date | None = None
+    redelivery_port: str | None = None
+    redelivery_date: date | None = None
+    hire_rate: Decimal | None = None
+    hire_currency: str | None = None
+    payment_frequency: Literal["monthly", "semi_monthly"] | None = None
+    cancel_date: date | None = None
+
+
 class TCContractOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
@@ -2198,7 +2346,10 @@ def list_tc_contracts(
     db: Session = Depends(get_db),
 ):
     rows = db.scalars(
-        select(TimeCharterContract).where(TimeCharterContract.tenant_id == auth.tenant_id)
+        select(TimeCharterContract).where(
+            TimeCharterContract.tenant_id == auth.tenant_id,
+            TimeCharterContract.status != "deleted",
+        )
     ).all()
     return rows
 
@@ -2243,6 +2394,117 @@ def get_tc_contract(
     if not c:
         raise HTTPException(404, "Contract not found")
     return c
+
+
+_TC_LOCKED_STATUSES = {"active", "completed", "cancelled"}
+
+
+def _assert_tc_editable(c: TimeCharterContract) -> None:
+    if c.status in _TC_LOCKED_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INVALID_STATE",
+                "message": f"TC contract is {c.status}; only draft contracts can be edited or deleted",
+                "current": c.status,
+            },
+        )
+
+
+@router.patch("/tc-contracts/{contract_id}", response_model=TCContractOut)
+def update_tc_contract(
+    contract_id: UUID,
+    body: TCContractUpdate,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    _assert_tc_editable(c)
+    fields = body.model_fields_set
+    if "charter_id" in fields and body.charter_id is not None:
+        if scoped_get(db, Charter, body.charter_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Charter not found")
+        c.charter_id = body.charter_id
+    if "contract_type" in fields and body.contract_type is not None:
+        c.contract_type = body.contract_type
+    if "vessel_id" in fields and body.vessel_id is not None:
+        if scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Vessel not found")
+        c.vessel_id = body.vessel_id
+    if "counterparty_id" in fields and body.counterparty_id is not None:
+        party = db.get(Counterparty, body.counterparty_id)
+        if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+            raise HTTPException(404, "Counterparty not found")
+        c.counterparty_id = body.counterparty_id
+    if "delivery_port" in fields:
+        c.delivery_port = body.delivery_port
+    if "delivery_date" in fields:
+        c.delivery_date = body.delivery_date
+    if "redelivery_port" in fields:
+        c.redelivery_port = body.redelivery_port
+    if "redelivery_date" in fields:
+        c.redelivery_date = body.redelivery_date
+    if "hire_rate" in fields and body.hire_rate is not None:
+        c.hire_rate = body.hire_rate
+    if "hire_currency" in fields and body.hire_currency is not None:
+        c.hire_currency = body.hire_currency
+    if "payment_frequency" in fields and body.payment_frequency is not None:
+        c.payment_frequency = body.payment_frequency
+    if "cancel_date" in fields:
+        c.cancel_date = body.cancel_date
+    c.updated_at = datetime.now(timezone.utc)
+    audit(
+        db,
+        action="tc_contract.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="tc_contract",
+        entity_id=str(c.id),
+        detail={"fields": sorted(fields)},
+    )
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+@router.delete("/tc-contracts/{contract_id}")
+def delete_tc_contract(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    _assert_tc_editable(c)
+    linked_stmt = db.scalar(
+        select(HireStatement.id).where(HireStatement.contract_id == c.id).limit(1)
+    )
+    if linked_stmt is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "TC_CONTRACT_IN_USE", "message": "TC contract still has hire statements"},
+        )
+    linked_voyage = db.scalar(
+        select(Voyage.id).where(Voyage.tc_contract_id == c.id, Voyage.status != "deleted").limit(1)
+    )
+    if linked_voyage is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "TC_CONTRACT_IN_USE", "message": "TC contract still linked to voyages"},
+        )
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="tc_contract",
+        row=c,
+        title=f"TC {c.contract_type} {c.delivery_port or ''}".strip(),
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 @router.get("/tc-contracts/{contract_id}/summary")
@@ -2480,6 +2742,93 @@ def upsert_distance(
     return {"id": str(row.id), "action": "created"}
 
 
+class PortDistanceUpdate(BaseModel):
+    from_port_unlocode: str | None = None
+    to_port_unlocode: str | None = None
+    distance_nm: Decimal | None = None
+    route_type: str | None = None
+    canal_transit: str | None = None
+    canal_toll: Decimal | None = None
+    transit_days: Decimal | None = None
+    notes: str | None = None
+
+
+@router.patch("/distances/{distance_id}")
+def update_distance(
+    distance_id: UUID,
+    body: PortDistanceUpdate,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(PortDistance, distance_id)
+    if row is None:
+        raise HTTPException(404, "Distance not found")
+    fields = body.model_fields_set
+    # Unique on (from, to, route_type) — reject a patch that would collide with another row
+    if fields & {"from_port_unlocode", "to_port_unlocode", "route_type"}:
+        fp = body.from_port_unlocode.upper() if "from_port_unlocode" in fields and body.from_port_unlocode else row.from_port_unlocode
+        tp = body.to_port_unlocode.upper() if "to_port_unlocode" in fields and body.to_port_unlocode else row.to_port_unlocode
+        rt = body.route_type if "route_type" in fields and body.route_type else row.route_type
+        clash = db.scalar(
+            select(PortDistance.id)
+            .where(
+                PortDistance.from_port_unlocode == fp,
+                PortDistance.to_port_unlocode == tp,
+                PortDistance.route_type == rt,
+                PortDistance.id != row.id,
+            )
+            .limit(1)
+        )
+        if clash is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "DISTANCE_EXISTS", "message": "A distance row already exists for this port pair / route"},
+            )
+    if "from_port_unlocode" in fields and body.from_port_unlocode is not None:
+        row.from_port_unlocode = body.from_port_unlocode.upper()
+    if "to_port_unlocode" in fields and body.to_port_unlocode is not None:
+        row.to_port_unlocode = body.to_port_unlocode.upper()
+    if "distance_nm" in fields and body.distance_nm is not None:
+        row.distance_nm = body.distance_nm
+    if "route_type" in fields and body.route_type is not None:
+        row.route_type = body.route_type
+    if "canal_transit" in fields:
+        row.canal_transit = body.canal_transit
+    if "canal_toll" in fields:
+        row.canal_toll = body.canal_toll
+    if "transit_days" in fields:
+        row.transit_days = body.transit_days
+    if "notes" in fields:
+        row.notes = body.notes
+    audit(
+        db,
+        action="port_distance.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="port_distance",
+        entity_id=str(row.id),
+        detail={"fields": sorted(fields)},
+    )
+    db.commit()
+    db.refresh(row)
+    return {"id": str(row.id), "action": "updated"}
+
+
+@router.delete("/distances/{distance_id}")
+def delete_distance(
+    distance_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """Hard-delete a distance master row (lookup data; nothing FKs onto it)."""
+    row = db.get(PortDistance, distance_id)
+    if row is None:
+        raise HTTPException(404, "Distance not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
 # ── Sensitivity Analysis + BEP ──
 
 
@@ -2593,6 +2942,19 @@ class OfferIn(BaseModel):
     notes: str | None = None
 
 
+class OfferUpdate(BaseModel):
+    counterparty_id: UUID | None = None
+    vessel_id: UUID | None = None
+    charterer_name: str | None = None
+    cargo: str | None = None
+    laycan_from: datetime | None = None
+    laycan_to: datetime | None = None
+    rate: float | None = None
+    demurrage_rate: float | None = None
+    expires_at: datetime | None = None
+    notes: str | None = None
+
+
 @router.post("/offers")
 def create_offer(body: OfferIn, auth: AuthContext = Depends(require_module("chartering")), db: Session = Depends(get_db)):
     if body.counterparty_id and scoped_get(db, Counterparty, body.counterparty_id, auth.tenant_id) is None:
@@ -2610,7 +2972,7 @@ def list_offers(
     auth: AuthContext = Depends(require_module("chartering")),
     db: Session = Depends(get_db),
 ):
-    q = select(CharterOffer).where(CharterOffer.tenant_id == auth.tenant_id)
+    q = select(CharterOffer).where(CharterOffer.tenant_id == auth.tenant_id, CharterOffer.status != "deleted")
     if status:
         q = q.where(CharterOffer.status == status)
     rows = db.scalars(q.order_by(CharterOffer.created_at.desc())).all()
@@ -2634,6 +2996,96 @@ def list_offers(
             for r in rows
         ]
     }
+
+
+_OFFER_TERMINAL = {"declined", "expired", "fixed"}
+
+
+def _get_alive_offer(db: Session, tenant_id: UUID, offer_id: UUID) -> CharterOffer:
+    row = scoped_get(db, CharterOffer, offer_id, tenant_id)
+    if row is None:
+        raise HTTPException(404, "Offer not found")
+    return row
+
+
+def _assert_offer_editable(row: CharterOffer) -> None:
+    if row.status in _OFFER_TERMINAL:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INVALID_STATE",
+                "message": f"Offer is {row.status}; terminal offers cannot be modified or deleted",
+                "current": row.status,
+            },
+        )
+
+
+@router.patch("/offers/{offer_id}")
+def update_offer(
+    offer_id: UUID,
+    body: OfferUpdate,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    row = _get_alive_offer(db, auth.tenant_id, offer_id)
+    _assert_offer_editable(row)
+    fields = body.model_fields_set
+    if "counterparty_id" in fields:
+        if body.counterparty_id is not None and scoped_get(db, Counterparty, body.counterparty_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Counterparty not found")
+        row.counterparty_id = body.counterparty_id
+    if "vessel_id" in fields:
+        if body.vessel_id is not None and scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Vessel not found")
+        row.vessel_id = body.vessel_id
+    if "charterer_name" in fields:
+        row.charterer_name = body.charterer_name
+    if "cargo" in fields:
+        row.cargo = body.cargo
+    if "laycan_from" in fields:
+        row.laycan_from = body.laycan_from
+    if "laycan_to" in fields:
+        row.laycan_to = body.laycan_to
+    if "rate" in fields:
+        row.rate = body.rate
+    if "demurrage_rate" in fields:
+        row.demurrage_rate = body.demurrage_rate
+    if "expires_at" in fields:
+        row.expires_at = body.expires_at
+    if "notes" in fields:
+        row.notes = body.notes
+    audit(
+        db,
+        action="offer.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="charter_offer",
+        entity_id=str(row.id),
+        detail={"fields": sorted(fields)},
+    )
+    db.commit()
+    db.refresh(row)
+    return {"id": str(row.id), "status": row.status}
+
+
+@router.delete("/offers/{offer_id}")
+def delete_offer(
+    offer_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    row = _get_alive_offer(db, auth.tenant_id, offer_id)
+    _assert_offer_editable(row)
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="charter_offer",
+        row=row,
+        title=row.charterer_name or row.cargo or "Offer",
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 @router.post("/offers/{offer_id}/transition")

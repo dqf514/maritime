@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -36,13 +38,36 @@ def _alive(model):
     return model.deleted_at.is_(None)
 
 
+def _company_out(r: Company) -> CompanyOut:
+    return CompanyOut(
+        id=r.id, name=r.name, code=r.code, base_currency=r.base_currency, tax_no=r.tax_no, status=r.status
+    )
+
+
+class CompanyPatch(BaseModel):
+    name: str | None = None
+    code: str | None = None
+    base_currency: str | None = None
+    tax_no: str | None = None
+
+
+class ExchangeRatePatch(BaseModel):
+    base_currency: str | None = None
+    quote_currency: str | None = None
+    rate: Decimal | None = None
+    rate_date: date | None = None
+    source: str | None = None
+
+
 @router.get("/companies", response_model=list[CompanyOut])
 def list_companies(
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
-    rows = db.scalars(select(Company).where(Company.tenant_id == auth.tenant_id)).all()
-    return [CompanyOut(id=r.id, name=r.name, code=r.code, base_currency=r.base_currency, tax_no=r.tax_no, status=r.status) for r in rows]
+    rows = db.scalars(
+        select(Company).where(Company.tenant_id == auth.tenant_id, Company.status != "deleted")
+    ).all()
+    return [_company_out(r) for r in rows]
 
 
 @router.post("/companies", response_model=CompanyOut)
@@ -55,7 +80,50 @@ def create_company(
     db.add(row)
     db.commit()
     db.refresh(row)
-    return CompanyOut(id=row.id, name=row.name, code=row.code, base_currency=row.base_currency, tax_no=row.tax_no, status=row.status)
+    return _company_out(row)
+
+
+@router.patch("/companies/{company_id}", response_model=CompanyOut)
+def update_company(
+    company_id: UUID,
+    body: CompanyPatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(Company, company_id)
+    if not row or row.tenant_id != auth.tenant_id or row.status == "deleted":
+        raise HTTPException(404, "Company not found")
+    data = body.model_dump(exclude_unset=True)
+    if "code" in data and data["code"] is not None and data["code"] != row.code:
+        clash = db.scalars(
+            select(Company).where(
+                Company.tenant_id == auth.tenant_id,
+                Company.code == data["code"],
+                Company.id != row.id,
+            )
+        ).first()
+        if clash:
+            raise HTTPException(409, detail={"code": "COMPANY_CODE_EXISTS", "message": "Company code already in use"})
+    for k, v in data.items():
+        setattr(row, k, v)
+    row.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(row)
+    return _company_out(row)
+
+
+@router.delete("/companies/{company_id}")
+def delete_company(
+    company_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(Company, company_id)
+    if not row or row.tenant_id != auth.tenant_id or row.status == "deleted":
+        raise HTTPException(404, "Company not found")
+    soft_delete(db, tenant_id=auth.tenant_id, user_id=auth.user_id, entity_type="company", row=row, title=row.name)
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 @router.get("/vessels", response_model=list[VesselOut])
@@ -416,6 +484,48 @@ def create_fx(
     db.commit()
     db.refresh(row)
     return ExchangeRateOut.model_validate(row, from_attributes=True)
+
+
+def _fx_or_404(db: Session, auth: AuthContext, rate_id: UUID) -> ExchangeRate:
+    """Tenant-owned FX rows are editable by the tenant; global (tenant_id NULL) rows need admin."""
+    row = db.get(ExchangeRate, rate_id)
+    if not row:
+        raise HTTPException(404, "Exchange rate not found")
+    if row.tenant_id is not None and row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Exchange rate not found")
+    if row.tenant_id is None and not ({"tenant_admin", "platform_admin"} & set(auth.roles)):
+        raise HTTPException(404, "Exchange rate not found")
+    return row
+
+
+@router.patch("/exchange-rates/{rate_id}", response_model=ExchangeRateOut)
+def update_fx(
+    rate_id: UUID,
+    body: ExchangeRatePatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """Correct an FX rate (rate/date/source are the correction surface)."""
+    row = _fx_or_404(db, auth, rate_id)
+    data = body.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        setattr(row, k, v)
+    db.commit()
+    db.refresh(row)
+    return ExchangeRateOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/exchange-rates/{rate_id}")
+def delete_fx(
+    rate_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """Hard delete — ExchangeRate has no deleted_at/status column, so soft_delete cannot mark the row."""
+    row = _fx_or_404(db, auth, rate_id)
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/counterparties/{party_id}/rescreen")

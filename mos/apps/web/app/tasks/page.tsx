@@ -16,7 +16,7 @@ import { Tabs, type TabItem } from "@/components/Tabs";
 import { Toolbar } from "@/components/Toolbar";
 import { StateView } from "@/components/StateView";
 import { useListHotkeys } from "@/components/useListHotkeys";
-import { apiGet, apiPatch, apiPost, type TaskAssignee, type TaskOut } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, type TaskAssignee, type TaskOut } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -110,6 +110,8 @@ function TasksPageInner() {
         ? [{ key: "reopen", label: t("page.tasks.reopen", "Reopen"), onClick: () => transition(target, "reopen") } as ContextMenuItem]
         : [{ key: "complete", label: t("page.tasks.complete", "Complete"), onClick: () => transition(target, "complete") } as ContextMenuItem]),
       { key: "edit", label: t("common.edit", "Edit"), onClick: () => openEdit(target) },
+      { key: "d2", divider: true, label: "" },
+      { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => void deleteTask(target.id) },
     ];
   }
 
@@ -188,6 +190,20 @@ function TasksPageInner() {
     setBusyId(task.id);
     try {
       await apiPost(`/api/v1/tasks/${task.id}/${action}`);
+      await load();
+    } catch (e: any) {
+      toast.error(e?.message || t("common.failed", "Failed"));
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function deleteTask(id: string) {
+    setBusyId(id);
+    try {
+      await apiDelete(`/api/v1/tasks/${id}`);
+      toast.success(t("page.tasks.deleted", "Task deleted"));
+      setDraft(null);
       await load();
     } catch (e: any) {
       toast.error(e?.message || t("common.failed", "Failed"));
@@ -308,7 +324,8 @@ function TasksPageInner() {
         title={draft?.id ? t("page.tasks.edit", "Edit task") : t("page.tasks.new", "New task")}
         onClose={() => setDraft(null)}
         onSave={saveDraft}
-        canDelete={false}
+        canDelete={!!draft?.id}
+        onDelete={draft?.id ? () => void deleteTask(draft.id as string) : undefined}
         saving={saving}
       >
         <label>

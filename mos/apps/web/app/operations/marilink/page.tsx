@@ -8,11 +8,12 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { RowActions } from "@/components/RowActions";
 import { SavedViews } from "@/components/SavedViews";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -25,7 +26,8 @@ type ShipReport = {
   vessel_name: string | null;
   submitted_at: string;
   status: string;
-  submitted_by_name: string | null;
+  submitted_by: string | null;
+  review_notes: string | null;
 };
 
 type ShipForm = {
@@ -33,6 +35,7 @@ type ShipForm = {
   form_type: string;
   form_name: string;
   is_active: boolean;
+  auto_import: boolean;
 };
 
 function MariLinkPageInner() {
@@ -50,8 +53,8 @@ function MariLinkPageInner() {
   function exportRows(selected: ShipReport[]) {
     downloadCsv(
       "marilink-reports",
-      ["id", "report_ref", "form_type", "vessel_name", "submitted_at", "status", "submitted_by_name"],
-      selected.map((r) => [r.id, r.report_ref, r.form_type, r.vessel_name ?? "", r.submitted_at, r.status, r.submitted_by_name ?? ""]),
+      ["id", "report_ref", "form_type", "vessel_name", "submitted_at", "status", "submitted_by"],
+      selected.map((r) => [r.id, r.report_ref, r.form_type, r.vessel_name ?? "", r.submitted_at, r.status, r.submitted_by ?? ""]),
     );
   }
 
@@ -112,15 +115,80 @@ function MariLinkPageInner() {
     await load();
   }
 
+  async function onReportCellSave(rowId: string, colKey: string, value: unknown, row: ShipReport) {
+    const src = row as unknown as Record<string, unknown>;
+    if ((src[colKey] ?? "") === (value ?? "")) return;
+    try {
+      await apiPatch(`/api/v1/marilink/reports/${rowId}`, { [colKey]: value === "" ? null : value });
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteReport(reportId: string) {
+    try {
+      await apiDelete(`/api/v1/marilink/reports/${reportId}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function onFormCellSave(rowId: string, colKey: string, value: unknown, row: ShipForm) {
+    let payload: Record<string, unknown>;
+    if (colKey === "is_active" || colKey === "auto_import") {
+      const next = Boolean(value);
+      if (row[colKey] === next) return;
+      payload = { [colKey]: next };
+    } else {
+      const src = row as unknown as Record<string, unknown>;
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    }
+    try {
+      await apiPatch(`/api/v1/marilink/forms/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteForm(formId: string) {
+    try {
+      await apiDelete(`/api/v1/marilink/forms/${formId}`);
+      toast.success(t("common.deleted", "Deleted"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   const columns: ColumnDef<ShipReport>[] = [
     {
       key: "report_ref",
       title: t("page.marilink.ref", "Reference"),
       width: 150,
       value: (r) => r.report_ref,
-      render: (_v, r) => <span style={{ fontFamily: "monospace" }}>{r.report_ref}</span>,
+      render: (_v, r) => <code>{r.report_ref}</code>,
     },
-    { key: "form_type", title: t("page.marilink.type", "Type"), width: 130, value: (r) => r.form_type },
+    {
+      key: "form_type",
+      title: t("page.marilink.type", "Type"),
+      width: 130,
+      value: (r) => r.form_type,
+      editor: {
+        type: "select",
+        options: [
+          { value: "noon_report", label: t("page.marilink.noon_report", "Noon Report") },
+          { value: "bunker_report", label: t("page.marilink.bunker_report", "Bunker Report") },
+          { value: "incident", label: t("page.marilink.incident", "Incident") },
+        ],
+      },
+    },
     {
       key: "vessel_name",
       title: t("page.marilink.vessel", "Vessel"),
@@ -143,22 +211,89 @@ function MariLinkPageInner() {
       render: (_v, r) => <StatusBadge status={r.status} />,
     },
     {
+      key: "review_notes",
+      title: t("page.marilink.notes", "Review Notes"),
+      minWidth: 140,
+      value: (r) => r.review_notes || "",
+      editor: { type: "text" },
+    },
+    {
       key: "actions",
       title: t("common.actions", "Actions"),
       width: 110,
       value: (r) => r.status,
       render: (_v, r) =>
         r.status === "submitted" ? (
-          <button
-            className="btn btn-secondary"
-            style={{ padding: "4px 8px", fontSize: 12 }}
-            onClick={() => setOpen(r)}
-          >
+          <button className="btn btn-secondary btn-sm" onClick={() => setOpen(r)}>
             {t("common.review", "Review")}
           </button>
         ) : (
           ""
         ),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 70,
+      align: "right",
+      render: (_v, r) => {
+        const locked = r.status === "approved" || r.status === "rejected";
+        return (
+          <RowActions
+            label={r.report_ref}
+            canEdit={!locked}
+            canDelete={!locked}
+            onDelete={() => deleteReport(r.id)}
+          />
+        );
+      },
+    },
+  ];
+
+  const formColumns: ColumnDef<ShipForm>[] = [
+    {
+      key: "form_name",
+      title: t("common.name", "Name"),
+      minWidth: 180,
+      value: (f) => f.form_name,
+      editor: { type: "text" },
+    },
+    {
+      key: "form_type",
+      title: t("page.marilink.type", "Type"),
+      width: 150,
+      value: (f) => f.form_type,
+      editor: {
+        type: "select",
+        options: [
+          { value: "noon_report", label: t("page.marilink.noon_report", "Noon Report") },
+          { value: "bunker_report", label: t("page.marilink.bunker_report", "Bunker Report") },
+          { value: "incident", label: t("page.marilink.incident", "Incident") },
+        ],
+      },
+    },
+    {
+      key: "is_active",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (f) => f.is_active,
+      editor: { type: "checkbox" },
+      render: (v) => (v ? t("page.marilink.form_active", "Active") : t("page.marilink.form_inactive", "Inactive")),
+    },
+    {
+      key: "auto_import",
+      title: t("page.marilink.auto_import", "Auto import"),
+      width: 110,
+      value: (f) => f.auto_import,
+      editor: { type: "checkbox" },
+      render: (v) => (v ? t("common.yes", "Yes") : t("common.no", "No")),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 70,
+      align: "right",
+      render: (_v, f) => <RowActions label={f.form_name} onDelete={() => deleteForm(f.id)} />,
     },
   ];
 
@@ -209,6 +344,8 @@ function MariLinkPageInner() {
               columns={columns}
               data={reports}
               rowKey={(r) => r.id}
+              editable
+              onCellSave={onReportCellSave}
               onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
               storageKey="marilink_reports_grid"
               showFooter={false}
@@ -222,17 +359,17 @@ function MariLinkPageInner() {
         <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>
           {t("page.marilink.active_forms", "Active Form Form Templates")}
         </h2>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {forms.map((f) => (
-            <div
-              key={f.id}
-              className="card"
-              style={{ padding: 12, minWidth: 200, opacity: f.is_active ? 1 : 0.5 }}
-            >
-              <div style={{ fontWeight: 500 }}>{f.form_name}</div>
-              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{f.form_type}</div>
-            </div>
-          ))}
+        <div className="card" style={{ overflow: "auto" }}>
+          <DataGrid<ShipForm>
+            columns={formColumns}
+            data={forms}
+            rowKey={(f) => f.id}
+            editable
+            onCellSave={onFormCellSave}
+            storageKey="marilink_forms_grid"
+            showFooter={false}
+            emptyText={t("common.no_data", "No data")}
+          />
         </div>
       </div>
 

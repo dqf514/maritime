@@ -12,10 +12,11 @@ import { LookupSelect } from "@/components/LookupSelect";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { RowActions } from "@/components/RowActions";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -260,6 +261,10 @@ export default function BunkerDeskPage() {
         toast.success(t("page.bunker.created", "Bunker order created"));
         closeModal();
       } else {
+        if (orderLocked(open)) {
+          toast.error(t("page.bunker.order_locked", "Delivered/closed orders cannot be edited or deleted"));
+          return;
+        }
         await apiPatch(`/api/v1/bunker-orders/${open.id}`, {
           grade: form.grade,
           qty_ordered: Number(form.qty_ordered) || 0,
@@ -307,9 +312,51 @@ export default function BunkerDeskPage() {
     loadInquiries(r.id).catch(() => undefined);
   }
 
+  function orderLocked(r: Order) {
+    return r.status === "delivered" || r.status === "closed";
+  }
+
+  async function deleteOrder(id: string) {
+    try {
+      await apiDelete(`/api/v1/bunker-orders/${id}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      closeModal();
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  // ── 行内编辑（失焦/回车保存；值未变化不发请求，避免 blur→reload 打断输入） ──
+  async function onOrderCellSave(rowId: string, colKey: string, value: unknown, row: Order) {
+    if (orderLocked(row)) {
+      toast.error(t("page.bunker.order_locked", "Delivered/closed orders cannot be edited or deleted"));
+      return;
+    }
+    const numFields = ["qty_ordered", "unit_price", "rob_before"];
+    let payload: Record<string, unknown>;
+    if (numFields.includes(colKey)) {
+      const n = Number(value);
+      if (value === null || value === "" || isNaN(n)) return;
+      const prev = Number((row as unknown as Record<string, unknown>)[colKey]);
+      if (n === prev) return;
+      payload = { [colKey]: n };
+    } else {
+      if (((row as unknown as Record<string, unknown>)[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    }
+    try {
+      await apiPatch(`/api/v1/bunker-orders/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   const columns: ColumnDef<Order>[] = [
     { key: "order_no", title: t("page.finance.number", "No."), width: 130, value: (r) => r.order_no },
-    { key: "grade", title: t("page.bunker.grade", "Grade"), width: 110, value: (r) => r.grade },
+    { key: "grade", title: t("page.bunker.grade", "Grade"), width: 110, value: (r) => r.grade, editor: { type: "text" } },
     { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
     {
       key: "qty_ordered",
@@ -318,6 +365,7 @@ export default function BunkerDeskPage() {
       align: "right",
       value: (r) => r.qty_ordered,
       render: (v) => <Num v={v as number} digits={2} />,
+      editor: { type: "number", min: 0 },
     },
     {
       key: "unit_price",
@@ -326,6 +374,7 @@ export default function BunkerDeskPage() {
       align: "right",
       value: (r) => r.unit_price,
       render: (v) => <Num v={v as number} digits={2} />,
+      editor: { type: "number", min: 0 },
     },
     {
       key: "amount",
@@ -336,15 +385,21 @@ export default function BunkerDeskPage() {
       render: (v) => <Num v={v as number} digits={2} />,
     },
     {
-      key: "rob",
-      title: "ROB",
-      minWidth: 130,
-      value: (r) => `${r.rob_before ?? ""} → ${r.rob_after ?? ""}`,
-      render: (_v, r) => (
-        <>
-          <Num v={r.rob_before} digits={2} /> → <Num v={r.rob_after} digits={2} />
-        </>
-      ),
+      key: "rob_before",
+      title: t("page.bunker.rob_before", "ROB before"),
+      width: 110,
+      align: "right",
+      value: (r) => r.rob_before,
+      render: (v) => <Num v={v as number | null} digits={2} />,
+      editor: { type: "number", min: 0 },
+    },
+    {
+      key: "rob_after",
+      title: t("page.bunker.rob_after", "ROB after"),
+      width: 110,
+      align: "right",
+      value: (r) => r.rob_after,
+      render: (v) => <Num v={v as number | null} digits={2} />,
     },
     {
       key: "updated_at",
@@ -352,6 +407,23 @@ export default function BunkerDeskPage() {
       width: 135,
       value: (r) => r.updated_at ?? null,
       render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 64,
+      align: "center",
+      render: (_v, r) => (
+        <span title={orderLocked(r) ? t("page.bunker.order_locked", "Delivered/closed orders cannot be edited or deleted") : undefined}>
+          <RowActions
+            onEdit={() => openRow(r)}
+            onDelete={() => deleteOrder(r.id)}
+            canEdit={!orderLocked(r)}
+            canDelete={!orderLocked(r)}
+            label={r.order_no}
+          />
+        </span>
+      ),
     },
   ];
 
@@ -421,21 +493,23 @@ export default function BunkerDeskPage() {
       </Toolbar>
       {err ? <p className="flash-err">{err}</p> : null}
       {warnings.length ? (
-        <div className="panel" style={{ borderColor: "var(--warn)" }}>
+        <div className="panel panel-warn">
           {warnings.map((w, i) => (
-            <p key={i} style={{ color: "var(--warn)", fontWeight: 600, margin: "0.25rem 0" }}>
+            <p key={i} className="flash-warn">
               {w}
             </p>
           ))}
         </div>
       ) : null}
 
-      <div className="panel" style={{ marginTop: "1rem" }}>
+      <div className="panel panel-gap-top">
         <StatusLegend statuses={["planned", "inquiry", "ordered", "delivered", "closed"]} />
         <DataGrid<Order>
           columns={columns}
           data={rows}
           rowKey={(r) => r.id}
+          editable
+          onCellSave={onOrderCellSave}
           onRowClick={(r) => openRow(r)}
           onRowContextMenu={(row, _i, e) => orderCtx.open(row)(e)}
           storageKey="bunker_orders_grid"
@@ -456,7 +530,9 @@ export default function BunkerDeskPage() {
         }
         onClose={closeModal}
         onSave={save}
-        canDelete={false}
+        canEdit={!open || !orderLocked(open)}
+        canDelete={open ? !orderLocked(open) : false}
+        onDelete={open ? () => deleteOrder(open.id) : undefined}
         saving={busy}
       >
         {!creating && open ? (
@@ -542,8 +618,8 @@ export default function BunkerDeskPage() {
               {t("page.bunker.consumption", "Consumption")}
               <input value={consumption} onChange={(e) => setConsumption(e.target.value)} />
             </label>
-            <div className="desk-section" style={{ margin: "0.5rem 0" }}>
-              <h3 style={{ marginTop: 0 }}>{t("page.bunker.inquiries", "Inquiries")}</h3>
+            <div className="desk-section desk-section-tight">
+              <h3>{t("page.bunker.inquiries", "Inquiries")}</h3>
               {inquiries.length ? (
                 <DataGrid<Inquiry>
                   columns={inquiryColumns}
@@ -556,9 +632,9 @@ export default function BunkerDeskPage() {
                   emptyText={t("page.bunker.no_inquiries", "No quotes yet")}
                 />
               ) : (
-                <p className="muted" style={{ margin: 0 }}>{t("page.bunker.no_inquiries", "No quotes yet")}</p>
+                <p className="muted m-0">{t("page.bunker.no_inquiries", "No quotes yet")}</p>
               )}
-              <div className="form-grid" style={{ marginTop: "0.5rem" }}>
+              <div className="form-grid mt-sm">
                 <label>
                   {t("page.bunker.supplier", "Supplier")}
                   <PartyPicker value="" onChange={(_id, item) => item && setInqSupplier(item.label)} placeholder={inqSupplier || t("picker.search", "Search counterparty…")} />
@@ -567,7 +643,7 @@ export default function BunkerDeskPage() {
                   {t("page.bunker.quoted_price", "Quoted price")}
                   <input type="number" step="any" value={inqPrice} onChange={(e) => setInqPrice(e.target.value)} />
                 </label>
-                <div style={{ display: "flex", alignItems: "end" }}>
+                <div className="editor-actions">
                   <button className="btn btn-sm" type="button" disabled={busy} onClick={addInquiry}>
                     {t("page.bunker.add_inquiry", "Add quote")}
                   </button>
@@ -575,15 +651,15 @@ export default function BunkerDeskPage() {
               </div>
             </div>
             {open.voyage_id ? (
-              <div className="desk-section" style={{ margin: "0.5rem 0" }}>
-                <div className="desk-toolbar" style={{ margin: 0 }}>
-                  <h3 style={{ margin: 0, fontSize: "0.95rem" }}>{t("page.bunker.allocation", "Voyage allocation estimate")}</h3>
+              <div className="desk-section desk-section-tight">
+                <div className="desk-toolbar desk-toolbar-flush">
+                  <h3 className="h3-compact">{t("page.bunker.allocation", "Voyage allocation estimate")}</h3>
                   <button className="btn btn-sm" type="button" disabled={busy} onClick={loadAllocation}>
                     {t("page.bunker.alloc_run", "Run allocation")}
                   </button>
                 </div>
                 {alloc ? (
-                  <div className="desk-results" style={{ marginTop: "0.5rem" }}>
+                  <div className="desk-results mt-sm">
                     <div className="kv-box">
                       <span>{t("page.bunker.alloc_consumption", "Consumption mt")}</span>
                       <strong>{String(alloc.consumption_mt ?? "—")}</strong>

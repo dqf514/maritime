@@ -10,6 +10,7 @@ import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { RowActions } from "@/components/RowActions";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
 import { StatusBadge, type StatusTone } from "@/components/StatusBadge";
 import { useStateActions } from "@/components/useTransitions";
@@ -57,6 +58,15 @@ function varianceClass(n: number | null | undefined) {
   return n < 0 ? "neg" : "pos";
 }
 
+/** ISO → datetime-local 输入值（YYYY-MM-DDTHH:MM，本地时区） */
+function toLocalInput(iso: string | null | undefined) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 type PortRef = { id: string; name: string; latitude: number | null; longitude: number | null; timezone?: string | null };
 
 type PortFunctionMeta = { code: string; label_en: string; label_zh: string; tone: string };
@@ -65,6 +75,7 @@ type PcRow = TimelinePortCall & {
   function_code?: string | null;
   id?: string | null;
   port_id?: string | null;
+  agent?: string | null;
   timezone?: string | null;
 };
 
@@ -197,9 +208,10 @@ export default function VoyageWorkspacePage() {
   const [savingNote, setSavingNote] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // port-call create (C2: function_code select)
+  // port-call create/edit (C2: function_code select)
   const [pcModalOpen, setPcModalOpen] = useState(false);
   const [pcSaving, setPcSaving] = useState(false);
+  const [pcEditId, setPcEditId] = useState<string | null>(null);
   const [pcForm, setPcForm] = useState({
     port_id: "",
     seq: "1",
@@ -210,19 +222,37 @@ export default function VoyageWorkspacePage() {
     agent: "",
   });
 
-  const openPortCallModal = useCallback(() => {
-    const lastSeq = (data?.port_calls || []).reduce((m, pc) => Math.max(m, pc.seq ?? 0), 0);
-    setPcForm({
-      port_id: "",
-      seq: String(lastSeq + 1),
-      purpose: "load",
-      function_code: "",
-      eta: "",
-      etd: "",
-      agent: "",
-    });
-    setPcModalOpen(true);
-  }, [data?.port_calls]);
+  const openPortCallModal = useCallback(
+    (row?: PcRow) => {
+      if (row && row.id) {
+        // 编辑模式：预填当前行
+        setPcEditId(row.id);
+        setPcForm({
+          port_id: row.port_id || "",
+          seq: String(row.seq ?? 1),
+          purpose: row.purpose || "load",
+          function_code: row.function_code || "",
+          eta: toLocalInput(row.eta),
+          etd: toLocalInput(row.etd),
+          agent: row.agent || "",
+        });
+      } else {
+        const lastSeq = (data?.port_calls || []).reduce((m, pc) => Math.max(m, pc.seq ?? 0), 0);
+        setPcEditId(null);
+        setPcForm({
+          port_id: "",
+          seq: String(lastSeq + 1),
+          purpose: "load",
+          function_code: "",
+          eta: "",
+          etd: "",
+          agent: "",
+        });
+      }
+      setPcModalOpen(true);
+    },
+    [data?.port_calls],
+  );
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -270,8 +300,7 @@ export default function VoyageWorkspacePage() {
       if (!id) return;
       setPcSaving(true);
       try {
-        await apiPost("/api/v1/port-calls", {
-          voyage_id: id,
+        const payload = {
           port_id: pcForm.port_id || null,
           seq: Number(pcForm.seq) || 1,
           purpose: pcForm.purpose || "load",
@@ -279,9 +308,16 @@ export default function VoyageWorkspacePage() {
           eta: pcForm.eta ? new Date(pcForm.eta).toISOString() : null,
           etd: pcForm.etd ? new Date(pcForm.etd).toISOString() : null,
           agent: pcForm.agent || null,
-        });
-        toast.success(t("ws.pc_created", "Port call added"));
+        };
+        if (pcEditId) {
+          await apiPatch(`/api/v1/port-calls/${pcEditId}`, payload);
+          toast.success(t("common.saved", "Saved"));
+        } else {
+          await apiPost("/api/v1/port-calls", { voyage_id: id, ...payload });
+          toast.success(t("ws.pc_created", "Port call added"));
+        }
         setPcModalOpen(false);
+        setPcEditId(null);
         await load();
       } catch (ex: any) {
         toast.error(ex?.message || t("common.failed", "Failed"));
@@ -289,7 +325,105 @@ export default function VoyageWorkspacePage() {
         setPcSaving(false);
       }
     },
-    [id, pcForm, load, toast, t],
+    [id, pcEditId, pcForm, load, toast, t],
+  );
+
+  const deletePortCall = useCallback(
+    async (pcId: string) => {
+      try {
+        await apiDelete(`/api/v1/port-calls/${pcId}`);
+        toast.success(t("common.deleted", "Deleted"));
+        await load();
+      } catch (ex: any) {
+        toast.error(ex?.message || t("common.failed", "Failed"));
+      }
+    },
+    [load, toast, t],
+  );
+
+  // 行内编辑失焦保存：值未变化时不发请求（避免 blur → reload 打断下一格输入）
+  const onPcCellSave = useCallback(
+    async (rowId: string, colKey: string, value: unknown, row: PcRow) => {
+      const dtFields = ["eta", "etd", "ata", "atd"];
+      let payload: Record<string, unknown>;
+      if (colKey === "seq") {
+        const n = value === null || value === "" ? null : Number(value);
+        if (n !== null && (isNaN(n) || n === (row.seq ?? null))) return;
+        payload = { seq: n };
+      } else if (dtFields.includes(colKey)) {
+        const prev = (row as Record<string, unknown>)[colKey];
+        const nextIso = value ? new Date(String(value)).toISOString() : null;
+        const prevT = prev ? new Date(String(prev)).getTime() : null;
+        const nextT = nextIso ? new Date(nextIso).getTime() : null;
+        if (prevT === nextT) return;
+        payload = { [colKey]: nextIso };
+      } else if (colKey === "port_id" || colKey === "purpose") {
+        if ((row as Record<string, unknown>)[colKey] === (value ?? null)) return;
+        payload = { [colKey]: value ?? null };
+      } else {
+        if (((row as Record<string, unknown>)[colKey] ?? "") === (value ?? "")) return;
+        payload = { [colKey]: value ?? null };
+      }
+      try {
+        await apiPatch(`/api/v1/port-calls/${rowId}`, payload);
+        toast.success(t("common.saved", "Saved"));
+        await load();
+      } catch (ex: any) {
+        toast.error(ex?.message || t("common.failed", "Failed"));
+      }
+    },
+    [load, toast, t],
+  );
+
+  const closeOffHire = useCallback(
+    async (eventId: string) => {
+      try {
+        await apiPost(`/api/v1/off-hire/${eventId}/close`, {});
+        toast.success(t("ws.oh_closed", "Off-hire closed"));
+        await load();
+      } catch (ex: any) {
+        toast.error(ex?.message || t("common.failed", "Failed"));
+      }
+    },
+    [load, toast, t],
+  );
+
+  const deleteOffHire = useCallback(
+    async (eventId: string) => {
+      try {
+        await apiDelete(`/api/v1/off-hire/${eventId}`);
+        toast.success(t("common.deleted", "Deleted"));
+        await load();
+      } catch (ex: any) {
+        toast.error(ex?.message || t("common.failed", "Failed"));
+      }
+    },
+    [load, toast, t],
+  );
+
+  const onOffHireCellSave = useCallback(
+    async (rowId: string, colKey: string, value: unknown, row: Record<string, unknown>) => {
+      let payload: Record<string, unknown>;
+      if (colKey === "start_at" || colKey === "end_at") {
+        const nextIso = value ? new Date(String(value)).toISOString() : null;
+        const prev = row[colKey];
+        const prevT = prev ? new Date(String(prev)).getTime() : null;
+        const nextT = nextIso ? new Date(nextIso).getTime() : null;
+        if (prevT === nextT) return;
+        payload = { [colKey]: nextIso };
+      } else {
+        if ((row[colKey] ?? "") === (value ?? "")) return;
+        payload = { [colKey]: value ?? null };
+      }
+      try {
+        await apiPatch(`/api/v1/off-hire/${rowId}`, payload);
+        toast.success(t("common.saved", "Saved"));
+        await load();
+      } catch (ex: any) {
+        toast.error(ex?.message || t("common.failed", "Failed"));
+      }
+    },
+    [load, toast, t],
   );
 
   const loadAux = useCallback(async () => {
@@ -345,6 +479,7 @@ export default function VoyageWorkspacePage() {
           seq: pc.seq ?? i + 1,
           port_name: pc.port_name || port?.name || pc.port_id?.slice(0, 8) || "?",
           port_id: pc.port_id ?? null,
+          agent: pc.agent ?? null,
           eta: pc.eta,
           etd: pc.etd,
           ata: pc.ata,
@@ -681,8 +816,15 @@ export default function VoyageWorkspacePage() {
   );
 
   const pcColumns: GridColumnDef<(typeof timelinePortCalls)[number]>[] = [
-    { key: "seq", title: "#", width: 48, align: "right" },
-    { key: "port_name", title: t("ws.port", "Port"), width: 160 },
+    { key: "seq", title: "#", width: 48, align: "right", editor: { type: "number" } },
+    {
+      key: "port_id",
+      title: t("ws.port", "Port"),
+      width: 160,
+      value: (r) => r.port_id ?? "",
+      render: (_v, row) => row.port_name,
+      editor: { type: "select", options: ports.map((p) => ({ value: p.id, label: p.name })) },
+    },
     {
       key: "purpose",
       title: t("ws.purpose", "Purpose"),
@@ -692,12 +834,22 @@ export default function VoyageWorkspacePage() {
           {v ? String(v) : "—"} <PortFnChip code={row.function_code} />
         </>
       ),
+      editor: {
+        type: "select",
+        options: [
+          { value: "load", label: "load" },
+          { value: "discharge", label: "discharge" },
+          { value: "bunker", label: "bunker" },
+          { value: "transit", label: "transit" },
+        ],
+      },
     },
     {
       key: "eta",
       title: "ETA",
       width: 150,
       render: (v, row) => <PortTime value={v as string | null} tz={row.timezone} showTz />,
+      editor: { type: "datetime" },
     },
     {
       key: "ata",
@@ -714,9 +866,31 @@ export default function VoyageWorkspacePage() {
           </span>
         );
       },
+      editor: { type: "datetime" },
     },
-    { key: "etd", title: "ETD", width: 150, render: (v, row) => <PortTime value={v as string | null} tz={row.timezone} showTz /> },
-    { key: "atd", title: "ATD", width: 150, render: (v, row) => <PortTime value={v as string | null} tz={row.timezone} showTz /> },
+    { key: "etd", title: "ETD", width: 150, render: (v, row) => <PortTime value={v as string | null} tz={row.timezone} showTz />, editor: { type: "datetime" } },
+    { key: "atd", title: "ATD", width: 150, render: (v, row) => <PortTime value={v as string | null} tz={row.timezone} showTz />, editor: { type: "datetime" } },
+    {
+      key: "agent",
+      title: t("ws.agent", "Agent"),
+      width: 110,
+      value: (r) => r.agent ?? "",
+      render: (v) => (v ? String(v) : "—"),
+      editor: { type: "text" },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 64,
+      align: "center",
+      render: (_v, row) => (
+        <RowActions
+          onEdit={() => openPortCallModal(row)}
+          onDelete={row.id ? () => deletePortCall(row.id!) : undefined}
+          label={row.port_name}
+        />
+      ),
+    },
   ];
 
   const portCallsTab = (
@@ -737,6 +911,8 @@ export default function VoyageWorkspacePage() {
           columns={pcColumns}
           data={timelinePortCalls}
           rowKey={(row) => row.id || `${row.seq}-${row.port_name}`}
+          editable
+          onCellSave={(rk, key, val, row) => onPcCellSave(rk, key, val, row as PcRow)}
           emptyText={t("common.empty", "No records")}
         />
       </Panel>
@@ -819,23 +995,61 @@ export default function VoyageWorkspacePage() {
     {
       key: "start_at",
       title: t("ws.start", "Start"),
-      width: 140,
+      width: 150,
       value: (r) => r.start_at || "",
       render: (v) => fmtDate(v as string | null),
+      editor: { type: "datetime" },
     },
     {
       key: "end_at",
       title: t("ws.end", "End"),
-      width: 140,
+      width: 150,
       value: (r) => r.end_at || "",
       render: (v) => (v ? fmtDate(v as string) : t("ws.oh_open", "In progress")),
+      editor: { type: "datetime" },
     },
     {
       key: "reason",
       title: t("ws.reason", "Reason"),
-      minWidth: 130,
+      minWidth: 120,
       value: (r) => r.reason || "",
       render: (v) => (v ? String(v) : "—"),
+      editor: { type: "text" },
+    },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => r.status || "",
+      render: (v, row) =>
+        row.status === "open" ? (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            title={t("ws.oh_close", "Close off-hire")}
+            onClick={(e) => {
+              e.stopPropagation();
+              closeOffHire(row.id);
+            }}
+          >
+            ● {t("ws.oh_close_btn", "Close")}
+          </button>
+        ) : (
+          <span className="muted">{String(v || "—")}</span>
+        ),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 44,
+      align: "center",
+      render: (_v, row) => (
+        <RowActions
+          canEdit={false}
+          onDelete={row.status === "open" ? () => deleteOffHire(row.id) : undefined}
+          label={fmtDate(row.start_at)}
+        />
+      ),
     },
   ];
 
@@ -878,6 +1092,8 @@ export default function VoyageWorkspacePage() {
           rowKey={(r) => r.id}
           storageKey="voyage_ws_offhire_grid"
           showFooter={false}
+          editable
+          onCellSave={onOffHireCellSave}
           emptyText={t("common.no_data", "No data")}
         />
       </Panel>
@@ -1083,8 +1299,11 @@ export default function VoyageWorkspacePage() {
 
       <RecordModal
         open={pcModalOpen}
-        title={t("ws.add_port_call", "Add port call")}
-        onClose={() => setPcModalOpen(false)}
+        title={pcEditId ? t("ws.edit_port_call", "Edit port call") : t("ws.add_port_call", "Add port call")}
+        onClose={() => {
+          setPcModalOpen(false);
+          setPcEditId(null);
+        }}
         onSave={savePortCall}
         canDelete={false}
         saving={pcSaving}

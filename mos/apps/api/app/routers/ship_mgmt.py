@@ -518,6 +518,36 @@ def update_work_order(
     return {"id": str(wo.id), "status": wo.status, "warnings": warnings}
 
 
+@router.delete("/ship/work-orders/{wo_id}")
+def delete_work_order(
+    wo_id: UUID,
+    auth: AuthContext = Depends(require_module("ship_mgmt")),
+    db: Session = Depends(get_db),
+):
+    """Hard delete (file convention). Completed/closed work orders are locked."""
+    wo = _wo_or_404(db, auth.tenant_id, wo_id)
+    if wo.status in ("done", "closed"):
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Work order in status '{wo.status}' cannot be deleted", "status": wo.status},
+        )
+    spares = db.scalars(select(ShipWoSpare).where(ShipWoSpare.wo_id == wo.id)).all()
+    for s in spares:
+        db.delete(s)
+    audit(
+        db,
+        action="ship.work_order.delete",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="ship_work_order",
+        entity_id=wo.id,
+        detail={"wo_no": wo.wo_no, "status": wo.status, "spares_removed": len(spares)},
+    )
+    db.delete(wo)
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/ship/work-orders/{wo_id}/spares")
 def register_wo_spare(
     wo_id: UUID,

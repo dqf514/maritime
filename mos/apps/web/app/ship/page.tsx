@@ -9,8 +9,9 @@ import { Tabs } from "@/components/Tabs";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { DeskSection } from "@/components/DeskSection";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { CertOverview, VesselCertificates } from "@/components/ShipCertificates";
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -59,6 +60,7 @@ export default function ShipManagementPage() {
   const [busy, setBusy] = useState(false);
 
   const [selWo, setSelWo] = useState<any>(null);
+  const [woDeletePending, setWoDeletePending] = useState<(() => void) | null>(null);
   const [woSpares, setWoSpares] = useState<any[]>([]);
   const [woPart, setWoPart] = useState("");
   const [woQty, setWoQty] = useState("1");
@@ -157,6 +159,21 @@ export default function ShipManagementPage() {
       setWoWarnings(Array.isArray(res?.warnings) ? res.warnings.map((w: unknown) => String(w)) : []);
       toast.success(t("page.ship.wo_moved", "Work order status → {target}", { target }));
       setSelWo((prev: any) => (prev ? { ...prev, status: res?.status || target } : prev));
+      await refreshDetail();
+    } catch (e: any) {
+      toast.error(e?.message || t("common.failed", "Failed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteWo(id: string) {
+    setBusy(true);
+    try {
+      await apiDelete(`/api/v1/ship/work-orders/${id}`);
+      toast.success(t("page.ship.wo_deleted", "Work order deleted"));
+      setSelWo(null);
+      setWoSpares([]);
       await refreshDetail();
     } catch (e: any) {
       toast.error(e?.message || t("common.failed", "Failed"));
@@ -487,6 +504,25 @@ export default function ShipManagementPage() {
                         {t("page.ship.wo_done", "Mark done")}
                       </button>
                     ) : null}
+                    {selWo.status === "done" || selWo.status === "closed" ? (
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        disabled
+                        title={t("page.ship.wo_delete_locked", "Completed/closed work orders cannot be deleted")}
+                      >
+                        {t("page.ship.wo_delete", "Delete")}
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setWoDeletePending(() => () => deleteWo(selWo.id))}
+                      >
+                        {t("page.ship.wo_delete", "Delete")}
+                      </button>
+                    )}
                   </div>
                   {woWarnings.length ? (
                     <div style={{ marginTop: "0.5rem" }}>
@@ -665,6 +701,18 @@ export default function ShipManagementPage() {
       </div>
         </>
       )}
+      <ConfirmDialog
+        open={Boolean(woDeletePending)}
+        title={t("page.ship.wo_delete", "Delete")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: selWo?.wo_no ?? "" })}
+        danger
+        onConfirm={() => {
+          const fn = woDeletePending;
+          setWoDeletePending(null);
+          fn?.();
+        }}
+        onCancel={() => setWoDeletePending(null)}
+      />
     </AppShell>
   );
 }

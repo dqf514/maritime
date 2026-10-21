@@ -461,6 +461,21 @@ def update_template(
     return _template_out(row)
 
 
+@router.delete("/templates/{template_id}")
+def delete_template(
+    template_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete a pricing template (master data — allowed even when referenced)."""
+    row = scoped_get(db, PricingTemplate, template_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Pricing template not found")
+    soft_delete(db, tenant_id=auth.tenant_id, user_id=auth.user_id, entity_type="pricing_template", row=row, title=row.name)
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
 @router.post("/templates/{template_id}/resolve")
 def resolve_template(
     template_id: UUID,

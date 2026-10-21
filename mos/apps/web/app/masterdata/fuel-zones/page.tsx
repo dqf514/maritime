@@ -8,12 +8,13 @@ import type { ColumnDef } from "@/components/grid";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { RowActions } from "@/components/RowActions";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -51,8 +52,9 @@ function FuelZonesPage() {
   const [cSulfur, setCSulfur] = useState("");
   const [complianceResult, setComplianceResult] = useState<Record<string, unknown> | null>(null);
 
-  // Create zone (RecordModal)
+  // Create/edit zone (RecordModal)
   const [creating, setCreating] = useState(false);
+  const [zoneEditId, setZoneEditId] = useState<string | null>(null);
   const [zName, setZName] = useState("");
   const [zType, setZType] = useState("eca");
   const [zSulfur, setZSulfur] = useState("");
@@ -79,35 +81,89 @@ function FuelZonesPage() {
   }
 
   function openCreate() {
+    setZoneEditId(null);
     setCreating(true);
     setZName("");
     setZType("eca");
     setZSulfur("");
   }
 
+  function openEditZone(z: FuelZone) {
+    setZoneEditId(z.id);
+    setZName(z.zone_name);
+    setZType(z.zone_type);
+    const sulfur = (z.fuel_requirements as Record<string, number> | null)?.sulfur_max;
+    setZSulfur(sulfur === undefined || sulfur === null ? "" : String(sulfur));
+    setCreating(true);
+  }
+
   useListHotkeys(openCreate);
 
   function closeCreate() {
     setCreating(false);
+    setZoneEditId(null);
   }
 
-  async function createZone(e: FormEvent) {
+  async function saveZone(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
     try {
       const fuelReqs = zSulfur ? { sulfur_max: parseFloat(zSulfur), fuel_type: "MGO" } : null;
-      await apiPost("/api/v1/reference/fuel-zones", {
+      const body = {
         zone_name: zName,
         zone_type: zType,
         fuel_requirements: fuelReqs,
-      });
-      toast.success(t("page.fuelZones.zone_created", "Zone created"));
+      };
+      if (zoneEditId) {
+        await apiPatch(`/api/v1/reference/fuel-zones/${zoneEditId}`, body);
+        toast.success(t("common.saved", "Saved"));
+      } else {
+        await apiPost("/api/v1/reference/fuel-zones", body);
+        toast.success(t("page.fuelZones.zone_created", "Zone created"));
+      }
       closeCreate();
       await load();
-    } catch {
-      toast.error(t("common.failed", "Failed"));
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function deleteZone(id: string) {
+    try {
+      await apiDelete(`/api/v1/reference/fuel-zones/${id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      if (zoneEditId === id) closeCreate();
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  // ── 行内编辑（值未变化不发请求） ──
+  async function onZoneCellSave(rowId: string, colKey: string, value: unknown, row: FuelZone) {
+    let payload: Record<string, unknown>;
+    if (colKey === "sulfur") {
+      const next = value === null || value === "" ? null : Number(value);
+      const prev = (row.fuel_requirements as Record<string, number> | null)?.sulfur_max ?? null;
+      if (next === prev || (next !== null && isNaN(next))) return;
+      payload = { fuel_requirements: next === null ? null : { sulfur_max: next, fuel_type: "MGO" } };
+    } else if (colKey === "is_active") {
+      const next = Boolean(value);
+      if (row.is_active === next) return;
+      payload = { is_active: next };
+    } else {
+      const src = row as unknown as Record<string, unknown>;
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    }
+    try {
+      await apiPatch(`/api/v1/reference/fuel-zones/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
     }
   }
 
@@ -165,7 +221,7 @@ function FuelZonesPage() {
   };
 
   const columns: ColumnDef<FuelZone>[] = [
-    { key: "zone_name", title: t("page.fuelZones.name", "Name"), minWidth: 160, value: (z) => z.zone_name },
+    { key: "zone_name", title: t("page.fuelZones.name", "Name"), minWidth: 160, value: (z) => z.zone_name, editor: { type: "text" } },
     {
       key: "zone_type",
       title: t("page.fuelZones.type", "Type"),
@@ -176,6 +232,13 @@ function FuelZonesPage() {
           {z.zone_type.toUpperCase()}
         </span>
       ),
+      editor: { type: "select", options: [
+        { value: "eca", label: t("page.fuelZones.type_eca", "ECA") },
+        { value: "eu_ets", label: t("page.fuelZones.type_eu_ets", "EU ETS") },
+        { value: "fueleu", label: t("page.fuelZones.type_fueleu", "FuelEU") },
+        { value: "cii", label: t("page.fuelZones.type_cii", "CII") },
+        { value: "non_eca", label: t("page.fuelZones.type_non_eca", "Non-ECA") },
+      ] },
     },
     {
       key: "sulfur",
@@ -191,13 +254,28 @@ function FuelZonesPage() {
         ) : (
           "—"
         ),
+      editor: { type: "number", min: 0, max: 10, step: 0.01 },
     },
     {
       key: "is_active",
       title: t("page.fuelZones.active", "Active"),
       width: 100,
-      value: (z) => (z.is_active ? "active" : "inactive"),
+      value: (z) => z.is_active,
       render: (_v, z) => <StatusBadge status={z.is_active ? "active" : "inactive"} />,
+      editor: { type: "checkbox" },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 64,
+      align: "center",
+      render: (_v, z) => (
+        <RowActions
+          onEdit={() => openEditZone(z)}
+          onDelete={() => deleteZone(z.id)}
+          label={z.zone_name}
+        />
+      ),
     },
   ];
 
@@ -317,6 +395,8 @@ function FuelZonesPage() {
             columns={columns}
             data={zones}
             rowKey={(z) => z.id}
+            editable
+            onCellSave={onZoneCellSave}
             onRowContextMenu={(z, _i, e) => zoneCtx.open(z)(e)}
             storageKey="fuel_zones_grid"
             showFooter={false}
@@ -328,10 +408,11 @@ function FuelZonesPage() {
 
       <RecordModal
         open={creating}
-        title={t("page.fuelZones.create_zone", "Create Zone")}
+        title={zoneEditId ? t("page.fuelZones.edit_zone", "Edit Zone") : t("page.fuelZones.create_zone", "Create Zone")}
         onClose={closeCreate}
-        onSave={createZone}
-        canDelete={false}
+        onSave={saveZone}
+        canDelete={!!zoneEditId}
+        onDelete={zoneEditId ? () => deleteZone(zoneEditId) : undefined}
         saving={saving}
       >
         <label>

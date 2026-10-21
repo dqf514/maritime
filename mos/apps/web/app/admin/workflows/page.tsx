@@ -9,7 +9,8 @@ import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { RowActions } from "@/components/RowActions";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -118,8 +119,8 @@ export default function WorkflowsAdminPage() {
       setOpen(null);
       setCreating(false);
       await load();
-    } catch {
-      toast.error(t("common.failed", "保存失败"));
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "保存失败"));
     } finally {
       setSaving(false);
     }
@@ -129,6 +130,20 @@ export default function WorkflowsAdminPage() {
     e?.stopPropagation();
     await apiPatch(`/api/v1/admin/workflows/${r.id}`, { enabled });
     await load();
+  }
+
+  async function deleteWorkflow(r: Wf) {
+    try {
+      await apiDelete(`/api/v1/admin/workflows/${r.id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      if (open?.id === r.id) {
+        setOpen(null);
+        setCreating(false);
+      }
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Delete failed"));
+    }
   }
 
   const columns: ColumnDef<Wf>[] = [
@@ -167,6 +182,20 @@ export default function WorkflowsAdminPage() {
             onChange={(e) => toggleEnabled(r, e.target.checked).catch(() => toast.error(t("common.failed", "失败")))}
           />
         </span>
+      ),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => (
+        <RowActions
+          onEdit={() => openRow(r)}
+          // 后端要求先停用再删除（enabled → INVALID_STATE 409）
+          onDelete={!r.enabled ? () => deleteWorkflow(r) : undefined}
+          label={r.name || r.code}
+        />
       ),
     },
   ];

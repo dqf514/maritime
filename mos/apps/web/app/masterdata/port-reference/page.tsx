@@ -9,11 +9,12 @@ import type { ColumnDef } from "@/components/grid";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { RowActions } from "@/components/RowActions";
 import { SavedViews } from "@/components/SavedViews";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -70,6 +71,7 @@ function PortReferencePage() {
 
   // Holiday form (RecordModal)
   const [holidayOpen, setHolidayOpen] = useState(false);
+  const [holidayEditId, setHolidayEditId] = useState<string | null>(null);
   const [hPort, setHPort] = useState("");
   const [hCountry, setHCountry] = useState("CN");
   const [hDate, setHDate] = useState("");
@@ -79,6 +81,7 @@ function PortReferencePage() {
 
   // Rate form (RecordModal)
   const [rateOpen, setRateOpen] = useState(false);
+  const [rateEditId, setRateEditId] = useState<string | null>(null);
   const [rPort, setRPort] = useState("");
   const [rType, setRType] = useState("pilotage");
   const [rAmount, setRAmount] = useState("");
@@ -113,59 +116,168 @@ function PortReferencePage() {
 
   function openCreate() {
     if (tab === "rates") {
+      setRateEditId(null);
       setRateOpen(true);
       setRPort("");
+      setRType("pilotage");
       setRAmount("");
+      setRBand("medium");
+      setRBasis("per_call");
     } else {
+      setHolidayEditId(null);
       setHolidayOpen(true);
       setHPort("");
+      setHCountry("CN");
       setHDate("");
       setHName("");
+      setHType("public");
+      setHRecurring(false);
     }
+  }
+
+  function openEditHoliday(h: Holiday) {
+    setHolidayEditId(h.id);
+    setHPort(h.port_unlocode);
+    setHCountry(h.country);
+    setHDate(h.holiday_date);
+    setHName(h.holiday_name);
+    setHType(h.holiday_type);
+    setHRecurring(h.recurring);
+    setHolidayOpen(true);
+  }
+
+  function openEditRate(r: PortRate) {
+    setRateEditId(r.id);
+    setRPort(r.port_unlocode);
+    setRType(r.rate_type);
+    setRAmount(String(r.amount_usd));
+    setRBand(r.vessel_size_band);
+    setRBasis(r.basis);
+    setRateOpen(true);
   }
 
   useListHotkeys(openCreate);
 
-  async function addHoliday(e: FormEvent) {
+  async function saveHoliday(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
     try {
-      await apiPost("/api/v1/reference/ports/holidays", {
+      const body = {
         port_unlocode: hPort.toUpperCase(),
         country: hCountry.toUpperCase(),
         holiday_date: hDate,
         holiday_name: hName,
         holiday_type: hType,
         recurring: hRecurring,
-      });
-      toast.success(t("page.portRef.holiday_added", "Holiday added"));
+      };
+      if (holidayEditId) {
+        await apiPatch(`/api/v1/reference/ports/holidays/${holidayEditId}`, body);
+        toast.success(t("common.saved", "Saved"));
+      } else {
+        await apiPost("/api/v1/reference/ports/holidays", body);
+        toast.success(t("page.portRef.holiday_added", "Holiday added"));
+      }
       setHolidayOpen(false);
       await loadHolidays();
-    } catch {
-      toast.error(t("common.failed", "Failed"));
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
     } finally {
       setSaving(false);
     }
   }
 
-  async function addRate(e: FormEvent) {
+  async function deleteHoliday(id: string) {
+    try {
+      await apiDelete(`/api/v1/reference/ports/holidays/${id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      if (holidayEditId === id) setHolidayOpen(false);
+      await loadHolidays();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  async function saveRate(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
     try {
-      await apiPost("/api/v1/reference/ports/rates", {
+      const body = {
         port_unlocode: rPort.toUpperCase(),
         rate_type: rType,
         amount_usd: parseFloat(rAmount),
         vessel_size_band: rBand,
         basis: rBasis,
-      });
-      toast.success(t("page.portRef.rate_added", "Rate added"));
+      };
+      if (rateEditId) {
+        await apiPatch(`/api/v1/reference/ports/rates/${rateEditId}`, body);
+        toast.success(t("common.saved", "Saved"));
+      } else {
+        await apiPost("/api/v1/reference/ports/rates", body);
+        toast.success(t("page.portRef.rate_added", "Rate added"));
+      }
       setRateOpen(false);
       await loadRates();
-    } catch {
-      toast.error(t("common.failed", "Failed"));
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function deleteRate(id: string) {
+    try {
+      await apiDelete(`/api/v1/reference/ports/rates/${id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      if (rateEditId === id) setRateOpen(false);
+      await loadRates();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  // ── 行内编辑（值未变化不发请求，避免 blur→reload 打断输入） ──
+  async function onHolidayCellSave(rowId: string, colKey: string, value: unknown, row: Holiday) {
+    const src = row as unknown as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "recurring") {
+      const next = Boolean(value);
+      if (row.recurring === next) return;
+      payload = { recurring: next };
+    } else if (colKey === "holiday_date") {
+      const prev = row.holiday_date;
+      const next = value ? String(value).slice(0, 10) : "";
+      if (!next || prev === next) return;
+      payload = { holiday_date: next };
+    } else {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    }
+    try {
+      await apiPatch(`/api/v1/reference/ports/holidays/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await loadHolidays();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  async function onRateCellSave(rowId: string, colKey: string, value: unknown, row: PortRate) {
+    const src = row as unknown as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "amount_usd") {
+      const next = value === null || value === "" ? null : Number(value);
+      if (next === null || isNaN(next) || next === row.amount_usd) return;
+      payload = { amount_usd: next };
+    } else {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    }
+    try {
+      await apiPatch(`/api/v1/reference/ports/rates/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await loadRates();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
     }
   }
 
@@ -240,10 +352,21 @@ function PortReferencePage() {
       width: 100,
       value: (h) => h.port_unlocode,
       render: (_v, h) => <code>{h.port_unlocode}</code>,
+      editor: { type: "text" },
     },
-    { key: "holiday_date", title: t("page.portRef.date", "Date"), width: 120, value: (h) => h.holiday_date },
-    { key: "holiday_name", title: t("page.portRef.name", "Name"), minWidth: 160, value: (h) => h.holiday_name },
-    { key: "holiday_type", title: t("page.portRef.holiday_type", "Type"), width: 110, value: (h) => h.holiday_type },
+    { key: "holiday_date", title: t("page.portRef.date", "Date"), width: 120, value: (h) => h.holiday_date, editor: { type: "date" } },
+    { key: "holiday_name", title: t("page.portRef.name", "Name"), minWidth: 160, value: (h) => h.holiday_name, editor: { type: "text" } },
+    {
+      key: "holiday_type",
+      title: t("page.portRef.holiday_type", "Type"),
+      width: 110,
+      value: (h) => h.holiday_type,
+      editor: { type: "select", options: [
+        { value: "public", label: t("page.portRef.public", "Public") },
+        { value: "religious", label: t("page.portRef.religious", "Religious") },
+        { value: "local", label: t("page.portRef.local", "Local") },
+      ] },
+    },
     {
       key: "recurring",
       title: t("page.portRef.recurring_short", "Rec."),
@@ -251,12 +374,49 @@ function PortReferencePage() {
       align: "center",
       value: (h) => h.recurring,
       render: (_v, h) => (h.recurring ? "✓" : ""),
+      editor: { type: "checkbox" },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 64,
+      align: "center",
+      render: (_v, h) => (
+        <RowActions
+          onEdit={() => openEditHoliday(h)}
+          onDelete={() => deleteHoliday(h.id)}
+          label={`${h.port_unlocode} ${h.holiday_date}`}
+        />
+      ),
     },
   ];
 
   const rateColumns: ColumnDef<PortRate>[] = [
-    { key: "rate_type", title: t("page.portRef.type", "Type"), width: 130, value: (r) => r.rate_type },
-    { key: "vessel_size_band", title: t("page.portRef.band", "Band"), width: 110, value: (r) => r.vessel_size_band },
+    {
+      key: "rate_type",
+      title: t("page.portRef.type", "Type"),
+      width: 130,
+      value: (r) => r.rate_type,
+      editor: { type: "select", options: [
+        { value: "pilotage", label: t("page.portRef.pilotage", "Pilotage") },
+        { value: "towage", label: t("page.portRef.towage", "Towage") },
+        { value: "mooring", label: t("page.portRef.mooring", "Mooring") },
+        { value: "wharfage", label: t("page.portRef.wharfage", "Wharfage") },
+        { value: "light_dues", label: t("page.portRef.light_dues", "Light Dues") },
+      ] },
+    },
+    {
+      key: "vessel_size_band",
+      title: t("page.portRef.band", "Band"),
+      width: 110,
+      value: (r) => r.vessel_size_band,
+      editor: { type: "select", options: [
+        { value: "small", label: t("page.portRef.band_small", "Small (≤10k DWT)") },
+        { value: "medium", label: t("page.portRef.band_medium", "Medium (10-50k DWT)") },
+        { value: "large", label: t("page.portRef.band_large", "Large (50-150k DWT)") },
+        { value: "xl", label: t("page.portRef.band_xl", "XL >150k DWT") },
+      ] },
+    },
     {
       key: "amount_usd",
       title: t("page.portRef.amount", "Amount"),
@@ -269,8 +429,33 @@ function PortReferencePage() {
           <Num v={v as number} digits={2} />
         </>
       ),
+      editor: { type: "number" },
     },
-    { key: "basis", title: t("page.portRef.basis", "Basis"), width: 110, value: (r) => r.basis },
+    {
+      key: "basis",
+      title: t("page.portRef.basis", "Basis"),
+      width: 110,
+      value: (r) => r.basis,
+      editor: { type: "select", options: [
+        { value: "per_call", label: t("page.portRef.per_call", "Per Call") },
+        { value: "per_day", label: t("page.portRef.per_day", "Per Day") },
+        { value: "per_gt", label: t("page.portRef.per_gt", "Per GT") },
+        { value: "per_dwt", label: t("page.portRef.per_dwt", "Per DWT") },
+      ] },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 64,
+      align: "center",
+      render: (_v, r) => (
+        <RowActions
+          onEdit={() => openEditRate(r)}
+          onDelete={() => deleteRate(r.id)}
+          label={`${r.port_unlocode} ${r.rate_type}`}
+        />
+      ),
+    },
   ];
 
   return (
@@ -315,6 +500,8 @@ function PortReferencePage() {
             columns={holidayColumns}
             data={holidays}
             rowKey={(h) => h.id}
+            editable
+            onCellSave={onHolidayCellSave}
             onRowContextMenu={(h, _i, e) => holidayCtx.open(h)(e)}
             storageKey="port_ref_holidays_grid"
             showFooter={false}
@@ -338,6 +525,8 @@ function PortReferencePage() {
             columns={rateColumns}
             data={rates}
             rowKey={(r) => r.id}
+            editable
+            onCellSave={onRateCellSave}
             onRowContextMenu={(r, _i, e) => rateCtx.open(r)(e)}
             storageKey="port_ref_rates_grid"
             showFooter={false}
@@ -393,10 +582,11 @@ function PortReferencePage() {
 
       <RecordModal
         open={holidayOpen}
-        title={t("page.portRef.add_holiday", "Add Holiday")}
+        title={holidayEditId ? t("page.portRef.edit_holiday", "Edit Holiday") : t("page.portRef.add_holiday", "Add Holiday")}
         onClose={() => setHolidayOpen(false)}
-        onSave={addHoliday}
-        canDelete={false}
+        onSave={saveHoliday}
+        canDelete={!!holidayEditId}
+        onDelete={holidayEditId ? () => deleteHoliday(holidayEditId) : undefined}
         saving={saving}
       >
         <label>
@@ -434,10 +624,11 @@ function PortReferencePage() {
 
       <RecordModal
         open={rateOpen}
-        title={t("page.portRef.add_rate", "Add Port Rate")}
+        title={rateEditId ? t("page.portRef.edit_rate", "Edit Port Rate") : t("page.portRef.add_rate", "Add Port Rate")}
         onClose={() => setRateOpen(false)}
-        onSave={addRate}
-        canDelete={false}
+        onSave={saveRate}
+        canDelete={!!rateEditId}
+        onDelete={rateEditId ? () => deleteRate(rateEditId) : undefined}
         saving={saving}
       >
         <label>

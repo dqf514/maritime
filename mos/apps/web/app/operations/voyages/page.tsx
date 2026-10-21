@@ -9,6 +9,7 @@ import { ExportButton } from "@/components/ExportButton";
 import { PageGuide } from "@/components/PageGuide";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { RowActions } from "@/components/RowActions";
 import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
@@ -40,6 +41,16 @@ type OffHire = {
   reason: string | null;
   deduct_hire?: boolean;
   deducted_days?: number | null;
+  status?: string;
+};
+type NoonRow = {
+  id: string;
+  report_at: string | null;
+  speed: number | null;
+  rob_fo: number | null;
+  rob_do: number | null;
+  remarks: string | null;
+  stage?: string | null;
 };
 type SofSummary = {
   events: Array<{ id: string; event_code: string; event_at: string | null }>;
@@ -161,6 +172,7 @@ function VoyagesPageInner() {
   const [sofSummary, setSofSummary] = useState<{ pc: string; data: SofSummary | null } | null>(null);
 
   const [offHires, setOffHires] = useState<OffHire[]>([]);
+  const [noons, setNoons] = useState<NoonRow[]>([]);
   const [ohStart, setOhStart] = useState("");
   const [ohReason, setOhReason] = useState("");
   const [ohDeduct, setOhDeduct] = useState(true);
@@ -224,6 +236,12 @@ function VoyagesPageInner() {
       setOffHires(oh);
     } catch {
       setOffHires([]);
+    }
+    try {
+      const nn = await apiGet(`/api/v1/noon-reports?voyage_id=${voyageId}`);
+      setNoons(nn);
+    } catch {
+      setNoons([]);
     }
   }, []);
 
@@ -443,6 +461,154 @@ function VoyagesPageInner() {
     }
   }
 
+  // ── 行内编辑（失焦/回车保存；值未变化不发请求，避免 blur→reload 打断输入） ──
+
+  async function onPcCellSave(rowId: string, colKey: string, value: unknown, row: PortCall) {
+    const dtFields = ["eta", "etd", "nor_at", "eosp_at"];
+    let payload: Record<string, unknown>;
+    if (colKey === "seq") {
+      const n = value === null || value === "" ? null : Number(value);
+      if (n === null || isNaN(n) || n === row.seq) return;
+      payload = { seq: n };
+    } else if (dtFields.includes(colKey)) {
+      const prev = (row as Record<string, unknown>)[colKey];
+      const nextIso = value ? new Date(String(value)).toISOString() : null;
+      const prevT = prev ? new Date(String(prev)).getTime() : null;
+      const nextT = nextIso ? new Date(nextIso).getTime() : null;
+      if (prevT === nextT) return;
+      payload = { [colKey]: nextIso };
+    } else {
+      if (((row as Record<string, unknown>)[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    }
+    try {
+      await apiPatch(`/api/v1/port-calls/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      if (selectedId) await loadPortCalls(selectedId, selectedPc);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deletePortCall(pcId: string) {
+    if (!selectedId) return;
+    try {
+      await apiDelete(`/api/v1/port-calls/${pcId}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      await loadPortCalls(selectedId);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function onSofCellSave(
+    rowId: string,
+    colKey: string,
+    value: unknown,
+    row: (typeof sofEvents)[number],
+  ) {
+    let payload: Record<string, unknown>;
+    if (colKey === "event_at") {
+      const prev = row.event_at;
+      const nextIso = value ? new Date(String(value)).toISOString() : null;
+      const prevT = prev ? new Date(prev).getTime() : null;
+      const nextT = nextIso ? new Date(nextIso).getTime() : null;
+      if (prevT === nextT) return;
+      payload = { event_at: nextIso };
+    } else {
+      if ((row as Record<string, unknown>)[colKey] === (value ?? null)) return;
+      payload = { [colKey]: value ?? null };
+    }
+    try {
+      await apiPatch(`/api/v1/sof-events/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      if (selectedId) await loadPortCalls(selectedId, selectedPc);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteSof(eventId: string) {
+    try {
+      await apiDelete(`/api/v1/sof-events/${eventId}`);
+      toast.success(t("common.deleted", "Deleted"));
+      if (selectedId) await loadPortCalls(selectedId, selectedPc);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function onOffHireCellSave(rowId: string, colKey: string, value: unknown, row: OffHire) {
+    const src = row as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "start_at" || colKey === "end_at") {
+      const prev = src[colKey];
+      const nextIso = value ? new Date(String(value)).toISOString() : null;
+      const prevT = prev ? new Date(String(prev)).getTime() : null;
+      const nextT = nextIso ? new Date(nextIso).getTime() : null;
+      if (prevT === nextT) return;
+      payload = { [colKey]: nextIso };
+    } else {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    }
+    try {
+      await apiPatch(`/api/v1/off-hire/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      if (selectedId) await loadPortCalls(selectedId, selectedPc);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteOffHire(eventId: string) {
+    try {
+      await apiDelete(`/api/v1/off-hire/${eventId}`);
+      toast.success(t("common.deleted", "Deleted"));
+      if (selectedId) await loadPortCalls(selectedId, selectedPc);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function onNoonCellSave(rowId: string, colKey: string, value: unknown, row: NoonRow) {
+    const src = row as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "report_at") {
+      const prev = row.report_at;
+      const nextIso = value ? new Date(String(value)).toISOString() : null;
+      const prevT = prev ? new Date(prev).getTime() : null;
+      const nextT = nextIso ? new Date(nextIso).getTime() : null;
+      if (prevT === nextT) return;
+      payload = { report_at: nextIso };
+    } else if (colKey === "speed" || colKey === "rob_fo" || colKey === "rob_do") {
+      const next = value === null || value === "" ? null : Number(value);
+      if (next !== null && isNaN(next)) return;
+      if ((src[colKey] ?? null) === next) return;
+      payload = { [colKey]: next };
+    } else {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    }
+    try {
+      await apiPatch(`/api/v1/noon-reports/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      if (selectedId) await loadPortCalls(selectedId, selectedPc);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteNoon(noonId: string) {
+    try {
+      await apiDelete(`/api/v1/noon-reports/${noonId}`);
+      toast.success(t("common.deleted", "Deleted"));
+      if (selectedId) await loadPortCalls(selectedId, selectedPc);
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   async function addNoon(e: FormEvent) {
     e.preventDefault();
     if (!selectedId) return;
@@ -615,20 +781,35 @@ function VoyagesPageInner() {
   ];
 
   const portCallColumns: ColumnDef<PortCall>[] = [
-    { key: "seq", title: "#", width: 48, align: "right", value: (r) => r.seq },
+    { key: "seq", title: "#", width: 48, align: "right", value: (r) => r.seq, editor: { type: "number" } },
     {
-      key: "port",
+      key: "port_id",
       title: t("page.voyages.port", "Port"),
       minWidth: 150,
-      value: (r) => portLabel(r.port_id),
+      value: (r) => r.port_id || "",
+      render: (_v, r) => portLabel(r.port_id),
+      editor: {
+        type: "select",
+        options: ports.map((p) => ({ value: p.id, label: p.name })),
+      },
     },
-    { key: "purpose", title: t("page.voyages.purpose", "Purpose"), width: 90, value: (r) => r.purpose },
+    {
+      key: "purpose",
+      title: t("page.voyages.purpose", "Purpose"),
+      width: 90,
+      value: (r) => r.purpose,
+      editor: {
+        type: "select",
+        options: ["load", "discharge", "bunker", "transit"].map((p) => ({ value: p, label: p })),
+      },
+    },
     {
       key: "eta",
       title: "ETA",
       width: 130,
       value: (r) => r.eta || "",
       render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+      editor: { type: "datetime" },
     },
     {
       key: "etd",
@@ -636,6 +817,7 @@ function VoyagesPageInner() {
       width: 130,
       value: (r) => r.etd || "",
       render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+      editor: { type: "datetime" },
     },
     {
       key: "nor_at",
@@ -643,6 +825,7 @@ function VoyagesPageInner() {
       width: 130,
       value: (r) => r.nor_at || "",
       render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+      editor: { type: "datetime" },
     },
     {
       key: "eosp_at",
@@ -650,6 +833,7 @@ function VoyagesPageInner() {
       width: 130,
       value: (r) => r.eosp_at || "",
       render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+      editor: { type: "datetime" },
     },
     {
       key: "bl_date",
@@ -657,6 +841,7 @@ function VoyagesPageInner() {
       width: 110,
       value: (r) => r.bl_date || "",
       render: (v) => (v ? String(v) : "—"),
+      editor: { type: "text" },
     },
     {
       key: "agent",
@@ -664,23 +849,55 @@ function VoyagesPageInner() {
       minWidth: 110,
       value: (r) => r.agent || "",
       render: (v) => (v ? String(v) : "—"),
+      editor: { type: "text" },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => (
+        <RowActions
+          onDelete={() => deletePortCall(r.id)}
+          label={`#${r.seq} ${portLabel(r.port_id)}`}
+        />
+      ),
     },
   ];
 
   const sofColumns: ColumnDef<(typeof sofEvents)[number]>[] = [
-    { key: "event_code", title: t("page.voyages.event", "Event"), width: 130, value: (r) => r.event_code },
+    {
+      key: "event_code",
+      title: t("page.voyages.event", "Event"),
+      width: 130,
+      value: (r) => r.event_code,
+      editor: { type: "select", options: SOF_CODES.map((c) => ({ value: c, label: c })) },
+    },
     {
       key: "event_at",
       title: t("page.voyages.event_at", "Event at"),
       minWidth: 160,
       value: (r) => r.event_at || "",
       render: (v) => (v ? new Date(v as string).toLocaleString() : "—"),
+      editor: { type: "datetime" },
     },
     {
       key: "port_call_id",
       title: t("page.voyages.port_call", "Port call"),
       width: 110,
       value: (r) => r.port_call_id.slice(0, 8),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => (
+        <RowActions
+          onDelete={() => deleteSof(r.id)}
+          label={r.event_code}
+        />
+      ),
     },
   ];
 
@@ -691,6 +908,7 @@ function VoyagesPageInner() {
       width: 130,
       value: (r) => r.start_at || "",
       render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+      editor: { type: "datetime" },
     },
     {
       key: "end_at",
@@ -698,6 +916,7 @@ function VoyagesPageInner() {
       width: 130,
       value: (r) => r.end_at || "",
       render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+      editor: { type: "datetime" },
     },
     {
       key: "reason",
@@ -705,6 +924,7 @@ function VoyagesPageInner() {
       minWidth: 120,
       value: (r) => r.reason || "",
       render: (v) => (v ? String(v) : "—"),
+      editor: { type: "text" },
     },
     {
       key: "deducted_days",
@@ -717,21 +937,86 @@ function VoyagesPageInner() {
     {
       key: "_actions",
       title: "",
-      width: 220,
+      width: 250,
       align: "right",
-      render: (_v, oh) =>
-        !oh.end_at ? (
-          <span
-            className="desk-toolbar"
-            style={{ margin: 0, justifyContent: "flex-end" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <DateTimeInput value={ohCloseAt} onChange={setOhCloseAt} />
-            <button className="btn btn-sm" type="button" disabled={busy} onClick={() => closeOffHire(oh.id)}>
-              {t("common.close", "Close")}
-            </button>
-          </span>
-        ) : null,
+      render: (_v, oh) => (
+        <span
+          className="desk-toolbar"
+          style={{ margin: 0, justifyContent: "flex-end" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {!oh.end_at ? (
+            <>
+              <DateTimeInput value={ohCloseAt} onChange={setOhCloseAt} />
+              <button className="btn btn-sm" type="button" disabled={busy} onClick={() => closeOffHire(oh.id)}>
+                {t("common.close", "Close")}
+              </button>
+            </>
+          ) : null}
+          <RowActions
+            onDelete={oh.status !== "closed" ? () => deleteOffHire(oh.id) : undefined}
+            label={oh.reason || toLocalInput(oh.start_at)}
+          />
+        </span>
+      ),
+    },
+  ];
+
+  const noonColumns: ColumnDef<NoonRow>[] = [
+    {
+      key: "report_at",
+      title: t("page.voyages.at", "At"),
+      width: 130,
+      value: (r) => r.report_at || "",
+      render: (v) => (v ? toLocalInput(v as string).replace("T", " ") : "—"),
+      editor: { type: "datetime" },
+    },
+    {
+      key: "speed",
+      title: t("page.voyages.speed", "Speed"),
+      width: 80,
+      align: "right",
+      value: (r) => r.speed ?? "",
+      render: (v) => (v === "" || v == null ? "—" : String(v)),
+      editor: { type: "number", step: 0.1 },
+    },
+    {
+      key: "rob_fo",
+      title: "ROB FO",
+      width: 85,
+      align: "right",
+      value: (r) => r.rob_fo ?? "",
+      render: (v) => (v === "" || v == null ? "—" : String(v)),
+      editor: { type: "number", step: 0.1 },
+    },
+    {
+      key: "rob_do",
+      title: "ROB DO",
+      width: 85,
+      align: "right",
+      value: (r) => r.rob_do ?? "",
+      render: (v) => (v === "" || v == null ? "—" : String(v)),
+      editor: { type: "number", step: 0.1 },
+    },
+    {
+      key: "remarks",
+      title: t("page.voyages.remarks", "Remarks"),
+      minWidth: 120,
+      value: (r) => r.remarks || "",
+      render: (v) => (v ? String(v) : "—"),
+      editor: { type: "text" },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => (
+        <RowActions
+          onDelete={() => deleteNoon(r.id)}
+          label={toLocalInput(r.report_at).replace("T", " ")}
+        />
+      ),
     },
   ];
 
@@ -943,6 +1228,8 @@ function VoyagesPageInner() {
                   rowKey={(r) => r.id}
                   storageKey="voyages_portcalls_grid"
                   showFooter={false}
+                  editable
+                  onCellSave={onPcCellSave}
                   emptyText={t("common.empty", "No records")}
                   onRowClick={(pc) => setSelectedPc(pc.id)}
                 />
@@ -990,7 +1277,7 @@ function VoyagesPageInner() {
                       ))}
                     </select>
                   </label>
-                  <div style={{ display: "flex", alignItems: "end" }}>
+                  <div className="form-actions">
                     <button className="btn btn-primary btn-sm" type="submit" disabled={busy}>
                       {t("page.voyages.add_pc", "Add port call")}
                     </button>
@@ -1025,7 +1312,7 @@ function VoyagesPageInner() {
                     {t("page.voyages.event_at", "Event at")}
                     <DateTimeInput value={sofAt} onChange={setSofAt} />
                   </label>
-                  <div style={{ display: "flex", alignItems: "end" }}>
+                  <div className="form-actions">
                     <button className="btn btn-sm" type="submit" disabled={busy}>
                       {t("page.voyages.post_sof", "Post SOF")}
                     </button>
@@ -1038,6 +1325,8 @@ function VoyagesPageInner() {
                     rowKey={(r) => r.id}
                     storageKey="voyages_sof_grid"
                     showFooter={false}
+                    editable
+                    onCellSave={onSofCellSave}
                     emptyText={t("common.no_data", "No data")}
                   />
                 </div>
@@ -1104,7 +1393,7 @@ function VoyagesPageInner() {
                     {t("page.voyages.remarks", "Remarks")}
                     <input value={noonRemarks} onChange={(e) => setNoonRemarks(e.target.value)} />
                   </label>
-                  <div style={{ display: "flex", alignItems: "end" }}>
+                  <div className="form-actions">
                     <button className="btn btn-sm" type="submit" disabled={busy}>
                       {t("page.voyages.post_noon", "Post noon")}
                     </button>
@@ -1130,6 +1419,18 @@ function VoyagesPageInner() {
                     </div>
                   </div>
                 ) : null}
+                <div style={{ marginTop: "0.75rem" }}>
+                  <DataGrid<NoonRow>
+                    columns={noonColumns}
+                    data={noons}
+                    rowKey={(r) => r.id}
+                    storageKey="voyages_noons_grid"
+                    showFooter={false}
+                    editable
+                    onCellSave={onNoonCellSave}
+                    emptyText={t("page.voyages.no_noons", "No noon reports yet")}
+                  />
+                </div>
               </DeskSection>
             </div>
           ) : (
@@ -1201,7 +1502,7 @@ function VoyagesPageInner() {
                 <input type="checkbox" checked={ohDeduct} onChange={(e) => setOhDeduct(e.target.checked)} />
                 {t("page.voyages.oh_deduct", "Deduct hire")}
               </label>
-              <div style={{ display: "flex", alignItems: "end" }}>
+              <div className="form-actions">
                 <button className="btn btn-sm" type="submit" disabled={busy}>
                   {t("page.voyages.oh_open", "Open off-hire")}
                 </button>
@@ -1214,6 +1515,8 @@ function VoyagesPageInner() {
                 rowKey={(r) => r.id}
                 storageKey="voyages_offhire_grid"
                 showFooter={false}
+                editable
+                onCellSave={onOffHireCellSave}
                 emptyText={t("common.no_data", "No data")}
               />
             </div>

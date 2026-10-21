@@ -18,7 +18,8 @@ import { Tabs } from "@/components/Tabs";
 import { PartyPicker } from "@/components/DataPicker";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { useStateActions } from "@/components/useTransitions";
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -164,6 +165,12 @@ export default function TcWorkspacePage() {
   // Contract edit form
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // 仅 draft 可编辑/删除（后端 _assert_tc_editable 同步约束）
+  const isDraft = contract?.status === "draft";
+  const inUse =
+    (summary?.statement_count ?? 0) > 0 || (summary?.voyage_count ?? 0) > 0;
 
   // Tab data
   const [billing, setBilling] = useState<BillingRow[]>([]);
@@ -336,9 +343,21 @@ export default function TcWorkspacePage() {
       setContract(updated);
       toast.success(t("common.saved", "Saved"));
       await reloadSummary();
-    } catch (ex) {
-      toast.error(String(ex));
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
     } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeContract() {
+    setSaving(true);
+    try {
+      await apiDelete(`/api/v1/tc/contracts/${contractId}`);
+      toast.success(t("page.tc.deleted", "TC contract deleted"));
+      router.push("/charters?type=tc");
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
       setSaving(false);
     }
   }
@@ -693,8 +712,9 @@ export default function TcWorkspacePage() {
   };
 
   return (
-    <AppShell>
-      {err ? <p className="flash-err">{err}</p> : null}
+    <>
+      <AppShell>
+        {err ? <p className="flash-err">{err}</p> : null}
 
       {contract ? (
         <>
@@ -773,8 +793,29 @@ export default function TcWorkspacePage() {
                   <h3>{t("page.tc.tab.contract", "Contract")}</h3>
                   <div className="quick-row">
                     <ValidateButton onValidate={validateTc} />
-                    <button type="button" className="btn btn-primary" onClick={saveContract} disabled={saving}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={saveContract}
+                      disabled={saving || !isDraft}
+                      title={isDraft ? undefined : t("page.tc.draft_only", "Only draft contracts can be edited")}
+                    >
                       {t("common.save", "Save")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={() => setConfirmDelete(true)}
+                      disabled={saving || !isDraft || inUse}
+                      title={
+                        !isDraft
+                          ? t("page.tc.draft_only_delete", "Only draft contracts can be deleted")
+                          : inUse
+                            ? t("page.tc.in_use", "Contract has hire statements or voyages and cannot be deleted")
+                            : undefined
+                      }
+                    >
+                      {t("common.delete", "Delete")}
                     </button>
                   </div>
                 </div>
@@ -1169,6 +1210,20 @@ export default function TcWorkspacePage() {
       ) : (
         <p className="flash-err">{t("common.not_found", "Not found")}</p>
       )}
-    </AppShell>
+      </AppShell>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored.")}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          setConfirmDelete(false);
+          void removeContract();
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
+    </>
   );
 }

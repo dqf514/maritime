@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.security import AuthContext, require_module
 from app.services import mari_ai
+from app.services.recycle import soft_delete
 
 router = APIRouter(prefix="/ai", tags=["MariAI"])
 
@@ -106,6 +107,7 @@ def list_conversations(
             updated_at=c.updated_at.isoformat() if c.updated_at else None,
         )
         for c in convs
+        if c.status != "deleted"
     ]
 
 
@@ -130,6 +132,66 @@ def create_conversation(
         created_at=conv.created_at.isoformat(),
         updated_at=conv.updated_at.isoformat() if conv.updated_at else None,
     )
+
+
+class ConversationUpdate(BaseModel):
+    """Rename / archive a conversation. Only explicitly provided fields apply."""
+
+    title: str | None = None
+    status: str | None = None  # active | archived
+
+
+@router.patch("/conversations/{conv_id}", response_model=ConversationOut)
+def update_conversation(
+    conv_id: UUID,
+    body: ConversationUpdate,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """Partial update (rename / archived flag). User-scoped like create/list."""
+    conv = mari_ai.get_conversation(db, conv_id, auth.tenant_id)
+    if not conv or conv.user_id != auth.user_id or conv.status == "deleted":
+        raise HTTPException(404, "Conversation not found")
+    fields = body.model_fields_set
+    if "title" in fields:
+        conv.title = body.title
+    if "status" in fields and body.status is not None:
+        if body.status not in ("active", "archived"):
+            raise HTTPException(422, "status must be active|archived")
+        conv.status = body.status
+    db.commit()
+    db.refresh(conv)
+    return ConversationOut(
+        id=str(conv.id),
+        agent_name=conv.agent_name,
+        title=conv.title,
+        status=conv.status,
+        message_count=conv.message_count or 0,
+        created_at=conv.created_at.isoformat(),
+        updated_at=conv.updated_at.isoformat() if conv.updated_at else None,
+    )
+
+
+@router.delete("/conversations/{conv_id}")
+def delete_conversation(
+    conv_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete a conversation (recycle bin). User-scoped like create/list."""
+    conv = mari_ai.get_conversation(db, conv_id, auth.tenant_id)
+    if not conv or conv.user_id != auth.user_id or conv.status == "deleted":
+        raise HTTPException(404, "Conversation not found")
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="ai_conversation",
+        row=conv,
+        title=conv.title or conv.agent_name,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 @router.get("/conversations/{conv_id}/messages", response_model=list[MessageOut])

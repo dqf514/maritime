@@ -810,6 +810,42 @@ def platform_update_tenant(
     return platform_get_tenant(tenant_id, auth, db)
 
 
+@router.delete("/platform/tenants/{tenant_id}")
+def platform_delete_tenant(
+    tenant_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """Deactivate a tenant — never hard-deletes the tenant row.
+
+    Uses the documented ``status="suspended"`` value (the only one the auth layer
+    blocks in ``security._assert_tenant_active``). Reversible via PUT /status.
+    """
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant or tenant.code == "sys" or tenant.status != "active":
+        raise HTTPException(404, "Tenant not found")
+    if tenant.id == auth.tenant_id:
+        raise HTTPException(400, detail={"code": "CANNOT_DELETE_SELF"})
+    active_count = (
+        db.scalar(select(func.count()).select_from(Tenant).where(Tenant.status == "active", Tenant.code != "sys")) or 0
+    )
+    if active_count <= 1:
+        raise HTTPException(409, detail={"code": "LAST_ACTIVE_TENANT", "message": "Cannot deactivate the last active tenant"})
+    tenant.status = "suspended"
+    db.commit()
+    audit(
+        db,
+        tenant_id=tenant.id,
+        actor_user_id=auth.user_id,
+        action="platform.tenant_deactivated",
+        entity_type="tenant",
+        entity_id=tenant.id,
+        detail={"code": tenant.code, "name": tenant.name},
+    )
+    db.commit()
+    return {"id": str(tenant.id), "code": tenant.code, "status": tenant.status, "ok": True}
+
+
 @router.get("/platform/modules")
 def platform_list_modules(auth: AuthContext = Depends(require_roles("platform_admin")), db: Session = Depends(get_db)):
     _ = auth

@@ -8,7 +8,8 @@ import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
-import { API_BASE as API, apiGet, apiPost, apiPut } from "@/lib/api";
+import { RowActions } from "@/components/RowActions";
+import { API_BASE as API, apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -36,6 +37,15 @@ type Policy = {
 
 type SsoRow = { provider: string; mode: string; status: string };
 
+type InviteRow = {
+  id: string;
+  email: string;
+  expires_at: string;
+  created_at: string | null;
+  full_name: string;
+  role_codes: string[];
+};
+
 export default function TenantSecurityPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -48,7 +58,7 @@ export default function TenantSecurityPage() {
   const [inviteSaving, setInviteSaving] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
-  const [invites, setInvites] = useState<any[]>([]);
+  const [invites, setInvites] = useState<InviteRow[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
   const [demoToken, setDemoToken] = useState("");
 
@@ -59,7 +69,16 @@ export default function TenantSecurityPage() {
     setMsHint(p.microsoft_tenant_hint || "");
     setGoogleHd(p.google_hosted_domain || "");
     setSsoNotes(p.sso_notes || "");
-    setInvites(await apiGet("/api/v1/admin/security/invites"));
+    setInvites(
+      ((await apiGet("/api/v1/admin/security/invites")) as any[]).map((i) => ({
+        id: String(i.id),
+        email: String(i.email || ""),
+        expires_at: String(i.expires_at || ""),
+        created_at: i.created_at ?? null,
+        full_name: String(i.payload?.full_name || ""),
+        role_codes: Array.isArray(i.payload?.role_codes) ? i.payload.role_codes : [],
+      })),
+    );
     setLogs(await apiGet("/api/v1/admin/security/mail-logs"));
   }
 
@@ -108,6 +127,78 @@ export default function TenantSecurityPage() {
   function openInvite() {
     setInviteOpen(true);
   }
+
+  // 行内编辑邀请：值未变化不发请求，避免 blur→reload 打断输入
+  async function onInviteCellSave(rowId: string, colKey: string, value: unknown, row: InviteRow) {
+    let payload: Record<string, unknown>;
+    if (colKey === "expires_at") {
+      const prevT = row.expires_at ? new Date(row.expires_at).getTime() : null;
+      const nextIso = value ? new Date(String(value)).toISOString() : null;
+      const nextT = nextIso ? new Date(nextIso).getTime() : null;
+      if (prevT === nextT) return;
+      payload = { expires_at: nextIso };
+    } else if (colKey === "full_name") {
+      const next = value == null ? "" : String(value);
+      if ((row.full_name || "") === next) return;
+      payload = { full_name: next };
+    } else {
+      return;
+    }
+    try {
+      await apiPatch(`/api/v1/admin/security/invites/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      const msg =
+        ex?.code === "INVITE_ACCEPTED"
+          ? t("page.security.invite_already_accepted", "This invite was already accepted")
+          : ex?.message || t("common.failed", "Failed");
+      toast.error(msg);
+      await load();
+    }
+  }
+
+  async function deleteInvite(row: InviteRow) {
+    try {
+      await apiDelete(`/api/v1/admin/security/invites/${row.id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  const inviteColumns: ColumnDef<InviteRow>[] = [
+    {
+      key: "email",
+      title: t("common.email", "Email"),
+      minWidth: 180,
+      value: (r) => r.email,
+    },
+    {
+      key: "full_name",
+      title: t("page.users.full_name", "Name"),
+      minWidth: 130,
+      value: (r) => r.full_name || "",
+      render: (v) => (v ? String(v) : "—"),
+      editor: { type: "text" },
+    },
+    {
+      key: "expires_at",
+      title: t("page.security.expires", "Expires"),
+      width: 170,
+      value: (r) => r.expires_at || "",
+      render: (v) => (v ? new Date(String(v)).toLocaleString() : "—"),
+      editor: { type: "datetime" },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => <RowActions onDelete={() => deleteInvite(r)} label={r.email} />,
+    },
+  ];
 
   useListHotkeys(openInvite);
 
@@ -276,14 +367,16 @@ export default function TenantSecurityPage() {
       <div className="ship-layout">
         <div className="panel">
           <h2>{t("page.security.pending", "待处理邀请")}</h2>
-          <ul className="compact-list">
-            {invites.map((i, idx) => (
-              <li key={idx}>
-                {i.email} · {t("page.security.expires", "过期")} {i.expires_at}
-              </li>
-            ))}
-            {!invites.length ? <li className="muted">{t("common.none", "无")}</li> : null}
-          </ul>
+          <DataGrid<InviteRow>
+            columns={inviteColumns}
+            data={invites}
+            rowKey={(r) => r.id}
+            storageKey="admin_security_invites_grid"
+            emptyText={t("common.none", "无")}
+            showFooter={false}
+            editable
+            onCellSave={onInviteCellSave}
+          />
         </div>
         <div className="panel">
           <h2>{t("page.security.mail_log", "租户邮件日志")}</h2>

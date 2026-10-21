@@ -9,13 +9,41 @@ import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
-import { apiGet, apiPost } from "@/lib/api";
+import { RowActions } from "@/components/RowActions";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
 type Tenant = { id: string; code: string; name: string };
-type Plan = { code: string; name: string; price_amount: number; billing_period: string };
-type Pack = { code: string; name: string; meter_code: string; quantity: number; price_amount: number };
+type Plan = {
+  id: string;
+  code: string;
+  name: string;
+  price_amount: number;
+  billing_period: string;
+  currency: string;
+  seat_limit: number | null;
+  included_quotas?: Record<string, unknown>;
+};
+type Pack = {
+  id: string;
+  code: string;
+  name: string;
+  meter_code: string;
+  quantity: number;
+  price_amount: number;
+  currency: string;
+};
+type AiRow = {
+  id: string;
+  code: string;
+  name: string;
+  provider_type: string;
+  model_default: string | null;
+  meter_code: string;
+  tokens_per_call_est: number;
+  status: string;
+};
 type SubRow = {
   id: string;
   tenant_id: string;
@@ -33,7 +61,7 @@ function PlatformSaasPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [packs, setPacks] = useState<Pack[]>([]);
   const [meters, setMeters] = useState<Array<Record<string, unknown>>>([]);
-  const [ai, setAi] = useState<Array<Record<string, unknown>>>([]);
+  const [ai, setAi] = useState<AiRow[]>([]);
   const [providers, setProviders] = useState<Array<Record<string, unknown>>>([]);
   const [subs, setSubs] = useState<SubRow[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -146,6 +174,92 @@ function PlatformSaasPage() {
     }
   }
 
+  // ── 行内编辑：值未变化不发请求，避免 blur→reload 打断输入 ──
+  function dirtyEq(prev: unknown, next: unknown): boolean {
+    if (typeof prev === "number" || typeof next === "number") {
+      const a = prev === null || prev === "" || prev === undefined ? null : Number(prev);
+      const b = next === null || next === "" || next === undefined ? null : Number(next);
+      return a === b || (a !== null && b !== null && isNaN(a) && isNaN(b));
+    }
+    return (prev ?? "") === (next ?? "");
+  }
+
+  async function patchCell(
+    path: string,
+    colKey: string,
+    value: unknown,
+    row: Record<string, unknown>,
+    numericKeys: string[] = [],
+  ) {
+    if (dirtyEq(row[colKey], value)) return;
+    const isNum = numericKeys.includes(colKey);
+    const next = isNum
+      ? value === null || value === ""
+        ? null
+        : Number(value)
+      : value === ""
+        ? null
+        : value;
+    if (isNum && next !== null && isNaN(next as number)) return;
+    try {
+      await apiPatch(path, { [colKey]: next });
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  async function onPlanCellSave(rowId: string, colKey: string, value: unknown, row: Plan) {
+    await patchCell(`/api/v1/platform/saas/plans/${rowId}`, colKey, value, row as unknown as Record<string, unknown>, [
+      "price_amount",
+      "seat_limit",
+    ]);
+  }
+
+  async function deletePlan(row: Plan) {
+    try {
+      await apiDelete(`/api/v1/platform/saas/plans/${row.id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  async function onPackCellSave(rowId: string, colKey: string, value: unknown, row: Pack) {
+    await patchCell(`/api/v1/platform/saas/packs/${rowId}`, colKey, value, row as unknown as Record<string, unknown>, [
+      "quantity",
+      "price_amount",
+    ]);
+  }
+
+  async function deletePackRow(row: Pack) {
+    try {
+      await apiDelete(`/api/v1/platform/saas/packs/${row.id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
+  async function onAiCellSave(rowId: string, colKey: string, value: unknown, row: AiRow) {
+    await patchCell(`/api/v1/platform/saas/ai-endpoints/${rowId}`, colKey, value, row as unknown as Record<string, unknown>, [
+      "tokens_per_call_est",
+    ]);
+  }
+
+  async function deleteAi(row: AiRow) {
+    try {
+      await apiDelete(`/api/v1/platform/saas/ai-endpoints/${row.id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("common.failed", "Failed"));
+    }
+  }
+
   const subColumns: ColumnDef<SubRow>[] = [
     {
       key: "tenant",
@@ -170,19 +284,108 @@ function PlatformSaasPage() {
 
   const planColumns: ColumnDef<Plan>[] = [
     { key: "code", title: t("common.code", "Code"), width: 120, value: (r) => r.code },
-    { key: "name", title: t("common.name", "Name"), minWidth: 140, value: (r) => r.name },
     {
-      key: "price",
+      key: "name",
+      title: t("common.name", "Name"),
+      minWidth: 140,
+      value: (r) => r.name,
+      editor: { type: "text" },
+    },
+    {
+      key: "billing_period",
+      title: t("page.saas.billing_period", "Billing period"),
+      width: 120,
+      value: (r) => r.billing_period,
+      editor: {
+        type: "select",
+        options: ["monthly", "quarterly", "annual", "one_time"].map((p) => ({ value: p, label: p })),
+      },
+    },
+    {
+      key: "price_amount",
       title: t("page.saas.price", "Price"),
-      width: 130,
-      value: (r) => `${r.price_amount} / ${r.billing_period}`,
+      width: 110,
+      align: "right",
+      value: (r) => r.price_amount,
+      editor: { type: "number", step: 0.01 },
+    },
+    {
+      key: "currency",
+      title: t("page.saas.currency", "Currency"),
+      width: 90,
+      value: (r) => r.currency,
+      editor: { type: "text" },
+    },
+    {
+      key: "seat_limit",
+      title: t("page.saas.seat_limit", "Seat limit"),
+      width: 100,
+      align: "right",
+      value: (r) => r.seat_limit ?? "",
+      render: (v) => (v === "" || v == null ? "—" : String(v)),
+      editor: { type: "number" },
     },
     {
       key: "included_quotas",
       title: t("page.saas.quotas", "Quotas"),
       minWidth: 160,
-      value: (r) => JSON.stringify((r as { included_quotas?: Record<string, unknown> }).included_quotas || {}),
+      value: (r) => JSON.stringify(r.included_quotas || {}),
       render: (v) => <code>{String(v)}</code>,
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => <RowActions onDelete={() => deletePlan(r)} label={r.name || r.code} />,
+    },
+  ];
+
+  const packColumns: ColumnDef<Pack>[] = [
+    { key: "code", title: t("common.code", "Code"), width: 120, value: (r) => r.code },
+    {
+      key: "name",
+      title: t("common.name", "Name"),
+      minWidth: 140,
+      value: (r) => r.name,
+      editor: { type: "text" },
+    },
+    {
+      key: "meter_code",
+      title: t("page.saas.meter", "Meter"),
+      width: 120,
+      value: (r) => r.meter_code,
+      editor: { type: "text" },
+    },
+    {
+      key: "quantity",
+      title: t("page.saas.quantity", "Quantity"),
+      width: 110,
+      align: "right",
+      value: (r) => r.quantity,
+      editor: { type: "number", step: 1 },
+    },
+    {
+      key: "price_amount",
+      title: t("page.saas.price", "Price"),
+      width: 110,
+      align: "right",
+      value: (r) => r.price_amount,
+      editor: { type: "number", step: 0.01 },
+    },
+    {
+      key: "currency",
+      title: t("page.saas.currency", "Currency"),
+      width: 90,
+      value: (r) => r.currency,
+      editor: { type: "text" },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => <RowActions onDelete={() => deletePackRow(r)} label={r.name || r.code} />,
     },
   ];
 
@@ -199,18 +402,43 @@ function PlatformSaasPage() {
     },
   ];
 
-  type AiRow = Record<string, unknown>;
-
   const aiColumns: ColumnDef<AiRow>[] = [
-    { key: "code", title: t("common.code", "Code"), width: 130, value: (r) => String(r.code) },
-    { key: "model_default", title: t("page.saas.model", "Model"), width: 150, value: (r) => String(r.model_default) },
-    { key: "meter_code", title: t("page.saas.meter", "Meter"), width: 130, value: (r) => String(r.meter_code) },
+    { key: "code", title: t("common.code", "Code"), width: 130, value: (r) => r.code },
+    {
+      key: "name",
+      title: t("common.name", "Name"),
+      minWidth: 140,
+      value: (r) => r.name,
+      editor: { type: "text" },
+    },
+    {
+      key: "model_default",
+      title: t("page.saas.model", "Model"),
+      width: 150,
+      value: (r) => r.model_default || "",
+      editor: { type: "text" },
+    },
+    {
+      key: "meter_code",
+      title: t("page.saas.meter", "Meter"),
+      width: 130,
+      value: (r) => r.meter_code,
+      editor: { type: "text" },
+    },
     {
       key: "tokens_per_call_est",
       title: t("page.saas.tokens", "Est. tokens/call"),
       width: 140,
       align: "right",
-      value: (r) => String(r.tokens_per_call_est),
+      value: (r) => r.tokens_per_call_est,
+      editor: { type: "number", step: 1 },
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => <RowActions onDelete={() => deleteAi(r)} label={r.name || r.code} />,
     },
   ];
 
@@ -284,9 +512,24 @@ function PlatformSaasPage() {
         <DataGrid<Plan>
           columns={planColumns}
           data={plans}
-          rowKey={(r) => r.code}
+          rowKey={(r) => r.id}
           storageKey="platform_saas_plans_grid"
           emptyText={t("common.none", "None")}
+          editable
+          onCellSave={onPlanCellSave}
+        />
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">{t("page.saas.packs", "Usage packs")}</div>
+        <DataGrid<Pack>
+          columns={packColumns}
+          data={packs}
+          rowKey={(r) => r.id}
+          storageKey="platform_saas_packs_grid"
+          emptyText={t("common.none", "None")}
+          editable
+          onCellSave={onPackCellSave}
         />
       </div>
 
@@ -306,9 +549,11 @@ function PlatformSaasPage() {
         <DataGrid<AiRow>
           columns={aiColumns}
           data={ai}
-          rowKey={(r) => String(r.code)}
+          rowKey={(r) => r.id}
           storageKey="platform_saas_ai_endpoints_grid"
           emptyText={t("common.none", "None")}
+          editable
+          onCellSave={onAiCellSave}
         />
       </div>
 

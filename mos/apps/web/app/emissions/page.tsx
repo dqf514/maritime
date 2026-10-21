@@ -6,10 +6,11 @@ import { AppShell } from "@/components/AppShell";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { RowActions } from "@/components/RowActions";
 import { StatusLegend } from "@/components/StatusLegend";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -110,6 +111,40 @@ export default function EmissionsPage() {
     ];
   }
 
+  async function onCellSave(rowId: string, colKey: string, value: unknown, row: Row) {
+    const src = row as unknown as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "fo_mt" || colKey === "do_mt") {
+      const next = value === null || value === "" ? 0 : Number(value);
+      if (Number.isNaN(next)) return;
+      if (Number(src[colKey] ?? 0) === next) return;
+      payload = { [colKey]: next };
+    } else if (colKey === "voyage_id" || colKey === "vessel_id") {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    } else {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value === "" ? null : value };
+    }
+    try {
+      await apiPatch(`/api/v1/emissions/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteEmission(id: string) {
+    try {
+      await apiDelete(`/api/v1/emissions/${id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   const columns: ColumnDef<Row>[] = [
     {
       key: "id",
@@ -119,19 +154,49 @@ export default function EmissionsPage() {
       render: (v) => String(v),
     },
     {
+      key: "voyage_id",
+      title: t("page.voyages.list", "Voyages"),
+      width: 130,
+      value: (r) => r.voyage_id || "",
+      editor: {
+        type: "select",
+        options: [{ value: "", label: "—" }, ...voyages.map((v) => ({ value: v.id, label: v.voyage_no || v.id.slice(0, 8) }))],
+      },
+      render: (_v, r) => {
+        const v = voyages.find((x) => x.id === r.voyage_id);
+        return v ? v.voyage_no || v.id.slice(0, 8) : r.voyage_id ? r.voyage_id.slice(0, 8) : "—";
+      },
+    },
+    {
+      key: "vessel_id",
+      title: t("page.estimates.vessel", "Vessel"),
+      width: 130,
+      value: (r) => r.vessel_id || "",
+      editor: {
+        type: "select",
+        options: [{ value: "", label: "—" }, ...vessels.map((v) => ({ value: v.id, label: v.name || v.id.slice(0, 8) }))],
+      },
+      render: (_v, r) => {
+        const v = vessels.find((x) => x.id === r.vessel_id);
+        return v ? v.name || v.id.slice(0, 8) : r.vessel_id ? r.vessel_id.slice(0, 8) : "—";
+      },
+    },
+    {
       key: "fo_mt",
-      title: "FO",
+      title: t("page.emissions.fo", "FO"),
       width: 90,
       align: "right",
       value: (r) => r.fo_mt,
+      editor: { type: "number", min: 0, step: 0.001 },
       render: (v) => <Num v={v as number} digits={3} />,
     },
     {
       key: "do_mt",
-      title: "DO",
+      title: t("page.emissions.do", "DO"),
       width: 90,
       align: "right",
       value: (r) => r.do_mt,
+      editor: { type: "number", min: 0, step: 0.001 },
       render: (v) => <Num v={v as number} digits={3} />,
     },
     {
@@ -151,9 +216,10 @@ export default function EmissionsPage() {
     },
     {
       key: "period",
-      title: "Period",
+      title: t("page.emissions.period", "Period"),
       minWidth: 110,
       value: (r) => r.period || "",
+      editor: { type: "text" },
       render: (v) => (v ? String(v) : "—"),
     },
     {
@@ -162,6 +228,13 @@ export default function EmissionsPage() {
       width: 135,
       value: (r) => r.updated_at ?? null,
       render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 70,
+      align: "right",
+      render: (_v, r) => <RowActions label={r.id.slice(0, 8)} onDelete={() => deleteEmission(r.id)} />,
     },
   ];
 
@@ -278,6 +351,8 @@ export default function EmissionsPage() {
           columns={columns}
           data={rows}
           rowKey={(r) => r.id}
+          editable
+          onCellSave={onCellSave}
           onRowContextMenu={(row, _i, e) => ctx.open(row)(e)}
           storageKey="emissions_records_grid"
           showFooter={false}

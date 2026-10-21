@@ -20,6 +20,7 @@ from app.services.state_machine import PDA_TRANSITIONS, transition
 
 from app.routers._finance_common import _alive
 from app.services.port_cost_benchmark import benchmark_for_port, over_benchmark
+from app.services.recycle import soft_delete
 
 router = APIRouter()
 
@@ -31,6 +32,19 @@ class PdaIn(BaseModel):
     pda_amount: float
     currency: str = "USD"
     lines: dict = Field(default_factory=dict)
+
+
+class PdaPatchIn(BaseModel):
+    voyage_id: UUID | None = None
+    port_call_id: UUID | None = None
+    pda_amount: float | None = None
+    fda_amount: float | None = None
+    currency: str | None = None
+    lines: dict | None = None
+
+
+# Statuses where money is already committed / billed — edits and deletes blocked.
+_PDA_LOCKED_STATUSES = {"approved", "fda", "closed"}
 
 
 @router.post("/port-disbursements")
@@ -90,7 +104,59 @@ def list_pda(auth: AuthContext = Depends(require_module("operations")), db: Sess
             "lines": r.lines or {},
         }
         for r in rows
+        if _alive(r.status)
     ]
+
+
+def _pda_or_404(db: Session, tenant_id: UUID, pda_id: UUID) -> PortDisbursement:
+    row = db.get(PortDisbursement, pda_id)
+    if not row or row.tenant_id != tenant_id or not _alive(row.status):
+        raise HTTPException(404, "PDA not found")
+    return row
+
+
+@router.patch("/port-disbursements/{pda_id}")
+def update_pda(
+    pda_id: UUID,
+    body: PdaPatchIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = _pda_or_404(db, auth.tenant_id, pda_id)
+    if row.status in _PDA_LOCKED_STATUSES:
+        raise HTTPException(409, detail={"code": "INVALID_STATE", "message": f"PDA in status '{row.status}' cannot be edited", "status": row.status})
+    data = body.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        setattr(row, k, v)
+    if "pda_amount" in data or "fda_amount" in data:
+        if row.fda_amount is not None:
+            row.variance = Decimal(str(row.fda_amount)) - Decimal(str(row.pda_amount or 0))
+        else:
+            row.variance = None
+    db.commit()
+    return {
+        "id": str(row.id),
+        "status": row.status,
+        "pda_amount": float(row.pda_amount or 0),
+        "fda_amount": float(row.fda_amount or 0) if row.fda_amount is not None else None,
+        "variance": float(row.variance or 0) if row.variance is not None else None,
+        "currency": row.currency,
+        "lines": row.lines or {},
+    }
+
+
+@router.delete("/port-disbursements/{pda_id}")
+def delete_pda(
+    pda_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = _pda_or_404(db, auth.tenant_id, pda_id)
+    if row.status in _PDA_LOCKED_STATUSES:
+        raise HTTPException(409, detail={"code": "INVALID_STATE", "message": f"PDA in status '{row.status}' cannot be deleted", "status": row.status})
+    soft_delete(db, tenant_id=auth.tenant_id, user_id=auth.user_id, entity_type="port_disbursement", row=row, title=f"PDA {row.id}")
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 

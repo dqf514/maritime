@@ -12,6 +12,7 @@ import type { ColumnDef } from "@/components/grid";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { RowActions } from "@/components/RowActions";
 import { SavedViews } from "@/components/SavedViews";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
@@ -91,8 +92,9 @@ function GlPage() {
   const [accEdit, setAccEdit] = useState<Account | null>(null);
   const [accForm, setAccForm] = useState({ account_code: "", account_name: "", account_type: "asset", parent_code: "", currency: "USD" });
 
-  // 日记账弹窗（两行：借/贷）
+  // 日记账弹窗（两行：借/贷）；jrEdit 非空时为编辑草稿
   const [jrOpen, setJrOpen] = useState(false);
+  const [jrEdit, setJrEdit] = useState<Journal | null>(null);
   const [jrForm, setJrForm] = useState({
     period: currentPeriod(),
     journal_type: "non_voyage",
@@ -192,27 +194,84 @@ function GlPage() {
     }
   }
 
-  async function createJournal() {
+  const openJournal = useCallback((jr: Journal | null) => {
+    setJrEdit(jr);
+    if (jr) {
+      const entries = jr.entries || [];
+      const debitLine = entries.find((e) => Number(e.debit) > 0) || entries[0];
+      const creditLine = entries.find((e) => Number(e.credit) > 0) || entries[1] || entries[0];
+      setJrForm({
+        period: jr.period,
+        journal_type: jr.journal_type,
+        description: jr.description || "",
+        debit_account: debitLine?.account_code || debitLine?.account || "",
+        debit: debitLine ? String(Number(debitLine.debit) || 0) : "",
+        credit_account: creditLine?.account_code || creditLine?.account || "",
+        credit: creditLine ? String(Number(creditLine.credit) || 0) : "",
+      });
+    } else {
+      setJrForm({
+        period: currentPeriod(),
+        journal_type: "non_voyage",
+        description: "",
+        debit_account: "",
+        debit: "",
+        credit_account: "",
+        credit: "",
+      });
+    }
+    setJrOpen(true);
+  }, []);
+
+  async function saveJournal() {
+    const debit = Number(jrForm.debit);
+    const credit = Number(jrForm.credit);
+    if (Number.isNaN(debit) || Number.isNaN(credit)) {
+      toast.error(t("page.gl.journal_bad_amount", "Debit and credit must be numbers"));
+      return;
+    }
     setBusy(true);
     try {
-      await apiPost("/api/v1/gl/journals", {
+      const body = {
         period: jrForm.period,
         journal_type: jrForm.journal_type,
         description: jrForm.description || null,
         entries: [
-          { account_code: jrForm.debit_account, debit: Number(jrForm.debit) || 0, credit: 0 },
-          { account_code: jrForm.credit_account, debit: 0, credit: Number(jrForm.credit) || 0 },
+          { account_code: jrForm.debit_account, debit, credit: 0 },
+          { account_code: jrForm.credit_account, debit: 0, credit },
         ],
-      });
-      toast.success(t("page.gl.journal_created", "Journal created (draft)"));
+      };
+      if (jrEdit) {
+        await apiPatch(`/api/v1/gl/journals/${jrEdit.id}`, body);
+        toast.success(t("common.saved", "Saved"));
+      } else {
+        await apiPost("/api/v1/gl/journals", body);
+        toast.success(t("page.gl.journal_created", "Journal created (draft)"));
+      }
       setJrOpen(false);
+      setJrEdit(null);
       await loadJournals();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error((ex as { message?: string })?.message || String(ex));
     } finally {
       setBusy(false);
     }
   }
+
+  const deleteJournal = useCallback(
+    async (id: string) => {
+      try {
+        await apiDelete(`/api/v1/gl/journals/${id}`);
+        toast.success(t("page.gl.journal_deleted", "Journal deleted"));
+        setJrOpen(false);
+        setJrEdit(null);
+        await loadJournals();
+      } catch (ex) {
+        toast.error((ex as { message?: string })?.message || String(ex));
+      }
+    },
+    [loadJournals, t, toast],
+  );
 
   async function postJournal(id: string) {
     try {
@@ -231,6 +290,23 @@ function GlPage() {
       await loadJournals();
     } catch (ex) {
       toast.error(String(ex));
+    }
+  }
+
+  // 行内编辑：值未变化不发请求，避免 blur→reload 打断输入
+  async function onJournalCellSave(rowId: string, colKey: string, value: unknown, row: Journal) {
+    if (row.status !== "draft") {
+      toast.error(t("page.gl.journal_locked", "Only draft journals can be edited or deleted"));
+      return;
+    }
+    const src = row as unknown as Record<string, unknown>;
+    if ((src[colKey] ?? "") === (value ?? "")) return;
+    try {
+      await apiPatch(`/api/v1/gl/journals/${rowId}`, { [colKey]: value === "" ? null : value });
+      toast.success(t("common.saved", "Saved"));
+      await loadJournals();
+    } catch (ex) {
+      toast.error((ex as { message?: string })?.message || String(ex));
     }
   }
 
@@ -256,9 +332,13 @@ function GlPage() {
 
   const journalCols = useMemo<ColumnDef<Journal>[]>(
     () => [
-      { key: "period", title: t("page.gl.period", "Period") },
-      { key: "journal_type", title: t("common.type", "Type") },
-      { key: "description", title: t("common.description", "Description"), render: (v) => (v ? String(v) : "—") },
+      { key: "period", title: t("page.gl.period", "Period"), editor: { type: "text" } },
+      {
+        key: "journal_type",
+        title: t("common.type", "Type"),
+        editor: { type: "select", options: JOURNAL_TYPES.map((jt) => ({ value: jt, label: jt })) },
+      },
+      { key: "description", title: t("common.description", "Description"), render: (v) => (v ? String(v) : "—"), editor: { type: "text" } },
       {
         key: "total_debit",
         title: t("page.gl.debit", "Debit"),
@@ -283,8 +363,29 @@ function GlPage() {
         value: (r) => r.updated_at ?? null,
         render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
       },
+      {
+        key: "_actions",
+        title: "",
+        width: 44,
+        align: "center",
+        render: (_v, r) => {
+          const locked = r.status !== "draft";
+          return (
+            <span title={locked ? t("page.gl.journal_locked", "Only draft journals can be edited or deleted") : undefined}>
+              {locked ? <span className="muted">—</span> : null}
+              <RowActions
+                canEdit={!locked}
+                canDelete={!locked}
+                onEdit={() => openJournal(r)}
+                onDelete={() => deleteJournal(r.id)}
+                label={`${r.period}/${r.journal_type}`}
+              />
+            </span>
+          );
+        },
+      },
     ],
-    [t],
+    [t, openJournal, deleteJournal],
   );
 
   const stmtCols = useMemo<ColumnDef<StmtRow>[]>(
@@ -367,6 +468,15 @@ function GlPage() {
   ];
 
   const journalMenuItems = (row: Journal): ContextMenuItem[] => [
+    ...(row.status === "draft"
+      ? [
+          {
+            key: "edit",
+            label: t("common.edit", "Edit"),
+            onClick: () => openJournal(row),
+          } as ContextMenuItem,
+        ]
+      : []),
     { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => copyId(row.id) },
     {
       key: "export",
@@ -380,6 +490,11 @@ function GlPage() {
             key: "post",
             label: t("page.gl.post", "Post"),
             onClick: () => postJournal(row.id),
+          } as ContextMenuItem,
+          {
+            key: "delete",
+            label: t("common.delete", "Delete"),
+            onClick: () => deleteJournal(row.id),
           } as ContextMenuItem,
         ]
       : []),
@@ -502,7 +617,7 @@ function GlPage() {
               </label>
             }
           >
-            <button className="btn btn-primary btn-sm" type="button" onClick={() => setJrOpen(true)}>
+            <button className="btn btn-primary btn-sm" type="button" onClick={() => openJournal(null)}>
               {t("page.gl.new_journal", "New journal")}
             </button>
             <StatusLegend statuses={["draft", "posted", "reversed"]} />
@@ -511,6 +626,8 @@ function GlPage() {
             columns={journalCols}
             data={journals}
             rowKey={(r) => r.id}
+            editable
+            onCellSave={onJournalCellSave}
             onRowContextMenu={(row, _i, e) => jrCtx.open(row)(e)}
             storageKey="gl.journals"
             emptyText={t("common.empty", "No records")}
@@ -617,10 +734,14 @@ function GlPage() {
 
       <RecordModal
         open={jrOpen}
-        title={t("page.gl.new_journal", "New journal")}
-        onClose={() => setJrOpen(false)}
-        onSave={createJournal}
-        canDelete={false}
+        title={jrEdit ? t("page.gl.edit_journal", "Edit journal") : t("page.gl.new_journal", "New journal")}
+        onClose={() => {
+          setJrOpen(false);
+          setJrEdit(null);
+        }}
+        onSave={saveJournal}
+        onDelete={jrEdit ? () => deleteJournal(jrEdit.id) : undefined}
+        canDelete={!!jrEdit}
         saving={busy}
       >
         <div className="form-grid">

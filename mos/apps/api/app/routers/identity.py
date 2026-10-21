@@ -110,6 +110,12 @@ class InviteIn(BaseModel):
     role_codes: list[str] = Field(default_factory=lambda: ["viewer"])
 
 
+class InvitePatchIn(BaseModel):
+    expires_at: datetime | None = None
+    full_name: str | None = None
+    role_codes: list[str] | None = None
+
+
 class InviteAcceptIn(BaseModel):
     token: str
     password: str = Field(min_length=8)
@@ -389,6 +395,7 @@ def list_pending_invites(
     ).all()
     return [
         {
+            "id": str(r.id),
             "email": r.email,
             "expires_at": r.expires_at.isoformat(),
             "payload": r.payload,
@@ -396,6 +403,70 @@ def list_pending_invites(
         }
         for r in rows
     ]
+
+
+def _invite_or_404(db: Session, tenant_id: UUID, invite_id: UUID):
+    from app.models_identity import AuthChallenge
+
+    row = db.get(AuthChallenge, invite_id)
+    if not row or row.tenant_id != tenant_id or row.purpose != "invite":
+        raise HTTPException(404, detail={"code": "INVITE_NOT_FOUND"})
+    return row
+
+
+@router.patch("/admin/security/invites/{invite_id}")
+def patch_invite(
+    invite_id: UUID,
+    body: InvitePatchIn,
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    """Update an invite's expiry / roles / display name. Accepted invites are locked."""
+    row = _invite_or_404(db, auth.tenant_id, invite_id)
+    if row.consumed_at is not None:
+        raise HTTPException(409, detail={"code": "INVITE_ACCEPTED", "message": "Invite already accepted"})
+    if body.expires_at is not None:
+        row.expires_at = body.expires_at
+    if body.full_name is not None:
+        payload = dict(row.payload or {})
+        payload["full_name"] = body.full_name
+        row.payload = payload
+    if body.role_codes is not None:
+        role_codes = [c for c in body.role_codes if c != "platform_admin"]
+        payload = dict(row.payload or {})
+        payload["role_codes"] = role_codes
+        row.payload = payload
+        # Keep the pending user shell's roles in sync
+        from app.models import User, UserRole
+
+        user = db.scalar(select(User).where(User.tenant_id == auth.tenant_id, User.email == row.email))
+        if user:
+            for ur in db.scalars(select(UserRole).where(UserRole.user_id == user.id)).all():
+                db.delete(ur)
+            for code in role_codes:
+                role = db.scalar(select(Role).where(Role.tenant_id == auth.tenant_id, Role.code == code))
+                if role:
+                    db.add(UserRole(user_id=user.id, role_id=role.id))
+    db.commit()
+    return {
+        "id": str(row.id),
+        "email": row.email,
+        "expires_at": row.expires_at.isoformat(),
+        "payload": row.payload,
+    }
+
+
+@router.delete("/admin/security/invites/{invite_id}")
+def delete_invite(
+    invite_id: UUID,
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    """Revoke / clean up an invite. Pending, expired and accepted invites may all be removed."""
+    row = _invite_or_404(db, auth.tenant_id, invite_id)
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/admin/security/mail-logs")

@@ -27,6 +27,11 @@ DEFAULT_RESTORE_STATUS: dict[str, str] = {
     "claim": "open",
     "laytime": "draft",
     "cargo": "open",
+    "port_call": "active",
+    "off_hire_event": "open",
+    "bunker_order": "planned",
+    "bunker_requirement": "draft",
+    "bunker_option": "offered",
 }
 
 

@@ -114,3 +114,20 @@
   color: var(--accent);
   font-weight: 700;
 }
+
+/* ── RowActions — 全站统一行尾动作（编辑/删除）── */
+.row-actions {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  white-space: nowrap;
+}
+.row-actions .btn-sm {
+  min-width: 22px;
+  padding: 0 4px;
+  line-height: 18px;
+}
+.row-action-danger:hover,
+.row-action-danger:focus-visible {
+  color: var(--danger, #d13c3c);
+}

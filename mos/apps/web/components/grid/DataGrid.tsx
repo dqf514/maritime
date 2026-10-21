@@ -15,6 +15,19 @@ function getCellValue(col: ColumnDef<any>, row: Record<string, unknown>): unknow
   return col.value ? col.value(row as any) : row[col.key];
 }
 
+/** 编辑器输入框的初值：datetime 用本地时间 YYYY-MM-DDTHH:MM（datetime-local 要求） */
+function toInputValue(col: ColumnDef, row: Record<string, unknown>): string {
+  const val = getCellValue(col, row);
+  if (val === null || val === undefined) return "";
+  if (col.editor?.type === "datetime") {
+    const d = new Date(val as string | number);
+    if (isNaN(d.getTime())) return "";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  return String(val);
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function formatDisplay(col: ColumnDef<any>, row: Record<string, unknown>, index: number): React.ReactNode {
   const val = getCellValue(col, row);
@@ -310,7 +323,7 @@ export function DataGrid<T extends Record<string, any>>({
               <select
                 ref={editingInputRef as React.RefObject<HTMLSelectElement>}
                 className="grid-cell-input"
-                defaultValue={String(getCellValue(col, row) ?? "")}
+                defaultValue={toInputValue(col, row)}
                 onBlur={commitEdit}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -331,11 +344,19 @@ export function DataGrid<T extends Record<string, any>>({
               <input
                 ref={editingInputRef as React.RefObject<HTMLInputElement>}
                 className="grid-cell-input"
-                type={col.editor.type === "number" ? "number" : col.editor.type === "date" ? "date" : "text"}
+                type={
+                  col.editor.type === "number"
+                    ? "number"
+                    : col.editor.type === "date"
+                      ? "date"
+                      : col.editor.type === "datetime"
+                        ? "datetime-local"
+                        : "text"
+                }
                 step={col.editor.step}
                 min={col.editor.min}
                 max={col.editor.max}
-                defaultValue={String(getCellValue(col, row) ?? "")}
+                defaultValue={toInputValue(col, row)}
                 onBlur={commitEdit}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {

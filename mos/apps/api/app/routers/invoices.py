@@ -33,7 +33,7 @@ from app.services.period_close import assert_period_open
 
 from app.models_wave1 import Counterparty
 from app.services.sanctions import assert_not_sanctioned
-from app.services.tenant_guard import scoped_get
+from app.services.tenant_guard import scoped_get, scoped_query
 
 router = APIRouter()
 
@@ -645,9 +645,20 @@ class AccrualIn(BaseModel):
     notes: str | None = None
 
 
+class AccrualPatch(BaseModel):
+    """草稿计提可改；posted/reversed 只可冲销/重建 → 409 INVALID_STATE。"""
+
+    voyage_id: UUID | None = None
+    period_ym: str | None = None
+    line_type: str | None = None
+    amount: float | None = None
+    currency: str | None = None
+    notes: str | None = None
+
+
 @router.get("/finance/accruals")
 def list_accruals(auth: AuthContext = Depends(require_module("finance")), db: Session = Depends(get_db)):
-    rows = db.scalars(select(VoyageAccrual).where(VoyageAccrual.tenant_id == auth.tenant_id)).all()
+    rows = db.scalars(scoped_query(db, VoyageAccrual, auth.tenant_id)).all()
     return [
         {
             "id": str(r.id),
@@ -692,6 +703,60 @@ def post_accrual(accrual_id: UUID, auth: AuthContext = Depends(require_module("f
     row.status = "posted"
     db.commit()
     return {"id": str(row.id), "status": row.status}
+
+
+@router.patch("/finance/accruals/{accrual_id}")
+def update_accrual(
+    accrual_id: UUID,
+    body: AccrualPatch,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """改草稿计提。posted/reversed 锁定 → 409（只可冲销/重建）；关账期间禁止改。"""
+    row = db.get(VoyageAccrual, accrual_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Accrual not found")
+    if row.status != "draft":
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Cannot edit accrual in status {row.status}"},
+        )
+    assert_period_open(db, auth.tenant_id, row.period_ym)
+    fields = body.model_fields_set
+    if "voyage_id" in fields and body.voyage_id is not None:
+        if scoped_get(db, Voyage, body.voyage_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Voyage not found")
+    if "period_ym" in fields and body.period_ym is not None:
+        assert_period_open(db, auth.tenant_id, body.period_ym)
+    if "amount" in fields and body.amount is not None and Decimal(str(body.amount)) < 0:
+        raise HTTPException(422, detail={"code": "INVALID_AMOUNT", "message": "amount must be >= 0"})
+    for field in ("voyage_id", "period_ym", "line_type", "amount", "currency", "notes"):
+        if field in fields:
+            val = getattr(body, field)
+            # period_ym/line_type/amount/currency 非空列：显式 null 不落地
+            if val is None and field in ("period_ym", "line_type", "amount", "currency"):
+                continue
+            setattr(row, field, val)
+    audit(
+        db,
+        action="accrual.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="accrual",
+        entity_id=str(row.id),
+        detail={"fields": sorted(fields)},
+    )
+    db.commit()
+    return {
+        "id": str(row.id),
+        "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+        "period_ym": row.period_ym,
+        "line_type": row.line_type,
+        "amount": float(row.amount or 0),
+        "currency": row.currency,
+        "status": row.status,
+        "notes": row.notes,
+    }
 
 
 

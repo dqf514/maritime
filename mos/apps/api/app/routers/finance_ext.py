@@ -50,6 +50,7 @@ from app.services import pnl_engine
 from app.services.sanctions import assert_not_sanctioned
 from app.services.state_machine import POOL_PERIOD_TRANSITIONS, transition
 from app.services.tenant_guard import scoped_get
+from app.services.recycle import soft_delete
 from app.routers._finance_common import DEFAULT_VAR_LIMIT
 
 router = APIRouter()
@@ -80,7 +81,69 @@ def add_quote(symbol: str, value: float, quote_date: date | None = None, auth: A
 @router.get("/market/quotes")
 def list_quotes(auth: AuthContext = Depends(require_module("analytics")), db: Session = Depends(get_db)):
     rows = db.scalars(select(MarketQuote).where(MarketQuote.tenant_id == auth.tenant_id)).all()
-    return [{"symbol": r.symbol, "value": float(r.value), "quote_date": r.quote_date.isoformat()} for r in rows]
+    return [
+        {"id": str(r.id), "symbol": r.symbol, "value": float(r.value), "quote_date": r.quote_date.isoformat(), "source": r.source}
+        for r in rows
+    ]
+
+
+class MarketQuoteUpdate(BaseModel):
+    """Admin correction workflow — only explicitly provided fields apply."""
+
+    symbol: str | None = None
+    value: float | None = None
+    quote_date: date | None = None
+    source: str | None = None
+
+
+@router.patch("/market/quotes/{quote_id}")
+def update_quote(
+    quote_id: UUID,
+    body: MarketQuoteUpdate,
+    auth: AuthContext = Depends(require_module("analytics")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, MarketQuote, quote_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Quote not found")
+    fields = body.model_fields_set
+    new_symbol = body.symbol if "symbol" in fields and body.symbol is not None else row.symbol
+    new_date = body.quote_date if "quote_date" in fields and body.quote_date is not None else row.quote_date
+    if (new_symbol, new_date) != (row.symbol, row.quote_date):
+        dup = db.scalar(
+            select(MarketQuote).where(
+                MarketQuote.tenant_id == auth.tenant_id,
+                MarketQuote.symbol == new_symbol,
+                MarketQuote.quote_date == new_date,
+                MarketQuote.id != quote_id,
+            )
+        )
+        if dup:
+            raise HTTPException(409, detail={"code": "QUOTE_EXISTS", "message": "quote already exists for symbol/date"})
+        row.symbol = new_symbol
+        row.quote_date = new_date
+    if "value" in fields and body.value is not None:
+        row.value = body.value
+    if "source" in fields and body.source is not None:
+        row.source = body.source
+    db.commit()
+    db.refresh(row)
+    return {"id": str(row.id), "symbol": row.symbol, "value": float(row.value), "quote_date": row.quote_date.isoformat(), "source": row.source}
+
+
+@router.delete("/market/quotes/{quote_id}")
+def delete_quote(
+    quote_id: UUID,
+    auth: AuthContext = Depends(require_module("analytics")),
+    db: Session = Depends(get_db),
+):
+    """Hard delete a market quote (no soft-delete column; correction workflow)."""
+    row = scoped_get(db, MarketQuote, quote_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Quote not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/dq/issues")
@@ -97,7 +160,7 @@ def list_dq(
     auth: AuthContext = Depends(require_module("analytics")),
     db: Session = Depends(get_db),
 ):
-    q = select(DqIssue).where(DqIssue.tenant_id == auth.tenant_id)
+    q = select(DqIssue).where(DqIssue.tenant_id == auth.tenant_id, DqIssue.status != "deleted")
     if status:
         q = q.where(DqIssue.status == status)
     rows = db.scalars(q).all()
@@ -113,6 +176,59 @@ def list_dq(
         }
         for r in rows
     ]
+
+
+class DqIssueUpdate(BaseModel):
+    severity: str | None = None
+    status: str | None = None
+    message: str | None = None
+
+
+@router.patch("/dq/issues/{issue_id}")
+def update_dq(
+    issue_id: UUID,
+    body: DqIssueUpdate,
+    auth: AuthContext = Depends(require_module("analytics")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, DqIssue, issue_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "DQ issue not found")
+    fields = body.model_fields_set
+    if "severity" in fields and body.severity is not None:
+        if body.severity not in ("info", "warn", "error"):
+            raise HTTPException(422, "severity must be info|warn|error")
+        row.severity = body.severity
+    if "status" in fields and body.status is not None:
+        if body.status not in ("open", "resolved", "ignored"):
+            raise HTTPException(422, "status must be open|resolved|ignored")
+        row.status = body.status
+    if "message" in fields and body.message is not None:
+        row.message = body.message
+    db.commit()
+    db.refresh(row)
+    return {"id": str(row.id), "rule_code": row.rule_code, "severity": row.severity, "status": row.status, "message": row.message}
+
+
+@router.delete("/dq/issues/{issue_id}")
+def delete_dq(
+    issue_id: UUID,
+    auth: AuthContext = Depends(require_module("analytics")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, DqIssue, issue_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "DQ issue not found")
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="dq_issue",
+        row=row,
+        title=f"{row.rule_code}: {row.entity_type}",
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 def _eeoi(co2_mt: float, cargo_mt: float | None, distance_nm: float | None) -> float | None:
@@ -171,6 +287,69 @@ def list_emissions(auth: AuthContext = Depends(require_module("emissions")), db:
         }
         for r in rows
     ]
+
+
+class EmissionUpdate(BaseModel):
+    """EmissionRecord is mostly system-derived (co2/cii). Editable inputs only."""
+
+    voyage_id: UUID | None = None
+    vessel_id: UUID | None = None
+    fo_mt: float | None = None
+    do_mt: float | None = None
+    period: str | None = None
+
+
+@router.patch("/emissions/{emission_id}")
+def update_emission(
+    emission_id: UUID,
+    body: EmissionUpdate,
+    auth: AuthContext = Depends(require_module("emissions")),
+    db: Session = Depends(get_db),
+):
+    """PATCH user-editable fuel/voyage inputs; co2_mt recomputed from fo/do."""
+    row = scoped_get(db, EmissionRecord, emission_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Emission not found")
+    fields = body.model_fields_set
+    if "voyage_id" in fields:
+        row.voyage_id = body.voyage_id
+    if "vessel_id" in fields:
+        row.vessel_id = body.vessel_id
+    if "fo_mt" in fields and body.fo_mt is not None:
+        row.fo_mt = body.fo_mt
+    if "do_mt" in fields and body.do_mt is not None:
+        row.do_mt = body.do_mt
+    if "period" in fields:
+        row.period = body.period
+    if fields & {"fo_mt", "do_mt"}:
+        row.co2_mt = float(row.fo_mt or 0) * 3.114 + float(row.do_mt or 0) * 3.206
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": str(row.id),
+        "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+        "vessel_id": str(row.vessel_id) if row.vessel_id else None,
+        "fo_mt": float(row.fo_mt or 0),
+        "do_mt": float(row.do_mt or 0),
+        "co2_mt": float(row.co2_mt or 0),
+        "cii_rating": row.cii_rating,
+        "period": row.period,
+    }
+
+
+@router.delete("/emissions/{emission_id}")
+def delete_emission(
+    emission_id: UUID,
+    auth: AuthContext = Depends(require_module("emissions")),
+    db: Session = Depends(get_db),
+):
+    """Hard delete an emission record (model has no deleted_at/status column)."""
+    row = scoped_get(db, EmissionRecord, emission_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Emission not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 class FuelEuIn(BaseModel):
@@ -599,7 +778,87 @@ def create_risk(
 @router.get("/risk/positions")
 def list_risk(auth: AuthContext = Depends(require_module("risk")), db: Session = Depends(get_db)):
     rows = db.scalars(select(RiskPosition).where(RiskPosition.tenant_id == auth.tenant_id)).all()
-    return [{"id": str(r.id), "symbol": r.symbol, "var_1d": float(r.var_1d or 0), "limit_breach": r.limit_breach} for r in rows]
+    return [
+        {
+            "id": str(r.id),
+            "symbol": r.symbol,
+            "side": r.side,
+            "qty": float(r.qty or 0),
+            "entry_price": float(r.entry_price or 0),
+            "mark_price": float(r.mark_price) if r.mark_price is not None else None,
+            "var_1d": float(r.var_1d or 0),
+            "limit_breach": r.limit_breach,
+        }
+        for r in rows
+    ]
+
+
+class RiskPositionUpdate(BaseModel):
+    """Manual-position correction. Positions are created via POST /risk/positions
+    (not derived from trades) — all trade fields are editable."""
+
+    symbol: str | None = None
+    side: str | None = None
+    qty: float | None = None
+    entry_price: float | None = None
+    mark_price: float | None = None
+
+
+@router.patch("/risk/positions/{position_id}")
+def update_risk_position(
+    position_id: UUID,
+    body: RiskPositionUpdate,
+    auth: AuthContext = Depends(require_module("risk")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, RiskPosition, position_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Risk position not found")
+    fields = body.model_fields_set
+    if "symbol" in fields and body.symbol is not None:
+        row.symbol = body.symbol
+    if "side" in fields and body.side is not None:
+        if body.side not in ("long", "short"):
+            raise HTTPException(422, "side must be long|short")
+        row.side = body.side
+    if "qty" in fields and body.qty is not None:
+        row.qty = body.qty
+    if "entry_price" in fields and body.entry_price is not None:
+        row.entry_price = body.entry_price
+    if "mark_price" in fields:
+        row.mark_price = body.mark_price
+    if fields & {"qty", "entry_price"}:
+        qty = float(row.qty or 0)
+        entry = float(row.entry_price or 0)
+        row.var_1d = abs(qty * entry * 0.02)
+        limit = _resolve_var_limit(db, auth.tenant_id, row.symbol)
+        row.limit_breach = float(row.var_1d) > limit
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": str(row.id),
+        "symbol": row.symbol,
+        "side": row.side,
+        "qty": float(row.qty or 0),
+        "entry_price": float(row.entry_price or 0),
+        "var_1d": float(row.var_1d or 0),
+        "limit_breach": row.limit_breach,
+    }
+
+
+@router.delete("/risk/positions/{position_id}")
+def delete_risk_position(
+    position_id: UUID,
+    auth: AuthContext = Depends(require_module("risk")),
+    db: Session = Depends(get_db),
+):
+    """Hard delete a manual risk position (not trade-derived; no soft-delete column)."""
+    row = scoped_get(db, RiskPosition, position_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Risk position not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/risk/hedge-view")
@@ -755,3 +1014,18 @@ def update_risk_limit(
         row.active = body.active
     db.commit()
     return {"id": str(row.id), "amount": float(row.amount), "currency": row.currency, "active": bool(row.active)}
+
+
+@router.delete("/risk/limits/{limit_id}")
+def delete_risk_limit(
+    limit_id: UUID,
+    auth: AuthContext = Depends(require_module("risk")),
+    db: Session = Depends(get_db),
+):
+    """Hard delete a risk limit (config row, no soft-delete column; cf. ApprovalLimit delete)."""
+    row = scoped_get(db, RiskLimit, limit_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Risk limit not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}

@@ -156,7 +156,7 @@ def bunker_transition(
     db: Session = Depends(get_db),
 ):
     row = db.get(BunkerOrder, order_id)
-    if not row or row.tenant_id != auth.tenant_id:
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Bunker order not found")
     row.status = transition("bunker_order", row.status, target, BUNKER_TRANSITIONS)
     if bdn_qty is not None and qty_delivered is None:
@@ -213,7 +213,9 @@ def bunker_transition(
 
 @router.get("/bunker-orders")
 def list_bunker(auth: AuthContext = Depends(require_module("bunker")), db: Session = Depends(get_db)):
-    rows = db.scalars(select(BunkerOrder).where(BunkerOrder.tenant_id == auth.tenant_id)).all()
+    rows = db.scalars(
+        select(BunkerOrder).where(BunkerOrder.tenant_id == auth.tenant_id, BunkerOrder.status != "deleted")
+    ).all()
     return [
         {
             "id": str(r.id),
@@ -256,7 +258,7 @@ def update_bunker(
     db: Session = Depends(get_db),
 ):
     row = db.get(BunkerOrder, order_id)
-    if not row or row.tenant_id != auth.tenant_id:
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Bunker order not found")
     if body.grade is not None:
         row.grade = body.grade
@@ -285,6 +287,33 @@ def update_bunker(
     return {"id": str(row.id), "order_no": row.order_no, "status": row.status}
 
 
+@router.delete("/bunker-orders/{order_id}")
+def delete_bunker(
+    order_id: UUID,
+    auth: AuthContext = Depends(require_module("bunker")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(BunkerOrder, order_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Bunker order not found")
+    if row.status in ("delivered", "closed"):
+        # 已交付/已关闭的加油单进入 ROB 与成本分摊链，终态不可删
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_STATE", "message": f"Cannot delete a {row.status} bunker order"},
+        )
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="bunker_order",
+        row=row,
+        title=row.order_no,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
 class BunkerInquiryIn(BaseModel):
     supplier: str
     quoted_price: float
@@ -298,7 +327,7 @@ def create_bunker_inquiry(
     db: Session = Depends(get_db),
 ):
     order = db.get(BunkerOrder, order_id)
-    if not order or order.tenant_id != auth.tenant_id:
+    if not order or order.tenant_id != auth.tenant_id or not _alive(order.status):
         raise HTTPException(404, "Bunker order not found")
     if body.quoted_price <= 0:
         raise HTTPException(422, detail={"code": "INVALID_PRICE", "message": "quoted_price must be > 0"})
@@ -319,7 +348,7 @@ def create_bunker_inquiry(
 def list_bunker_inquiries(order_id: UUID, auth: AuthContext = Depends(require_module("bunker")), db: Session = Depends(get_db)):
     """All supplier quotes for a bunker order (含 INDEX: 定价审计行), newest first."""
     order = db.get(BunkerOrder, order_id)
-    if not order or order.tenant_id != auth.tenant_id:
+    if not order or order.tenant_id != auth.tenant_id or not _alive(order.status):
         raise HTTPException(404, "Bunker order not found")
     rows = db.scalars(
         select(BunkerInquiry)
@@ -357,7 +386,7 @@ def accept_bunker_inquiry(
             detail={"code": "INVALID_STATE", "message": f"Cannot accept an inquiry in status {row.status}"},
         )
     order = db.get(BunkerOrder, row.order_id)
-    if not order or order.tenant_id != auth.tenant_id:
+    if not order or order.tenant_id != auth.tenant_id or not _alive(order.status):
         raise HTTPException(404, "Bunker order not found")
     row.status = "accepted"
     order.unit_price = row.quoted_price
@@ -540,7 +569,9 @@ def list_bunker_requirements(
     auth: AuthContext = Depends(require_module("bunker")),
     db: Session = Depends(get_db),
 ):
-    q = select(BunkerRequirement).where(BunkerRequirement.tenant_id == auth.tenant_id)
+    q = select(BunkerRequirement).where(
+        BunkerRequirement.tenant_id == auth.tenant_id, BunkerRequirement.status != "deleted"
+    )
     if status is not None:
         q = q.where(BunkerRequirement.status == status)
     if vessel_id is not None:
@@ -559,7 +590,7 @@ def tender_bunker_requirement(
 ):
     """Open tendering on a requirement (draft|approved → tendering)."""
     row = db.get(BunkerRequirement, requirement_id)
-    if not row or row.tenant_id != auth.tenant_id:
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Bunker requirement not found")
     row.status = transition("bunker_requirement", row.status, "tendering", BUNKER_REQUIREMENT_TRANSITIONS)
     db.commit()
@@ -577,11 +608,113 @@ def transition_bunker_requirement(
     if target not in BUNKER_REQUIREMENT_STATUSES:
         raise HTTPException(422, detail={"code": "INVALID_STATUS", "message": f"Unknown status '{target}'"})
     row = db.get(BunkerRequirement, requirement_id)
-    if not row or row.tenant_id != auth.tenant_id:
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Bunker requirement not found")
     row.status = transition("bunker_requirement", row.status, target, BUNKER_REQUIREMENT_TRANSITIONS)
     db.commit()
     return _requirement_payload(row)
+
+
+class BunkerRequirementUpdate(BaseModel):
+    vessel_id: UUID | None = None
+    voyage_id: UUID | None = None
+    fuel_type: str | None = None
+    qty_required: float | None = None
+    port_id: UUID | None = None
+    window_from: date | None = None
+    window_to: date | None = None
+    notes: str | None = None
+
+
+@router.patch("/bunker/requirements/{requirement_id}")
+def update_bunker_requirement(
+    requirement_id: UUID,
+    body: BunkerRequirementUpdate,
+    auth: AuthContext = Depends(require_module("bunker")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(BunkerRequirement, requirement_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Bunker requirement not found")
+    if row.status in ("ordered", "fulfilled", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_STATE", "message": f"Cannot edit a {row.status} requirement"},
+        )
+    fields = body.model_fields_set
+    w_from = body.window_from if "window_from" in fields else row.window_from
+    w_to = body.window_to if "window_to" in fields else row.window_to
+    if w_from and w_to and w_to < w_from:
+        raise HTTPException(422, detail={"code": "INVALID_WINDOW", "message": "window_to must be >= window_from"})
+    if "vessel_id" in fields:
+        if body.vessel_id is None:
+            raise HTTPException(422, detail={"code": "INVALID_VESSEL", "message": "vessel_id is required"})
+        _check_vessel(db, auth.tenant_id, body.vessel_id)
+        row.vessel_id = body.vessel_id
+    if "voyage_id" in fields:
+        if body.voyage_id is not None:
+            _check_voyage(db, auth.tenant_id, body.voyage_id)
+        row.voyage_id = body.voyage_id
+    if "fuel_type" in fields:
+        if not body.fuel_type:
+            raise HTTPException(422, detail={"code": "INVALID_FUEL_TYPE", "message": "fuel_type is required"})
+        row.fuel_type = body.fuel_type
+    if "qty_required" in fields:
+        if body.qty_required is None or body.qty_required <= 0:
+            raise HTTPException(422, detail={"code": "INVALID_QTY", "message": "qty_required must be > 0"})
+        row.qty_required = Decimal(str(body.qty_required)).quantize(Decimal("0.001"))
+    if "port_id" in fields:
+        if body.port_id is not None:
+            _port = db.get(Port, body.port_id)
+            if not _port or _port.deleted_at:
+                raise HTTPException(404, "Port not found")
+        row.port_id = body.port_id
+    if "window_from" in fields:
+        row.window_from = body.window_from
+    if "window_to" in fields:
+        row.window_to = body.window_to
+    if "notes" in fields:
+        row.notes = body.notes
+    db.commit()
+    db.refresh(row)
+    return _requirement_payload(row)
+
+
+@router.delete("/bunker/requirements/{requirement_id}")
+def delete_bunker_requirement(
+    requirement_id: UUID,
+    auth: AuthContext = Depends(require_module("bunker")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(BunkerRequirement, requirement_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Bunker requirement not found")
+    if row.status in ("ordered", "fulfilled"):
+        # 已选定供应商/已履约的需求进入采购执行链，不可删
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_STATE", "message": f"Cannot delete a {row.status} requirement"},
+        )
+    has_options = db.scalars(
+        select(BunkerOption.id)
+        .where(BunkerOption.requirement_id == row.id, BunkerOption.status != "deleted")
+        .limit(1)
+    ).first()
+    if has_options is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "REQUIREMENT_HAS_OPTIONS", "message": "Delete the requirement's supplier options first"},
+        )
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="bunker_requirement",
+        row=row,
+        title=row.requirement_no,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 class BunkerOptionIn(BaseModel):
@@ -604,7 +737,7 @@ def create_bunker_option(
     if body.price_per_mt <= 0:
         raise HTTPException(422, detail={"code": "INVALID_PRICE", "message": "price_per_mt must be > 0"})
     req = db.get(BunkerRequirement, body.requirement_id)
-    if not req or req.tenant_id != auth.tenant_id:
+    if not req or req.tenant_id != auth.tenant_id or not _alive(req.status):
         raise HTTPException(404, "Bunker requirement not found")
     if req.status in ("fulfilled", "cancelled"):
         raise HTTPException(
@@ -651,7 +784,7 @@ def list_bunker_options(
     auth: AuthContext = Depends(require_module("bunker")),
     db: Session = Depends(get_db),
 ):
-    q = select(BunkerOption).where(BunkerOption.tenant_id == auth.tenant_id)
+    q = select(BunkerOption).where(BunkerOption.tenant_id == auth.tenant_id, BunkerOption.status != "deleted")
     if requirement_id is not None:
         q = q.where(BunkerOption.requirement_id == requirement_id)
     if status is not None:
@@ -668,7 +801,7 @@ def select_bunker_option(
 ):
     """Select a supplier option: siblings become rejected, requirement → ordered."""
     opt = db.get(BunkerOption, option_id)
-    if not opt or opt.tenant_id != auth.tenant_id:
+    if not opt or opt.tenant_id != auth.tenant_id or not _alive(opt.status):
         raise HTTPException(404, "Bunker option not found")
     if opt.status != "offered":
         raise HTTPException(
@@ -676,7 +809,7 @@ def select_bunker_option(
             detail={"code": "INVALID_STATE", "message": f"Cannot select an option in status {opt.status}"},
         )
     req = db.get(BunkerRequirement, opt.requirement_id)
-    if not req or req.tenant_id != auth.tenant_id:
+    if not req or req.tenant_id != auth.tenant_id or not _alive(req.status):
         raise HTTPException(404, "Bunker requirement not found")
     if req.status not in ("draft", "approved", "tendering"):
         raise HTTPException(
@@ -707,6 +840,109 @@ def select_bunker_option(
         "price_per_mt": float(opt.price_per_mt or 0),
         "rejected_options": len(others),
     }
+
+
+class BunkerOptionUpdate(BaseModel):
+    requirement_id: UUID | None = None
+    supplier_id: UUID | None = None
+    port_id: UUID | None = None
+    fuel_type: str | None = None
+    qty: float | None = None
+    price_per_mt: float | None = None
+    delivery_date: date | None = None
+    notes: str | None = None
+
+
+@router.patch("/bunker/options/{option_id}")
+def update_bunker_option(
+    option_id: UUID,
+    body: BunkerOptionUpdate,
+    auth: AuthContext = Depends(require_module("bunker")),
+    db: Session = Depends(get_db),
+):
+    opt = db.get(BunkerOption, option_id)
+    if not opt or opt.tenant_id != auth.tenant_id or not _alive(opt.status):
+        raise HTTPException(404, "Bunker option not found")
+    if opt.status != "offered":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_STATE", "message": f"Cannot edit an option in status {opt.status}"},
+        )
+    fields = body.model_fields_set
+    if "requirement_id" in fields and body.requirement_id is not None:
+        req = db.get(BunkerRequirement, body.requirement_id)
+        if not req or req.tenant_id != auth.tenant_id or not _alive(req.status):
+            raise HTTPException(404, "Bunker requirement not found")
+        if req.status in ("fulfilled", "cancelled"):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "INVALID_STATE", "message": f"Cannot add options to a {req.status} requirement"},
+            )
+        opt.requirement_id = body.requirement_id
+    if "supplier_id" in fields:
+        if body.supplier_id is None:
+            raise HTTPException(422, detail={"code": "INVALID_SUPPLIER", "message": "supplier_id is required"})
+        party = db.get(Counterparty, body.supplier_id)
+        if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
+            raise HTTPException(404, "Supplier not found")
+        assert_not_sanctioned(db, auth.tenant_id, party.id)
+        opt.supplier_id = body.supplier_id
+    if "port_id" in fields:
+        port_id = body.port_id
+        if port_id is None:
+            # 与 create 同口径：未指定时回落到需求港
+            req_row = db.get(BunkerRequirement, opt.requirement_id)
+            port_id = req_row.port_id if req_row else None
+        if port_id is None:
+            raise HTTPException(422, detail={"code": "PORT_REQUIRED", "message": "port_id is required (option or requirement)"})
+        _port = db.get(Port, port_id)
+        if not _port or _port.deleted_at:
+            raise HTTPException(404, "Port not found")
+        opt.port_id = port_id
+    if "fuel_type" in fields and body.fuel_type is not None:
+        opt.fuel_type = body.fuel_type
+    if "qty" in fields and body.qty is not None:
+        if body.qty <= 0:
+            raise HTTPException(422, detail={"code": "INVALID_QTY", "message": "qty must be > 0"})
+        opt.qty = Decimal(str(body.qty)).quantize(Decimal("0.001"))
+    if "price_per_mt" in fields:
+        if body.price_per_mt is None or body.price_per_mt <= 0:
+            raise HTTPException(422, detail={"code": "INVALID_PRICE", "message": "price_per_mt must be > 0"})
+        opt.price_per_mt = Decimal(str(body.price_per_mt)).quantize(Decimal("0.01"))
+    if "delivery_date" in fields:
+        opt.delivery_date = body.delivery_date
+    if "notes" in fields:
+        opt.notes = body.notes
+    db.commit()
+    db.refresh(opt)
+    return _option_payload(opt)
+
+
+@router.delete("/bunker/options/{option_id}")
+def delete_bunker_option(
+    option_id: UUID,
+    auth: AuthContext = Depends(require_module("bunker")),
+    db: Session = Depends(get_db),
+):
+    opt = db.get(BunkerOption, option_id)
+    if not opt or opt.tenant_id != auth.tenant_id or not _alive(opt.status):
+        raise HTTPException(404, "Bunker option not found")
+    if opt.status == "selected":
+        # 选定报价已驱动需求 → ordered，删除会破坏采购链审计
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_STATE", "message": "Cannot delete a selected option"},
+        )
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="bunker_option",
+        row=opt,
+        title=opt.notes or f"{opt.fuel_type} @ {float(opt.price_per_mt or 0)}",
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
 
 
 # —— Bunker cap/collar (价格上下限保护) ——
@@ -796,6 +1032,93 @@ def _cap_collar_payload(r: BunkerCapCollar) -> dict:
     }
 
 
+class BunkerCapCollarUpdate(BaseModel):
+    charter_id: UUID | None = None
+    fuel_type: str | None = None
+    cap_price: float | None = None
+    collar_price: float | None = None
+    index_symbol: str | None = None
+    effective_from: date | None = None
+    effective_to: date | None = None
+
+
+@router.patch("/bunker/cap-collar/{collar_id}")
+def update_bunker_cap_collar(
+    collar_id: UUID,
+    body: BunkerCapCollarUpdate,
+    auth: AuthContext = Depends(require_module("bunker")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(BunkerCapCollar, collar_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Bunker cap/collar not found")
+    fields = body.model_fields_set
+    cap_price = body.cap_price if "cap_price" in fields else (float(row.cap_price) if row.cap_price is not None else None)
+    collar_price = (
+        body.collar_price if "collar_price" in fields else (float(row.collar_price) if row.collar_price is not None else None)
+    )
+    effective_from = body.effective_from if "effective_from" in fields else row.effective_from
+    effective_to = body.effective_to if "effective_to" in fields else row.effective_to
+    if "effective_from" in fields and body.effective_from is None:
+        raise HTTPException(422, detail={"code": "INVALID_PERIOD", "message": "effective_from is required"})
+    if cap_price is None and collar_price is None:
+        raise HTTPException(
+            422,
+            detail={"code": "CAP_OR_COLLAR_REQUIRED", "message": "At least one of cap_price / collar_price is required"},
+        )
+    if cap_price is not None and cap_price <= 0:
+        raise HTTPException(422, detail={"code": "INVALID_CAP", "message": "cap_price must be > 0"})
+    if collar_price is not None and collar_price <= 0:
+        raise HTTPException(422, detail={"code": "INVALID_COLLAR", "message": "collar_price must be > 0"})
+    if cap_price is not None and collar_price is not None and collar_price > cap_price:
+        raise HTTPException(
+            422,
+            detail={"code": "COLLAR_ABOVE_CAP", "message": "collar_price must be <= cap_price"},
+        )
+    if effective_to is not None and effective_from is not None and effective_to < effective_from:
+        raise HTTPException(
+            422,
+            detail={"code": "INVALID_PERIOD", "message": "effective_to must be >= effective_from"},
+        )
+    if "charter_id" in fields and body.charter_id is not None:
+        if scoped_get(db, Charter, body.charter_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Charter not found")
+    if "fuel_type" in fields and not body.fuel_type:
+        raise HTTPException(422, detail={"code": "INVALID_FUEL_TYPE", "message": "fuel_type is required"})
+    if "cap_price" in fields:
+        row.cap_price = Decimal(str(cap_price)).quantize(Decimal("0.01")) if cap_price is not None else None
+    if "collar_price" in fields:
+        row.collar_price = Decimal(str(collar_price)).quantize(Decimal("0.01")) if collar_price is not None else None
+    if "charter_id" in fields:
+        row.charter_id = body.charter_id
+    if "fuel_type" in fields:
+        row.fuel_type = body.fuel_type
+    if "index_symbol" in fields:
+        row.index_symbol = body.index_symbol
+    if "effective_from" in fields:
+        row.effective_from = body.effective_from
+    if "effective_to" in fields:
+        row.effective_to = body.effective_to
+    db.commit()
+    db.refresh(row)
+    return _cap_collar_payload(row)
+
+
+@router.delete("/bunker/cap-collar/{collar_id}")
+def delete_bunker_cap_collar(
+    collar_id: UUID,
+    auth: AuthContext = Depends(require_module("bunker")),
+    db: Session = Depends(get_db),
+):
+    # BunkerCapCollar 无 status/deleted_at，回收站无法标记 → 硬删
+    row = db.get(BunkerCapCollar, collar_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Bunker cap/collar not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
 # —— Fuel consumption categories (分场景油耗定额) ——
 
 
@@ -862,5 +1185,66 @@ def _consumption_payload(r: FuelConsumptionCategory) -> dict:
         "consumption_per_day": float(r.consumption_per_day or 0),
         "notes": r.notes,
     }
+
+
+class ConsumptionCategoryUpdate(BaseModel):
+    vessel_id: UUID | None = None
+    category: str | None = None
+    fuel_type: str | None = None
+    consumption_per_day: float | None = None
+    notes: str | None = None
+
+
+@router.patch("/bunker/consumption-categories/{category_id}")
+def update_consumption_category(
+    category_id: UUID,
+    body: ConsumptionCategoryUpdate,
+    auth: AuthContext = Depends(require_module("bunker")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(FuelConsumptionCategory, category_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Consumption category not found")
+    fields = body.model_fields_set
+    if "vessel_id" in fields:
+        if body.vessel_id is None:
+            raise HTTPException(422, detail={"code": "INVALID_VESSEL", "message": "vessel_id is required"})
+        _check_vessel(db, auth.tenant_id, body.vessel_id)
+        row.vessel_id = body.vessel_id
+    if "category" in fields:
+        if body.category not in CONSUMPTION_CATEGORIES:
+            raise HTTPException(
+                422,
+                detail={"code": "INVALID_CATEGORY", "message": f"category must be one of {list(CONSUMPTION_CATEGORIES)}"},
+            )
+        row.category = body.category
+    if "fuel_type" in fields and not body.fuel_type:
+        raise HTTPException(422, detail={"code": "INVALID_FUEL_TYPE", "message": "fuel_type is required"})
+    if "consumption_per_day" in fields:
+        if body.consumption_per_day is None or body.consumption_per_day < 0:
+            raise HTTPException(422, detail={"code": "INVALID_CONSUMPTION", "message": "consumption_per_day must be >= 0"})
+        row.consumption_per_day = Decimal(str(body.consumption_per_day)).quantize(Decimal("0.001"))
+    if "fuel_type" in fields:
+        row.fuel_type = body.fuel_type
+    if "notes" in fields:
+        row.notes = body.notes
+    db.commit()
+    db.refresh(row)
+    return _consumption_payload(row)
+
+
+@router.delete("/bunker/consumption-categories/{category_id}")
+def delete_consumption_category(
+    category_id: UUID,
+    auth: AuthContext = Depends(require_module("bunker")),
+    db: Session = Depends(get_db),
+):
+    # FuelConsumptionCategory 无 status/deleted_at，回收站无法标记 → 硬删
+    row = db.get(FuelConsumptionCategory, category_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Consumption category not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 

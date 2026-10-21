@@ -6,7 +6,8 @@ import { PageHeader } from "@/components/PageHeader";
 import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
-import { apiGet, apiPost } from "@/lib/api";
+import { RowActions } from "@/components/RowActions";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -135,6 +136,28 @@ export default function OfficeEcosystemPage() {
     await load();
   }
 
+  async function onHookCellSave(rowId: string, colKey: string, value: unknown, row: Webhook) {
+    const src = row as unknown as Record<string, unknown>;
+    if ((src[colKey] ?? "") === (value ?? "")) return;
+    try {
+      await apiPatch(`/api/v1/office/webhooks/${rowId}`, { [colKey]: value === "" ? null : value });
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteHook(id: string) {
+    try {
+      await apiDelete(`/api/v1/office/webhooks/${id}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   async function markAddon(id: string, st: string) {
     await apiPost(`/api/v1/office/addons/${id}`, { status: st });
     await load();
@@ -164,24 +187,46 @@ export default function OfficeEcosystemPage() {
   ];
 
   const hookColumns: ColumnDef<Webhook>[] = [
-    { key: "name", title: t("common.name", "Name"), minWidth: 140, value: (r) => r.name },
+    {
+      key: "name",
+      title: t("common.name", "Name"),
+      minWidth: 140,
+      value: (r) => r.name,
+      editor: { type: "text" },
+    },
     {
       key: "target_url",
       title: "URL",
       minWidth: 200,
       value: (r) => r.target_url,
+      editor: { type: "text" },
       render: (v) => <code>{String(v)}</code>,
     },
-    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => r.status,
+      editor: {
+        type: "select",
+        options: [
+          { value: "active", label: t("page.office.hook_active", "Active") },
+          { value: "paused", label: t("page.office.hook_paused", "Paused") },
+        ],
+      },
+    },
     {
       key: "_actions",
       title: "",
-      width: 90,
+      width: 130,
       align: "right",
       render: (_v, h) => (
-        <button className="btn" type="button" onClick={() => testHook(h.id).catch((e) => toast.error(String(e)))}>
-          {t("common.test", "Test")}
-        </button>
+        <span className="row-actions">
+          <button className="btn btn-sm" type="button" onClick={() => testHook(h.id).catch((e) => toast.error(String(e)))}>
+            {t("common.test", "Test")}
+          </button>
+          <RowActions label={h.name} onDelete={() => deleteHook(h.id)} />
+        </span>
       ),
     },
   ];
@@ -371,6 +416,8 @@ export default function OfficeEcosystemPage() {
           columns={hookColumns}
           data={hooks}
           rowKey={(r) => r.id}
+          editable
+          onCellSave={onHookCellSave}
           storageKey="settings_office_hooks_grid"
           emptyText={t("common.no_data", "No data")}
         />

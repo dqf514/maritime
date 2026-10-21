@@ -23,6 +23,7 @@ from app.models_saas import (
     SaaSPlan,
     TenantCompanyProfile,
     TenantSubscription,
+    UsageLedger,
     UsageMeterDef,
     UsagePack,
     WorkflowDefinition,
@@ -216,6 +217,59 @@ def create_plan(body: PlanIn, auth: AuthContext = Depends(require_roles("platfor
     return _plan_out(row)
 
 
+class PlanPatchIn(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    billing_period: str | None = None
+    price_amount: float | None = None
+    currency: str | None = None
+    included_modules: dict | None = None
+    included_quotas: dict | None = None
+    seat_limit: int | None = None
+    is_public: bool | None = None
+    status: str | None = None
+
+
+@router.patch("/platform/saas/plans/{plan_id}")
+def patch_plan(
+    plan_id: UUID,
+    body: PlanPatchIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    row = db.get(SaaSPlan, plan_id)
+    if not row or row.status == "deleted":
+        raise HTTPException(404, "Plan not found")
+    data = body.model_dump(exclude_unset=True)
+    if "status" in data and data["status"] == "deleted":
+        data.pop("status")
+    for k, v in data.items():
+        setattr(row, k, v)
+    db.commit()
+    return _plan_out(row)
+
+
+@router.delete("/platform/saas/plans/{plan_id}")
+def delete_plan(
+    plan_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete a plan (status=deleted). Refused while subscriptions/orders reference it."""
+    _ = auth
+    row = db.get(SaaSPlan, plan_id)
+    if not row or row.status == "deleted":
+        raise HTTPException(404, "Plan not found")
+    if db.scalar(select(TenantSubscription.id).where(TenantSubscription.plan_id == row.id).limit(1)):
+        raise HTTPException(409, detail={"code": "IN_USE", "message": "Plan referenced by tenant subscriptions"})
+    if db.scalar(select(PaymentOrder.id).where(PaymentOrder.ref_id == str(row.id)).limit(1)):
+        raise HTTPException(409, detail={"code": "IN_USE", "message": "Plan referenced by payment orders"})
+    row.status = "deleted"
+    db.commit()
+    return {"ok": True, "id": str(row.id)}
+
+
 def _plan_out(r: SaaSPlan) -> dict:
     return {
         "id": str(r.id),
@@ -284,10 +338,68 @@ def create_pack(body: PackIn, auth: AuthContext = Depends(require_roles("platfor
     return {"id": str(row.id), "code": row.code}
 
 
+class PackPatchIn(BaseModel):
+    name: str | None = None
+    meter_code: str | None = None
+    quantity: float | None = None
+    price_amount: float | None = None
+    currency: str | None = None
+    status: str | None = None
+
+
+@router.patch("/platform/saas/packs/{pack_id}")
+def patch_pack(
+    pack_id: UUID,
+    body: PackPatchIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    row = db.get(UsagePack, pack_id)
+    if not row or row.status == "deleted":
+        raise HTTPException(404, "Pack not found")
+    data = body.model_dump(exclude_unset=True)
+    if "status" in data and data["status"] == "deleted":
+        data.pop("status")
+    for k, v in data.items():
+        setattr(row, k, v)
+    db.commit()
+    return {
+        "id": str(row.id),
+        "code": row.code,
+        "name": row.name,
+        "meter_code": row.meter_code,
+        "quantity": float(row.quantity),
+        "price_amount": float(row.price_amount),
+        "currency": row.currency,
+        "status": row.status,
+    }
+
+
+@router.delete("/platform/saas/packs/{pack_id}")
+def delete_pack(
+    pack_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete a usage pack (status=deleted). Refused while orders/ledger reference it."""
+    _ = auth
+    row = db.get(UsagePack, pack_id)
+    if not row or row.status == "deleted":
+        raise HTTPException(404, "Pack not found")
+    if db.scalar(select(PaymentOrder.id).where(PaymentOrder.ref_id == str(row.id)).limit(1)):
+        raise HTTPException(409, detail={"code": "IN_USE", "message": "Pack referenced by payment orders"})
+    if db.scalar(select(UsageLedger.id).where(UsageLedger.ref_id == str(row.id)).limit(1)):
+        raise HTTPException(409, detail={"code": "IN_USE", "message": "Pack referenced by usage ledger"})
+    row.status = "deleted"
+    db.commit()
+    return {"ok": True, "id": str(row.id)}
+
+
 @router.get("/platform/saas/ai-endpoints")
 def list_ai_endpoints(auth: AuthContext = Depends(require_roles("platform_admin")), db: Session = Depends(get_db)):
     _ = auth
-    rows = db.scalars(select(PlatformAiEndpoint)).all()
+    rows = db.scalars(select(PlatformAiEndpoint).where(PlatformAiEndpoint.status != "deleted")).all()
     return [
         {
             "id": str(r.id),
@@ -320,6 +432,63 @@ def create_ai_endpoint(body: AiEndpointIn, auth: AuthContext = Depends(require_r
     db.add(row)
     db.commit()
     return {"id": str(row.id), "code": row.code}
+
+
+class AiEndpointPatchIn(BaseModel):
+    name: str | None = None
+    provider_type: str | None = None
+    base_url: str | None = None
+    model_default: str | None = None
+    meter_code: str | None = None
+    tokens_per_call_est: int | None = None
+    config: dict | None = None
+    status: str | None = None
+
+
+@router.patch("/platform/saas/ai-endpoints/{endpoint_id}")
+def patch_ai_endpoint(
+    endpoint_id: UUID,
+    body: AiEndpointPatchIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    row = db.get(PlatformAiEndpoint, endpoint_id)
+    if not row or row.status == "deleted":
+        raise HTTPException(404, "AI endpoint not found")
+    data = body.model_dump(exclude_unset=True)
+    if "status" in data and data["status"] == "deleted":
+        data.pop("status")
+    for k, v in data.items():
+        setattr(row, k, v)
+    db.commit()
+    return {
+        "id": str(row.id),
+        "code": row.code,
+        "name": row.name,
+        "provider_type": row.provider_type,
+        "base_url": row.base_url,
+        "model_default": row.model_default,
+        "status": row.status,
+        "meter_code": row.meter_code,
+        "tokens_per_call_est": row.tokens_per_call_est,
+    }
+
+
+@router.delete("/platform/saas/ai-endpoints/{endpoint_id}")
+def delete_ai_endpoint(
+    endpoint_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete an AI endpoint (status=deleted). No FK references exist on this catalog row."""
+    _ = auth
+    row = db.get(PlatformAiEndpoint, endpoint_id)
+    if not row or row.status == "deleted":
+        raise HTTPException(404, "AI endpoint not found")
+    row.status = "deleted"
+    db.commit()
+    return {"ok": True, "id": str(row.id)}
 
 
 @router.get("/platform/saas/payments/providers")
@@ -1096,6 +1265,29 @@ def patch_workflow(
         "steps": row.steps,
         "enabled": row.enabled,
     }
+
+
+@router.delete("/admin/workflows/{workflow_id}")
+def delete_workflow(
+    workflow_id: UUID,
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    """Hard-delete a workflow definition. Only disabled, never-instantiated workflows.
+
+    WorkflowDefinition has no soft-delete column, so deletion is physical; running or
+    historical instances would break the FK and are refused with IN_USE.
+    """
+    row = db.get(WorkflowDefinition, workflow_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Workflow not found")
+    if db.scalar(select(WorkflowInstance.id).where(WorkflowInstance.definition_id == row.id).limit(1)):
+        raise HTTPException(409, detail={"code": "IN_USE", "message": "Workflow has instance history"})
+    if row.enabled:
+        raise HTTPException(409, detail={"code": "INVALID_STATE", "message": "Disable the workflow before deleting"})
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/workflows/inbox")

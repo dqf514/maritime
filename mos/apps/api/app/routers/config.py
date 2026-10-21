@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -36,6 +37,13 @@ class ConfigFlagIn(BaseModel):
     value: str
     value_type: str = "string"
     category: str = "general"
+    description: str | None = None
+
+
+class ConfigFlagUpdate(BaseModel):
+    value: str | None = None
+    value_type: str | None = None
+    category: str | None = None
     description: str | None = None
 
 
@@ -101,6 +109,44 @@ def set_config_flag(
         description=body.description,
         updated_by=auth.user_id,
     )
+    return ConfigFlagOut(
+        id=str(flag.id),
+        flag_key=flag.flag_key,
+        flag_value=flag.flag_value,
+        value_type=flag.value_type,
+        category=flag.category,
+        scope_key=flag.scope_key,
+        description=flag.description,
+        tenant_id=str(flag.tenant_id) if flag.tenant_id else None,
+        user_id=str(flag.user_id) if flag.user_id else None,
+    )
+
+
+@router.patch("/flags/{flag_id}", response_model=ConfigFlagOut)
+def update_config_flag(
+    flag_id: UUID,
+    body: ConfigFlagUpdate,
+    auth: AuthContext = Depends(require_module("admin")),
+    db: Session = Depends(get_db),
+):
+    """Update configuration flag at tenant scope (partial)."""
+    flag = db.get(ConfigFlag, flag_id)
+    if not flag or flag.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Flag not found")
+    fields = body.model_fields_set
+    if "value_type" in fields and body.value_type is not None:
+        flag.value_type = body.value_type
+    if "value" in fields and body.value is not None:
+        flag.flag_value = body.value
+    if "category" in fields and body.category is not None:
+        flag.category = body.category
+    if "description" in fields:
+        flag.description = body.description
+    flag.updated_by = auth.user_id
+    flag.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(flag)
+    ConfigService._cache.clear()
     return ConfigFlagOut(
         id=str(flag.id),
         flag_key=flag.flag_key,
@@ -185,6 +231,31 @@ class BusinessRuleIn(BaseModel):
     description: str | None = None
 
 
+class BusinessRuleUpdate(BaseModel):
+    rule_name: str | None = None
+    rule_type: str | None = None
+    entity_type: str | None = None
+    condition: dict | None = None
+    action: dict | None = None
+    priority: int | None = None
+    enabled: bool | None = None
+    description: str | None = None
+
+
+def _business_rule_out(rule: BusinessRuleDefinition) -> BusinessRuleOut:
+    return BusinessRuleOut(
+        id=str(rule.id),
+        rule_name=rule.rule_name,
+        rule_type=rule.rule_type,
+        entity_type=rule.entity_type,
+        priority=rule.priority,
+        condition_json=rule.condition_json or {},
+        action_json=rule.action_json or {},
+        enabled=rule.enabled,
+        description=rule.description,
+    )
+
+
 @router.get("/rules", response_model=list[BusinessRuleOut])
 def list_business_rules(
     rule_type: str | None = Query(None),
@@ -253,6 +324,55 @@ def create_business_rule(
     )
 
 
+@router.patch("/rules/{rule_id}", response_model=BusinessRuleOut)
+def update_business_rule(
+    rule_id: UUID,
+    body: BusinessRuleUpdate,
+    auth: AuthContext = Depends(require_module("admin")),
+    db: Session = Depends(get_db),
+):
+    """Update a business rule (partial)."""
+    rule = db.get(BusinessRuleDefinition, rule_id)
+    if not rule or rule.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Rule not found")
+    fields = body.model_fields_set
+    if "rule_name" in fields and body.rule_name is not None:
+        rule.rule_name = body.rule_name
+    if "rule_type" in fields and body.rule_type is not None:
+        rule.rule_type = body.rule_type
+    if "entity_type" in fields and body.entity_type is not None:
+        rule.entity_type = body.entity_type
+    if "condition" in fields and body.condition is not None:
+        rule.condition_json = body.condition
+    if "action" in fields and body.action is not None:
+        rule.action_json = body.action
+    if "priority" in fields and body.priority is not None:
+        rule.priority = body.priority
+    if "enabled" in fields and body.enabled is not None:
+        rule.enabled = body.enabled
+    if "description" in fields:
+        rule.description = body.description
+    rule.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(rule)
+    return _business_rule_out(rule)
+
+
+@router.delete("/rules/{rule_id}")
+def delete_business_rule(
+    rule_id: UUID,
+    auth: AuthContext = Depends(require_module("admin")),
+    db: Session = Depends(get_db),
+):
+    """Delete a business rule."""
+    rule = db.get(BusinessRuleDefinition, rule_id)
+    if not rule or rule.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Rule not found")
+    db.delete(rule)
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/rules/evaluate")
 def evaluate_business_rules(
     rule_type: str = Query(...),
@@ -289,6 +409,32 @@ class AlertRuleIn(BaseModel):
     alert_priority: str = "normal"
     frequency_days: int | None = None
     blocking: bool = False
+
+
+class AlertRuleUpdate(BaseModel):
+    rule_name: str | None = None
+    entity_type: str | None = None
+    condition: dict | None = None
+    alert_message: str | None = None
+    alert_priority: str | None = None
+    frequency_days: int | None = None
+    enabled: bool | None = None
+    blocking: bool | None = None
+
+
+def _alert_rule_out(rule: ConfigAlertRule) -> AlertRuleOut:
+    return AlertRuleOut(
+        id=str(rule.id),
+        rule_name=rule.rule_name,
+        entity_type=rule.entity_type,
+        condition_json=rule.condition_json or {},
+        alert_message=rule.alert_message,
+        alert_priority=rule.alert_priority,
+        frequency_days=rule.frequency_days,
+        enabled=rule.enabled,
+        blocking=bool(rule.blocking),
+        last_triggered_at=rule.last_triggered_at.isoformat() if rule.last_triggered_at else None,
+    )
 
 
 @router.get("/alert-rules", response_model=list[AlertRuleOut])
@@ -349,6 +495,55 @@ def create_alert_rule(
     )
 
 
+@router.patch("/alert-rules/{rule_id}", response_model=AlertRuleOut)
+def update_alert_rule(
+    rule_id: UUID,
+    body: AlertRuleUpdate,
+    auth: AuthContext = Depends(require_module("admin")),
+    db: Session = Depends(get_db),
+):
+    """Update an alert rule (partial)."""
+    rule = db.get(ConfigAlertRule, rule_id)
+    if not rule or rule.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Alert rule not found")
+    fields = body.model_fields_set
+    if "rule_name" in fields and body.rule_name is not None:
+        rule.rule_name = body.rule_name
+    if "entity_type" in fields and body.entity_type is not None:
+        rule.entity_type = body.entity_type
+    if "condition" in fields and body.condition is not None:
+        rule.condition_json = body.condition
+    if "alert_message" in fields and body.alert_message is not None:
+        rule.alert_message = body.alert_message
+    if "alert_priority" in fields and body.alert_priority is not None:
+        rule.alert_priority = body.alert_priority
+    if "frequency_days" in fields:
+        rule.frequency_days = body.frequency_days
+    if "enabled" in fields and body.enabled is not None:
+        rule.enabled = body.enabled
+    if "blocking" in fields and body.blocking is not None:
+        rule.blocking = body.blocking
+    rule.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(rule)
+    return _alert_rule_out(rule)
+
+
+@router.delete("/alert-rules/{rule_id}")
+def delete_alert_rule(
+    rule_id: UUID,
+    auth: AuthContext = Depends(require_module("admin")),
+    db: Session = Depends(get_db),
+):
+    """Delete an alert rule."""
+    rule = db.get(ConfigAlertRule, rule_id)
+    if not rule or rule.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Alert rule not found")
+    db.delete(rule)
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/alert-rules/evaluate")
 def evaluate_alert_rules(
     entity_type: str = Query(...),
@@ -393,6 +588,31 @@ class TaskRuleIn(BaseModel):
     task_description: str | None = None
     assign_to_role: str | None = None
     due_days_offset: int | None = None
+
+
+class TaskRuleUpdate(BaseModel):
+    rule_name: str | None = None
+    trigger_entity_type: str | None = None
+    trigger_condition: dict | None = None
+    task_title: str | None = None
+    task_description: str | None = None
+    assign_to_role: str | None = None
+    due_days_offset: int | None = None
+    enabled: bool | None = None
+
+
+def _task_rule_out(rule: TaskRule) -> TaskRuleOut:
+    return TaskRuleOut(
+        id=str(rule.id),
+        rule_name=rule.rule_name,
+        trigger_entity_type=rule.trigger_entity_type,
+        trigger_condition=rule.trigger_condition or {},
+        task_title=rule.task_title,
+        task_description=rule.task_description,
+        assign_to_role=rule.assign_to_role,
+        due_days_offset=rule.due_days_offset,
+        enabled=rule.enabled,
+    )
 
 
 @router.get("/task-rules", response_model=list[TaskRuleOut])
@@ -449,6 +669,55 @@ def create_task_rule(
         due_days_offset=rule.due_days_offset,
         enabled=rule.enabled,
     )
+
+
+@router.patch("/task-rules/{rule_id}", response_model=TaskRuleOut)
+def update_task_rule(
+    rule_id: UUID,
+    body: TaskRuleUpdate,
+    auth: AuthContext = Depends(require_module("admin")),
+    db: Session = Depends(get_db),
+):
+    """Update a task automation rule (partial)."""
+    rule = db.get(TaskRule, rule_id)
+    if not rule or rule.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Task rule not found")
+    fields = body.model_fields_set
+    if "rule_name" in fields and body.rule_name is not None:
+        rule.rule_name = body.rule_name
+    if "trigger_entity_type" in fields and body.trigger_entity_type is not None:
+        rule.trigger_entity_type = body.trigger_entity_type
+    if "trigger_condition" in fields and body.trigger_condition is not None:
+        rule.trigger_condition = body.trigger_condition
+    if "task_title" in fields and body.task_title is not None:
+        rule.task_title = body.task_title
+    if "task_description" in fields:
+        rule.task_description = body.task_description
+    if "assign_to_role" in fields:
+        rule.assign_to_role = body.assign_to_role
+    if "due_days_offset" in fields:
+        rule.due_days_offset = body.due_days_offset
+    if "enabled" in fields and body.enabled is not None:
+        rule.enabled = body.enabled
+    rule.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(rule)
+    return _task_rule_out(rule)
+
+
+@router.delete("/task-rules/{rule_id}")
+def delete_task_rule(
+    rule_id: UUID,
+    auth: AuthContext = Depends(require_module("admin")),
+    db: Session = Depends(get_db),
+):
+    """Delete a task automation rule."""
+    rule = db.get(TaskRule, rule_id)
+    if not rule or rule.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Task rule not found")
+    db.delete(rule)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/task-rules/evaluate")

@@ -6,14 +6,18 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { LookupSelect } from "@/components/LookupSelect";
 import { Num } from "@/components/Num";
+import { RowActions } from "@/components/RowActions";
 import { useToast } from "@/components/ToastProvider";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 type VoyageRef = { id: string; voyage_no: string };
 type Pda = { id: string; voyage_id: string | null; status: string; pda_amount: number; fda_amount?: number | null; variance?: number | null; currency: string };
+
+// 与后端 _PDA_LOCKED_STATUSES 一致：金额已承诺后不可改/删
+const PDA_LOCKED = new Set(["approved", "fda", "closed"]);
 
 export function PdaPanel() {
   const { t } = useI18n();
@@ -60,6 +64,43 @@ export function PdaPanel() {
     }
   }
 
+  // 行内编辑（失焦保存；值未变化不发请求；锁定状态直接忽略）
+  async function onCellSave(rowId: string, colKey: string, value: unknown, row: Pda) {
+    if (PDA_LOCKED.has(row.status)) return;
+    const src = row as unknown as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "pda_amount" || colKey === "fda_amount") {
+      const n = value === null || value === "" ? null : Number(value);
+      if (n !== null && isNaN(n)) return;
+      const prev = src[colKey];
+      if ((prev ?? null) === n || (prev == null && n == null)) return;
+      payload = { [colKey]: n };
+    } else if (colKey === "voyage_id") {
+      if ((row.voyage_id ?? "") === (value ?? "")) return;
+      payload = { voyage_id: value || null };
+    } else {
+      if ((src[colKey] ?? "") === (value ?? "")) return;
+      payload = { [colKey]: value };
+    }
+    try {
+      await apiPatch(`/api/v1/port-disbursements/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function remove(id: string) {
+    try {
+      await apiDelete(`/api/v1/port-disbursements/${id}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   async function transition(id: string, target: string) {
     setBusy(true);
     try {
@@ -93,6 +134,7 @@ export function PdaPanel() {
           r.voyage_id
             ? voyages.find((x) => x.id === r.voyage_id)?.voyage_no || r.voyage_id.slice(0, 8)
             : "—",
+        editor: { type: "select", options: voyages.map((x) => ({ value: x.id, label: x.voyage_no })) },
       },
       {
         key: "pda_amount",
@@ -100,6 +142,7 @@ export function PdaPanel() {
         align: "right",
         value: (r) => r.pda_amount,
         render: (v) => <Num v={v as number} digits={2} />,
+        editor: { type: "number", step: 0.01 },
       },
       {
         key: "fda_amount",
@@ -107,6 +150,14 @@ export function PdaPanel() {
         align: "right",
         value: (r) => r.fda_amount ?? null,
         render: (v) => <Num v={v as number | null} digits={2} />,
+        editor: { type: "number", step: 0.01 },
+      },
+      {
+        key: "currency",
+        title: t("page.finance.currency", "Currency"),
+        width: 80,
+        value: (r) => r.currency,
+        editor: { type: "text" },
       },
       {
         key: "variance",
@@ -119,10 +170,16 @@ export function PdaPanel() {
       {
         key: "actions",
         title: "",
-        width: 170,
+        width: 200,
         value: () => "",
         render: (_v, r) => (
           <div className="desk-toolbar" style={{ margin: 0 }}>
+            <RowActions
+              canEdit={!PDA_LOCKED.has(r.status)}
+              canDelete={!PDA_LOCKED.has(r.status)}
+              onDelete={() => remove(r.id)}
+              label={String(r.id).slice(0, 8)}
+            />
             {r.status === "draft" ? (
               <button
                 className="btn btn-sm"
@@ -228,6 +285,8 @@ export function PdaPanel() {
           onRowContextMenu={(row, _i, e) => ctx.open(row)(e)}
           storageKey="finance_pda_grid"
           showFooter={false}
+          editable
+          onCellSave={onCellSave}
           emptyText={t("common.empty", "No records")}
         />
       </div>

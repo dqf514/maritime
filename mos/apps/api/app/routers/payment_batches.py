@@ -81,6 +81,13 @@ class BatchIn(BaseModel):
     bank_charge_mode: str = "shared"
 
 
+class BatchPatch(BaseModel):
+    """草稿批次可改；已审批（processing/completed/reversed）→ 409 INVALID_STATE。"""
+
+    batch_date: date | None = None
+    bank_charge_mode: str | None = None
+
+
 @router.get("/payments/payable-invoices")
 def list_payable_invoices(
     due_before: date | None = Query(None),
@@ -219,6 +226,62 @@ def reverse_payment_batch(
     db.commit()
     db.refresh(batch)
     return _batch_out(batch)
+
+
+@router.patch("/payments/batches/{batch_id}")
+def patch_payment_batch(
+    batch_id: UUID,
+    body: BatchPatch,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """改草稿批次。已审批/已完成/已冲正（released）→ 409，只可 reverse 后重建。"""
+    batch = scoped_get(db, PaymentBatch, batch_id, auth.tenant_id)
+    if batch is None:
+        raise HTTPException(404, detail={"code": "BATCH_NOT_FOUND", "message": str(batch_id)})
+    if batch.status != "draft":
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Batch is {batch.status}, only draft can be edited"},
+        )
+    fields = body.model_fields_set
+    if "bank_charge_mode" in fields and body.bank_charge_mode is not None:
+        if body.bank_charge_mode not in BANK_CHARGE_MODES:
+            raise HTTPException(
+                422,
+                detail={"code": "BAD_BANK_CHARGE_MODE", "message": f"expected one of {BANK_CHARGE_MODES}"},
+            )
+        batch.bank_charge_mode = body.bank_charge_mode
+    if "batch_date" in fields and body.batch_date is not None:
+        batch.batch_date = body.batch_date
+    db.commit()
+    db.refresh(batch)
+    return _batch_out(batch)
+
+
+@router.delete("/payments/batches/{batch_id}")
+def delete_payment_batch(
+    batch_id: UUID,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """删草稿批次（连带其尚未入账的 staged Payment 行）。已审批批次 → 409。"""
+    batch = scoped_get(db, PaymentBatch, batch_id, auth.tenant_id)
+    if batch is None:
+        raise HTTPException(404, detail={"code": "BATCH_NOT_FOUND", "message": str(batch_id)})
+    if batch.status != "draft":
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Batch is {batch.status}, only draft can be deleted"},
+        )
+    staged = db.scalars(
+        select(Payment).where(Payment.tenant_id == auth.tenant_id, Payment.batch_id == batch.id)
+    ).all()
+    for pay in staged:
+        db.delete(pay)
+    db.delete(batch)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/payments/batches/{batch_id}/export-xml")
@@ -498,6 +561,16 @@ class AdvanceIn(BaseModel):
     notes: str | None = None
 
 
+class AdvancePatch(BaseModel):
+    """未核销预收/预付可改；已核销（partially/fully_allocated）→ 409 INVALID_STATE。"""
+
+    direction: str | None = None
+    counterparty_id: UUID | None = None
+    amount: float | None = Field(None, gt=0)
+    currency: str | None = None
+    notes: str | None = None
+
+
 class AllocateIn(BaseModel):
     invoice_id: UUID
     amount: float = Field(..., gt=0)
@@ -637,3 +710,78 @@ def allocate_advance(
     db.commit()
     db.refresh(row)
     return _advance_out(row, _allocations_of(db, auth.tenant_id, row.id))
+
+
+@router.patch("/payments/advances/{advance_id}")
+def patch_advance(
+    advance_id: UUID,
+    body: AdvancePatch,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """改预收/预付。已核销金额 > 0（released）→ 409；未核销可改，金额须 ≥ 已核销。"""
+    row = scoped_get(db, AdvancePayment, advance_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "ADVANCE_NOT_FOUND", "message": str(advance_id)})
+    fields = body.model_fields_set
+    allocated = Decimal(str(row.allocated_amount or 0))
+    locked = fields & {"direction", "amount", "currency"}
+    if locked and allocated > 0:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "INVALID_STATE",
+                "message": f"Advance is {row.status}; {sorted(locked)} cannot change once allocated",
+            },
+        )
+    if "direction" in fields and body.direction is not None and body.direction not in ADVANCE_DIRECTIONS:
+        raise HTTPException(422, detail={"code": "BAD_DIRECTION", "message": f"expected one of {ADVANCE_DIRECTIONS}"})
+    if "counterparty_id" in fields and body.counterparty_id is not None:
+        if scoped_get(db, Counterparty, body.counterparty_id, auth.tenant_id) is None:
+            raise HTTPException(404, detail={"code": "COUNTERPARTY_NOT_FOUND", "message": str(body.counterparty_id)})
+    if "amount" in fields and body.amount is not None and Decimal(str(body.amount)) < allocated:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "AMOUNT_BELOW_ALLOCATED",
+                "message": f"Amount {body.amount} is below already allocated {allocated}",
+                "allocated_amount": float(allocated),
+            },
+        )
+    for field in ("direction", "counterparty_id", "amount", "currency", "notes"):
+        if field in fields:
+            val = getattr(body, field)
+            # direction/amount/currency 非空列：显式 null 不落地
+            if val is None and field in ("direction", "amount", "currency"):
+                continue
+            setattr(row, field, Decimal(str(val)) if field == "amount" and val is not None else val)
+    db.commit()
+    db.refresh(row)
+    return _advance_out(row)
+
+
+@router.delete("/payments/advances/{advance_id}")
+def delete_advance(
+    advance_id: UUID,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """删未核销的预收/预付（连带 allocations 防御性清理）。已核销 → 409。"""
+    row = scoped_get(db, AdvancePayment, advance_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "ADVANCE_NOT_FOUND", "message": str(advance_id)})
+    if Decimal(str(row.allocated_amount or 0)) > 0:
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Advance is {row.status}; allocated advances cannot be deleted"},
+        )
+    for alloc in db.scalars(
+        select(AdvanceAllocation).where(
+            AdvanceAllocation.tenant_id == auth.tenant_id,
+            AdvanceAllocation.advance_id == row.id,
+        )
+    ).all():
+        db.delete(alloc)
+    db.delete(row)
+    db.commit()
+    return {"ok": True}

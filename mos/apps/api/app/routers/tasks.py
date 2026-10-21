@@ -76,7 +76,7 @@ def task_out(db: Session, row: Task) -> dict:
 
 def _task_or_404(db: Session, tenant_id: UUID, task_id: UUID) -> Task:
     row = db.get(Task, task_id)
-    if not row or row.tenant_id != tenant_id:
+    if not row or row.tenant_id != tenant_id or row.status == "deleted":
         raise HTTPException(404, "Task not found")
     return row
 
@@ -105,6 +105,7 @@ def my_tasks(
 ):
     q = select(Task).where(
         Task.tenant_id == auth.tenant_id,
+        Task.status != "deleted",
         or_(Task.assignee_user_id == auth.user_id, Task.created_by == auth.user_id),
     )
     if status:
@@ -132,7 +133,7 @@ def list_tasks(
 ):
     if not MANAGE_ROLES.intersection(auth.roles):
         raise HTTPException(403, detail={"code": "ROLE_REQUIRED", "roles": sorted(MANAGE_ROLES)})
-    q = select(Task).where(Task.tenant_id == auth.tenant_id)
+    q = select(Task).where(Task.tenant_id == auth.tenant_id, Task.status != "deleted")
     if status:
         q = q.where(Task.status == status)
     if assignee_user_id:
@@ -246,3 +247,21 @@ def reopen_task(
     audit(db, action="task.reopen", tenant_id=auth.tenant_id, actor_user_id=auth.user_id, entity_type="task", entity_id=task.id)
     db.commit()
     return task_out(db, task)
+
+
+@router.delete("/tasks/{task_id}")
+def delete_task(
+    task_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
+    """Soft delete via status="deleted" (done/cancelled tasks may also be deleted)."""
+    from app.services.recycle import soft_delete
+
+    task = _task_or_404(db, auth.tenant_id, task_id)
+    _assert_can_edit(auth, task)
+    soft_delete(db, tenant_id=auth.tenant_id, user_id=auth.user_id, entity_type="task", row=task, title=task.title)
+    task.updated_at = _now()
+    audit(db, action="task.delete", tenant_id=auth.tenant_id, actor_user_id=auth.user_id, entity_type="task", entity_id=task.id)
+    db.commit()
+    return {"ok": True, "recycled": True}

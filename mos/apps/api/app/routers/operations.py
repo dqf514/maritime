@@ -32,7 +32,7 @@ from app.services.port_functions import normalize_function_code
 from app.services.alert_engine import assert_no_blocking_alerts
 from app.services.audit import audit
 from app.services.recycle import soft_delete
-from app.services.report_sequence import assert_report_sequence
+from app.services.report_sequence import assert_report_sequence, derive_report_stage
 from app.services.tenant_guard import scoped_get
 from app.services.state_machine import VOYAGE_TRANSITIONS, InvalidState, transition
 
@@ -129,6 +129,24 @@ class PortCallOut(BaseModel):
     timezone: str
 
 
+class PortCallUpdate(BaseModel):
+    """部分更新 — 只有显式传入的字段才落地（model_fields_set 语义）。"""
+
+    port_id: UUID | None = None
+    seq: int | None = None
+    purpose: str | None = None
+    function_code: str | None = None
+    eta: datetime | None = None
+    etd: datetime | None = None
+    ata: datetime | None = None
+    atd: datetime | None = None
+    nor_at: datetime | None = None
+    eosp_at: datetime | None = None
+    bl_date: datetime | None = None
+    agent: str | None = None
+    timezone: str | None = None
+
+
 class NoonIn(BaseModel):
     voyage_id: UUID
     report_at: datetime
@@ -158,6 +176,13 @@ class SofIn(BaseModel):
     event_code: str
     event_at: datetime
     local_tz: str = "UTC"
+    remarks: str | None = None
+
+
+class SofEventUpdate(BaseModel):
+    event_code: str | None = None
+    event_at: datetime | None = None
+    local_tz: str | None = None
     remarks: str | None = None
 
 
@@ -473,7 +498,13 @@ def copy_voyage_itinerary(
     if not src or src.tenant_id != auth.tenant_id or not _alive(src.status):
         raise HTTPException(404, "Voyage not found")
     src_calls = db.scalars(
-        select(PortCall).where(PortCall.tenant_id == auth.tenant_id, PortCall.voyage_id == src.id).order_by(PortCall.seq)
+        select(PortCall)
+        .where(
+            PortCall.tenant_id == auth.tenant_id,
+            PortCall.voyage_id == src.id,
+            PortCall.deleted_at.is_(None),
+        )
+        .order_by(PortCall.seq)
     ).all()
 
     base_no = f"{src.voyage_no}-COPY"
@@ -637,10 +668,22 @@ def voyage_overview(
     estimate = db.get(Estimate, charter.estimate_id) if charter and charter.estimate_id else None
     counterparty = db.get(Counterparty, charter.counterparty_id) if charter and charter.counterparty_id else None
     port_calls = db.scalars(
-        select(PortCall).where(PortCall.tenant_id == auth.tenant_id, PortCall.voyage_id == v.id).order_by(PortCall.seq)
+        select(PortCall)
+        .where(
+            PortCall.tenant_id == auth.tenant_id,
+            PortCall.voyage_id == v.id,
+            PortCall.deleted_at.is_(None),
+        )
+        .order_by(PortCall.seq)
     ).all()
     noon_count = len(
-        db.scalars(select(NoonReport).where(NoonReport.tenant_id == auth.tenant_id, NoonReport.voyage_id == v.id)).all()
+        db.scalars(
+            select(NoonReport).where(
+                NoonReport.tenant_id == auth.tenant_id,
+                NoonReport.voyage_id == v.id,
+                NoonReport.deleted_at.is_(None),
+            )
+        ).all()
     )
     laytimes = db.scalars(
         select(LaytimeCalc).where(LaytimeCalc.tenant_id == auth.tenant_id, LaytimeCalc.voyage_id == v.id)
@@ -652,7 +695,11 @@ def voyage_overview(
         select(Invoice).where(Invoice.tenant_id == auth.tenant_id, Invoice.voyage_id == v.id, Invoice.status != "deleted")
     ).all()
     off_hire = db.scalars(
-        select(OffHireEvent).where(OffHireEvent.tenant_id == auth.tenant_id, OffHireEvent.voyage_id == v.id)
+        select(OffHireEvent).where(
+            OffHireEvent.tenant_id == auth.tenant_id,
+            OffHireEvent.voyage_id == v.id,
+            OffHireEvent.status != "deleted",
+        )
     ).all()
     results = (estimate.results if estimate else None) or {}
     return {
@@ -701,6 +748,7 @@ def voyage_overview(
                 "ata": pc.ata.isoformat() if pc.ata else None,
                 "atd": pc.atd.isoformat() if pc.atd else None,
                 "nor_at": pc.nor_at.isoformat() if pc.nor_at else None,
+                "agent": pc.agent,
             }
             for pc in port_calls
         ],
@@ -774,22 +822,92 @@ def list_port_calls(
     auth: AuthContext = Depends(require_module("operations")),
     db: Session = Depends(get_db),
 ):
-    stmt = select(PortCall).where(PortCall.tenant_id == auth.tenant_id)
+    stmt = select(PortCall).where(PortCall.tenant_id == auth.tenant_id, PortCall.deleted_at.is_(None))
     if voyage_id:
         stmt = stmt.where(PortCall.voyage_id == voyage_id)
     rows = db.scalars(stmt.order_by(PortCall.seq)).all()
     return [PortCallOut.model_validate(r) for r in rows]
 
 
+@router.patch("/port-calls/{port_call_id}", response_model=PortCallOut)
+def update_port_call(
+    port_call_id: UUID,
+    body: PortCallUpdate,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(PortCall, port_call_id)
+    if not row or row.tenant_id != auth.tenant_id or row.deleted_at is not None:
+        raise HTTPException(404, "Port call not found")
+    fields = body.model_fields_set
+    if "port_id" in fields and body.port_id is not None:
+        if scoped_get(db, Port, body.port_id, auth.tenant_id) is None:
+            raise HTTPException(404, "Port not found")
+    if "function_code" in fields:
+        body.function_code = normalize_function_code(body.function_code)
+    for name in (
+        "port_id",
+        "seq",
+        "purpose",
+        "function_code",
+        "eta",
+        "etd",
+        "ata",
+        "atd",
+        "nor_at",
+        "eosp_at",
+        "bl_date",
+        "agent",
+        "timezone",
+    ):
+        if name in fields:
+            setattr(row, name, getattr(body, name))
+    audit(
+        db,
+        action="port_call.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="port_call",
+        entity_id=str(row.id),
+        detail={"fields": sorted(fields)},
+    )
+    db.commit()
+    db.refresh(row)
+    return PortCallOut.model_validate(row)
+
+
+@router.delete("/port-calls/{port_call_id}")
+def delete_port_call(
+    port_call_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = db.get(PortCall, port_call_id)
+    if not row or row.tenant_id != auth.tenant_id or row.deleted_at is not None:
+        raise HTTPException(404, "Port call not found")
+    # 软删挂靠港本身；其 SOF 事件保持原样（列表按“挂靠港存活”过滤，
+    # 回收站恢复挂靠港后事件随之重新可见，避免级联丢失）
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="port_call",
+        row=row,
+        title=f"Port call #{row.seq}",
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
 @router.get("/port-calls/{port_call_id}/sof-summary")
 def sof_summary(port_call_id: UUID, auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
     """SOF 标准事件时间线 + 作业/等泊时长，供 laytime from-sof 消费。"""
     pc = db.get(PortCall, port_call_id)
-    if not pc or pc.tenant_id != auth.tenant_id:
+    if not pc or pc.tenant_id != auth.tenant_id or pc.deleted_at is not None:
         raise HTTPException(404, "Port call not found")
     rows = db.scalars(
         select(SofEvent)
-        .where(SofEvent.tenant_id == auth.tenant_id, SofEvent.port_call_id == pc.id)
+        .where(SofEvent.tenant_id == auth.tenant_id, SofEvent.port_call_id == pc.id, SofEvent.deleted_at.is_(None))
         .order_by(SofEvent.event_at.asc())
     ).all()
     by_code: dict[str, datetime] = {}
@@ -830,7 +948,12 @@ def create_noon(body: NoonIn, auth: AuthContext = Depends(require_module("operat
     )
     deviation = None
     # ETA deviation vs first port call ETA
-    pc = db.scalar(select(PortCall).where(PortCall.voyage_id == v.id).order_by(PortCall.seq).limit(1))
+    pc = db.scalar(
+        select(PortCall)
+        .where(PortCall.voyage_id == v.id, PortCall.deleted_at.is_(None))
+        .order_by(PortCall.seq)
+        .limit(1)
+    )
     if pc and pc.eta and body.eta_next:
         eta = pc.eta if pc.eta.tzinfo else pc.eta.replace(tzinfo=timezone.utc)
         eta_next = body.eta_next if body.eta_next.tzinfo else body.eta_next.replace(tzinfo=timezone.utc)
@@ -875,43 +998,250 @@ def create_noon(body: NoonIn, auth: AuthContext = Depends(require_module("operat
     )
 
 
-@router.post("/sof-events")
-def create_sof(body: SofIn, auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
-    pc = db.get(PortCall, body.port_call_id)
-    if not pc or pc.tenant_id != auth.tenant_id:
-        raise HTTPException(404, "Port call not found")
-    code = body.event_code.upper()
+class NoonDetail(BaseModel):
+    """午报全字段读模型 — 列表/编辑用（NoonOut 是创建响应的精简形态）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    voyage_id: UUID
+    report_at: datetime
+    lat: float | None = None
+    lon: float | None = None
+    speed: float | None = None
+    rob_fo: float | None = None
+    rob_do: float | None = None
+    eta_next: datetime | None = None
+    remarks: str | None = None
+    eta_deviation_hours: float | None = None
+    wind_bf: float | None = None
+    sea_state: str | None = None
+    current_kn: float | None = None
+
+
+class NoonUpdate(BaseModel):
+    report_at: datetime | None = None
+    lat: float | None = None
+    lon: float | None = None
+    speed: float | None = None
+    rob_fo: float | None = None
+    rob_do: float | None = None
+    eta_next: datetime | None = None
+    remarks: str | None = None
+    wind_bf: float | None = None
+    sea_state: str | None = None
+    current_kn: float | None = None
+
+
+def _noon_deviation(db: Session, tenant_id: UUID, voyage_id: UUID, eta_next: datetime | None) -> Decimal | None:
+    """ETA 偏差 = 首个挂靠港 ETA vs eta_next（与创建时同一口径）。"""
+    if eta_next is None:
+        return None
+    pc = db.scalar(
+        select(PortCall)
+        .where(
+            PortCall.tenant_id == tenant_id,
+            PortCall.voyage_id == voyage_id,
+            PortCall.deleted_at.is_(None),
+        )
+        .order_by(PortCall.seq)
+        .limit(1)
+    )
+    if not (pc and pc.eta):
+        return None
+    eta = pc.eta if pc.eta.tzinfo else pc.eta.replace(tzinfo=timezone.utc)
+    nxt = eta_next if eta_next.tzinfo else eta_next.replace(tzinfo=timezone.utc)
+    return Decimal(str((nxt - eta).total_seconds() / 3600.0))
+
+
+def _noon_detail(row: NoonReport, stage: str | None = None) -> dict:
+    return {
+        "id": row.id,
+        "voyage_id": row.voyage_id,
+        "report_at": row.report_at,
+        "lat": float(row.lat) if row.lat is not None else None,
+        "lon": float(row.lon) if row.lon is not None else None,
+        "speed": float(row.speed) if row.speed is not None else None,
+        "rob_fo": float(row.rob_fo) if row.rob_fo is not None else None,
+        "rob_do": float(row.rob_do) if row.rob_do is not None else None,
+        "eta_next": row.eta_next,
+        "remarks": row.remarks,
+        "eta_deviation_hours": float(row.eta_deviation_hours) if row.eta_deviation_hours is not None else None,
+        "wind_bf": float(row.wind_bf) if row.wind_bf is not None else None,
+        "sea_state": row.sea_state,
+        "current_kn": float(row.current_kn) if row.current_kn is not None else None,
+        "stage": stage,
+    }
+
+
+def _get_alive_noon(db: Session, tenant_id: UUID, noon_id: UUID) -> NoonReport:
+    row = db.get(NoonReport, noon_id)
+    if not row or row.tenant_id != tenant_id or row.deleted_at is not None:
+        raise HTTPException(404, "Noon report not found")
+    return row
+
+
+@router.get("/noon-reports")
+def list_noon_reports(
+    voyage_id: UUID | None = None,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    stmt = select(NoonReport).where(NoonReport.tenant_id == auth.tenant_id, NoonReport.deleted_at.is_(None))
+    if voyage_id:
+        stmt = stmt.where(NoonReport.voyage_id == voyage_id)
+    rows = db.scalars(stmt.order_by(NoonReport.report_at.asc())).all()
+    # stage 推导按航次分组（同一航次的挂靠港窗口只取一次）
+    pc_cache: dict[UUID, list] = {}
+    out = []
+    for r in rows:
+        if r.voyage_id not in pc_cache:
+            pc_cache[r.voyage_id] = db.scalars(
+                select(PortCall).where(
+                    PortCall.voyage_id == r.voyage_id,
+                    PortCall.deleted_at.is_(None),
+                )
+            ).all()
+        stage = derive_report_stage(
+            report_at=r.report_at,
+            lat=float(r.lat) if r.lat is not None else None,
+            lon=float(r.lon) if r.lon is not None else None,
+            speed=float(r.speed) if r.speed is not None else None,
+            remarks=r.remarks,
+            port_calls=pc_cache[r.voyage_id],
+        )
+        out.append(_noon_detail(r, stage))
+    return out
+
+
+@router.get("/noon-reports/{noon_id}")
+def get_noon_report(
+    noon_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = _get_alive_noon(db, auth.tenant_id, noon_id)
+    pcs = db.scalars(
+        select(PortCall).where(PortCall.voyage_id == row.voyage_id, PortCall.deleted_at.is_(None))
+    ).all()
+    stage = derive_report_stage(
+        report_at=row.report_at,
+        lat=float(row.lat) if row.lat is not None else None,
+        lon=float(row.lon) if row.lon is not None else None,
+        speed=float(row.speed) if row.speed is not None else None,
+        remarks=row.remarks,
+        port_calls=pcs,
+    )
+    return _noon_detail(row, stage)
+
+
+@router.patch("/noon-reports/{noon_id}")
+def update_noon_report(
+    noon_id: UUID,
+    body: NoonUpdate,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = _get_alive_noon(db, auth.tenant_id, noon_id)
+    fields = body.model_fields_set
+    for name in (
+        "report_at",
+        "lat",
+        "lon",
+        "speed",
+        "rob_fo",
+        "rob_do",
+        "eta_next",
+        "remarks",
+        "wind_bf",
+        "sea_state",
+        "current_kn",
+    ):
+        if name in fields:
+            setattr(row, name, getattr(body, name))
+    if "eta_next" in fields or "report_at" in fields:
+        row.eta_deviation_hours = _noon_deviation(db, auth.tenant_id, row.voyage_id, row.eta_next)
+    audit(
+        db,
+        action="noon_report.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="noon_report",
+        entity_id=str(row.id),
+        detail={"fields": sorted(fields)},
+    )
+    db.commit()
+    db.refresh(row)
+    return _noon_detail(row)
+
+
+@router.delete("/noon-reports/{noon_id}")
+def delete_noon_report(
+    noon_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = _get_alive_noon(db, auth.tenant_id, noon_id)
+    row.deleted_at = datetime.now(timezone.utc)
+    audit(
+        db,
+        action="noon_report.delete",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="noon_report",
+        entity_id=str(row.id),
+        detail={"voyage_id": str(row.voyage_id)},
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+def _assert_sof_code(code: str) -> None:
     if code not in SOF_EVENT_CODES:
         raise HTTPException(
             422,
             detail={
                 "code": "INVALID_SOF_EVENT_CODE",
-                "message": f"Unknown SOF event code '{body.event_code}'",
+                "message": f"Unknown SOF event code '{code}'",
                 "allowed": sorted(SOF_EVENT_CODES),
             },
         )
-    existing = db.scalars(select(SofEvent).where(SofEvent.port_call_id == pc.id)).all()
-    event_at = _as_utc(body.event_at)
+
+
+def _assert_sof_sequence(existing: list[SofEvent], code: str, event_at: datetime) -> None:
+    """SOF 时序校验：NOR 不得晚于最早非豁免事件；非豁免事件不得早于 NOR。
+    existing 应已排除软删行与（PATCH 场景下的）自身行。"""
+    at = _as_utc(event_at)
     if code == "NOR":
-        # NOR 不得晚于已有最早的非豁免事件（豁免事件本就该早于 NOR）
         non_exempt = [e for e in existing if e.event_code.upper() not in SOF_PRE_NOR_EXEMPT]
         if non_exempt:
             earliest = min(_as_utc(e.event_at) for e in non_exempt)
-            if event_at > earliest:
+            if at > earliest:
                 raise HTTPException(
                     422,
                     detail={"code": "SOF_SEQUENCE_VIOLATION", "message": "NOR must not be later than existing events of this port call"},
                 )
     elif code not in SOF_PRE_NOR_EXEMPT:
-        # 非豁免事件时间不得早于同 port_call 的 NOR 时间
         nors = [e for e in existing if e.event_code.upper() == "NOR"]
         if nors:
             nor_at = min(_as_utc(e.event_at) for e in nors)
-            if event_at < nor_at:
+            if at < nor_at:
                 raise HTTPException(
                     422,
                     detail={"code": "SOF_SEQUENCE_VIOLATION", "message": "Event time must not be earlier than NOR of this port call"},
                 )
+
+
+@router.post("/sof-events")
+def create_sof(body: SofIn, auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
+    pc = db.get(PortCall, body.port_call_id)
+    if not pc or pc.tenant_id != auth.tenant_id or pc.deleted_at is not None:
+        raise HTTPException(404, "Port call not found")
+    code = body.event_code.upper()
+    _assert_sof_code(code)
+    existing = db.scalars(
+        select(SofEvent).where(SofEvent.port_call_id == pc.id, SofEvent.deleted_at.is_(None))
+    ).all()
+    _assert_sof_sequence(existing, code, body.event_at)
     row = SofEvent(tenant_id=auth.tenant_id, **body.model_dump())
     db.add(row)
     if code == "NOR":
@@ -936,13 +1266,31 @@ def list_sof_events(
     auth: AuthContext = Depends(require_module("operations")),
     db: Session = Depends(get_db),
 ):
-    q = select(SofEvent).where(SofEvent.tenant_id == auth.tenant_id)
+    q = select(SofEvent).where(SofEvent.tenant_id == auth.tenant_id, SofEvent.deleted_at.is_(None))
     if port_call_id:
         q = q.where(SofEvent.port_call_id == port_call_id)
     elif voyage_id:
-        pc_ids = db.scalars(select(PortCall.id).where(PortCall.tenant_id == auth.tenant_id, PortCall.voyage_id == voyage_id)).all()
+        pc_ids = db.scalars(
+            select(PortCall.id).where(
+                PortCall.tenant_id == auth.tenant_id,
+                PortCall.voyage_id == voyage_id,
+                PortCall.deleted_at.is_(None),
+            )
+        ).all()
         q = q.where(SofEvent.port_call_id.in_(pc_ids or [UUID(int=0)]))
     rows = db.scalars(q.order_by(SofEvent.event_at.asc())).all()
+    # 挂靠港已软删的事件不对外暴露（恢复挂靠港后重新可见）
+    alive_pcs = {
+        pc.id
+        for pc in db.scalars(
+            select(PortCall).where(
+                PortCall.tenant_id == auth.tenant_id,
+                PortCall.id.in_([r.port_call_id for r in rows] or [UUID(int=0)]),
+            )
+        ).all()
+        if pc.deleted_at is None
+    }
+    rows = [r for r in rows if r.port_call_id in alive_pcs]
     return [
         {
             "id": str(r.id),
@@ -956,6 +1304,113 @@ def list_sof_events(
     ]
 
 
+def _sof_public(r: SofEvent) -> dict:
+    return {
+        "id": str(r.id),
+        "port_call_id": str(r.port_call_id),
+        "event_code": r.event_code,
+        "event_at": r.event_at.isoformat() if r.event_at else None,
+        "local_tz": r.local_tz,
+        "remarks": r.remarks,
+    }
+
+
+def _get_alive_sof(db: Session, tenant_id: UUID, event_id: UUID) -> SofEvent:
+    row = db.get(SofEvent, event_id)
+    if not row or row.tenant_id != tenant_id or row.deleted_at is not None:
+        raise HTTPException(404, "SOF event not found")
+    pc = db.get(PortCall, row.port_call_id)
+    if not pc or pc.deleted_at is not None:
+        raise HTTPException(404, "SOF event not found")
+    return row
+
+
+@router.patch("/sof-events/{event_id}")
+def update_sof_event(
+    event_id: UUID,
+    body: SofEventUpdate,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = _get_alive_sof(db, auth.tenant_id, event_id)
+    fields = body.model_fields_set
+    new_code = (body.event_code.upper() if "event_code" in fields and body.event_code else row.event_code)
+    if "event_code" in fields:
+        _assert_sof_code(new_code)
+    new_at = body.event_at if "event_at" in fields and body.event_at is not None else row.event_at
+    if "event_code" in fields or "event_at" in fields:
+        others = db.scalars(
+            select(SofEvent).where(
+                SofEvent.port_call_id == row.port_call_id,
+                SofEvent.deleted_at.is_(None),
+                SofEvent.id != row.id,
+            )
+        ).all()
+        _assert_sof_sequence(others, new_code, new_at)
+
+    old_at = row.event_at
+    if "event_code" in fields:
+        row.event_code = new_code
+    if "event_at" in fields and body.event_at is not None:
+        row.event_at = body.event_at
+    if "local_tz" in fields:
+        row.local_tz = body.local_tz or "UTC"
+    if "remarks" in fields:
+        row.remarks = body.remarks
+
+    # 挂靠港派生时间字段：仅当其值来源于被改事件的旧时间时同步更新
+    pc = db.get(PortCall, row.port_call_id)
+    if pc and old_at is not None:
+        old_utc = _as_utc(old_at)
+        new_utc = _as_utc(row.event_at)
+        if new_utc != old_utc:
+            if row.event_code == "NOR":
+                if pc.nor_at and _as_utc(pc.nor_at) == old_utc:
+                    pc.nor_at = row.event_at
+                if pc.ata and _as_utc(pc.ata) == old_utc:
+                    pc.ata = row.event_at
+            elif row.event_code == "EOSP" and pc.eosp_at and _as_utc(pc.eosp_at) == old_utc:
+                pc.eosp_at = row.event_at
+            elif row.event_code == "BL_DATE" and pc.bl_date and _as_utc(pc.bl_date) == old_utc:
+                pc.bl_date = row.event_at
+            elif row.event_code in {"COMPLETED", "SAILED"} and pc.atd and _as_utc(pc.atd) == old_utc:
+                pc.atd = row.event_at
+
+    audit(
+        db,
+        action="sof_event.update",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="sof_event",
+        entity_id=str(row.id),
+        detail={"fields": sorted(fields)},
+    )
+    db.commit()
+    db.refresh(row)
+    return _sof_public(row)
+
+
+@router.delete("/sof-events/{event_id}")
+def delete_sof_event(
+    event_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    row = _get_alive_sof(db, auth.tenant_id, event_id)
+    row.deleted_at = datetime.now(timezone.utc)
+    audit(
+        db,
+        action="sof_event.delete",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type="sof_event",
+        entity_id=str(row.id),
+        detail={"event_code": row.event_code},
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
 @router.get("/twin/fleet")
 def twin_fleet(auth: AuthContext = Depends(require_module("twin")), db: Session = Depends(get_db)):
     vessels = db.scalars(select(Vessel).where(Vessel.tenant_id == auth.tenant_id)).all()
@@ -967,7 +1422,10 @@ def twin_fleet(auth: AuthContext = Depends(require_module("twin")), db: Session 
         noon = None
         if voy:
             noon = db.scalar(
-                select(NoonReport).where(NoonReport.voyage_id == voy.id).order_by(NoonReport.report_at.desc()).limit(1)
+                select(NoonReport)
+                .where(NoonReport.voyage_id == voy.id, NoonReport.deleted_at.is_(None))
+                .order_by(NoonReport.report_at.desc())
+                .limit(1)
             )
         points.append(
             {
@@ -988,8 +1446,16 @@ def twin_voyage(voyage_id: UUID, auth: AuthContext = Depends(require_module("twi
     v = db.get(Voyage, voyage_id)
     if not v or v.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Voyage not found")
-    calls = db.scalars(select(PortCall).where(PortCall.voyage_id == v.id).order_by(PortCall.seq)).all()
-    noons = db.scalars(select(NoonReport).where(NoonReport.voyage_id == v.id).order_by(NoonReport.report_at)).all()
+    calls = db.scalars(
+        select(PortCall)
+        .where(PortCall.voyage_id == v.id, PortCall.deleted_at.is_(None))
+        .order_by(PortCall.seq)
+    ).all()
+    noons = db.scalars(
+        select(NoonReport)
+        .where(NoonReport.voyage_id == v.id, NoonReport.deleted_at.is_(None))
+        .order_by(NoonReport.report_at)
+    ).all()
     return {
         "level": "L2",
         "voyage": VoyageOut.model_validate(v).model_dump(),

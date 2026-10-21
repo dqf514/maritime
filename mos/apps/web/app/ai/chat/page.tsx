@@ -5,8 +5,9 @@ import { AppShell } from "@/components/AppShell";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordModal } from "@/components/RecordModal";
 import { StatusLegend } from "@/components/StatusLegend";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -45,6 +46,8 @@ export default function AiChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [renaming, setRenaming] = useState<Conversation | null>(null);
+  const [renameTitle, setRenameTitle] = useState("");
   const convCtx = useContextMenu<Conversation>();
 
   async function loadAgents() {
@@ -130,6 +133,55 @@ export default function AiChatPage() {
     toast.success(t("ctx.copied_id", "ID copied"));
   }
 
+  function openRename(c: Conversation) {
+    setRenaming(c);
+    setRenameTitle(c.title || "");
+  }
+
+  async function saveRename() {
+    if (!renaming) return;
+    const next = renameTitle.trim();
+    if (!next || next === (renaming.title || "")) {
+      setRenaming(null);
+      return;
+    }
+    try {
+      await apiPatch(`/api/v1/ai/conversations/${renaming.id}`, { title: next });
+      toast.success(t("common.saved", "Saved"));
+      if (activeConv?.id === renaming.id) setActiveConv({ ...renaming, title: next });
+      setRenaming(null);
+      await loadConversations();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function toggleArchive(c: Conversation) {
+    const next = c.status === "archived" ? "active" : "archived";
+    try {
+      await apiPatch(`/api/v1/ai/conversations/${c.id}`, { status: next });
+      toast.success(t("common.saved", "Saved"));
+      if (activeConv?.id === c.id) setActiveConv({ ...c, status: next });
+      await loadConversations();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  async function deleteConv(c: Conversation) {
+    try {
+      await apiDelete(`/api/v1/ai/conversations/${c.id}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      if (activeConv?.id === c.id) {
+        setActiveConv(null);
+        setMessages([]);
+      }
+      await loadConversations();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
   function formatTs(iso: string | null | undefined): string {
     if (!iso) return "—";
     return iso.slice(0, 16).replace("T", " ");
@@ -137,6 +189,13 @@ export default function AiChatPage() {
 
   const convMenuItems = (c: Conversation): ContextMenuItem[] => [
     { key: "open", label: t("ctx.open", "Open"), onClick: () => setActiveConv(c) },
+    { key: "rename", label: t("ai.rename", "Rename"), onClick: () => openRename(c) },
+    {
+      key: "archive",
+      label: c.status === "archived" ? t("ai.unarchive", "Unarchive") : t("ai.archive", "Archive"),
+      onClick: () => toggleArchive(c).catch(() => undefined),
+    },
+    { key: "delete", label: t("common.delete", "Delete"), onClick: () => deleteConv(c).catch(() => undefined) },
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyConvId(c) },
   ];
 
@@ -287,6 +346,23 @@ export default function AiChatPage() {
           </div>
         </div>
       </div>
+
+      <RecordModal
+        open={!!renaming}
+        title={t("ai.rename", "Rename")}
+        onClose={() => setRenaming(null)}
+        onSave={saveRename}
+        canDelete={false}
+      >
+        <label>
+          {t("common.title", "Title")}
+          <input
+            value={renameTitle}
+            onChange={(e) => setRenameTitle(e.target.value)}
+            placeholder={t("ai.rename_placeholder", "Conversation title")}
+          />
+        </label>
+      </RecordModal>
     </AppShell>
   );
 }

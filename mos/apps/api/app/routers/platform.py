@@ -353,6 +353,68 @@ def list_backups(
     ]
 
 
+class BackupJobPatchIn(BaseModel):
+    status: str | None = None
+    error: str | None = None
+
+
+@router.patch("/settings/dataops/backups/{job_id}", response_model=BackupJobOut, tags=["DataOps"])
+def patch_backup(
+    job_id: UUID,
+    body: BackupJobPatchIn,
+    auth: AuthContext = Depends(require_module("dataops")),
+    db: Session = Depends(get_db),
+):
+    """Annotate a backup job record (status / error note). BackupJob has no enabled/schedule fields."""
+    row = db.get(BackupJob, job_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Backup not found")
+    if body.status is not None and body.status != "deleted":
+        row.status = body.status
+    if body.error is not None:
+        row.error = body.error
+    db.commit()
+    db.refresh(row)
+    return BackupJobOut(
+        id=row.id,
+        status=row.status,
+        trigger=row.trigger,
+        storage_path=row.storage_path,
+        checksum=row.checksum,
+        created_at=row.created_at,
+        finished_at=row.finished_at,
+        error=row.error,
+    )
+
+
+@router.delete("/settings/dataops/backups/{job_id}", tags=["DataOps"])
+def delete_backup(
+    job_id: UUID,
+    auth: AuthContext = Depends(require_module("dataops")),
+    db: Session = Depends(get_db),
+):
+    """Delete a backup job and its file — same purge path as backup_scheduler prune."""
+    row = db.get(BackupJob, job_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Backup not found")
+    if row.status in {"queued", "running"}:
+        raise HTTPException(409, detail={"code": "IN_USE", "message": "Backup is still in progress"})
+    if row.storage_path:
+        from pathlib import Path
+
+        from app.services.tenant_backup import _data_root
+
+        try:
+            p = _data_root() / row.storage_path
+            if p.is_file():
+                p.unlink()
+        except OSError:  # pragma: no cover - 文件已不存在等
+            pass
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
 # ── 自动备份设置（每租户一行；由 backup_scheduler 周期 tick 执行） ──
 
 

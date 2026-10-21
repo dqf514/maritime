@@ -262,6 +262,7 @@ class PortCall(Base):
     bl_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     agent: Mapped[str | None] = mapped_column(Text)
     timezone: Mapped[str] = mapped_column(Text, default="UTC")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # 软删（recycle 约定）
 
 
 class NoonReport(Base):
@@ -283,6 +284,7 @@ class NoonReport(Base):
     wind_bf: Mapped[Decimal | None] = mapped_column(Numeric(4, 1))  # Beaufort scale
     sea_state: Mapped[str | None] = mapped_column(String(32))
     current_kn: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # current speed, kn (+fair / -adverse)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # 软删（recycle 约定）
 
 
 class SofEvent(Base):
@@ -295,6 +297,7 @@ class SofEvent(Base):
     event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     local_tz: Mapped[str] = mapped_column(Text, default="UTC")
     remarks: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # 软删（recycle 约定）
 
 
 class LaytimeCalc(Base):

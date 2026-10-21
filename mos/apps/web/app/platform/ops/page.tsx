@@ -11,15 +11,45 @@ import { useListHotkeys } from "@/components/useListHotkeys";
 import { Tabs } from "@/components/Tabs";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
+import { RowActions } from "@/components/RowActions";
+import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch, apiPost, apiDelete } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
+
+type ProfileRow = {
+  id: string;
+  code: string;
+  name: string;
+  kind: string;
+  cloud_provider?: string | null;
+  region?: string | null;
+  description?: string | null;
+  is_builtin?: boolean;
+  status?: string;
+  template?: Record<string, unknown>;
+  last_applied_at?: string | null;
+};
+
+type AlertRow = {
+  id: string;
+  code?: string;
+  name: string;
+  metric_code: string;
+  operator: string;
+  threshold: number;
+  severity: string;
+  last_state?: string;
+  enabled: boolean;
+  description?: string | null;
+};
 
 type Tab = "datasource" | "tenants" | "init" | "deploy" | "monitor";
 const TAB_IDS: readonly string[] = ["datasource", "tenants", "init", "deploy", "monitor"];
 
 function PlatformOpsPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const router = useRouter();
   const pathname = usePathname();
   const { query, setQuery } = useListQuery();
@@ -29,12 +59,15 @@ function PlatformOpsPage() {
   const [bindings, setBindings] = useState<Array<Record<string, unknown>>>([]);
   const [tenants, setTenants] = useState<Array<Record<string, unknown>>>([]);
   const [steps, setSteps] = useState<Array<Record<string, unknown>>>([]);
-  const [profiles, setProfiles] = useState<Array<Record<string, unknown>>>([]);
-  const [alerts, setAlerts] = useState<Array<Record<string, unknown>>>([]);
+  const [profiles, setProfiles] = useState<ProfileRow[]>([]);
+  const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null);
   const [msg, setMsg] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [bindingOpen, setBindingOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState<ProfileRow | null>(null);
+  const [profileEdit, setProfileEdit] = useState({ name: "", kind: "", cloud_provider: "", region: "", description: "" });
+  const [profileSaving, setProfileSaving] = useState(false);
 
   const [form, setForm] = useState({
     tenant_id: "",
@@ -203,6 +236,84 @@ function PlatformOpsPage() {
     }
   }
 
+  // ── 告警行内编辑：值未变化不发请求 ──
+  async function onAlertCellSave(rowId: string, colKey: string, value: unknown, row: AlertRow) {
+    const src = row as unknown as Record<string, unknown>;
+    let payload: Record<string, unknown>;
+    if (colKey === "threshold") {
+      const next = value === null || value === "" ? null : Number(value);
+      if (next === null || isNaN(next)) return;
+      if (Number(src[colKey]) === next) return;
+      payload = { threshold: next };
+    } else {
+      const next = value == null ? "" : String(value);
+      if (String(src[colKey] ?? "") === next) return;
+      payload = { [colKey]: next };
+    }
+    try {
+      await apiPatch(`/api/v1/platform/ops/monitor/alerts/${rowId}`, payload);
+      toast.success(t("common.saved", "Saved"));
+      setAlerts(await apiGet("/api/v1/platform/ops/monitor/alerts"));
+    } catch (ex: any) {
+      toast.error(ex?.message || t("page.ops.update_fail", "Update failed"));
+    }
+  }
+
+  async function deleteAlert(row: AlertRow) {
+    try {
+      await apiDelete(`/api/v1/platform/ops/monitor/alerts/${row.id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      setAlerts(await apiGet("/api/v1/platform/ops/monitor/alerts"));
+    } catch (ex: any) {
+      toast.error(ex?.message || t("page.ops.delete_fail", "Delete failed"));
+    }
+  }
+
+  // ── 部署档案：表单编辑 + 删除（内置档案不可删） ──
+  function openProfile(p: ProfileRow) {
+    setProfileOpen(p);
+    setProfileEdit({
+      name: p.name || "",
+      kind: p.kind || "",
+      cloud_provider: p.cloud_provider || "",
+      region: p.region || "",
+      description: p.description || "",
+    });
+  }
+
+  async function saveProfile(e: FormEvent) {
+    e.preventDefault();
+    if (!profileOpen) return;
+    setProfileSaving(true);
+    try {
+      await apiPatch(`/api/v1/platform/ops/deploy/profiles/${profileOpen.id}`, {
+        name: profileEdit.name,
+        kind: profileEdit.kind,
+        cloud_provider: profileEdit.cloud_provider || null,
+        region: profileEdit.region || null,
+        description: profileEdit.description || null,
+      });
+      toast.success(t("common.saved", "Saved"));
+      setProfileOpen(null);
+      setProfiles(await apiGet("/api/v1/platform/ops/deploy/profiles"));
+    } catch (ex: any) {
+      toast.error(ex?.message || t("page.ops.save_fail", "Save failed"));
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  async function deleteProfile(p: ProfileRow) {
+    try {
+      await apiDelete(`/api/v1/platform/ops/deploy/profiles/${p.id}`);
+      toast.success(t("common.deleted", "Deleted"));
+      setProfileOpen(null);
+      setProfiles(await apiGet("/api/v1/platform/ops/deploy/profiles"));
+    } catch (ex: any) {
+      toast.error(ex?.message || t("page.ops.delete_fail", "Delete failed"));
+    }
+  }
+
   const ds = (overview?.datasource || {}) as Record<string, unknown>;
   const caps = (overview?.capabilities || {}) as Record<string, unknown>;
 
@@ -257,16 +368,43 @@ function PlatformOpsPage() {
     { key: "unit", title: t("page.ops.col.unit", "Unit"), value: (r) => r.unit },
   ];
 
-  const alertColumns: ColumnDef<OpsRow>[] = [
-    { key: "name", title: t("page.ops.col.name", "Name"), value: (r) => r.name },
+  const alertColumns: ColumnDef<AlertRow>[] = [
+    {
+      key: "name",
+      title: t("page.ops.col.name", "Name"),
+      value: (r) => r.name,
+      editor: { type: "text" },
+    },
     { key: "metric_code", title: t("page.ops.col.metric", "Metric"), value: (r) => r.metric_code },
     {
-      key: "condition",
-      title: t("page.ops.col.condition", "Condition"),
-      value: (r) => `${String(r.operator)} ${String(r.threshold)}`,
+      key: "operator",
+      title: t("page.ops.col.operator", "Operator"),
+      width: 90,
+      value: (r) => r.operator,
+      editor: {
+        type: "select",
+        options: ["gt", "gte", "lt", "lte", "eq", "ne"].map((op) => ({ value: op, label: op })),
+      },
     },
-    { key: "severity", title: t("page.ops.col.severity", "Severity"), value: (r) => r.severity },
-    { key: "last_state", title: t("common.status", "Status"), value: (r) => r.last_state },
+    {
+      key: "threshold",
+      title: t("page.ops.col.threshold", "Threshold"),
+      width: 110,
+      align: "right",
+      value: (r) => r.threshold,
+      editor: { type: "number", step: 0.1 },
+    },
+    {
+      key: "severity",
+      title: t("page.ops.col.severity", "Severity"),
+      width: 110,
+      value: (r) => r.severity,
+      editor: {
+        type: "select",
+        options: ["info", "warning", "critical"].map((s) => ({ value: s, label: s })),
+      },
+    },
+    { key: "last_state", title: t("common.status", "Status"), width: 90, value: (r) => r.last_state },
     {
       key: "enabled",
       title: t("page.ops.col.enabled", "Enabled"),
@@ -276,6 +414,13 @@ function PlatformOpsPage() {
           {row.enabled ? t("common.disable", "Disable") : t("common.enable", "Enable")}
         </button>
       ),
+    },
+    {
+      key: "_actions",
+      title: "",
+      width: 30,
+      align: "center",
+      render: (_v, r) => <RowActions onDelete={() => deleteAlert(r)} label={r.name} />,
     },
   ];
 
@@ -427,15 +572,21 @@ function PlatformOpsPage() {
                 {String(p.kind)}
                 {p.cloud_provider ? ` · ${String(p.cloud_provider)}` : ""}
                 {p.region ? ` · ${String(p.region)}` : ""}
+                {p.is_builtin ? ` · ${t("page.ops.builtin", "built-in")}` : ""}
               </div>
               <ul style={{ fontSize: 13, paddingLeft: 18 }}>
                 {(((p.template as any)?.steps as string[]) || []).slice(0, 4).map((step, i) => (
                   <li key={i}>{step}</li>
                 ))}
               </ul>
-              <button type="button" className="btn primary" disabled={busy} onClick={() => applyProfile(String(p.id))}>
-                {t("page.ops.gen_guide", "Generate deploy guide")}
-              </button>
+              <div className="form-actions">
+                <button type="button" className="btn primary" disabled={busy} onClick={() => applyProfile(p.id)}>
+                  {t("page.ops.gen_guide", "Generate deploy guide")}
+                </button>
+                <button type="button" className="btn" onClick={() => openProfile(p)}>
+                  {t("common.edit", "Edit")}
+                </button>
+              </div>
               {p.last_applied_at ? (
                 <div style={{ fontSize: 12, marginTop: 8 }}>{t("page.ops.step_last", "Last")}: {String(p.last_applied_at)}</div>
               ) : null}
@@ -486,10 +637,46 @@ function PlatformOpsPage() {
               rowKey={(r) => String(r.id)}
               storageKey="platform_ops_alerts"
               emptyText={t("common.empty", "No records")}
+              editable
+              onCellSave={onAlertCellSave}
             />
           </div>
         </div>
       )}
+
+      <RecordModal
+        open={Boolean(profileOpen)}
+        title={t("page.ops.edit_profile", "Edit deploy profile")}
+        onClose={() => setProfileOpen(null)}
+        onSave={saveProfile}
+        saving={profileSaving}
+        // 内置档案后端 IN_USE 409，隐藏删除
+        canDelete={!profileOpen?.is_builtin}
+        onDelete={profileOpen ? () => deleteProfile(profileOpen) : undefined}
+      >
+        <div className="form-grid">
+          <label>
+            {t("common.name", "Name")}
+            <input value={profileEdit.name} onChange={(e) => setProfileEdit({ ...profileEdit, name: e.target.value })} required />
+          </label>
+          <label>
+            {t("page.ops.field_kind", "Kind")}
+            <input value={profileEdit.kind} onChange={(e) => setProfileEdit({ ...profileEdit, kind: e.target.value })} required />
+          </label>
+          <label>
+            {t("page.ops.field_cloud", "Cloud provider (optional)")}
+            <input value={profileEdit.cloud_provider} onChange={(e) => setProfileEdit({ ...profileEdit, cloud_provider: e.target.value })} />
+          </label>
+          <label>
+            {t("page.ops.field_region", "Region")}
+            <input value={profileEdit.region} onChange={(e) => setProfileEdit({ ...profileEdit, region: e.target.value })} />
+          </label>
+          <label>
+            {t("page.ops.field_desc", "Description")}
+            <input value={profileEdit.description} onChange={(e) => setProfileEdit({ ...profileEdit, description: e.target.value })} />
+          </label>
+        </div>
+      </RecordModal>
 
       <RecordModal
         open={bindingOpen}

@@ -14,7 +14,8 @@ import { useListHotkeys } from "@/components/useListHotkeys";
 import { StatusBadge } from "@/components/StatusBadge";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
-import { apiDelete, apiGet, apiPost } from "@/lib/api";
+import { RowActions } from "@/components/RowActions";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
@@ -92,19 +93,28 @@ function ConfigFlagsPage() {
     if (!form.key.trim()) return;
     setBusy(true);
     try {
-      await apiPost("/api/v1/config/flags", {
-        key: form.key.trim(),
-        value: form.value,
-        value_type: form.value_type,
-        category: form.category || "general",
-        description: form.description || null,
-      });
-      toast.success(t("flags.saved", "Flag saved"));
+      if (editing) {
+        await apiPatch(`/api/v1/config/flags/${editing.id}`, {
+          value: form.value,
+          value_type: form.value_type,
+          category: form.category || "general",
+          description: form.description || null,
+        });
+      } else {
+        await apiPost("/api/v1/config/flags", {
+          key: form.key.trim(),
+          value: form.value,
+          value_type: form.value_type,
+          category: form.category || "general",
+          description: form.description || null,
+        });
+      }
+      toast.success(t("common.saved", "Saved"));
       setCreating(false);
       setEditing(null);
       await load();
-    } catch (err) {
-      toast.error(t("flags.save_fail", "Failed to save flag: {err}", { err: String(err) }));
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
     } finally {
       setBusy(false);
     }
@@ -113,26 +123,42 @@ function ConfigFlagsPage() {
   async function toggleBool(row: Flag) {
     const next = /^(true|1|yes|on)$/i.test(row.flag_value) ? "false" : "true";
     try {
-      await apiPost("/api/v1/config/flags", {
-        key: row.flag_key,
-        value: next,
-        value_type: "bool",
-        category: row.category,
-        description: row.description,
-      });
+      await apiPatch(`/api/v1/config/flags/${row.id}`, { value: next, value_type: "bool" });
+      toast.success(t("common.saved", "Saved"));
       setFlags((prev) => prev.map((f) => (f.id === row.id ? { ...f, flag_value: next } : f)));
-    } catch (err) {
-      toast.error(t("flags.save_fail", "Failed to save flag: {err}", { err: String(err) }));
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
+    }
+  }
+
+  // ── 行内编辑（失焦/回车保存；值未变化不发请求，避免 blur→reload 打断输入） ──
+  async function onCellSave(rowId: string, colKey: string, value: unknown, row: Flag) {
+    const fieldMap: Record<string, string> = {
+      flag_value: "value",
+      value_type: "value_type",
+      category: "category",
+      description: "description",
+    };
+    const field = fieldMap[colKey];
+    if (!field) return;
+    const prev = colKey === "flag_value" ? row.flag_value : (row as unknown as Record<string, unknown>)[colKey];
+    if ((prev ?? "") === (value ?? "")) return;
+    try {
+      await apiPatch(`/api/v1/config/flags/${rowId}`, { [field]: value === "" ? null : value });
+      toast.success(t("common.saved", "Saved"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
     }
   }
 
   async function remove(row: Flag) {
     try {
       await apiDelete(`/api/v1/config/flags/${row.id}`);
-      toast.success(t("flags.deleted", "Flag deleted"));
-      setFlags((prev) => prev.filter((f) => f.id !== row.id));
-    } catch (err) {
-      toast.error(t("flags.delete_fail", "Failed to delete flag: {err}", { err: String(err) }));
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || String(ex));
     }
   }
 
@@ -153,6 +179,7 @@ function ConfigFlagsPage() {
       title: t("flags.col_value", "Value"),
       width: 170,
       value: (r) => r.flag_value,
+      editor: { type: "text" },
       render: (v, r) =>
         r.value_type === "bool" ? (
           <button
@@ -167,8 +194,28 @@ function ConfigFlagsPage() {
           <span title={String(v)}>{String(v)}</span>
         ),
     },
-    { key: "value_type", title: t("flags.col_type", "Type"), width: 70, value: (r) => r.value_type },
-    { key: "category", title: t("flags.col_category", "Category"), width: 110, value: (r) => r.category },
+    {
+      key: "value_type",
+      title: t("flags.col_type", "Type"),
+      width: 70,
+      value: (r) => r.value_type,
+      editor: {
+        type: "select",
+        options: [
+          { value: "string", label: "string" },
+          { value: "bool", label: "bool" },
+          { value: "number", label: "number" },
+          { value: "json", label: "json" },
+        ],
+      },
+    },
+    {
+      key: "category",
+      title: t("flags.col_category", "Category"),
+      width: 110,
+      value: (r) => r.category,
+      editor: { type: "text" },
+    },
     {
       key: "scope_key",
       title: t("flags.col_scope", "Scope"),
@@ -181,21 +228,19 @@ function ConfigFlagsPage() {
       title: t("flags.col_desc", "Description"),
       minWidth: 200,
       value: (r) => r.description || "",
+      editor: { type: "text" },
     },
     {
       key: "_actions",
       title: "",
-      width: 60,
+      width: 72,
       align: "right",
       render: (_v, r) => (
-        <button
-          type="button"
-          className="btn btn-sm btn-danger"
-          title={t("flags.delete", "Delete flag")}
-          onClick={() => remove(r)}
-        >
-          ✕
-        </button>
+        <RowActions
+          onEdit={() => openEdit(r)}
+          onDelete={() => remove(r)}
+          label={r.flag_key}
+        />
       ),
     },
   ];
@@ -309,6 +354,8 @@ function ConfigFlagsPage() {
         data={filtered}
         rowKey={(r) => r.id}
         storageKey="settings_flags"
+        editable
+        onCellSave={onCellSave}
         onRowDoubleClick={(r) => openEdit(r)}
         emptyText={t("flags.empty", "No configuration flags")}
       />

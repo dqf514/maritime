@@ -216,3 +216,14 @@
 .editor-block { margin-top: 0.75rem; }
 .editor-caption { margin: 0 0 0.25rem; }
 .enriched-note { margin-top: 0.6rem; }
+
+/* 紧凑排版 / 告警工具类 —— 替代内联样式（inline-style 基线只降不升） */
+.panel-warn { border-color: var(--warn); }
+.flash-warn { color: var(--warn); font-weight: 600; margin: 0.25rem 0; }
+.panel-gap-top { margin-top: 1rem; }
+.desk-section-tight { margin: 0.5rem 0; }
+.desk-section-tight > h3 { margin-top: 0; }
+.desk-toolbar-flush { margin: 0; }
+.h3-compact { margin: 0; font-size: 0.95rem; }
+.mt-sm { margin-top: 0.5rem; }
+.m-0 { margin: 0; }

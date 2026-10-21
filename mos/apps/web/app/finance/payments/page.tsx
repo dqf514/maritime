@@ -12,13 +12,14 @@ import { DateInput } from "@/components/DateInput";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
+import { RowActions } from "@/components/RowActions";
 import { SavedViews } from "@/components/SavedViews";
 import { StateView } from "@/components/StateView";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { useToast } from "@/components/ToastProvider";
-import { API_BASE, apiGet, apiPost, readStorage, TOKEN_STORAGE_KEY } from "@/lib/api";
+import { API_BASE, apiDelete, apiGet, apiPatch, apiPost, readStorage, TOKEN_STORAGE_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { fmt } from "@/lib/fmt";
 import { useI18n } from "@/lib/i18n";
@@ -81,8 +82,10 @@ function PaymentsPage() {
   const [batchDate, setBatchDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [chargeMode, setChargeMode] = useState("shared");
 
-  // 批次详情
+  // 批次详情（draft 可改日期/银行费用，或删除）
   const [detail, setDetail] = useState<Batch | null>(null);
+  const [detailDate, setDetailDate] = useState("");
+  const [detailCharge, setDetailCharge] = useState("shared");
 
   // R4 行右键菜单
   const batchCtx = useContextMenu<Batch>();
@@ -158,9 +161,30 @@ function PaymentsPage() {
 
   async function openDetail(id: string) {
     try {
-      setDetail(await apiGet(`/api/v1/payments/batches/${id}`));
+      const batch: Batch = await apiGet(`/api/v1/payments/batches/${id}`);
+      setDetail(batch);
+      setDetailDate(batch.batch_date || "");
+      setDetailCharge(batch.bank_charge_mode || "shared");
     } catch (ex) {
       toast.error(String(ex));
+    }
+  }
+
+  async function saveDetail() {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await apiPatch(`/api/v1/payments/batches/${detail.id}`, {
+        batch_date: detailDate || null,
+        bank_charge_mode: detailCharge,
+      });
+      toast.success(t("common.saved", "Saved"));
+      await loadBatches();
+      await openDetail(detail.id);
+    } catch (ex) {
+      toast.error((ex as { message?: string })?.message || String(ex));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -211,10 +235,53 @@ function PaymentsPage() {
     }
   }
 
+  // 行内编辑：值未变化不发请求，避免 blur→reload 打断输入
+  async function onBatchCellSave(rowId: string, colKey: string, value: unknown, row: Batch) {
+    if (row.status !== "draft") {
+      toast.error(t("page.payments.batch_locked", "Only draft batches can be edited or deleted"));
+      return;
+    }
+    const src = row as unknown as Record<string, unknown>;
+    if (colKey === "batch_date") {
+      const prev = row.batch_date;
+      const next = value ? String(value) : null;
+      const prevT = prev ? new Date(prev).getTime() : null;
+      const nextT = next ? new Date(next).getTime() : null;
+      if (prevT === nextT) return;
+      try {
+        await apiPatch(`/api/v1/payments/batches/${rowId}`, { batch_date: next });
+        toast.success(t("common.saved", "Saved"));
+        await loadBatches();
+      } catch (ex) {
+        toast.error((ex as { message?: string })?.message || String(ex));
+      }
+      return;
+    }
+    if ((src[colKey] ?? "") === (value ?? "")) return;
+    try {
+      await apiPatch(`/api/v1/payments/batches/${rowId}`, { [colKey]: value === "" ? null : value });
+      toast.success(t("common.saved", "Saved"));
+      await loadBatches();
+    } catch (ex) {
+      toast.error((ex as { message?: string })?.message || String(ex));
+    }
+  }
+
+  async function deleteBatch(id: string) {
+    try {
+      await apiDelete(`/api/v1/payments/batches/${id}`);
+      toast.success(t("page.payments.deleted", "Batch deleted"));
+      setDetail(null);
+      await loadBatches();
+    } catch (ex) {
+      toast.error((ex as { message?: string })?.message || String(ex));
+    }
+  }
+
   const cols = useMemo<ColumnDef<Batch>[]>(
     () => [
       { key: "batch_number", title: t("page.payments.batch_no", "Batch no"), sticky: true },
-      { key: "batch_date", title: t("page.payments.batch_date", "Date") },
+      { key: "batch_date", title: t("page.payments.batch_date", "Date"), editor: { type: "date" } },
       { key: "status", title: t("common.status", "Status") },
       {
         key: "payment_count",
@@ -233,13 +300,45 @@ function PaymentsPage() {
         render: (v) => <Num v={v as number} digits={2} />,
       },
       { key: "currency", title: t("common.currency", "Currency") },
-      { key: "bank_charge_mode", title: t("page.payments.charge_mode", "Bank charges"), render: (v) => (v ? String(v) : "—") },
+      {
+        key: "bank_charge_mode",
+        title: t("page.payments.charge_mode", "Bank charges"),
+        render: (v) => (v ? String(v) : "—"),
+        editor: {
+          type: "select",
+          options: [
+            { value: "shared", label: "shared" },
+            { value: "sender", label: "sender" },
+            { value: "receiver", label: "receiver" },
+          ],
+        },
+      },
       {
         key: "updated_at",
         title: t("list.last_modified", "Last modified"),
         width: 135,
         value: (r) => r.updated_at ?? null,
         render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
+      {
+        key: "_actions",
+        title: "",
+        width: 44,
+        align: "center",
+        render: (_v, r) => {
+          const locked = r.status !== "draft";
+          return (
+            <span title={locked ? t("page.payments.batch_locked", "Only draft batches can be edited or deleted") : undefined}>
+              {locked ? <span className="muted">—</span> : null}
+              <RowActions
+                canEdit={false}
+                canDelete={!locked}
+                onDelete={() => deleteBatch(r.id)}
+                label={r.batch_number}
+              />
+            </span>
+          );
+        },
       },
     ],
     [t],
@@ -355,6 +454,8 @@ function PaymentsPage() {
             columns={cols}
             data={filteredRows}
             rowKey={(r) => r.id}
+            editable
+            onCellSave={onBatchCellSave}
             onRowClick={(r) => openDetail(r.id)}
             onRowContextMenu={(row, _i, e) => batchCtx.open(row)(e)}
             storageKey="payments.batches"
@@ -403,8 +504,11 @@ function PaymentsPage() {
         open={!!detail}
         title={detail ? `${detail.batch_number} · ${detail.status}` : ""}
         onClose={() => setDetail(null)}
-        canEdit={false}
-        canDelete={false}
+        onSave={detail && detail.status === "draft" ? saveDetail : undefined}
+        canEdit={detail?.status === "draft"}
+        canDelete={detail?.status === "draft"}
+        onDelete={detail ? () => deleteBatch(detail.id) : undefined}
+        saving={busy}
         size="lg"
       >
         {detail ? (
@@ -416,9 +520,26 @@ function PaymentsPage() {
               <span>
                 {t("page.payments.count", "Payments")}: {detail.payment_count}
               </span>
-              <span>
-                {t("page.payments.charge_mode", "Bank charges")}: {detail.bank_charge_mode || "—"}
-              </span>
+              {detail.status === "draft" ? (
+                <>
+                  <label>
+                    {t("page.payments.batch_date", "Batch date")}
+                    <DateInput value={detailDate} onChange={setDetailDate} />
+                  </label>
+                  <label>
+                    {t("page.payments.charge_mode", "Bank charges")}
+                    <select value={detailCharge} onChange={(e) => setDetailCharge(e.target.value)}>
+                      <option value="shared">shared</option>
+                      <option value="sender">sender</option>
+                      <option value="receiver">receiver</option>
+                    </select>
+                  </label>
+                </>
+              ) : (
+                <span>
+                  {t("page.payments.charge_mode", "Bank charges")}: {detail.bank_charge_mode || "—"}
+                </span>
+              )}
             </div>
             <DataGrid<PaymentRow>
               columns={paymentCols}

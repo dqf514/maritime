@@ -276,6 +276,17 @@ class CommissionCreateIn(CommissionCalcIn):
     currency: str = "USD"
 
 
+class CommissionPatch(BaseModel):
+    """佣金明细可改（改基数/费率自动重算）；已开票（invoice_id 已挂）→ 409 INVALID_STATE。"""
+
+    commission_type: str | None = None
+    base_amount: float | None = Field(None, ge=0)
+    rate_pct: float | None = Field(None, ge=0)
+    currency: str | None = None
+    invoice_id: UUID | None = None
+    counterparty_id: UUID | None = None
+
+
 @router.get("/commissions/types")
 def list_commission_types(auth: AuthContext = Depends(require_module("finance"))):
     return commission_type_catalog()
@@ -333,3 +344,73 @@ def list_commissions(
         stmt = stmt.where(CommissionType.commission_type == commission_type)
     rows, total = paginate(db, stmt, limit, offset)
     return envelope([_commission_out(r) for r in rows], total, limit, offset)
+
+
+def _assert_commission_editable(db: Session, row: CommissionType, tenant_id: UUID) -> None:
+    """已挂发票（invoiced）或其发票已付（paid）→ 409。CommissionType 无 status 列。"""
+    if row.invoice_id is not None:
+        inv = db.scalar(select(Invoice).where(Invoice.id == row.invoice_id, Invoice.tenant_id == tenant_id))
+        paid = inv is not None and str(getattr(inv, "status", "")) in {"paid", "partially_paid"}
+        state = "paid" if paid else "invoiced"
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Commission is {state}; only unlinked commissions can be changed"},
+        )
+
+
+@router.patch("/commissions/{commission_id}")
+def patch_commission(
+    commission_id: UUID,
+    body: CommissionPatch,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """改佣金明细；改基数/费率/类型自动重算。已开票/已付 → 409。"""
+    row = scoped_get(db, CommissionType, commission_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "COMMISSION_NOT_FOUND", "message": str(commission_id)})
+    _assert_commission_editable(db, row, auth.tenant_id)
+    fields = body.model_fields_set
+    if "invoice_id" in fields and body.invoice_id is not None:
+        if scoped_get(db, Invoice, body.invoice_id, auth.tenant_id) is None:
+            raise HTTPException(404, detail={"code": "INVOICE_NOT_FOUND", "message": str(body.invoice_id)})
+    if "counterparty_id" in fields and body.counterparty_id is not None:
+        if scoped_get(db, Counterparty, body.counterparty_id, auth.tenant_id) is None:
+            raise HTTPException(404, detail={"code": "COUNTERPARTY_NOT_FOUND", "message": str(body.counterparty_id)})
+    new_type = body.commission_type if "commission_type" in fields and body.commission_type is not None else row.commission_type
+    new_base = body.base_amount if "base_amount" in fields and body.base_amount is not None else _f(row.base_amount)
+    new_rate = body.rate_pct if "rate_pct" in fields and body.rate_pct is not None else _f(row.rate_pct)
+    if {"commission_type", "base_amount", "rate_pct"} & fields:
+        try:
+            calc = calculate_commission(new_type, new_base, new_rate)
+        except ValueError as exc:
+            raise HTTPException(422, detail={"code": "BAD_COMMISSION_TYPE", "message": str(exc)})
+        row.commission_type = calc["commission_type"]
+        row.base_amount = Decimal(str(calc["base_amount"]))
+        row.rate_pct = Decimal(str(calc["rate_pct"]))
+        row.calculated_amount = Decimal(str(calc["calculated_amount"]))
+    if "currency" in fields and body.currency is not None:
+        row.currency = body.currency
+    if "invoice_id" in fields:
+        row.invoice_id = body.invoice_id
+    if "counterparty_id" in fields:
+        row.counterparty_id = body.counterparty_id
+    db.commit()
+    db.refresh(row)
+    return _commission_out(row)
+
+
+@router.delete("/commissions/{commission_id}")
+def delete_commission(
+    commission_id: UUID,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """删佣金明细。已开票/已付 → 409。CommissionType 无 deleted_at/status，只能硬删。"""
+    row = scoped_get(db, CommissionType, commission_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, detail={"code": "COMMISSION_NOT_FOUND", "message": str(commission_id)})
+    _assert_commission_editable(db, row, auth.tenant_id)
+    db.delete(row)
+    db.commit()
+    return {"ok": True}

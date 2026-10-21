@@ -426,8 +426,10 @@ export type VoyageOverviewPortCall = {
   id: string;
   seq?: number;
   purpose?: string | null;
+  function_code?: string | null;
   port_id?: string | null;
   port_name?: string | null;
+  agent?: string | null;
   eta?: string | null;
   ata?: string | null;
   etd?: string | null;
@@ -465,7 +467,7 @@ export type VoyageOverview = {
   laytime: { id: string; status: string; result_type: string | null; amount: number | null; currency: string | null }[];
   claims: { id: string; claim_no?: string | null; status?: string | null; amount?: number | null; currency?: string | null }[];
   invoices: { id: string; invoice_no?: string | null; status?: string | null; amount?: number | null; currency?: string | null }[];
-  off_hire: { id: string; start_at?: string | null; end_at?: string | null; reason?: string | null; deducted_days?: number | null }[];
+  off_hire: { id: string; start_at?: string | null; end_at?: string | null; reason?: string | null; deducted_days?: number | null; status?: string; deduct_hire?: boolean }[];
   pnl: {
     estimated_pnl: number | null;
     actual_pnl: number | null;
