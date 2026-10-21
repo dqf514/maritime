@@ -17,7 +17,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models_finance_ext import CreditNote
@@ -63,6 +63,11 @@ def record_payment(db: Session, invoice: Invoice, amount, reference: str | None 
 
     校验金额与余额，写 Payment 行并推进发票状态（issued→partially_paid→paid）。
     commit 留给调用方。返回 Payment。
+
+    并发安全（25 用户并发验收发现的双花缺陷修复）：余额认领改为**条件 UPDATE**——
+    由数据库串行化（SQLite 写锁 / PostgreSQL 行锁），锁等待结束后 WHERE 按最新已提交
+    数据重算，`paid_amount + amt <= total` 不再成立即认领失败。旧实现读-改-写依赖
+    请求开始时的内存快照，25 线程同时全额支付会出现多笔同时通过余额校验（TOCTOU）。
     """
     from app.models_domain import Payment
 
@@ -72,9 +77,25 @@ def record_payment(db: Session, invoice: Invoice, amount, reference: str | None 
     if invoice.status not in {"issued", "partially_paid"}:
         raise HTTPException(409, detail={"code": "INVALID_STATE", "message": f"Cannot pay invoice in status {invoice.status}"})
     total = Decimal(str(invoice.amount)) + Decimal(str(invoice.tax_amount or 0))
-    already_paid = Decimal(str(invoice.paid_amount or 0))
-    open_balance = total - already_paid
-    if amt > open_balance:
+
+    # 原子认领：同一发票的并发收款在数据库层排队，WHERE 按提交后状态重算
+    claimed = (
+        db.query(Invoice)
+        .filter(
+            Invoice.id == invoice.id,
+            Invoice.tenant_id == invoice.tenant_id,
+            Invoice.status.in_(("issued", "partially_paid")),
+            func.coalesce(Invoice.paid_amount, 0) + amt <= total,
+        )
+        .update({Invoice.paid_amount: func.coalesce(Invoice.paid_amount, 0) + amt}, synchronize_session=False)
+    )
+    if claimed != 1:
+        # 认领失败：已被并发收款占满余额或状态已流转——刷新取权威值给准确错误码
+        db.expire(invoice)
+        db.refresh(invoice)
+        if invoice.status not in {"issued", "partially_paid"}:
+            raise HTTPException(409, detail={"code": "INVALID_STATE", "message": f"Cannot pay invoice in status {invoice.status}"})
+        open_balance = total - Decimal(str(invoice.paid_amount or 0))
         raise HTTPException(
             status_code=409,
             detail={
@@ -83,6 +104,10 @@ def record_payment(db: Session, invoice: Invoice, amount, reference: str | None 
                 "open_balance": float(open_balance),
             },
         )
+
+    # 认领成功（paid_amount 已在库中原子累加）→ refresh 拿权威值，写 Payment 行并推进状态
+    db.expire(invoice)
+    db.refresh(invoice)
     pay = Payment(
         tenant_id=invoice.tenant_id,
         invoice_id=invoice.id,
@@ -91,7 +116,6 @@ def record_payment(db: Session, invoice: Invoice, amount, reference: str | None 
         reference=reference,
     )
     db.add(pay)
-    invoice.paid_amount = already_paid + amt
     if invoice.paid_amount >= total:
         invoice.status = transition("invoice", invoice.status, "paid", INVOICE_TRANSITIONS)
     elif invoice.status == "issued":

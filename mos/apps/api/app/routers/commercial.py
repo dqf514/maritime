@@ -1652,7 +1652,25 @@ def charter_transition(
                 detail={"code": "WORKFLOW_REQUIRED", "message": "Charter must be approved via workflow inbox"},
             )
 
-    row.status = transition("charter", row.status, body.target, CHARTER_TRANSITIONS)
+    nxt_status = transition("charter", row.status, body.target, CHARTER_TRANSITIONS)
+    # 并发原子认领（25 用户并发验收修复）：条件 UPDATE 由数据库串行化（SQLite 写锁 /
+    # PG 行锁），锁等待后 WHERE 按已提交状态重算。旧读-改-写在 25 线程同时激活时会让
+    # 多方通过校验，重复执行“自动建航次”副作用并撞 voyages.voyage_no 唯一键 → 500。
+    claimed = (
+        db.query(Charter)
+        .filter(
+            Charter.id == row.id,
+            Charter.tenant_id == auth.tenant_id,
+            Charter.status == row.status,
+        )
+        .update({"status": nxt_status, "updated_at": datetime.now(timezone.utc)}, synchronize_session=False)
+    )
+    if claimed != 1:
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": f"Charter state changed concurrently; cannot transition to {body.target}"},
+        )
+    row.status = nxt_status
     row.updated_at = datetime.now(timezone.utc)
 
     if body.target == "pending_approval" and has_wf:

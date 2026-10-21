@@ -885,6 +885,15 @@ def delete_port_call(
     row = db.get(PortCall, port_call_id)
     if not row or row.tenant_id != auth.tenant_id or row.deleted_at is not None:
         raise HTTPException(404, "Port call not found")
+    # 并发原子认领（25 用户并发验收修复）：条件 UPDATE 保证同一挂靠港并发删除只有一方
+    # 成功。旧读-改-写会让多方都读到“未删”状态、各自 soft_delete 后都返回 200。
+    claimed = (
+        db.query(PortCall)
+        .filter(PortCall.id == row.id, PortCall.tenant_id == auth.tenant_id, PortCall.deleted_at.is_(None))
+        .update({"deleted_at": datetime.now(timezone.utc)}, synchronize_session=False)
+    )
+    if claimed != 1:
+        raise HTTPException(404, "Port call not found")
     # 软删挂靠港本身；其 SOF 事件保持原样（列表按“挂靠港存活”过滤，
     # 回收站恢复挂靠港后事件随之重新可见，避免级联丢失）
     soft_delete(

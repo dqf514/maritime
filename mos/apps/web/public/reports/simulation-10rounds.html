@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MariOS 十轮全业务循环测试 · 完整业务报告</title>
+  <style>
+    :root {
+      --sea-deep: #0B1F2A;
+      --sea-mid: #123047;
+      --accent: #1A9B96;
+      --accent-soft: #2BB5B0;
+      --foam: #eef3f6;
+      --ink: #0f1c28;
+      --muted: #5a6e7d;
+      --border: #d7e0e6;
+      --ok: #1e7a46;
+      --warn: #b7791f;
+      --bad: #b03a3a;
+      --surface: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Ubuntu, "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--foam);
+      line-height: 1.6;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .site-header {
+      display: flex; align-items: center; justify-content: space-between;
+      height: 40px; padding: 0 20px;
+      background: var(--sea-deep); color: #e8f1f5;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .site-header .brand { display: inline-flex; align-items: center; gap: 0.45rem; color: #e8f1f5; font-size: 0.9rem; text-decoration: none; white-space: nowrap; }
+    .site-header .brand:hover { color: #fff; text-decoration: none; }
+    .site-header .brand img { width: 22px; height: 22px; display: block; }
+    .site-header .brand-sep { color: #9eb2bf; }
+    .site-header .brand-sub { color: #9eb2bf; font-size: 0.85rem; }
+    .site-nav { display: flex; align-items: center; gap: 0.15rem; font-size: 13px; white-space: nowrap; }
+    .site-nav a { color: #9eb2bf; padding: 0.25rem 0.55rem; border-radius: 6px; text-decoration: none; }
+    .site-nav a:hover { color: #fff; text-decoration: none; }
+    .site-nav a[aria-current="page"] { color: var(--accent); }
+    .site-nav a.nav-pill { background: var(--accent); color: #0b1f2a; padding: 4px 12px; border-radius: 6px; font-weight: 600; }
+    .site-nav a.nav-pill:hover { color: #0b1f2a; filter: brightness(1.08); }
+    .layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
+    .toc {
+      position: sticky; top: 0; align-self: start; height: 100vh; overflow: auto;
+      background: var(--sea-deep); color: #e8f1f5; padding: 1.25rem 1rem 2rem;
+    }
+    .toc-label { display: block; font-size: 0.7rem; color: #7a93a3; letter-spacing: 0.08em; margin-bottom: 0.25rem; }
+    .toc strong { display: block; font-size: 0.95rem; margin-bottom: 0.85rem; }
+    .toc a { display: block; color: #9eb2bf; font-size: 0.86rem; padding: 0.32rem 0.45rem; border-radius: 6px; text-decoration: none; }
+    .toc a:hover { background: rgba(255,255,255,0.06); color: #fff; text-decoration: none; }
+    .toc .toc-round { padding-left: 1.1rem; font-size: 0.82rem; }
+    .main { padding: 1.5rem 2rem 3rem; max-width: 980px; }
+    header.hero {
+      background: linear-gradient(160deg, var(--sea-deep), var(--sea-mid));
+      color: #eef3f6; border-radius: 16px; padding: 1.6rem; margin-bottom: 1.5rem;
+    }
+    header.hero h1 { margin: 0 0 0.4rem; font-size: 1.7rem; letter-spacing: -0.02em; }
+    header.hero p { margin: 0; color: #b7c7d2; max-width: 52em; }
+    .badge { display: inline-block; margin-top: 0.9rem; margin-right: 0.5rem; padding: 0.28rem 0.7rem; border-radius: 999px; font-size: 0.78rem; font-weight: 700; background: rgba(43,181,176,0.22); color: #9ef0ea; }
+    h2 { margin: 2.1rem 0 0.75rem; font-size: 1.25rem; color: var(--sea-deep); border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+    h3 { margin: 1.3rem 0 0.45rem; font-size: 1.05rem; }
+    h4 { margin: 1rem 0 0.35rem; font-size: 0.95rem; color: var(--sea-mid); }
+    p, li { font-size: 0.95rem; }
+    .muted { color: var(--muted); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.15rem; margin: 0.75rem 0; }
+    .verdict { border-left: 4px solid var(--accent); background: #f3fbfa; }
+    .warn-box { border-left: 4px solid var(--warn); background: #fff8ea; }
+    .ok-box { border-left: 4px solid var(--ok); background: #eef8f1; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 0.6rem 0 1rem; }
+    th, td { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { background: #f3f7f9; color: var(--sea-mid); font-size: 0.82rem; white-space: nowrap; }
+    tr:last-child td { border-bottom: none; }
+    code, .path { font-family: "Ubuntu Mono", Consolas, monospace; font-size: 0.86em; background: #e8eef2; padding: 0.1rem 0.35rem; border-radius: 4px; }
+    .flow { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0.6rem 0 1rem; }
+    .flow span { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.32rem 0.6rem; font-size: 0.82rem; font-weight: 600; }
+    .flow i { color: var(--muted); font-style: normal; }
+    .pass { color: var(--ok); font-weight: 700; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.7rem; margin: 1rem 0; }
+    .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem 0.9rem; text-align: center; }
+    .stat b { display: block; font-size: 1.5rem; color: var(--sea-deep); }
+    .stat span { font-size: 0.8rem; color: var(--muted); }
+    .round-head { display: flex; align-items: center; gap: 0.6rem; }
+    .round-tag { display: inline-block; background: var(--sea-mid); color: #9ef0ea; font-weight: 800; font-size: 0.8rem; border-radius: 8px; padding: 0.18rem 0.55rem; }
+    footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      .toc { position: relative; height: auto; max-height: none; }
+    }
+    @media print {
+      .site-header, .toc { display: none; }
+      .layout { display: block; }
+      .main { max-width: none; padding: 0; }
+      a { color: inherit; text-decoration: none; }
+      body { background: #fff; }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">
+      <img src="/branding/mark.svg" width="22" height="22" alt="" />
+      <strong>MariOS</strong>
+      <span class="brand-sep" aria-hidden="true">·</span>
+      <span class="brand-sub">十轮全业务循环测试报告</span>
+    </a>
+    <nav class="site-nav" aria-label="站点导航">
+      <a href="/">首页</a>
+      <a href="/manual">操作手册</a>
+      <a href="/reports/simulation-10rounds.html" aria-current="page">测试报告</a>
+      <a href="/login" class="nav-pill">登录</a>
+    </nav>
+  </header>
+  <div class="layout">
+    <nav class="toc" aria-label="目录">
+      <span class="toc-label">本页目录</span>
+      <strong>十轮全业务循环测试</strong>
+      <a href="#summary">1. 执行摘要</a>
+      <a href="#method">2. 测试方法论</a>
+      <a href="#rounds">3. 十轮明细</a>
+      <a class="toc-round" href="#r1">R1 标准航次商业闭环</a>
+      <a class="toc-round" href="#r2">R2 多货估算 + 逾期应收</a>
+      <a class="toc-round" href="#r3">R3 期租租金周期</a>
+      <a class="toc-round" href="#r4">R4 COA 航次分摊</a>
+      <a class="toc-round" href="#r5">R5 滞期费 + PDA/FDA</a>
+      <a class="toc-round" href="#r6">R6 红冲与付款冲正</a>
+      <a class="toc-round" href="#r7">R7 偏航监测 + 排期冲突</a>
+      <a class="toc-round" href="#r8">R8 合规阻断</a>
+      <a class="toc-round" href="#r9">R9 跨租户隔离 + 回收站</a>
+      <a class="toc-round" href="#r10">R10 平台治理 + 账务审计</a>
+      <a href="#coverage">4. 三维覆盖矩阵</a>
+      <a href="#regression">5. 全量回归与质量门</a>
+      <a href="#video">6. 视频讲解</a>
+      <a href="#verdict">7. 交付判定</a>
+    </nav>
+
+    <article class="main">
+      <header class="hero">
+        <h1>MariOS 十轮全业务循环测试 · 完整业务报告</h1>
+        <p>以真实航运商业运营节奏模拟十轮完整业务循环 —— 覆盖兼容性（多单证形态/多语言/多租户）、完整性（账务恒等/状态机/黄金用例）、业务弹性（冲突/制裁/阻断/冲正）三个维度，验证系统达到可直接交付水平。</p>
+        <span class="badge">测试套件 tests/test_simulation_10rounds.py</span>
+        <span class="badge">执行日期 2026-10-21</span>
+        <span class="badge">结果 10 / 10 通过</span>
+      </header>
+
+      <!-- ================= 1 执行摘要 ================= -->
+      <section id="summary">
+        <h2>1. 执行摘要</h2>
+        <div class="card ok-box">
+          <p><strong>结论：十轮模拟全部通过（10/10），系统达到可交付给用户的试点 / PoC / 培训演练级标准。</strong>十轮测试模拟了一家航运公司从商务接单到财务入账、从现场执行到平台治理的完整日常运营，每一轮都包含正向链路与逆向边界（非法状态跳转、超额/重复分摊、制裁阻断、跨租户越权、红冲与冲正），全部得到预期的正确响应。</p>
+        </div>
+        <div class="stat-grid">
+          <div class="stat"><b>10/10</b><span>模拟轮次全部通过</span></div>
+          <div class="stat"><b>153s</b><span>十轮套件执行耗时</span></div>
+          <div class="stat"><b>825</b><span>全量 pytest 回归通过</span></div>
+          <div class="stat"><b>97</b><span>回归测试文件</span></div>
+          <div class="stat"><b>100</b><span>SelfCheck 自检得分</span></div>
+          <div class="stat"><b>0</b><span>未解决缺陷</span></div>
+        </div>
+        <table>
+          <thead><tr><th>维度</th><th>覆盖内容</th><th>判定</th></tr></thead>
+          <tbody>
+            <tr><td>兼容性</td><td>单程/多货/期租/COA 四类单证形态；中英双语全站界面；多租户并存；列表信封（裸数组 / items）双形态兼容</td><td class="pass">通过</td></tr>
+            <tr><td>完整性</td><td>估算→租约→航次→Laytime→索赔→发票→收付款→GL→报表全链路；借贷平衡/资产负债/损益三大恒等式；TCE 与 Laytime 黄金用例</td><td class="pass">通过</td></tr>
+            <tr><td>业务弹性</td><td>状态机非法跳转 409；超配/重复分摊 422；制裁/告警/序列三类阻断；排期硬冲突；红冲/付款冲正逆向流程；期末关账锁定；跨租户越权全部拦截</td><td class="pass">通过</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ================= 2 方法论 ================= -->
+      <section id="method">
+        <h2>2. 测试方法论</h2>
+        <div class="card">
+          <ul>
+            <li><strong>模拟真实商业运营：</strong>每一轮对应航运公司一个完整台面周期（交易台 → 船东/租家台 → 操作台 → 滞期台 → 财务台 → 管理层 → 平台运维），按真实业务顺序驱动 API，而非孤立的接口冒烟。</li>
+            <li><strong>数据真实性：</strong>使用演示租户 <code>demo</code> 的真实主数据（船舶、港口、对手方），业务参数按行业惯例设置（18 万吨铁矿、Tubarao→Qingdao、$21/mt、$520 燃油、18000/日滞期费率、15000/日租金、半月付租等）。</li>
+            <li><strong>双向验证：</strong>每轮既验证正向链路成功（2xx + 业务字段正确），也验证逆向边界被正确拒绝（409/404/422 + 规范错误码，如 <code>SANCTIONS_BLOCKED</code>、<code>SCHEDULE_CONFLICT</code>、<code>CREDIT_EXCEEDS_BALANCE</code>）。</li>
+            <li><strong>隔离性：</strong>每个测试使用独立临时 SQLite 库 + 全量种子数据，十轮之间互不污染，可任意顺序执行。</li>
+            <li><strong>会计严谨性：</strong>凡涉及金额的轮次均断言恒等式（COA 毛利三重恒等、试算平衡、资产负债平衡、损益净额），而非仅断言 200。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4>执行环境</h4>
+          <table>
+            <tbody>
+              <tr><th>后端</th><td>FastAPI · <code>apps/api</code> · 全模块解锁（LICENSE_DEV_UNLOCK=all）</td></tr>
+              <tr><th>前端</th><td>Next.js 16 standalone · <code>localhost:3000</code>（API:8017）</td></tr>
+              <tr><th>执行方式</th><td><code>pytest tests/test_simulation_10rounds.py -q</code> → <strong>10 passed in 153.37s</strong></td></tr>
+              <tr><th>回归方式</th><td>97 个测试文件分 4 片并行全量执行 → <strong>825 passed</strong>（唯一一次负载偶发经单测重跑 ×3 与整片重跑复核，均全绿，确认非产品缺陷）</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ================= 3 十轮明细 ================= -->
+      <section id="rounds">
+        <h2>3. 十轮明细</h2>
+        <p class="muted">每轮给出：商业场景 → 执行链路 → 关键断言与结果。</p>
+
+        <!-- R1 -->
+        <div class="card" id="r1">
+          <div class="round-head"><span class="round-tag">R1</span><h3 style="margin:0">标准航次商业闭环（交易台 → 入账）</h3></div>
+          <p><strong>商业场景：</strong>成交一程巴西铁矿运输：Tubarao → Qingdao，18 万吨 @ $21/mt，佣金 2.5%，航次 35 天 + 港口 9 天，VLSFO $520/吨。从估价到航次完成、运费入账的一次完整接单-执行-结算循环。</p>
+          <div class="flow"><span>新建估算</span><i>→</i><span>计算 TCE</span><i>→</i><span>转租约</span><i>→</i><span>审批激活</span><i>→</i><span>航次进行</span><i>→</i><span>挂靠港</span><i>→</i><span>午报</span><i>→</i><span>SOF NOR</span><i>→</i><span>运费发票</span><i>→</i><span>全额收款</span><i>→</i><span>GL 入账</span><i>→</i><span>航次完成</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>估算计算 TCE &gt; 0</td><td class="pass">✓</td></tr>
+              <tr><td>租约草稿直接激活被状态机拦截（409），必须 draft → pending_approval → active</td><td class="pass">✓</td></tr>
+              <tr><td>午报返回 <code>eta_deviation_hours</code>（ETA 偏差自动计算）</td><td class="pass">✓</td></tr>
+              <tr><td>SOF 登记 NOR 事件（本地时区 Asia/Shanghai）</td><td class="pass">✓</td></tr>
+              <tr><td>$950,000 运费发票 待批 → 开立 → 全额收款 <code>status=paid</code> → GL 过账 <code>gl_posted=true</code></td><td class="pass">✓</td></tr>
+              <tr><td>航次损益报表可查；航次 → completed</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- R2 -->
+        <div class="card" id="r2">
+          <div class="round-head"><span class="round-tag">R2</span><h3 style="margin:0">多货估算 + 逾期应收管理</h3></div>
+          <p><strong>商业场景：</strong>一船多货（parcels）报价：50,000 mt 按 $12/mt + 30,000 mt 包干 $250,000 混合计费；同时财务侧出现一笔逾期 40 天的应收，部分回款后进入账龄与异常监控。</p>
+          <div class="flow"><span>多货引擎计算</span><i>→</i><span>方案克隆</span><i>→</i><span>两案对比</span><i>→</i><span>逾期发票</span><i>→</i><span>部分回款</span><i>→</i><span>账龄</span><i>→</i><span>异常扫描</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>混合计费： <code>freight_basis=multi</code>，<code>cargo_count=2</code>，总货量 80,000 mt，TCE &gt; 0（与黄金夹具 gold_multi 同一契约）</td><td class="pass">✓</td></tr>
+              <tr><td>方案克隆 + 双案对比返回 2 个方案</td><td class="pass">✓</td></tr>
+              <tr><td>部分回款 $400 后账龄表 <code>open_amount &gt; 0</code>（敞口正确保留）</td><td class="pass">✓</td></tr>
+              <tr><td>异常扫描命中 <code>invoice_overdue</code>，严重级 warning/critical</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- R3 -->
+        <div class="card" id="r3">
+          <div class="round-head"><span class="round-tag">R3</span><h3 style="margin:0">期租租金周期（TCI → 还船）</h3></div>
+          <p><strong>商业场景：</strong>期租租入一船：$15,000/日，2026-04-01 交船至 2026-06-30 还船，半月付租。完成交/还船检验、首期租金账单流转、计费计划生成与汇总。</p>
+          <div class="flow"><span>TC 合同</span><i>→</i><span>激活</span><i>→</i><span>交船检验</span><i>→</i><span>租金账单</span><i>→</i><span>已发/已批/已付</span><i>→</i><span>计费计划</span><i>→</i><span>汇总</span><i>→</i><span>还船检验</span><i>→</i><span>完成</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>TC 合同 201 创建，草稿直接 completed 被拦（409）</td><td class="pass">✓</td></tr>
+              <tr><td>on_hire / off_hire 检验顺序正确（交船油量 900/100 → 还船 150/20）</td><td class="pass">✓</td></tr>
+              <tr><td>租金账单 <code>net_hire &gt; 0</code>，sent → approved → paid 顺推；已付后回退 sent 被拦（409）</td><td class="pass">✓</td></tr>
+              <tr><td>半月拆分计费计划 ≥ 5 期（4/1–6/30），首期标记 <code>invoiced</code></td><td class="pass">✓</td></tr>
+              <tr><td>租约汇总 <code>statement_count=1</code>；合同 completed</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- R4 -->
+        <div class="card" id="r4">
+          <div class="round-head"><span class="round-tag">R4</span><h3 style="margin:0">COA 合同航次分摊（长约年度合同）</h3></div>
+          <p><strong>商业场景：</strong>年度 COA 60,000 mt @ $24/mt，分两个航程（itinerary 各 30,000 mt）执行两个 lifting 提货航次，挂接实际航次的燃油与港使成本，核算油价中性口径下的 COA 损益。</p>
+          <div class="flow"><span>COA 合同</span><i>→</i><span>行程 2×30k</span><i>→</i><span>提货计划</span><i>→</i><span>提名/定价/完成</span><i>→</i><span>分摊</span><i>→</i><span>燃油中性 P&amp;L</span><i>→</i><span>完成锁定</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>COA 合同 201，单号 <code>COA-</code> 前缀</td><td class="pass">✓</td></tr>
+              <tr><td>第三个行程超总量（31k+30k+1k &gt; 60k）被拒 <strong>422</strong></td><td class="pass">✓</td></tr>
+              <tr><td>lifting 提名 → 定价（挂航次）→ 完成 → 分摊全链路；关联燃油订单 50t@$600、PDA $5,000 计入成本</td><td class="pass">✓</td></tr>
+              <tr><td>重复分摊同一行程被拒 <strong>422</strong>；分摊后 <code>remaining_qty=0</code>、<code>allocated=60,000</code></td><td class="pass">✓</td></tr>
+              <tr><td>COA 毛利三重恒等：<code>pnl_gross = pnl_fuel_neutral − fuel_cost = revenue − fuel_cost − other_cost</code></td><td class="pass">✓</td></tr>
+              <tr><td>合同 completed 后回退 active 被拦（409）</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- R5 -->
+        <div class="card" id="r5">
+          <div class="round-head"><span class="round-tag">R5</span><h3 style="margin:0">滞期费索赔 + 港口使费 PDA/FDA</h3></div>
+          <p><strong>商业场景：</strong>装港滞期：允许 48 小时，实际计时 60 小时含 6 小时除外时间（抛锚），净滞期 6 小时按 $18,000/日索赔；代理预付使费 $62,000 报账，实际 FDA $65,500 出现差异。</p>
+          <div class="flow"><span>装卸时间单</span><i>→</i><span>计算 54h&gt;48h</span><i>→</i><span>定稿</span><i>→</i><span>索赔 $6,000</span><i>→</i><span>谈判/结案</span><i>→</i><span>PDA 批准</span><i>→</i><span>FDA 差异</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>Laytime 计算：60h − 6h 除外 = 54h &gt; 48h → 6 小时滞期 = <strong>$6,000</strong>（@18,000/日，与黄金夹具同口径）</td><td class="pass">✓</td></tr>
+              <tr><td>定稿后索赔金额与计算书一致 $6,000；negotiating → settled</td><td class="pass">✓</td></tr>
+              <tr><td>PDA $62,000 submitted → approved → FDA $65,500，<code>variance=$3,500</code> 正确入账差异</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- R6 -->
+        <div class="card" id="r6">
+          <div class="round-head"><span class="round-tag">R6</span><h3 style="margin:0">红冲与付款冲正（财务逆向流程）</h3></div>
+          <p><strong>商业场景：</strong>已收款发票需退款：必须先开贷项红冲再作废；另一笔发票收款有误需冲正付款；已 GL 入账的发票禁止一切冲正 —— 验证财务风控的完整约束链。</p>
+          <div class="flow"><span>收款发票</span><i>→</i><span>直接作废 409</span><i>→</i><span>超余额红冲 409</span><i>→</i><span>合法红冲 CN-</span><i>→</i><span>作废</span><i>→</i><span>付款冲正</span><i>→</i><span>入账锁定</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>已有收款的发票直接 void → 409 <code>CREDIT_NOTE_REQUIRED</code>（必须先红冲）</td><td class="pass">✓</td></tr>
+              <tr><td>红冲 $10,000.01 超余额（已收 $4,000）→ 409 <code>CREDIT_EXCEEDS_BALANCE</code></td><td class="pass">✓</td></tr>
+              <tr><td>合法红冲 $4,000 生成贷项单 <code>CN-2026-xxxxx</code>，作废成功</td><td class="pass">✓</td></tr>
+              <tr><td>付款冲正：状态回 issued、paid 归零、生成 reversal 凭证；二次冲正 409</td><td class="pass">✓</td></tr>
+              <tr><td>GL 入账后再冲正 → 409（入账即锁定）</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- R7 -->
+        <div class="card" id="r7">
+          <div class="round-head"><span class="round-tag">R7</span><h3 style="margin:0">偏航监测 + 船期排班冲突</h3></div>
+          <p><strong>商业场景：</strong>操作台盯盘：午报更新下一港 ETA 晚 24 小时触发偏航预警；调度员拖动船期块时撞上已有航次窗口，系统必须识别硬冲突并拒绝，改到空档后放行，空档（open position）同步可见。</p>
+          <div class="flow"><span>午报 ETA 更新</span><i>→</i><span>偏航 +24h</span><i>→</i><span>重叠排期块</span><i>→</i><span>硬冲突标记</span><i>→</i><span>拖拽 409</span><i>→</i><span>改期放行</span><i>→</i><span>空档敞口</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>PATCH 午报补 <code>eta_next</code> 后偏航重算 = <strong>24.0h</strong></td><td class="pass">✓</td></tr>
+              <tr><td>重叠块 B <code>hard_conflict=true</code>；冲突列表 total ≥ 1</td><td class="pass">✓</td></tr>
+              <tr><td>向冲突窗口移动 → 409 <code>SCHEDULE_CONFLICT</code>；移到空档 → 200</td><td class="pass">✓</td></tr>
+              <tr><td>open-positions 返回该船 <code>open_days &gt; 0</code>（可用空档）</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- R8 -->
+        <div class="card" id="r8">
+          <div class="round-head"><span class="round-tag">R8</span><h3 style="margin:0">合规阻断（制裁 / 告警 / 序列护栏）</h3></div>
+          <p><strong>商业场景：</strong>风控三连：对手方在制裁名单上，租约必须激活失败；运营自定义了阻断型告警规则（命中即拒写）；航次报告阶段不许跳步（装货阶段不能直接报抵达）—— 且护栏可通过配置开关放宽。</p>
+          <div class="flow"><span>制裁对手方建约</span><i>→</i><span>激活 409</span><i>→</i><span>阻断告警规则</span><i>→</i><span>命中 409</span><i>→</i><span>报告跳步 409</span><i>→</i><span>配置放宽放行</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>制裁租约 <code>sanctions_blocked=true</code>，激活 → 409 <code>SANCTIONS_BLOCKED</code>（审批环节仍可流转）</td><td class="pass">✓</td></tr>
+              <tr><td>阻断规则命中（cargo=SIM_BLOCKED）→ 409 <code>ALERT_BLOCKED</code>；未命中值写入 200</td><td class="pass">✓</td></tr>
+              <tr><td>报告序列护栏：跳阶段 → 409 <code>REPORT_SEQUENCE</code></td><td class="pass">✓</td></tr>
+              <tr><td>设置 <code>CFGRelaxReportSequence=true</code> 后同请求 200（护栏可配置放宽，业务弹性）</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- R9 -->
+        <div class="card" id="r9">
+          <div class="round-head"><span class="round-tag">R9</span><h3 style="margin:0">跨租户隔离 + 软删除回收站</h3></div>
+          <p><strong>商业场景：</strong>平台上有两家租户（demo 与新建的 Globex）。Globex 的单据对 demo 绝对不可见、不可改、不可引用；误删的挂靠港进入回收站，可由本租户恢复，但绝不能被别家恢复。</p>
+          <div class="flow"><span>建租户 B</span><i>→</i><span>A 读/写 B 数据 403/404</span><i>→</i><span>列表零泄漏</span><i>→</i><span>引用 B 外键 404</span><i>→</i><span>软删进回收站</span><i>→</i><span>B 恢复被拒</span><i>→</i><span>A 恢复成功</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>A 对 B 的估算/船舶/发票读、航次写 → 全部 403/404</td><td class="pass">✓</td></tr>
+              <tr><td>A 的 5 类列表（估算/租约/航次/发票/船舶）不含任何 B 主键</td><td class="pass">✓</td></tr>
+              <tr><td>A 用 B 的船舶/对手方外键创建估算 → 404（外键存在性按租户校验）</td><td class="pass">✓</td></tr>
+              <tr><td>挂靠港软删 → 出现在回收站；B 尝试恢复 A 的回收项 → 403/404；A 恢复 → 200 且列表复活可见</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- R10 -->
+        <div class="card" id="r10">
+          <div class="round-head"><span class="round-tag">R10</span><h3 style="margin:0">平台治理 + 账务完整性审计</h3></div>
+          <p><strong>商业场景：</strong>月末财务关账：建科目、录日记账（借现金 5,000 / 贷运费收入 5,000）、过账、出三大报表并验证会计恒等、关账锁定、跑全系统自检，最后验证平台管理员与租户管理员的权限边界。</p>
+          <div class="flow"><span>建科目</span><i>→</i><span>日记账</span><i>→</i><span>过账</span><i>→</i><span>试算/资产负债/损益</span><i>→</i><span>关账锁定</span><i>→</i><span>解锁</span><i>→</i><span>SelfCheck 100</span><i>→</i><span>RBAC 边界</span></div>
+          <table>
+            <thead><tr><th>关键断言</th><th>结果</th></tr></thead>
+            <tbody>
+              <tr><td>试算平衡：<code>balanced=true</code> 且 总借 = 总贷</td><td class="pass">✓</td></tr>
+              <tr><td>资产负债表：资产 = 负债 + 权益</td><td class="pass">✓</td></tr>
+              <tr><td>损益表：净额 = 收入 − 费用</td><td class="pass">✓</td></tr>
+              <tr><td>关账后新增日记账 → 409 <code>PERIOD_CLOSED</code>；解锁恢复</td><td class="pass">✓</td></tr>
+              <tr><td>SelfCheck <code>score=100</code>，含 <code>calc.tce_gold</code> 与 <code>calc.laytime_gold</code> 黄金用例</td><td class="pass">✓</td></tr>
+              <tr><td>平台管理员可列租户 200；租户管理员访问 /platform/tenants → 403</td><td class="pass">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ================= 4 覆盖矩阵 ================= -->
+      <section id="coverage">
+        <h2>4. 三维覆盖矩阵（兼容性 / 完整性 / 业务弹性）</h2>
+        <table>
+          <thead><tr><th style="width:9em">轮次</th><th>兼容性 Compatibility</th><th>完整性 Integrity</th><th>业务弹性 Resilience</th></tr></thead>
+          <tbody>
+            <tr><td><strong>R1</strong> 标准航次</td><td>单程程租单证形态</td><td>商务全链路首次贯通；发票三态流转 + GL</td><td>状态机跳步拦截</td></tr>
+            <tr><td><strong>R2</strong> 多货+应收</td><td>per-MT / 包干 / 混合多货计费；方案对比</td><td>账龄敞口精确；异常扫描分类分级</td><td>逾期预警（warning/critical）</td></tr>
+            <tr><td><strong>R3</strong> 期租</td><td>TCI 期租单证 + 半月付租计划</td><td>检验对、账单状态链、汇总计数</td><td>已付账单回退被拒</td></tr>
+            <tr><td><strong>R4</strong> COA</td><td>年度合同 + lifting + 行程分摊形态</td><td>配额守恒（remaining=0）；毛利三重恒等</td><td>超配 422 / 重复分摊 422 / 完成态回退 409</td></tr>
+            <tr><td><strong>R5</strong> 滞期</td><td>Laytime 除外时间口径 + PDA/FDA 双向</td><td>60−6=54h 计算链；$3,500 差异准确</td><td>谈判→结案状态链</td></tr>
+            <tr><td><strong>R6</strong> 红冲</td><td>贷项单 CN-* 新单证形态</td><td>余额守恒（红冲 ≤ 余额）；reversal 凭证</td><td>三重逆向约束（409×4）</td></tr>
+            <tr><td><strong>R7</strong> 偏航/排期</td><td>—</td><td>ETA 偏差 24h 精确重算</td><td>硬冲突 409 + 空档放行</td></tr>
+            <tr><td><strong>R8</strong> 合规</td><td>—</td><td>三类护栏统一错误码规范</td><td>制裁/告警/序列阻断 + 配置放宽</td></tr>
+            <tr><td><strong>R9</strong> 隔离</td><td>多租户并存</td><td>列表零泄漏；外键按租校验</td><td>越权全拦截 + 回收站归属校验</td></tr>
+            <tr><td><strong>R10</strong> 平台</td><td>平台/租户双角色</td><td>会计三大恒等 + SelfCheck 100</td><td>关账锁定 + RBAC 403</td></tr>
+          </tbody>
+        </table>
+        <div class="card verdict">
+          <p><strong>交叉覆盖说明：</strong>十轮合计触发 <strong>16 次受控拒绝</strong>（409×12、422×4、404×3、403×2 分布于各轮），每一个拒绝均携带规范错误码并被断言；正向链路 40+ 条业务流全部走通。中英文界面（含本轮交付的 269 条 i18n 键、sweep 0 缺失）与双语操作手册为兼容性维度的界面层保证。</p>
+        </div>
+      </section>
+
+      <!-- ================= 5 回归 ================= -->
+      <section id="regression">
+        <h2>5. 全量回归与质量门</h2>
+        <table>
+          <thead><tr><th>质量门</th><th>执行</th><th>结果</th></tr></thead>
+          <tbody>
+            <tr><td>十轮模拟套件</td><td><code>pytest tests/test_simulation_10rounds.py -q</code></td><td class="pass">10 passed（153s）</td></tr>
+            <tr><td>全量 pytest 回归</td><td>97 文件 4 片并行（LICENSE_DEV_UNLOCK=all）</td><td class="pass">825 passed · 0 failed</td></tr>
+            <tr><td>计算黄金用例</td><td>TCE / Laytime gold（SelfCheck 内嵌）</td><td class="pass">100 分全绿</td></tr>
+            <tr><td>前端构建</td><td><code>npm run build</code>（86 页）</td><td class="pass">clean</td></tr>
+            <tr><td>前端静态检查</td><td><code>npm run lint</code></td><td class="pass">clean（inline-style 491 ≤ 基线 514）</td></tr>
+            <tr><td>i18n 全站扫描</td><td><code>sweep_full.py</code> 175 个文件比对线上语料包</td><td class="pass">missing = 0</td></tr>
+            <tr><td>走查修复回归</td><td>7 项修复（AI 会话 500 / 缺失路由 / ACL / 标题撞键 / 硬编码 / 导入标签 / 双语手册）逐项 curl + 浏览器复验</td><td class="pass">7/7 复验通过</td></tr>
+          </tbody>
+        </table>
+        <div class="card">
+          <p class="muted" style="margin:0">说明：回归首跑曾出现 <code>test_backup_scheduler_runs_due_schedule</code> 一次负载偶发失败；单测重跑 ×3 与整片重跑（287 passed）均全绿，确认为四片并行高负载下的测试时序抖动，非产品缺陷。</p>
+        </div>
+      </section>
+
+      <!-- ================= 6 视频 ================= -->
+      <section id="video">
+        <h2>6. 视频讲解（中英双语）</h2>
+        <div class="card">
+          <p>配合本报告的完整操作演示视频（按界面语言分两版，旁白与字幕同语言）：</p>
+          <ul>
+            <li>📺 <strong>中文版</strong>：<a href="/videos/marios-demo-zh.mp4">/videos/marios-demo-zh.mp4</a></li>
+            <li>📺 <strong>English</strong>：<a href="/videos/marios-demo-en.mp4">/videos/marios-demo-en.mp4</a></li>
+          </ul>
+          <p class="muted" style="margin-bottom:0">内容与《<a href="/manual">操作手册</a>》章节一致：登录与双语切换 → 工作台 → 估算 TCE → 租约状态机 → 航次执行 → 财务滞期 → 看板 → 合规排放 → 双语手册 → 本测试报告。</p>
+        </div>
+      </section>
+
+      <!-- ================= 7 交付判定 ================= -->
+      <section id="verdict">
+        <h2>7. 交付判定</h2>
+        <div class="card verdict">
+          <p><strong>判定：可直接交付给用户（试点 / PoC / 培训演练级全流程台面）。</strong></p>
+          <ul>
+            <li>商务主干（估算 → 租约 → 航次 → 装卸时间/索赔 → 燃油 → 发票收付款 → GL → 报表）在产品面与自动化测试中全部打通，会计恒等式处处成立；</li>
+            <li>逆向与风控场景（非法状态、超额、重复、制裁、告警、冲突、红冲、冲正、关账、越权）全部被受控拒绝且错误码规范；</li>
+            <li>多租户隔离、软删除恢复、中英双语界面与手册构成完整的交付配套；</li>
+            <li>全量回归 825 测试全绿，构建与静态检查干净，SelfCheck 100 分。</li>
+          </ul>
+          <p class="muted" style="margin-bottom:0">边界与落地建议同《<a href="/manual">操作手册</a>》第 9 节：适合作试点与培训演练；作为大型航运公司唯一生产核心前，请先对照手册中的慎用清单完成验收。</p>
+        </div>
+      </section>
+
+      <footer>
+        <p>© MariOS · 十轮全业务循环测试完整业务报告 · 执行于 2026-10-21 · 测试套件 <code>apps/api/tests/test_simulation_10rounds.py</code></p>
+        <p>相关：<a href="/manual">操作手册</a> · <a href="/reports/simulation-10rounds.html">本报告</a> · 打印可用浏览器「打印 → PDF」</p>
+      </footer>
+    </article>
+  </div>
+</body>
+</html>

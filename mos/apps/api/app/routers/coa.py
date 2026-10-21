@@ -531,7 +531,17 @@ def allocate_lifting(
     auth: AuthContext = Depends(require_module("chartering")),
     db: Session = Depends(get_db),
 ):
-    alloc = coa_svc.allocate_lifting(db, auth.tenant_id, coa_id, body.lifting_id, body.itinerary_seq)
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        alloc = coa_svc.allocate_lifting(db, auth.tenant_id, coa_id, body.lifting_id, body.itinerary_seq)
+    except IntegrityError as exc:
+        # 并发分摊（25 用户并发验收修复）：双方都通过“已分摊”预检后，数据库唯一键
+        # （coa_allocations.lifting_id）兜底拦截第二笔；转换为与串行重复分摊一致的 422。
+        db.rollback()
+        if "coa_allocations" in str(exc):
+            raise HTTPException(422, detail={"code": "LIFTING_ALREADY_ALLOCATED", "message": "lifting already allocated (concurrent)"})
+        raise
     return {
         "id": str(alloc.id),
         "coa_contract_id": str(alloc.coa_contract_id),
