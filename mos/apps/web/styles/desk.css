@@ -12,6 +12,24 @@
   padding: 0;
   min-width: 0;
 }
+/* 窄列工具栏：左侧动作不可收缩（见 kit.css），右侧筛选组可收缩避让；
+   实在放不下时整组换行 —— 任何宽度下都不会互相压盖 */
+.desk-list .toolbar {
+  flex-wrap: wrap;
+}
+.desk-list .toolbar-right {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.desk-list .toolbar-right .input {
+  width: auto;
+  flex: 1 1 6rem;
+  min-width: 4rem;
+}
+/* 窄列图例：徽章已缩写 + title hint，去掉文字标题省一行高度 */
+.desk-list .status-legend-title {
+  display: none;
+}
 .desk-list .desk-toolbar {
   position: sticky;
   top: 0;

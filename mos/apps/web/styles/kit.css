@@ -10,8 +10,9 @@
   display: flex;
   align-items: center;
   gap: var(--gap-xs);
-  min-width: 0;
   flex-wrap: nowrap;
+  /* 不可收缩：一旦窄于子按钮内容宽度，按钮会溢出并被右侧筛选框盖住（重叠） */
+  flex-shrink: 0;
 }
 .toolbar-right {
   display: flex;
