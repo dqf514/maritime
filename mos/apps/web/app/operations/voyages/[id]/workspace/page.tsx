@@ -8,6 +8,7 @@ import { useParams } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
+import { MailAside } from "@/components/MailAside";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
@@ -1290,6 +1291,16 @@ export default function VoyageWorkspacePage() {
                 id: "instructions",
                 label: t("ws.tab_instructions", "Instructions"),
                 content: renderNoteList("instruction", instructions),
+              },
+              {
+                id: "mail",
+                label: t("ws.tab_mail", "邮件"),
+                content: (
+                  <MailAside
+                    keywords={[voyage?.voyage_no, voyage?.vessel_name, data?.charter?.counterparty_name]}
+                    top={15}
+                  />
+                ),
               },
               { id: "activity", label: t("ws.tab_activity", "Activity"), content: activityTab },
             ]}

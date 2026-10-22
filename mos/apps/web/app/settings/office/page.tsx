@@ -334,16 +334,19 @@ export default function OfficeEcosystemPage() {
         </div>
       </div>
 
-      <div className="workbench-grid" style={{ marginTop: "1rem" }}>
+      <div className="stack-panels">
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.mail", "Mail")}</h3>
           <button className="btn" type="button" onClick={() => loadMail().catch((e) => toast.error(String(e)))}>
             {t("page.office.load_mail", "Load inbox sample")}
           </button>
-          <ul>
+          <ul className="panel-list">
             {mail.map((m) => (
               <li key={String(m.id)}>
-                <strong>{String(m.subject)}</strong>
+                <strong>{String(m.subject)}</strong>{" "}
+                <span className="muted">
+                  — {String(((m as any).from?.emailAddress?.address) || "")}
+                </span>
                 <div style={{ color: "var(--muted)", fontSize: "0.85rem" }}>{String((m as any).bodyPreview || "")}</div>
               </li>
             ))}
@@ -354,7 +357,7 @@ export default function OfficeEcosystemPage() {
           <button className="btn" type="button" onClick={() => loadDrives().catch((e) => toast.error(String(e)))}>
             {t("page.office.load_drives", "List drives")}
           </button>
-          <ul>
+          <ul className="panel-list">
             {drives.map((d) => (
               <li key={String(d.id)}>
                 {String(d.name)} <span style={{ color: "var(--muted)" }}>({String(d.driveType)})</span>
@@ -367,7 +370,7 @@ export default function OfficeEcosystemPage() {
           <button className="btn" type="button" onClick={() => loadTeams().catch((e) => toast.error(String(e)))}>
             {t("page.office.load_teams", "List teams")}
           </button>
-          <ul>
+          <ul className="panel-list">
             {teams.map((tm) => (
               <li key={String(tm.id)}>{String(tm.displayName)}</li>
             ))}

@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -34,7 +35,28 @@ def create_account(
     auth: AuthContext = Depends(require_module("email")),
     db: Session = Depends(get_db),
 ):
-    row = EmailAccount(tenant_id=auth.tenant_id, status="active", **body.model_dump())
+    data = body.model_dump()
+    email = (str(data.get("email") or "")).strip().lower() or None
+    provider = (data.get("provider") or "").strip().lower()
+    if not email and provider in GRAPH_PROVIDERS:
+        # Microsoft 365 account without explicit address → the connected mailbox
+        from app.services import office_hub
+
+        try:
+            me = office_hub.get_graph_client(db, auth.tenant_id).me()
+            email = (me.get("mail") or me.get("userPrincipalName") or "").strip().lower() or None
+        except Exception:  # noqa: BLE001
+            email = None
+        if not email:
+            raise HTTPException(400, detail={"code": "MAILBOX_ADDRESS_UNKNOWN", "message": "Cannot resolve the connected mailbox address; set email explicitly"})
+    if not email:
+        raise HTTPException(422, detail={"code": "EMAIL_REQUIRED"})
+    dup = db.scalar(
+        select(EmailAccount).where(EmailAccount.tenant_id == auth.tenant_id, EmailAccount.email == email)
+    )
+    if dup and dup.status != "deleted":
+        raise HTTPException(409, detail={"code": "ACCOUNT_EXISTS"})
+    row = EmailAccount(tenant_id=auth.tenant_id, status="active", **{**data, "email": email})
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -117,15 +139,152 @@ def delete_account(
     return {"ok": True, "recycled": True}
 
 
+GRAPH_PROVIDERS = {"microsoft", "m365", "graph", "outlook"}
+
+
+def _graph_dt(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _sync_graph_inbox(db: Session, auth: AuthContext, account: EmailAccount, top: int) -> dict:
+    """Pull the connected mailbox via Microsoft Graph and persist new messages
+    into the review pipeline (dedupe by Graph message id).
+
+    Business mail (fixture recap / NOR / laytime statement) lands in the review
+    queue with rule-based parse results; general mail is stored as parsed so it
+    doesn't clog the human review queue but remains searchable everywhere.
+    """
+    from app.services import office_hub
+    from app.services.email_intelligence import (
+        classify_email,
+        parse_fixture_recap,
+        parse_laytime_statement,
+        parse_nor,
+    )
+
+    try:
+        client = office_hub.get_graph_client(db, auth.tenant_id)
+        mails = client.list_mail(top=top)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, detail={"code": "GRAPH_SYNC_FAILED", "message": str(exc)}) from exc
+
+    synced = 0
+    review = 0
+    for m in mails:
+        mid = m.get("id")
+        if not mid:
+            continue
+        exists = db.scalar(
+            select(EmailMessage.id).where(
+                EmailMessage.tenant_id == auth.tenant_id, EmailMessage.message_id == str(mid)
+            )
+        )
+        if exists:
+            continue
+        subject = (m.get("subject") or "").strip() or "(no subject)"
+        body = (m.get("body") or {}).get("content") or m.get("bodyPreview") or ""
+        frm = (m.get("from") or {}).get("emailAddress") or {}
+        from_email = frm.get("address") or m.get("sender", {}).get("emailAddress", {}).get("address")
+        sent_at = _graph_dt(m.get("receivedDateTime")) or datetime.now(timezone.utc)
+
+        conv = m.get("conversationId") or mid
+        thread_key = f"graph-{conv}"
+        thread = db.scalar(
+            select(EmailThread).where(
+                EmailThread.tenant_id == auth.tenant_id, EmailThread.thread_key == thread_key
+            )
+        )
+        if not thread:
+            thread = EmailThread(
+                tenant_id=auth.tenant_id,
+                account_id=account.id,
+                subject_norm=subject.lower(),
+                thread_key=thread_key,
+                last_message_at=sent_at,
+                message_count=0,
+            )
+            db.add(thread)
+            db.flush()
+
+        # Classify + rule-based parse (fast & deterministic; the LLM pipeline
+        # remains available separately via /email-intelligence/process).
+        cls = classify_email(subject, body)
+        ctype = cls["type"]
+        parse_result: dict = {"email_type": ctype, "source": "graph", "graph_id": str(mid)}
+        status = "parsed"
+        if ctype == "fixture_recap":
+            parse_result.update(parse_fixture_recap(body))
+            status = "review"
+        elif ctype == "nor":
+            parse_result.update(parse_nor(body))
+            status = "review"
+        elif ctype == "laytime_statement":
+            parse_result.update(parse_laytime_statement(body))
+            status = "review"
+
+        db.add(
+            EmailMessage(
+                tenant_id=auth.tenant_id,
+                account_id=account.id,
+                thread_id=thread.id,
+                message_id=str(mid),
+                direction="inbound",
+                from_email=from_email,
+                subject=subject,
+                body_text=body[:20000],
+                sent_at=sent_at,
+                parse_status=status,
+                parse_confidence=Decimal(str(cls["confidence"])),
+                parse_result=parse_result,
+            )
+        )
+        thread.message_count = (thread.message_count or 0) + 1
+        thread.last_message_at = max(thread.last_message_at or sent_at, sent_at)
+        synced += 1
+        if status == "review":
+            review += 1
+
+    account.last_sync_at = datetime.now(timezone.utc)
+    db.add(account)
+    if review:
+        db.add(
+            Notification(
+                tenant_id=auth.tenant_id,
+                user_id=auth.user_id,
+                title="Microsoft 365 mail synced",
+                body=f"{review} message(s) ready for review from {account.email}",
+                level="info",
+                href="/email/review",
+            )
+        )
+    db.commit()
+    return {
+        "synced": synced,
+        "review_queue": review,
+        "provider": "microsoft",
+        "mode": getattr(client, "mode", "live"),
+    }
+
+
 @router.post("/email/accounts/{account_id}/sync")
 def sync_account(
     account_id: UUID,
+    top: int = Query(20, ge=1, le=100),
     auth: AuthContext = Depends(require_module("email")),
     db: Session = Depends(get_db),
 ):
     account = db.get(EmailAccount, account_id)
     if not account or account.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Account not found")
+
+    if (account.provider or "").strip().lower() in GRAPH_PROVIDERS:
+        # Real (or stub) Microsoft 365 mailbox — persisted into the review pipeline
+        return _sync_graph_inbox(db, auth, account, top)
 
     thread = EmailThread(
         tenant_id=auth.tenant_id,
@@ -195,6 +354,43 @@ def list_messages(
             parse_result=r.parse_result or {},
             sent_at=r.sent_at,
         )
+        for r in rows
+    ]
+
+
+@router.get("/email/related")
+def related_messages(
+    q: str = Query("", max_length=300),
+    top: int = Query(20, ge=1, le=100),
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """Keyword search across the tenant mailbox for the per-entity mail sidebar.
+
+    ``q`` accepts comma/semicolon-separated terms (e.g. voyage no, vessel name,
+    counterparty); any term matching subject or body pulls the message in (OR).
+    """
+    stmt = select(EmailMessage).where(EmailMessage.tenant_id == auth.tenant_id)
+    terms = [t.strip() for t in q.replace(";", ",").split(",") if t.strip()]
+    if terms:
+        conds = []
+        for term in terms:
+            like = f"%{term}%"
+            conds.append(
+                or_(EmailMessage.subject.ilike(like), EmailMessage.body_text.ilike(like))
+            )
+        stmt = stmt.where(or_(*conds))
+    rows = db.scalars(stmt.order_by(EmailMessage.sent_at.desc()).limit(top)).all()
+    return [
+        {
+            "id": str(r.id),
+            "subject": r.subject,
+            "from_email": r.from_email,
+            "sent_at": r.sent_at.isoformat() if r.sent_at else None,
+            "parse_status": r.parse_status,
+            "email_type": (r.parse_result or {}).get("email_type"),
+            "body_preview": (r.body_text or "")[:300],
+        }
         for r in rows
     ]
 

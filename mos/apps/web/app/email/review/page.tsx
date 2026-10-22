@@ -37,15 +37,18 @@ export default function EmailReviewPage() {
   const toast = useToast();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [rows, setRows] = useState<Msg[]>([]);
+  const [m365, setM365] = useState(false);
   const rowCtx = useContextMenu<Msg>();
 
   async function load() {
-    const [acc, review] = await Promise.all([
+    const [acc, review, office] = await Promise.all([
       apiGet("/api/v1/email/accounts"),
       apiGet("/api/v1/email/review"),
+      apiGet("/api/v1/office/status").catch(() => null),
     ]);
     setAccounts(acc);
     setRows(review);
+    setM365(Boolean(office?.connected));
   }
 
   useEffect(() => {
@@ -55,8 +58,16 @@ export default function EmailReviewPage() {
     });
   }, []);
 
-  async function ensureDemoAccount() {
+  async function ensureSyncAccount() {
     if (accounts.length) return accounts[0];
+    // Microsoft 365 connected → real mailbox (address resolved server-side from /me)
+    if (m365) {
+      return apiPost("/api/v1/email/accounts", {
+        provider: "microsoft",
+        display_name: "Microsoft 365 Inbox",
+        config: {},
+      });
+    }
     return apiPost("/api/v1/email/accounts", {
       provider: "demo",
       email: "ops@demo.marios",
@@ -66,8 +77,12 @@ export default function EmailReviewPage() {
   }
 
   async function sync() {
-    toast.success(t("page.email.syncing", "Syncing demo mailbox…"));
-    const acc = await ensureDemoAccount();
+    toast.success(
+      m365
+        ? t("page.email.syncing_m365", "正在从 Microsoft 365 同步收件箱…")
+        : t("page.email.syncing", "Syncing demo mailbox…"),
+    );
+    const acc = await ensureSyncAccount();
     const result = await apiPost(`/api/v1/email/accounts/${acc.id}/sync`);
     await load();
     toast.success(t("page.email.synced", "Synced {n} message(s).", { n: result.synced ?? 1 }));
@@ -232,8 +247,9 @@ export default function EmailReviewPage() {
       />
       <Toolbar right={<span className="hint">{t("page.email.count", "{n} messages", { n: rows.length })}</span>}>
         <button className="btn btn-primary" type="button" onClick={() => sync().catch(() => toast.error(t("page.email.sync_fail", "Sync failed")))}>
-          {t("page.email.sync_btn", "Sync demo inbox")}
+          {m365 ? t("page.email.sync_btn_m365", "同步 Microsoft 365 收件箱") : t("page.email.sync_btn", "Sync demo inbox")}
         </button>
+        {m365 ? <span className="badge badge-pass">{t("page.email.m365_connected", "Microsoft 365 已连接")}</span> : null}
       </Toolbar>
       <StatusLegend statuses={["pending", "review", "parsed", "failed"]} />
       <div className="panel">

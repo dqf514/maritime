@@ -138,7 +138,60 @@ def _redact_body_preview(body: str) -> str:
     the log must never persist a usable invite / verify / magic-link token)."""
     preview = re.sub(r"(token=)[^&\s]+", r"\1***", body)
     preview = re.sub(r"(?i)(demo token:\s*)\S+", r"\1***", preview)
+    preview = re.sub(r"(?i)(temp(?:orary)? password:\s*)\S+", r"\1***", preview)
     return preview[:2000]
+
+
+def _smtp_send(plat: PlatformIdentitySettings, to_email: str, subject: str, body: str) -> dict[str, Any]:
+    """Deliver one mail over the platform-configured SMTP relay.
+
+    Raises on any transport/auth failure — the caller logs the error and falls
+    back to console so mail outages never break the triggering workflow.
+    """
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    from email.utils import formataddr
+
+    from app.services.ops_crypto import decrypt_secret
+
+    host = (plat.smtp_host or "").strip()
+    if not host:
+        raise RuntimeError("SMTP_HOST not configured")
+    security = (plat.smtp_security or "starttls").strip().lower()
+    if security not in {"starttls", "ssl", "none"}:
+        security = "starttls"
+    port = plat.smtp_port or (465 if security == "ssl" else 587)
+    username = (plat.smtp_username or "").strip()
+    password = ""
+    if plat.smtp_password_cipher:
+        password = decrypt_secret(plat.smtp_password_cipher)
+
+    msg = EmailMessage()
+    from_name = (plat.email_from_name or "").strip()
+    msg["From"] = formataddr((from_name, plat.email_from)) if from_name else plat.email_from
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    ctx = ssl.create_default_context()
+    started = datetime.now().astimezone()
+    if security == "ssl":
+        with smtplib.SMTP_SSL(host, port, timeout=20, context=ctx) as smtp:
+            if username:
+                smtp.login(username, password)
+            smtp.send_message(msg)
+    else:
+        with smtplib.SMTP(host, port, timeout=20) as smtp:
+            smtp.ehlo()
+            if security == "starttls":
+                smtp.starttls(context=ctx)
+                smtp.ehlo()
+            if username:
+                smtp.login(username, password)
+            smtp.send_message(msg)
+    elapsed = (datetime.now().astimezone() - started).total_seconds()
+    return {"host": host, "port": port, "security": security, "latency_ms": int(elapsed * 1000)}
 
 
 def send_mail(
@@ -180,6 +233,15 @@ def send_mail(
         except Exception as exc:  # noqa: BLE001
             status = "fallback_console"
             send_meta["graph_error"] = str(exc)
+    elif channel in {"smtp", "email.smtp"}:
+        # Real SMTP delivery via the platform-configured relay. Attachments are
+        # not supported on this channel yet (Graph-only feature).
+        try:
+            send_meta["smtp"] = _smtp_send(plat, to_email, subject, body)
+            channel = "smtp"
+        except Exception as exc:  # noqa: BLE001
+            status = "fallback_console"
+            send_meta["smtp_error"] = str(exc)
     log = OutboundMailLog(
         tenant_id=tenant_id,
         to_email=to_email,

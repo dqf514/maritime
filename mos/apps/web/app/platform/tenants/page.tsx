@@ -12,7 +12,7 @@ import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
-import { apiDelete, apiGet, apiPost, apiPut, generateTempPassword } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut, generateTempPassword } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
@@ -50,6 +50,15 @@ type BackupRow = {
   total_rows?: number;
 };
 
+type PUserRow = {
+  id: string;
+  email: string;
+  full_name: string | null;
+  status: string;
+  roles: string[];
+};
+type RoleRow = { id: string; code: string; name: string };
+
 function PlatformTenantsPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -83,6 +92,14 @@ function PlatformTenantsPage() {
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [purgeConfirmText, setPurgeConfirmText] = useState("");
   const [purgeIncludeUsers, setPurgeIncludeUsers] = useState(false);
+  // 租户用户管理（平台侧增删改 + 密码重置）
+  const [pusers, setPusers] = useState<PUserRow[]>([]);
+  const [proles, setProles] = useState<RoleRow[]>([]);
+  const [userModal, setUserModal] = useState<{ mode: "create" | "edit"; user?: PUserRow } | null>(null);
+  const [userEdit, setUserEdit] = useState({ email: "", full_name: "", status: "active", role_codes: ["viewer"] as string[], send_email: true });
+  const [userSaving, setUserSaving] = useState(false);
+  const [userPw, setUserPw] = useState(""); // 一次性临时密码 flash
+  const [resetTarget, setResetTarget] = useState<PUserRow | null>(null);
 
   async function load() {
     setRows(await apiGet("/api/v1/platform/tenants"));
@@ -120,10 +137,128 @@ function PlatformTenantsPage() {
       setPurgeConfirmText("");
       setPurgeIncludeUsers(false);
       setBackups(await apiGet(`/api/v1/platform/tenants/${row.id}/backups`).catch(() => []));
+      // 用户管理区
+      await loadUsers(row.id);
     } catch {
       toast.error(t("common.failed", "加载失败"));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function loadUsers(tid?: string) {
+    if (!tid) return;
+    const [u, r] = await Promise.all([
+      apiGet(`/api/v1/platform/tenants/${tid}/users`),
+      apiGet(`/api/v1/platform/tenants/${tid}/roles`).catch(() => [] as RoleRow[]),
+    ]);
+    setPusers(u);
+    setProles(r);
+  }
+
+  const assignableRoles = proles.filter((r) => r.code !== "platform_admin");
+
+  function toggleRole(list: string[], code: string): string[] {
+    if (list.includes(code)) {
+      const next = list.filter((c) => c !== code);
+      return next.length ? next : ["viewer"];
+    }
+    return [...list.filter((c) => c !== "viewer" || code === "viewer"), code];
+  }
+
+  function openUserCreate() {
+    setUserEdit({ email: "", full_name: "", status: "active", role_codes: ["viewer"], send_email: true });
+    setUserModal({ mode: "create" });
+  }
+
+  function openUserRow(u: PUserRow) {
+    setUserEdit({ email: u.email, full_name: u.full_name || "", status: u.status, role_codes: u.roles.length ? u.roles : ["viewer"], send_email: true });
+    setUserModal({ mode: "edit", user: u });
+  }
+
+  async function copyUserPw() {
+    try {
+      await navigator.clipboard.writeText(userPw);
+    } catch {
+      window.prompt(t("page.users.copy_manual", "请手动复制初始密码："), userPw);
+    }
+    setUserPw("");
+  }
+
+  async function saveUser(e: FormEvent) {
+    e.preventDefault();
+    if (!selected || !userModal) return;
+    setUserSaving(true);
+    try {
+      if (userModal.mode === "create") {
+        // 不传 password → 服务端生成临时密码并（按 send_email）邮件下发
+        const res = await apiPost(`/api/v1/platform/tenants/${selected.id}/users`, {
+          email: userEdit.email,
+          full_name: userEdit.full_name,
+          role_codes: userEdit.role_codes.length ? userEdit.role_codes : ["viewer"],
+          send_email: userEdit.send_email,
+        });
+        if (res.temp_password) setUserPw(res.temp_password);
+        toast.success(
+          res.emailed
+            ? t("page.tenants.user_created_mailed", "用户已创建；临时密码已邮件发送给该用户（也可立即复制）。")
+            : t("page.tenants.user_created", "用户已创建；临时密码已生成，请通过安全渠道传达。"),
+        );
+      } else if (userModal.user) {
+        await apiPatch(`/api/v1/platform/tenants/${selected.id}/users/${userModal.user.id}`, {
+          full_name: userEdit.full_name,
+          status: userEdit.status,
+          role_codes: userEdit.role_codes.length ? userEdit.role_codes : ["viewer"],
+        });
+        toast.success(t("common.saved", "已保存"));
+      }
+      setUserModal(null);
+      await loadUsers(selected.id);
+      await load();
+    } catch (err: any) {
+      const code = err?.detail?.code;
+      toast.error(
+        code === "LAST_TENANT_ADMIN"
+          ? t("page.tenants.last_admin_guard", "该用户是最后一个启用的租户管理员，不能停用/降级/删除。")
+          : code === "USER_EXISTS"
+            ? t("page.tenants.user_exists", "该邮箱已存在于本租户")
+            : t("common.failed", "失败"),
+      );
+    } finally {
+      setUserSaving(false);
+    }
+  }
+
+  async function removeUser(u: PUserRow) {
+    if (!selected) return;
+    try {
+      await apiDelete(`/api/v1/platform/tenants/${selected.id}/users/${u.id}`);
+      toast.success(t("common.recycled", "已移入回收站"));
+      await loadUsers(selected.id);
+      await load();
+    } catch (err: any) {
+      toast.error(
+        err?.detail?.code === "LAST_TENANT_ADMIN"
+          ? t("page.tenants.last_admin_guard", "该用户是最后一个启用的租户管理员，不能停用/降级/删除。")
+          : t("common.failed", "失败"),
+      );
+    }
+  }
+
+  async function resetUserPw(u: PUserRow) {
+    if (!selected) return;
+    try {
+      const res = await apiPost(`/api/v1/platform/tenants/${selected.id}/users/${u.id}/reset-password`, { send_email: true });
+      if (res.temp_password) setUserPw(res.temp_password);
+      toast.success(
+        res.emailed
+          ? t("page.tenants.user_reset_mailed", "密码已重置并邮件发送；该用户现有登录会话已全部失效。")
+          : t("page.tenants.user_reset", "密码已重置；临时密码请立即复制传达。"),
+      );
+    } catch (err: any) {
+      toast.error(String(err?.message || t("common.failed", "失败")));
+    } finally {
+      setResetTarget(null);
     }
   }
 
@@ -490,6 +625,15 @@ function PlatformTenantsPage() {
           </button>
         </p>
       ) : null}
+      {userPw ? (
+        <p className="flash">
+          {t("page.tenants.user_pw_ready", "临时密码已生成（仅此一次，复制后即不再显示）。")}{" "}
+          <code>{userPw}</code>{" "}
+          <button type="button" className="btn btn-ghost" onClick={() => copyUserPw().catch(() => setUserPw(""))}>
+            {t("page.tenants.copy_pw", "Copy initial password")}
+          </button>
+        </p>
+      ) : null}
 
       <Toolbar
         filterCount={(filterStatus ? 1 : 0) + (filterQ ? 1 : 0)}
@@ -549,6 +693,74 @@ function PlatformTenantsPage() {
           <button type="button" className="btn btn-ghost" onClick={() => setEditOpen(true)}>
             {t("page.tenants.edit_profile", "编辑资料")}
           </button>
+
+          <h3 style={{ marginTop: "1.5rem" }}>{t("page.tenants.users", "用户管理")}</h3>
+          <p className="muted">
+            {t(
+              "page.tenants.users_sub",
+              "平台可为该租户新建 / 编辑 / 停用用户，也可重置密码（重置后邮件发送新临时密码，旧会话立即失效）。可直接把某人设为租户管理员。",
+            )}
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+            <button className="btn btn-primary" type="button" onClick={openUserCreate}>
+              {t("page.tenants.user_add", "新建用户")}
+            </button>
+            <button className="btn btn-sm" type="button" onClick={() => loadUsers(selected.id).catch(() => undefined)} title={t("common.refresh", "Refresh")}>
+              ↻
+            </button>
+          </div>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>{t("common.email", "邮箱")}</th>
+                <th>{t("common.name", "姓名")}</th>
+                <th>{t("common.roles", "角色")}</th>
+                <th>{t("common.status", "状态")}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {pusers.map((u) => (
+                <tr key={u.id}>
+                  <td>
+                    <button type="button" className="linklike" onClick={() => openUserRow(u)}>
+                      {u.email}
+                    </button>
+                  </td>
+                  <td>{u.full_name || "—"}</td>
+                  <td>{u.roles.join(", ")}</td>
+                  <td>
+                    <span className={u.status === "active" ? "badge badge-pass" : "badge badge-warn"}>{u.status}</span>
+                  </td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    <button className="btn btn-sm" type="button" onClick={() => setResetTarget(u)}>
+                      {t("page.tenants.user_reset_pw", "重置密码")}
+                    </button>{" "}
+                    <button
+                      className="btn btn-sm btn-danger"
+                      type="button"
+                      onClick={() =>
+                        setConfirm({
+                          message: t("page.tenants.user_delete_confirm", "删除用户 {email}？（软删除，可在回收站恢复）", { email: u.email }),
+                          danger: true,
+                          action: () => removeUser(u).catch(() => undefined),
+                        })
+                      }
+                    >
+                      {t("common.delete", "删除")}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!pusers.length ? (
+                <tr>
+                  <td colSpan={5} className="muted">
+                    {t("common.no_data", "No data")}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
 
           <h3 style={{ marginTop: "1.5rem" }}>{t("page.tenants.license_matrix", "模块许可证")}</h3>
           <p className="muted">{t("page.tenants.license_hint", "核心模块始终开通；业务模块可在此启停。")}</p>
@@ -837,6 +1049,103 @@ function PlatformTenantsPage() {
           </label>
         </div>
       </RecordModal>
+
+      <RecordModal
+        open={Boolean(userModal)}
+        title={
+          userModal?.mode === "create"
+            ? t("page.tenants.user_add", "新建用户")
+            : t("page.tenants.user_edit", "编辑用户") + (userModal?.user ? ` · ${userModal.user.email}` : "")
+        }
+        onClose={() => setUserModal(null)}
+        onSave={saveUser}
+        saving={userSaving}
+        canDelete={false}
+      >
+        {userModal?.mode === "create" ? (
+          <div className="form-grid">
+            <label>
+              {t("common.email", "邮箱")}
+              <input
+                type="email"
+                value={userEdit.email}
+                onChange={(e) => setUserEdit({ ...userEdit, email: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              {t("page.users.full_name", "姓名")}
+              <input
+                value={userEdit.full_name}
+                onChange={(e) => setUserEdit({ ...userEdit, full_name: e.target.value })}
+                required
+              />
+            </label>
+            <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={userEdit.send_email}
+                onChange={(e) => setUserEdit({ ...userEdit, send_email: e.target.checked })}
+              />
+              {t("page.tenants.user_send_email", "创建后邮件发送登录凭据（需平台配置邮件通道）")}
+            </label>
+          </div>
+        ) : (
+          <div className="form-grid">
+            <label>
+              {t("page.users.full_name", "姓名")}
+              <input
+                value={userEdit.full_name}
+                onChange={(e) => setUserEdit({ ...userEdit, full_name: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              {t("common.status", "状态")}
+              <select value={userEdit.status} onChange={(e) => setUserEdit({ ...userEdit, status: e.target.value })}>
+                <option value="active">active</option>
+                <option value="disabled">disabled</option>
+                <option value="invited">invited</option>
+              </select>
+            </label>
+          </div>
+        )}
+        <div>
+          <div className="muted" style={{ marginBottom: "0.4rem", fontSize: "0.85rem" }}>
+            {t("page.users.roles_multi", "可同时勾选多个业务角色（如租船+营运），适合小型企业一人多岗；租户管理员可与业务角色并存。")}
+          </div>
+          <div className="role-check-grid">
+            {assignableRoles.map((r) => (
+              <label key={r.code} className="role-check">
+                <input
+                  type="checkbox"
+                  checked={userEdit.role_codes.includes(r.code)}
+                  onChange={() => setUserEdit({ ...userEdit, role_codes: toggleRole(userEdit.role_codes, r.code) })}
+                />
+                <span>{r.name}</span>
+                <code>{r.code}</code>
+              </label>
+            ))}
+          </div>
+        </div>
+      </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(resetTarget)}
+        title={t("page.tenants.user_reset_pw", "重置密码")}
+        message={t(
+          "page.tenants.user_reset_confirm",
+          "将为 {email} 生成新的临时密码并邮件发送，其现有登录会话会立即失效。确认重置？",
+          { email: resetTarget?.email || "" },
+        )}
+        danger
+        onConfirm={() => {
+          const u = resetTarget;
+          setResetTarget(null);
+          if (u) resetUserPw(u).catch(() => undefined);
+        }}
+        onCancel={() => setResetTarget(null)}
+      />
 
       <ConfirmDialog
         open={Boolean(confirm)}

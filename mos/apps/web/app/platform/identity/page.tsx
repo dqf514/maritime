@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
-import { apiGet, apiPut } from "@/lib/api";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -15,6 +15,11 @@ type Identity = {
   email_channel: string;
   email_from: string;
   email_from_name: string;
+  smtp_host: string | null;
+  smtp_port: number | null;
+  smtp_security: string;
+  smtp_username: string | null;
+  smtp_password_set: boolean;
   default_require_email_verify: boolean;
   default_invite_only: boolean;
   default_allowed_domains: string[];
@@ -29,6 +34,10 @@ export default function PlatformIdentityPage() {
   const [form, setForm] = useState<Identity | null>(null);
   const [domains, setDomains] = useState("");
   const [logs, setLogs] = useState<any[]>([]);
+  const [smtpPw, setSmtpPw] = useState(""); // "" = keep current
+  const [smtpPwClear, setSmtpPwClear] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testTo, setTestTo] = useState("");
 
   async function load() {
     const data = await apiGet("/api/v1/platform/identity");
@@ -44,15 +53,37 @@ export default function PlatformIdentityPage() {
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!form) return;
-    await apiPut("/api/v1/platform/identity", {
-      ...form,
+    const { runtime, secret_guidance, smtp_password_set, ...rest } = form;
+    void runtime;
+    void secret_guidance;
+    void smtp_password_set;
+    const body: Record<string, unknown> = {
+      ...rest,
       default_allowed_domains: domains
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean),
-    });
-    toast.success(t("page.identity.saved", "Platform identity settings saved. Client secrets stay in server env only."));
+    };
+    if (smtpPwClear) body.smtp_password = "";
+    else if (smtpPw) body.smtp_password = smtpPw;
+    await apiPut("/api/v1/platform/identity", body);
+    toast.success(t("page.identity.saved", "Platform identity settings saved. The SMTP password is encrypted at rest and never sent to the browser."));
+    setSmtpPw("");
+    setSmtpPwClear(false);
     await load();
+  }
+
+  async function sendTest() {
+    setTesting(true);
+    try {
+      const res = await apiPost("/api/v1/platform/identity/smtp-test", testTo ? { to_email: testTo } : {});
+      if (res.ok) toast.success(t("page.identity.smtp_test_ok", "Test mail delivered to the SMTP relay."));
+      else toast.error(t("page.identity.smtp_test_fail", "SMTP test failed: {msg}").replace("{msg}", res.message || ""));
+    } catch (err: any) {
+      toast.error(err?.message || t("common.failed", "Failed"));
+    } finally {
+      setTesting(false);
+    }
   }
 
   if (!form) {
@@ -64,6 +95,7 @@ export default function PlatformIdentityPage() {
   }
 
   const rt = form.runtime || {};
+  const smtpConfigured = Boolean(form.smtp_host);
 
   return (
     <AppShell>
@@ -74,11 +106,11 @@ export default function PlatformIdentityPage() {
       />
 
       <div className="card verdict" style={{ marginBottom: "1rem", padding: "0.85rem 1rem", borderLeft: "4px solid var(--accent)", background: "#f3fbfa" }}>
-        <strong>{t("page.identity.email_box", "邮件通道与发件人")}</strong>
+        <strong>{t("page.identity.email_box", "Email channel and sender")}</strong>
         <p className="muted" style={{ margin: "0.35rem 0 0" }}>
           {t(
             "page.identity.email_box_d",
-            "在下方「邮件通道」选择 console / SMTP / SendGrid / Graph，并设置 From 地址与显示名后保存。SMTP 密码等密钥仅放在服务器环境变量，不会出现在浏览器。",
+            "Choose console / SMTP / SendGrid / Graph under \"Email channel\", set the From address and display name, then save. SMTP host / port / security / credentials are configured on this page; the password is encrypted at rest and never reaches the browser.",
           )}
         </p>
       </div>
@@ -149,6 +181,118 @@ export default function PlatformIdentityPage() {
               onChange={(e) => setForm({ ...form, email_from_name: e.target.value })}
             />
           </label>
+        </div>
+
+        <h2>{t("page.identity.smtp_section", "SMTP delivery")}</h2>
+        <p className="muted" style={{ margin: "0 0 0.5rem" }}>
+          {t("page.identity.smtp_d", "Used when the email channel is SMTP. The password is stored encrypted; leave the field blank to keep the saved password.")}
+        </p>
+        <div className="form-grid">
+          <label>
+            {t("page.identity.smtp_host", "SMTP host")}
+            <input
+              value={form.smtp_host || ""}
+              onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
+              placeholder="smtp.example.com"
+            />
+          </label>
+          <label>
+            {t("page.identity.smtp_port", "Port")}
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              value={form.smtp_port ?? ""}
+              onChange={(e) => setForm({ ...form, smtp_port: e.target.value ? Number(e.target.value) : null })}
+              placeholder={form.smtp_security === "ssl" ? "465" : "587"}
+            />
+          </label>
+          <label>
+            {t("page.identity.smtp_security", "Security")}
+            <select
+              value={form.smtp_security || "starttls"}
+              onChange={(e) => setForm({ ...form, smtp_security: e.target.value })}
+            >
+              <option value="starttls">{t("page.identity.smtp_sec_starttls", "STARTTLS (587)")}</option>
+              <option value="ssl">{t("page.identity.smtp_sec_ssl", "SSL / TLS (465)")}</option>
+              <option value="none">{t("page.identity.smtp_sec_none", "None (plain)")}</option>
+            </select>
+          </label>
+          <label>
+            {t("page.identity.smtp_username", "Username (optional)")}
+            <input
+              value={form.smtp_username || ""}
+              onChange={(e) => setForm({ ...form, smtp_username: e.target.value })}
+              autoComplete="off"
+            />
+          </label>
+          <label>
+            {t("page.identity.smtp_password", "Password")}
+            {form.smtp_password_set && !smtpPwClear ? (
+              <div style={{ display: "flex", gap: "0.4rem" }}>
+                <input
+                  type="password"
+                  value={smtpPw}
+                  onChange={(e) => setSmtpPw(e.target.value)}
+                  placeholder={t("platform.officecfg.secret_keep", "Leave blank to keep the current secret")}
+                  autoComplete="new-password"
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setSmtpPwClear(true)}
+                  title={t("platform.officecfg.clear_secret", "Clear secret")}
+                >
+                  {t("platform.officecfg.clear_secret", "Clear secret")}
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: "0.4rem" }}>
+                <input
+                  type="password"
+                  value={smtpPwClear ? "" : smtpPw}
+                  onChange={(e) => {
+                    setSmtpPw(e.target.value);
+                    if (smtpPwClear) setSmtpPwClear(false);
+                  }}
+                  placeholder={
+                    smtpPwClear
+                      ? t("page.identity.smtp_pw_cleared", "Will be cleared on save")
+                      : t("page.identity.smtp_pw_placeholder", "SMTP password")
+                  }
+                  autoComplete="new-password"
+                  disabled={smtpPwClear}
+                  style={{ flex: 1 }}
+                />
+                {smtpPwClear ? (
+                  <button type="button" className="btn btn-sm" onClick={() => setSmtpPwClear(false)}>
+                    {t("common.cancel", "Cancel")}
+                  </button>
+                ) : null}
+              </div>
+            )}
+            {form.smtp_password_set && !smtpPwClear ? (
+              <span className="badge badge-ok" style={{ marginTop: "0.25rem", alignSelf: "flex-start" }}>
+                {t("page.identity.smtp_pw_saved", "Password saved (encrypted)")}
+              </span>
+            ) : null}
+          </label>
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end", marginTop: "0.5rem", flexWrap: "wrap" }}>
+          <label style={{ flex: "0 1 260px" }}>
+            {t("page.identity.smtp_test_to", "Test recipient (default: your account)")}
+            <input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@example.com" />
+          </label>
+          <button
+            type="button"
+            className="btn"
+            disabled={testing || !smtpConfigured}
+            onClick={sendTest}
+            title={smtpConfigured ? undefined : t("page.identity.smtp_test_need_save", "Save an SMTP host first, then test.")}
+          >
+            {testing ? t("page.identity.testing", "Sending…") : t("page.identity.smtp_test", "Send test mail")}
+          </button>
         </div>
 
         <h2>{t("page.identity.defaults", "Default policy for new tenants")}</h2>

@@ -197,6 +197,37 @@
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: var(--gap-sm);
 }
+/* Full-width panels stacked as horizontal rows (office hub mail/files/teams) */
+.stack-panels {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-sm);
+  margin-top: 1rem;
+}
+.stack-panels .panel-list {
+  max-height: 340px;
+  overflow-y: auto;
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+}
+.stack-panels .panel-list li { margin-bottom: 0.5rem; }
+
+/* ── MailAside — related-mail panel attached to business pages ── */
+.mail-aside { margin-top: 1rem; }
+.mail-aside > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.mail-aside .mail-aside-hint { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
+.mail-aside ul { list-style: none; padding: 0; margin: 0.6rem 0 0; }
+.mail-aside li { padding: 0.45rem 0; border-bottom: 1px solid var(--border); }
+.mail-aside-head { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; }
+.mail-aside-head strong { font-size: 0.9rem; }
+.mail-aside-meta { color: var(--muted); font-size: 0.8rem; }
+.mail-aside-body { color: var(--muted); font-size: 0.8rem; white-space: pre-wrap; }
+.mail-aside-empty { color: var(--muted); margin: 0.5rem 0 0; font-size: 0.85rem; }
 .desk-split {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);

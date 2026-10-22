@@ -71,6 +71,11 @@ class PlatformIdentityOut(BaseModel):
     email_channel: str
     email_from: str
     email_from_name: str
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_security: str = "starttls"
+    smtp_username: str | None = None
+    smtp_password_set: bool = False
     default_require_email_verify: bool
     default_invite_only: bool
     default_allowed_domains: list
@@ -88,6 +93,12 @@ class PlatformIdentityIn(BaseModel):
     email_channel: str | None = None
     email_from: str | None = None
     email_from_name: str | None = None
+    # SMTP — smtp_password semantics: omitted = keep, "" = clear, value = replace
+    smtp_host: str | None = None
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
+    smtp_security: str | None = None  # starttls|ssl|none
+    smtp_username: str | None = None
+    smtp_password: str | None = None
     default_require_email_verify: bool | None = None
     default_invite_only: bool | None = None
     default_allowed_domains: list | None = None
@@ -223,14 +234,7 @@ def auth_methods(tenant_code: str = "demo", db: Session = Depends(get_db)):
 
 
 # —— Platform admin: IdP & mail channel ——
-@router.get("/platform/identity")
-def platform_identity_get(
-    auth: AuthContext = Depends(require_roles("platform_admin")),
-    db: Session = Depends(get_db),
-):
-    _ = auth
-    row = ensure_platform_identity(db)
-    db.commit()
+def _platform_identity_row_out(row: PlatformIdentitySettings) -> dict[str, Any]:
     return {
         **PlatformIdentityOut(
             microsoft_enabled=row.microsoft_enabled,
@@ -242,6 +246,11 @@ def platform_identity_get(
             email_channel=row.email_channel,
             email_from=row.email_from,
             email_from_name=row.email_from_name,
+            smtp_host=row.smtp_host,
+            smtp_port=row.smtp_port,
+            smtp_security=row.smtp_security or "starttls",
+            smtp_username=row.smtp_username,
+            smtp_password_set=bool(row.smtp_password_cipher),
             default_require_email_verify=row.default_require_email_verify,
             default_invite_only=row.default_invite_only,
             default_allowed_domains=row.default_allowed_domains or [],
@@ -251,10 +260,21 @@ def platform_identity_get(
         "secret_guidance": {
             "microsoft": "设置环境变量 MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET / MICROSOFT_TENANT",
             "google": "设置环境变量 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET",
-            "email": "发件人与通道可在本页保存；SMTP 还需 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD；SendGrid 用 SENDGRID_API_KEY",
-            "smtp": "EMAIL_CHANNEL=smtp 时读取 SMTP_* 环境变量（密钥不下发到浏览器）",
+            "email": "发件人、通道与 SMTP 参数均可在本页保存；SMTP 密码加密存储，不会下发到浏览器",
+            "smtp": "通道选 SMTP 时生效：host / port / 加密方式（STARTTLS / SSL / 明文）/ 用户名 / 密码",
         },
     }
+
+
+@router.get("/platform/identity")
+def platform_identity_get(
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    row = ensure_platform_identity(db)
+    db.commit()
+    return _platform_identity_row_out(row)
 
 
 @router.put("/platform/identity")
@@ -263,14 +283,73 @@ def platform_identity_put(
     auth: AuthContext = Depends(require_roles("platform_admin")),
     db: Session = Depends(get_db),
 ):
+    from app.services.ops_crypto import encrypt_secret
+
     _ = auth
     row = ensure_platform_identity(db)
     data = body.model_dump(exclude_unset=True)
+    # Secret semantics: omitted = keep, ""/null = clear, value = replace (encrypted at rest)
+    if "smtp_password" in data:
+        raw_pw = (data.pop("smtp_password") or "").strip()
+        row.smtp_password_cipher = encrypt_secret(raw_pw) if raw_pw else None
+    if "smtp_security" in data:
+        sec = (data["smtp_security"] or "").strip().lower()
+        if sec not in {"starttls", "ssl", "none"}:
+            raise HTTPException(400, detail={"code": "INVALID_SMTP_SECURITY"})
+        data["smtp_security"] = sec
     for k, v in data.items():
+        if isinstance(v, str):
+            v = v.strip() or (None if k in {"smtp_host", "smtp_username", "oauth_redirect_base", "web_app_base"} else v)
         setattr(row, k, v)
     row.updated_at = now_local()
+    audit(
+        db,
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        action="platform.identity_updated",
+        entity_type="platform",
+        entity_id=row.id,
+        detail={"email_channel": row.email_channel, "smtp_host": row.smtp_host, "smtp_port": row.smtp_port},
+    )
     db.commit()
     return platform_identity_get(auth, db)
+
+
+class SmtpTestIn(BaseModel):
+    to_email: EmailStr | None = None
+
+
+@router.post("/platform/identity/smtp-test")
+def platform_smtp_test(
+    body: SmtpTestIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """Send a probe mail through the configured channel; reports transport result."""
+    row = ensure_platform_identity(db)
+    channel = row.email_channel or "console"
+    if channel not in {"smtp", "email.smtp"}:
+        return {"ok": False, "channel": channel, "message": "email channel is not SMTP — switch the channel first"}
+    if not (row.smtp_host or "").strip():
+        return {"ok": False, "channel": channel, "message": "SMTP host not configured"}
+    to = (body.to_email or auth.user.email).strip().lower()
+    log = send_mail(
+        db,
+        to_email=to,
+        subject="MariOS SMTP test",
+        body=f"This is a test message from MariOS ({row.smtp_host}). If you can read it, SMTP delivery works.",
+        purpose="smtp_test",
+        meta={"triggered_by": str(auth.user_id)},
+    )
+    db.commit()
+    err = (log.meta or {}).get("smtp_error")
+    return {
+        "ok": log.status == "sent",
+        "channel": log.channel,
+        "status": log.status,
+        "to_email": to,
+        "message": "delivered to SMTP relay" if log.status == "sent" else f"SMTP send failed, fell back to console log: {err}",
+    }
 
 
 @router.get("/platform/identity/mail-logs")

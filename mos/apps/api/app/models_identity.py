@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
     Uuid,
@@ -22,7 +23,12 @@ from app.db import Base
 
 
 class PlatformIdentitySettings(Base):
-    """Singleton-ish platform IdP & email channel metadata (secrets stay in env)."""
+    """Singleton-ish platform IdP & email channel metadata.
+
+    OAuth app secrets stay in env / tenant rows; the SMTP password lives here
+    encrypted at rest (``ops_crypto.encrypt_secret``) so platform admins can
+    configure mail delivery from the UI without shell access.
+    """
 
     __tablename__ = "platform_identity_settings"
 
@@ -39,6 +45,12 @@ class PlatformIdentitySettings(Base):
     email_channel: Mapped[str] = mapped_column(Text, default="console")  # console|smtp|sendgrid|graph
     email_from: Mapped[str] = mapped_column(Text, default="noreply@marios.local")
     email_from_name: Mapped[str] = mapped_column(Text, default="MariOS")
+    # SMTP delivery (used when email_channel == "smtp")
+    smtp_host: Mapped[str | None] = mapped_column(Text)
+    smtp_port: Mapped[int | None] = mapped_column(Integer)  # unset → security default (ssl 465, else 587)
+    smtp_security: Mapped[str] = mapped_column(Text, default="starttls")  # starttls|ssl|none
+    smtp_username: Mapped[str | None] = mapped_column(Text)
+    smtp_password_cipher: Mapped[str | None] = mapped_column(Text)  # encrypt_secret(); never sent to clients
     # Default policy template applied to new tenants
     default_require_email_verify: Mapped[bool] = mapped_column(Boolean, default=True)
     default_invite_only: Mapped[bool] = mapped_column(Boolean, default=False)

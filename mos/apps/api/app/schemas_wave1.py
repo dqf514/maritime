@@ -174,7 +174,8 @@ class ConnectorOut(ConnectorIn):
 
 class EmailAccountIn(BaseModel):
     provider: str
-    email: EmailStr
+    # Optional for Microsoft 365 accounts — resolved from Graph /me at creation
+    email: EmailStr | None = None
     display_name: str | None = None
     config: dict = Field(default_factory=dict)
 

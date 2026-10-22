@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import time
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
@@ -18,6 +19,7 @@ from app.models import Module, Role, Tenant, TenantModuleLicense, User, UserRole
 from app.security import AuthContext, get_current_auth, hash_password, require_module
 from app.services.audit import audit
 from app.services.graph_client import request_client_credentials_token
+from app.services.identity import send_mail
 from app.services.ms_config import effective_mode, mask_ms_secret, resolve_ms_config
 from app.services.ops_crypto import encrypt_secret
 from app.services.search_acl import allowed_path_prefixes
@@ -998,3 +1000,350 @@ def platform_test_office_config(
         desc = str(payload.get("error_description") or res.text or "")[:160]
         message = f"{code}: {desc}" if desc else code
     return {"ok": False, "message": message, "latency_ms": latency_ms}
+
+
+# ── 平台管理员：任意租户的用户（含租户管理员）增删改 + 密码重置（邮件发送） ──
+
+
+def _platform_user_or_404(db: Session, tenant: Tenant, user_id: UUID) -> User:
+    user = db.get(User, user_id)
+    if not user or user.tenant_id != tenant.id or user.status == "deleted":
+        raise HTTPException(404, detail={"code": "USER_NOT_FOUND"})
+    return user
+
+
+def _active_tenant_admin_ids(db: Session, tenant_id: UUID) -> set[UUID]:
+    rows = db.execute(
+        select(User.id)
+        .join(UserRole, UserRole.user_id == User.id)
+        .join(Role, Role.id == UserRole.role_id)
+        .where(User.tenant_id == tenant_id, User.status == "active", Role.code == "tenant_admin")
+    ).all()
+    return {r[0] for r in rows}
+
+
+def _user_role_codes(db: Session, user_id: UUID) -> list[str]:
+    return list(
+        db.scalars(
+            select(Role.code).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user_id)
+        ).all()
+    )
+
+
+def _gen_temp_password(length: int = 16) -> str:
+    """Server-side twin of web/lib/api.ts generateTempPassword()."""
+    chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%&*"
+    return "".join(chars[secrets.randbelow(len(chars))] for _ in range(length))
+
+
+def _platform_user_out(db: Session, u: User) -> dict:
+    return {
+        "id": str(u.id),
+        "email": u.email,
+        "full_name": u.full_name,
+        "status": u.status,
+        "roles": _user_role_codes(db, u.id),
+        "email_verified": bool(u.email_verified_at),
+    }
+
+
+@router.get("/platform/tenants/{tenant_id}/roles")
+def platform_tenant_roles(
+    tenant_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    rows = db.scalars(select(Role).where(Role.tenant_id == tenant.id).order_by(Role.code)).all()
+    return [{"id": str(r.id), "code": r.code, "name": r.name, "permissions": r.permissions or {}} for r in rows]
+
+
+@router.get("/platform/tenants/{tenant_id}/users")
+def platform_list_tenant_users(
+    tenant_id: UUID,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    users = db.scalars(
+        select(User)
+        .where(User.tenant_id == tenant.id, User.status != "deleted")
+        .order_by(User.email)
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    user_ids = [u.id for u in users]
+    roles_by_user: dict[UUID, list[str]] = {uid: [] for uid in user_ids}
+    if user_ids:
+        for uid, code in db.execute(
+            select(UserRole.user_id, Role.code)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(UserRole.user_id.in_(user_ids))
+        ).all():
+            roles_by_user.setdefault(uid, []).append(code)
+    return [
+        {
+            "id": str(u.id),
+            "email": u.email,
+            "full_name": u.full_name,
+            "status": u.status,
+            "roles": roles_by_user.get(u.id, []),
+            "email_verified": bool(u.email_verified_at),
+        }
+        for u in users
+    ]
+
+
+class PlatformUserCreateIn(BaseModel):
+    email: EmailStr
+    full_name: str
+    role_codes: list[str] = Field(default_factory=lambda: ["viewer"])
+    # omitted → server generates a temp password (returned once + emailed)
+    password: str | None = Field(default=None, min_length=8)
+    send_email: bool = True
+
+
+@router.post("/platform/tenants/{tenant_id}/users")
+def platform_create_tenant_user(
+    tenant_id: UUID,
+    body: PlatformUserCreateIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """Platform-provisioned account for any tenant; mails the credentials when send_email."""
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    email = body.email.strip().lower()
+    exists = db.scalar(select(User).where(User.tenant_id == tenant.id, User.email == email))
+    if exists and exists.status != "deleted":
+        raise HTTPException(409, detail={"code": "USER_EXISTS", "message": "Email already in tenant"})
+    if "platform_admin" in body.role_codes:
+        raise HTTPException(403, detail={"code": "FORBIDDEN_ROLE", "message": "Cannot assign platform_admin"})
+    password = body.password or _gen_temp_password()
+    user = User(
+        tenant_id=tenant.id,
+        email=email,
+        full_name=body.full_name,
+        password_hash=hash_password(password),
+        status="active",
+        locale="en",
+        timezone="UTC",
+        # Provisioned with a known password → treated as verified (same as tenant admin path)
+        email_verified_at=datetime.now(timezone.utc).astimezone(),
+    )
+    db.add(user)
+    db.flush()
+    for code in body.role_codes:
+        role = db.scalar(select(Role).where(Role.tenant_id == tenant.id, Role.code == code))
+        if not role:
+            raise HTTPException(400, detail={"code": "UNKNOWN_ROLE", "role": code})
+        db.add(UserRole(user_id=user.id, role_id=role.id))
+    emailed = False
+    if body.send_email:
+        send_mail(
+            db,
+            to_email=email,
+            subject="Your MariOS account",
+            body=(
+                f"Hello {body.full_name},\n\n"
+                f"A platform administrator created your MariOS account for tenant \"{tenant.name}\" ({tenant.code}).\n\n"
+                f"Login: {email}\n"
+                f"Temporary password: {password}\n\n"
+                "Please sign in and change your password after first login."
+            ),
+            purpose="account_created",
+            tenant_id=tenant.id,
+            meta={"created_by": str(auth.user_id)},
+        )
+        emailed = True
+    audit(
+        db,
+        tenant_id=tenant.id,
+        actor_user_id=auth.user_id,
+        action="platform.user_created",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email, "roles": body.role_codes, "emailed": emailed},
+    )
+    db.commit()
+    return {
+        **_platform_user_out(db, user),
+        # Returned once so the platform admin can hand it over directly; never persisted in logs
+        "temp_password": password if not body.password else None,
+        "emailed": emailed,
+    }
+
+
+class PlatformUserUpdateIn(BaseModel):
+    email: EmailStr | None = None
+    full_name: str | None = None
+    status: str | None = None  # active | disabled | invited
+    role_codes: list[str] | None = None
+
+
+@router.patch("/platform/tenants/{tenant_id}/users/{user_id}")
+def platform_update_tenant_user(
+    tenant_id: UUID,
+    user_id: UUID,
+    body: PlatformUserUpdateIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    user = _platform_user_or_404(db, tenant, user_id)
+    if body.email is not None:
+        email = body.email.strip().lower()
+        if email != user.email:
+            clash = db.scalar(select(User).where(User.tenant_id == tenant.id, User.email == email))
+            if clash and clash.status != "deleted":
+                raise HTTPException(409, detail={"code": "USER_EXISTS"})
+            user.email = email
+    if body.full_name is not None:
+        user.full_name = body.full_name
+    if body.status is not None:
+        if body.status not in {"active", "disabled", "invited"}:
+            raise HTTPException(400, "Invalid status")
+        if body.status != user.status:
+            admins = _active_tenant_admin_ids(db, tenant.id)
+            if user.id in admins and len(admins) <= 1 and body.status != "active":
+                raise HTTPException(409, detail={"code": "LAST_TENANT_ADMIN", "message": "Cannot deactivate the last active tenant admin"})
+            audit(
+                db,
+                tenant_id=tenant.id,
+                actor_user_id=auth.user_id,
+                action="platform.user_status_changed",
+                entity_type="user",
+                entity_id=user.id,
+                detail={"email": user.email, "from": user.status, "to": body.status},
+            )
+            user.status = body.status
+    if body.role_codes is not None:
+        if "platform_admin" in body.role_codes:
+            raise HTTPException(403, detail={"code": "FORBIDDEN_ROLE"})
+        admins = _active_tenant_admin_ids(db, tenant.id)
+        keeps_admin = user.id in admins and "tenant_admin" in body.role_codes and user.status == "active"
+        if user.id in admins and not keeps_admin and len(admins) <= 1:
+            raise HTTPException(409, detail={"code": "LAST_TENANT_ADMIN", "message": "Cannot remove tenant_admin from the last active tenant admin"})
+        for ur in db.scalars(select(UserRole).where(UserRole.user_id == user.id)).all():
+            db.delete(ur)
+        for code in body.role_codes:
+            role = db.scalar(select(Role).where(Role.tenant_id == tenant.id, Role.code == code))
+            if not role:
+                raise HTTPException(400, detail={"code": "UNKNOWN_ROLE", "role": code})
+            db.add(UserRole(user_id=user.id, role_id=role.id))
+        audit(
+            db,
+            tenant_id=tenant.id,
+            actor_user_id=auth.user_id,
+            action="platform.user_roles_changed",
+            entity_type="user",
+            entity_id=user.id,
+            detail={"email": user.email, "roles": body.role_codes},
+        )
+    audit(
+        db,
+        tenant_id=tenant.id,
+        actor_user_id=auth.user_id,
+        action="platform.user_updated",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email},
+    )
+    db.commit()
+    return _platform_user_out(db, user)
+
+
+@router.delete("/platform/tenants/{tenant_id}/users/{user_id}")
+def platform_delete_tenant_user(
+    tenant_id: UUID,
+    user_id: UUID,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    from app.services.recycle import soft_delete
+
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    user = _platform_user_or_404(db, tenant, user_id)
+    admins = _active_tenant_admin_ids(db, tenant.id)
+    if user.id in admins and len(admins) <= 1:
+        raise HTTPException(409, detail={"code": "LAST_TENANT_ADMIN", "message": "Cannot delete the last active tenant admin"})
+    soft_delete(
+        db,
+        tenant_id=tenant.id,
+        user_id=auth.user_id,
+        entity_type="user",
+        row=user,
+        title=user.email,
+    )
+    audit(
+        db,
+        tenant_id=tenant.id,
+        actor_user_id=auth.user_id,
+        action="platform.user_deleted",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email},
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+class PlatformPasswordResetIn(BaseModel):
+    # omitted → server generates a temp password (returned once + emailed)
+    password: str | None = Field(default=None, min_length=8)
+    send_email: bool = True
+
+
+@router.post("/platform/tenants/{tenant_id}/users/{user_id}/reset-password")
+def platform_reset_tenant_user_password(
+    tenant_id: UUID,
+    user_id: UUID,
+    body: PlatformPasswordResetIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    """Rotate the account password (invalidates live sessions via password_version)
+    and mail the new credential to the account owner."""
+    tenant = _platform_tenant_or_404(db, tenant_id)
+    user = _platform_user_or_404(db, tenant, user_id)
+    password = body.password or _gen_temp_password()
+    user.password_hash = hash_password(password)
+    user.password_version = (user.password_version or 1) + 1  # kills all existing sessions (pwv check)
+    emailed = False
+    if body.send_email:
+        send_mail(
+            db,
+            to_email=user.email,
+            subject="Your MariOS password has been reset",
+            body=(
+                f"Hello {user.full_name or user.email},\n\n"
+                f"A platform administrator reset the password for your MariOS account ({user.email}), "
+                f"tenant \"{tenant.name}\" ({tenant.code}).\n\n"
+                f"Temporary password: {password}\n\n"
+                "Please sign in and change your password. If you did not expect this change, contact your administrator."
+            ),
+            purpose="password_reset",
+            tenant_id=tenant.id,
+            meta={"reset_by": str(auth.user_id)},
+        )
+        emailed = True
+    audit(
+        db,
+        tenant_id=tenant.id,
+        actor_user_id=auth.user_id,
+        action="platform.user_password_reset",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email, "emailed": emailed},
+    )
+    db.commit()
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "temp_password": password if not body.password else None,
+        "emailed": emailed,
+        "sessions_invalidated": True,
+    }
