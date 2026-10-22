@@ -35,6 +35,7 @@ type AuthMethods = {
   magic_link: boolean;
   require_email_verify: boolean;
   invite_only: boolean;
+  allowed_domains: string[];
   provider_modes: { microsoft: string; google: string };
 };
 
@@ -63,6 +64,8 @@ function GoogleIcon() {
 export default function LoginPage() {
   const router = useRouter();
   const { t } = useI18n();
+  // Step 1: tenant + email → methods resolved → step 2: password form or direct SSO jump.
+  const [step, setStep] = useState<"identity" | "credentials">("identity");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [tenant, setTenant] = useState("demo");
@@ -87,29 +90,92 @@ export default function LoginPage() {
       );
   }, []);
 
+  // Surface OAuth callback failures (?oauth_error=… from the backend redirect).
   useEffect(() => {
-    const code = tenant.trim() || "demo";
-    fetch(`${API_BASE}/api/v1/auth/methods?tenant_code=${encodeURIComponent(code)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then(setMethods)
-      .catch(() => setMethods(null));
-  }, [tenant]);
+    const code = new URLSearchParams(window.location.search).get("oauth_error");
+    if (!code) return;
+    const map: Record<string, string> = {
+      access_denied: t("login.oauth_err_access_denied", "Sign-in was cancelled at the identity provider."),
+      invalid_state: t("login.oauth_err_state", "Sign-in session expired — please try again."),
+      expired_state: t("login.oauth_err_state", "Sign-in session expired — please try again."),
+      domain_not_allowed: t("login.error_domain", "This email domain is not allowed by the tenant."),
+      invite_only: t("login.oauth_err_invite_only", "This tenant is invite-only — ask an admin for an invitation."),
+      email_not_verified: t("login.error_unverified", "Email not verified. Check your inbox or ask tenant admin to resend."),
+      token_exchange_failed: t("login.oauth_err_token", "Identity provider rejected the sign-in — check the tenant SSO configuration."),
+      oauth_not_configured: t("login.oauth_err_not_configured", "SSO is not configured for this tenant."),
+      identity_missing_email: t("login.oauth_err_no_email", "Identity provider did not return an email address."),
+      missing_id_token: t("login.oauth_err_token", "Identity provider rejected the sign-in — check the tenant SSO configuration."),
+      invalid_id_token: t("login.oauth_err_token", "Identity provider rejected the sign-in — check the tenant SSO configuration."),
+      token_endpoint_unreachable: t("login.error_network", "Cannot reach API — check that the backend is running."),
+    };
+    setError(map[code] || t("login.oauth_err_generic", "SSO sign-in failed.", { code }));
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [t]);
+
+  async function onContinue(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const tenantVal = String(fd.get("tenant") || tenant).trim() || "demo";
+    const emailVal = String(fd.get("email") || email).trim();
+    setTenant(tenantVal);
+    setEmail(emailVal);
+    setLoading(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/auth/methods?tenant_code=${encodeURIComponent(tenantVal)}`);
+      if (r.status === 404) {
+        setError(t("login.error_tenant", "Tenant not found — check the company code."));
+        return;
+      }
+      if (!r.ok) {
+        setError(t("login.error_generic", "Sign-in failed. Check tenant / credentials (or verification / method policy)."));
+        return;
+      }
+      const m: AuthMethods = await r.json();
+      setMethods(m);
+      // Early domain gate — same rule the backend enforces.
+      const dom = emailVal.includes("@") ? emailVal.split("@").pop()!.toLowerCase() : "";
+      if ((m.allowed_domains || []).length && dom && !(m.allowed_domains || []).some((d) => d.toLowerCase() === dom)) {
+        setError(t("login.error_domain", "This email domain is not allowed by the tenant."));
+        return;
+      }
+      if (m.password) {
+        setStep("credentials");
+        return;
+      }
+      // No password — route straight to the tenant's SSO / magic link.
+      if (m.microsoft) {
+        await startOAuth("microsoft", tenantVal, emailVal);
+        return;
+      }
+      if (m.google) {
+        await startOAuth("google", tenantVal, emailVal);
+        return;
+      }
+      if (m.magic_link) {
+        setStep("credentials");
+        await sendMagic(tenantVal, emailVal);
+        return;
+      }
+      setError(t("login.error_no_method", "No sign-in method is enabled for this tenant."));
+    } catch {
+      setError(t("login.error_network", "Cannot reach API — check that the backend is running."));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true);
     setError("");
     const fd = new FormData(e.currentTarget);
-    const tenantVal = String(fd.get("tenant") || tenant).trim();
-    const emailVal = String(fd.get("email") || email).trim();
     const passwordVal = String(fd.get("password") || password);
-    setTenant(tenantVal);
-    setEmail(emailVal);
     setPassword(passwordVal);
     try {
       // Session cookie is planted by the server (HttpOnly) — no localStorage.
-      await apiLogin(emailVal, passwordVal, tenantVal);
-      router.replace(tenantVal === "sys" ? "/platform" : "/home");
+      await apiLogin(email, passwordVal, tenant);
+      router.replace(tenant === "sys" ? "/platform" : "/home");
     } catch (err: any) {
       const detail = err?.detail || err?.message;
       if (String(detail).includes("EMAIL_NOT_VERIFIED") || err?.code === "EMAIL_NOT_VERIFIED") {
@@ -128,12 +194,14 @@ export default function LoginPage() {
     }
   }
 
-  async function startOAuth(provider: "microsoft" | "google") {
+  async function startOAuth(provider: "microsoft" | "google", tenantVal?: string, emailVal?: string) {
     setError("");
+    const code = tenantVal ?? tenant;
+    const mail = emailVal ?? email;
     const res = await fetch(`${API_BASE}/api/v1/auth/oauth/${provider}/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tenant_code: tenant || "demo", provider, intent: "login" }),
+      body: JSON.stringify({ tenant_code: code || "demo", provider, intent: "login", email: mail || null }),
     });
     if (!res.ok) {
       setError(t("login.error_oauth", "{provider} sign-in unavailable for this tenant", { provider }));
@@ -144,12 +212,12 @@ export default function LoginPage() {
     else setError(t("login.error_oauth_cfg", "OAuth not configured"));
   }
 
-  async function sendMagic() {
+  async function sendMagic(tenantVal?: string, emailVal?: string) {
     setError("");
     const res = await fetch(`${API_BASE}/api/v1/auth/magic-link/request`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, tenant_code: tenant || "demo" }),
+      body: JSON.stringify({ email: emailVal ?? email, tenant_code: (tenantVal ?? tenant) || "demo" }),
     });
     if (!res.ok) {
       setError(t("login.error_magic", "Magic link disabled or domain not allowed"));
@@ -162,12 +230,16 @@ export default function LoginPage() {
     setTenant(p.tenant);
     setEmail(p.email);
     setPassword(p.password);
+    setMethods(null); // presets bypass methods resolution — show the plain password form
+    setError("");
+    setStep("credentials");
   }
 
   const accent = brand?.primary_color || "#1A9B96";
   const name = brand?.product_name || "MariOS";
   const showSso = Boolean(methods?.microsoft || methods?.google);
   const showPassword = methods?.password !== false;
+  const showMagic = Boolean(methods?.magic_link);
 
   return (
     <div className="login-stage login-stage-clean" style={{ ["--portal-accent" as string]: accent }}>
@@ -193,10 +265,11 @@ export default function LoginPage() {
         </aside>
 
         <div className="login-form-pane">
-          <form className="login-card login-card-solo" onSubmit={onSubmit}>
+          {step === "identity" ? (
+          <form className="login-card login-card-solo" onSubmit={onContinue}>
           <div className="login-card-head">
             <h1>{t("login.welcome", "Welcome back")}</h1>
-            <p>{t("login.hint_quiet", "Sign in to your organisation workspace.")}</p>
+            <p>{t("login.hint_identity", "Tenant code + corporate identity")}</p>
           </div>
 
           {error ? <div className="error">{error}</div> : null}
@@ -209,7 +282,43 @@ export default function LoginPage() {
             onChange={(e) => setTenant(e.target.value)}
             autoComplete="organization"
             placeholder={t("login.tenant_ph", "Your company code")}
+            autoFocus
           />
+
+          <label htmlFor="email">{t("login.email", "Email")}</label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+            placeholder={t("login.email_ph", "you@company.com")}
+            required
+          />
+
+          <button className="btn btn-primary login-submit" disabled={loading} type="submit">
+            {loading ? "…" : t("login.continue", "Continue")}
+          </button>
+
+          <div className="login-alt-row">
+            <Link href="/login/verify-email">{t("login.verify_link", "Verify email")}</Link>
+            <Link href="/login/accept-invite">{t("login.invite_link", "Accept invite")}</Link>
+          </div>
+          </form>
+          ) : (
+          <form className="login-card login-card-solo" onSubmit={onSubmit}>
+          <div className="login-card-head">
+            <h1>{t("login.welcome", "Welcome back")}</h1>
+            <p className="muted">
+              {tenant} · {email}{" "}
+              <button type="button" className="login-text-btn" onClick={() => { setStep("identity"); setError(""); setMagicSent(""); }}>
+                {t("login.not_you", "Not you?")}
+              </button>
+            </p>
+          </div>
+
+          {error ? <div className="error">{error}</div> : null}
 
           {showSso ? (
             <div className="oauth-stack">
@@ -236,16 +345,6 @@ export default function LoginPage() {
 
           {showPassword ? (
             <>
-              <label htmlFor="email">{t("login.email", "Email")}</label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoComplete="username"
-                required
-              />
               <label htmlFor="password">{t("login.password", "Password")}</label>
               <input
                 id="password"
@@ -254,6 +353,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                autoFocus
                 required
               />
               <button className="btn btn-primary login-submit" disabled={loading} type="submit">
@@ -261,11 +361,11 @@ export default function LoginPage() {
               </button>
             </>
           ) : (
-            <p className="muted">{t("login.password_disabled", "Password login disabled — use Microsoft / Google.")}</p>
+            !showSso && <p className="muted">{t("login.password_disabled", "Password login disabled — use Microsoft / Google.")}</p>
           )}
 
           <div className="login-alt-row">
-            {methods?.magic_link ? (
+            {showMagic ? (
               <button type="button" className="login-text-btn" onClick={() => sendMagic()}>
                 {t("login.magic", "Email me a magic link")}
               </button>
@@ -279,6 +379,7 @@ export default function LoginPage() {
             </p>
           ) : null}
           </form>
+          )}
 
           <details className="login-demo-details">
             <summary>{t("login.demo_toggle", "Demo access")}</summary>

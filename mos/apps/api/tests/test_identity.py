@@ -121,6 +121,164 @@ def test_oauth_stub_flow(client, oauth_stub):
     assert any(i["provider"] == "microsoft" for i in sec.json()["identities"])
 
 
+def _set_demo_ms_override(db_engine, *, client_id="lestarigroup-app", ms_tenant="lestaritenant"):
+    """Point the demo tenant's M365 app override at a fake Entra app (no global env needed)."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models import Tenant
+    from app.services.ops_crypto import encrypt_secret
+
+    S = sessionmaker(bind=db_engine)
+    with S() as db:
+        tenant = db.scalar(select(Tenant).where(Tenant.code == "demo"))
+        tenant.ms_override_enabled = True
+        tenant.ms_client_id = client_id
+        tenant.ms_client_secret = encrypt_secret("lestarigroup-secret")
+        tenant.ms_tenant = ms_tenant
+        db.commit()
+
+
+def test_tenant_m365_override_drives_login(client, db_engine):
+    """Per-tenant M365 app override must drive /auth/methods + /oauth/start."""
+    _set_demo_ms_override(db_engine)
+
+    methods = client.get("/api/v1/auth/methods?tenant_code=demo").json()
+    assert methods["microsoft"] is True
+    assert methods["provider_modes"]["microsoft"] == "live"
+
+    start = client.post(
+        "/api/v1/auth/oauth/microsoft/start",
+        json={"tenant_code": "demo", "provider": "microsoft", "intent": "login", "email": "sso.user@example.com"},
+    )
+    assert start.status_code == 200, start.text
+    body = start.json()
+    assert body["mode"] == "live"
+    assert "lestarigroup-app" in body["authorize_url"]
+    assert "login.microsoftonline.com/lestaritenant" in body["authorize_url"]
+    assert body["redirect_uri"].endswith("/api/v1/auth/oauth/microsoft/callback")
+
+    # Email pre-check on start: domain restriction must 403 before redirecting to the IdP
+    h = client.post("/api/v1/auth/login", json={"email": "admin@demo.marios", "password": "Demo1234!", "tenant_code": "demo"}).json()
+    admin = {"Authorization": f"Bearer {h['access_token']}"}
+    client.put(
+        "/api/v1/admin/security/policy",
+        headers=admin,
+        json={"allowed_domains": ["demo.marios"]},
+    )
+    blocked = client.post(
+        "/api/v1/auth/oauth/microsoft/start",
+        json={"tenant_code": "demo", "provider": "microsoft", "intent": "login", "email": "x@evil.example"},
+    )
+    assert blocked.status_code == 403
+    ok = client.post(
+        "/api/v1/auth/oauth/microsoft/start",
+        json={"tenant_code": "demo", "provider": "microsoft", "intent": "login", "email": "admin@demo.marios"},
+    )
+    assert ok.status_code == 200, ok.text
+
+
+def test_oauth_live_callback_real_exchange(client, db_engine, monkeypatch):
+    """Live callback exchanges the code at the token endpoint and provisions from id_token claims."""
+    import base64
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    import app.services.identity as ident_svc
+
+    _set_demo_ms_override(db_engine)
+
+    def b64(obj):
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
+
+    id_token = (
+        f"{b64({'alg': 'RS256', 'typ': 'JWT'})}."
+        f"{b64({'aud': 'lestarigroup-app', 'preferred_username': 'sso.user@example.com', 'name': 'SSO User', 'oid': 'oid-123', 'sub': 'oid-123'})}.sig"
+    )
+
+    captured: dict = {}
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "at", "id_token": id_token, "token_type": "Bearer"}
+
+    def fake_post(url, data=None, timeout=None):
+        captured["url"] = url
+        captured["data"] = data
+        return FakeResp()
+
+    monkeypatch.setattr(ident_svc.httpx, "post", fake_post)
+
+    start = client.post(
+        "/api/v1/auth/oauth/microsoft/start",
+        json={"tenant_code": "demo", "provider": "microsoft", "intent": "login"},
+    )
+    assert start.status_code == 200, start.text
+    state = start.json()["state"]
+
+    cb = client.get(
+        f"/api/v1/auth/oauth/microsoft/callback?state={state}&code=fake-auth-code",
+        follow_redirects=False,
+    )
+    assert cb.status_code == 307
+    loc = cb.headers["location"]
+    assert "/login/oauth-done" in loc
+    # Token endpoint hit with the tenant's app credentials + the login redirect_uri
+    assert "login.microsoftonline.com/lestaritenant" in captured["url"]
+    assert captured["data"]["client_id"] == "lestarigroup-app"
+    assert captured["data"]["redirect_uri"].endswith("/api/v1/auth/oauth/microsoft/callback")
+    assert captured["data"]["code"] == "fake-auth-code"
+
+    token = parse_qs(urlparse(loc).query).get("token", [""])[0]
+    assert token
+    h = {"Authorization": f"Bearer {token}"}
+    sec = client.get("/api/v1/me/security", headers=h)
+    assert sec.status_code == 200
+    ids = sec.json()["identities"]
+    assert any(i["provider"] == "microsoft" and i["email"] == "sso.user@example.com" for i in ids)
+    assert sec.json()["email_verified"] is True
+
+    # Identity bound to the IdP subject (oid), not the old code[:12] placeholder
+    from sqlalchemy import select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models_identity import UserIdentity
+
+    S = sessionmaker(bind=db_engine)
+    with S() as db:
+        row = db.scalar(select(UserIdentity).where(UserIdentity.provider == "microsoft"))
+        assert row and row.subject == "microsoft:oid-123"
+
+
+def test_oauth_live_callback_exchange_failure(client, db_engine, monkeypatch):
+    """Token-endpoint errors surface as ?oauth_error= on the login redirect (no fake user)."""
+    import app.services.identity as ident_svc
+
+    _set_demo_ms_override(db_engine)
+
+    class FakeResp:
+        status_code = 400
+
+        def json(self):
+            return {"error": "invalid_grant"}
+
+    monkeypatch.setattr(ident_svc.httpx, "post", lambda *a, **k: FakeResp())
+
+    start = client.post(
+        "/api/v1/auth/oauth/microsoft/start",
+        json={"tenant_code": "demo", "provider": "microsoft", "intent": "login"},
+    )
+    state = start.json()["state"]
+    cb = client.get(
+        f"/api/v1/auth/oauth/microsoft/callback?state={state}&code=bad-code",
+        follow_redirects=False,
+    )
+    assert cb.status_code == 307
+    assert "oauth_error=token_exchange_failed" in cb.headers["location"]
+
+
 def test_magic_link(client, auth_headers, mail_capture):
     h = auth_headers
     client.put(

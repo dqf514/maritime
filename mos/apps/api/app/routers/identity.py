@@ -29,19 +29,23 @@ from app.security import (
 )
 from app.services.audit import audit
 from app.services.identity import (
+    OAuthExchangeError,
     build_oauth_authorize_url,
     consume_challenge,
     create_challenge,
     domain_allowed,
     ensure_platform_identity,
     ensure_tenant_policy,
+    exchange_login_code,
     mark_email_verified,
     now_local,
     as_aware,
     provider_runtime,
     public_auth_options,
     send_mail,
+    tenant_provider_runtime,
 )
+from app.services.ms_config import resolve_ms_config
 from app.services.ratelimit import rate_limit
 
 router = APIRouter(tags=["Identity"])
@@ -144,6 +148,7 @@ class OAuthStartIn(BaseModel):
     tenant_code: str
     provider: str  # microsoft|google
     intent: str = "login"  # login|link
+    email: str | None = None  # optional prefill — enables early domain check
 
 
 class StubOAuthCompleteIn(BaseModel):
@@ -307,7 +312,8 @@ def get_tenant_policy(
             "password": plat.email_password_enabled,
             "magic_link": plat.magic_link_enabled,
         },
-        "runtime": provider_runtime(),
+        # Tenant-aware: honors this tenant's M365 app override (source: tenant|global)
+        "runtime": tenant_provider_runtime(db, auth.tenant_id),
     }
 
 
@@ -676,12 +682,15 @@ def oauth_start(provider: str, body: OAuthStartIn, db: Session = Depends(get_db)
         raise HTTPException(404, "Tenant not found")
     policy = ensure_tenant_policy(db, tenant.id)
     plat = ensure_platform_identity(db)
+    runtime = tenant_provider_runtime(db, tenant.id)
     enabled = (
         (provider == "microsoft" and policy.microsoft_enabled and plat.microsoft_enabled)
         or (provider == "google" and policy.google_enabled and plat.google_enabled)
-    )
+    ) and runtime.get(provider, {}).get("mode") != "disabled"
     if not enabled:
         raise HTTPException(403, f"{provider} sign-in disabled for this tenant")
+    if body.email and not domain_allowed(policy, body.email.strip()):
+        raise HTTPException(403, detail={"code": "DOMAIN_NOT_ALLOWED", "message": "Email domain not allowed"})
 
     challenge, raw_state = create_challenge(
         db,
@@ -696,6 +705,8 @@ def oauth_start(provider: str, body: OAuthStartIn, db: Session = Depends(get_db)
         state=raw_state,
         microsoft_tenant=policy.microsoft_tenant_hint,
         google_hosted_domain=policy.google_hosted_domain,
+        # Tenant M365 app override (per-tenant SSO) takes precedence over global env
+        ms_config=resolve_ms_config(db, tenant.id) if provider == "microsoft" else None,
     )
     db.commit()
     return {
@@ -741,10 +752,16 @@ def oauth_callback(
     email = stub_email
     subject = None
     full_name = None
-    if code and provider_runtime().get(provider, {}).get("mode") == "live":
-        # Reserved: exchange authorization code with Microsoft/Google token endpoint.
-        email = email or f"oauth-user@{provider}.invalid"
-        subject = f"{provider}:{code[:12]}"
+    if code:
+        # Live IdP round-trip: exchange the authorization code for identity claims
+        # using the tenant-resolved app credentials (per-tenant M365 override wins).
+        try:
+            ident_out = exchange_login_code(db, provider, code, tenant_id=pending.tenant_id)
+        except OAuthExchangeError as exc:
+            return RedirectResponse(f"{web}/login?oauth_error={exc.code}")
+        email = ident_out["email"]
+        subject = f"{provider}:{ident_out['subject']}"
+        full_name = ident_out["full_name"]
 
     if not email:
         # Keep state unconsumed — stub UI will complete

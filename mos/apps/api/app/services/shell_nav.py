@@ -410,6 +410,8 @@ def build_navigation(user_roles: list[str], profile_tier: str = "M") -> list[dic
     for mod in MODULES:
         if mod["id"] == "analytics":
             continue  # handled separately after Administration
+        if mod["id"] == "platform" and "platform_admin" not in roles:
+            continue  # Platform 分组仅 platform_admin 可见（不给其他角色显示锁定骨架）
         items = _filter_module_items(mod, roles)
         if items:
             visible_modules.append({**mod, "_items": items})

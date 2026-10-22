@@ -274,8 +274,8 @@ def test_tenant_admin_unlocks_twin_and_analytics(client, auth_headers):
     assert items.get("/analytics") is False, "tenant_admin 应解锁 /analytics"
     assert items.get("/analytics/reports") is False
     assert items.get("/analytics/market") is False
-    # platform 区域仍锁定
-    assert items.get("/platform") is True
+    # platform 区域对非 platform_admin 完全不下发（不再显示锁定骨架）
+    assert "/platform" not in items
 
 
 def test_charterer_still_locked_out_of_business(client):

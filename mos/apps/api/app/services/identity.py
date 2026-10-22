@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+import httpx
+from jose import JWTError, jwt as jose_jwt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,6 +24,8 @@ from app.models_identity import (
     PlatformIdentitySettings,
     TenantAuthPolicy,
 )
+from app.services.graph_client import MsConfig
+from app.services.ms_config import resolve_ms_config
 
 
 def now_local() -> datetime:
@@ -217,6 +221,100 @@ def provider_runtime(settings: Settings | None = None) -> dict[str, Any]:
     }
 
 
+def tenant_provider_runtime(db: Session, tenant_id: UUID, settings: Settings | None = None) -> dict[str, Any]:
+    """Like provider_runtime(), but Microsoft mode is tenant-aware.
+
+    A tenant with its own M365 app override (ms_override_enabled + ms_client_id)
+    runs live even when the global MICROSOFT_CLIENT_* env is unset.
+    """
+    s = settings or get_settings()
+    runtime = provider_runtime(s)
+    cfg = resolve_ms_config(db, tenant_id, settings=s)
+    ms_live = bool(cfg.client_id and cfg.client_secret)
+    runtime["microsoft"] = {
+        "configured": ms_live,
+        "mode": "live" if ms_live else ("stub" if s.oauth_allow_stub else "disabled"),
+        "client_id_set": bool(cfg.client_id),
+        "tenant": cfg.ms_tenant,
+        "source": cfg.source,
+    }
+    return runtime
+
+
+class OAuthExchangeError(Exception):
+    """Authorization-code exchange failed; ``code`` surfaces as ?oauth_error= on login redirect."""
+
+    def __init__(self, code: str, *, status: int | None = None):
+        super().__init__(code)
+        self.code = code
+        self.status = status
+
+
+def exchange_login_code(
+    db: Session,
+    provider: str,
+    code: str,
+    *,
+    tenant_id: UUID,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Exchange the IdP authorization code for identity claims (live login path).
+
+    Microsoft credentials come from resolve_ms_config (tenant override > global
+    env). The redirect_uri must exactly match the one used at /start. The
+    id_token is delivered over TLS on the back channel with client-secret
+    authentication, so we validate aud rather than the signature (OIDC core
+    3.1.3.7 — signature checks apply to front-channel id_tokens).
+    """
+    s = settings or get_settings()
+    redirect_uri = f"{s.api_public_base.rstrip('/')}/api/v1/auth/oauth/{provider}/callback"
+    if provider == "microsoft":
+        cfg = resolve_ms_config(db, tenant_id, settings=s)
+        if not (cfg.client_id and cfg.client_secret):
+            raise OAuthExchangeError("oauth_not_configured")
+        token_url = f"https://login.microsoftonline.com/{cfg.ms_tenant or 'common'}/oauth2/v2.0/token"
+        client_id, client_secret = cfg.client_id, cfg.client_secret
+    elif provider == "google":
+        client_id, client_secret = s.google_client_id or "", s.google_client_secret or ""
+        if not (client_id and client_secret):
+            raise OAuthExchangeError("oauth_not_configured")
+        token_url = "https://oauth2.googleapis.com/token"
+    else:
+        raise OAuthExchangeError("unsupported_provider")
+
+    form = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    try:
+        res = httpx.post(token_url, data=form, timeout=20.0)
+    except httpx.HTTPError as exc:
+        raise OAuthExchangeError("token_endpoint_unreachable") from exc
+    if res.status_code >= 400:
+        raise OAuthExchangeError("token_exchange_failed", status=res.status_code)
+    payload = res.json()
+    id_token = (payload or {}).get("id_token") or ""
+    if not id_token:
+        raise OAuthExchangeError("missing_id_token")
+    try:
+        claims = jose_jwt.get_unverified_claims(id_token)
+    except JWTError as exc:
+        raise OAuthExchangeError("invalid_id_token") from exc
+    if claims.get("aud") != client_id:
+        raise OAuthExchangeError("invalid_id_token")
+    email = (claims.get("preferred_username") or claims.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        raise OAuthExchangeError("identity_missing_email")
+    return {
+        "email": email,
+        "full_name": (claims.get("name") or "").strip() or None,
+        "subject": str(claims.get("oid") or claims.get("sub") or email),
+    }
+
+
 def build_oauth_authorize_url(
     provider: str,
     *,
@@ -224,10 +322,20 @@ def build_oauth_authorize_url(
     settings: Settings | None = None,
     microsoft_tenant: str | None = None,
     google_hosted_domain: str | None = None,
+    ms_config: MsConfig | None = None,
 ) -> dict[str, Any]:
     s = settings or get_settings()
     runtime = provider_runtime(s)
     info = runtime.get(provider)
+    if provider == "microsoft" and ms_config is not None:
+        # Tenant-resolved credentials override the global env view.
+        ms_live = bool(ms_config.client_id and ms_config.client_secret)
+        info = {
+            "configured": ms_live,
+            "mode": "live" if ms_live else ("stub" if s.oauth_allow_stub else "disabled"),
+            "client_id_set": bool(ms_config.client_id),
+            "tenant": ms_config.ms_tenant,
+        }
     if not info:
         raise ValueError("unknown_provider")
     redirect_uri = f"{s.api_public_base.rstrip('/')}/api/v1/auth/oauth/{provider}/callback"
@@ -248,11 +356,13 @@ def build_oauth_authorize_url(
             "redirect_uri": redirect_uri,
         }
     if provider == "microsoft":
-        tenant_seg = (microsoft_tenant or s.microsoft_tenant or "common").strip() or "common"
+        client_id = (ms_config.client_id if ms_config else s.microsoft_client_id) or ""
+        default_seg = (ms_config.ms_tenant if ms_config else s.microsoft_tenant) or "common"
+        tenant_seg = (microsoft_tenant or default_seg or "common").strip() or "common"
         base = f"https://login.microsoftonline.com/{tenant_seg}/oauth2/v2.0/authorize"
         q = urllib.parse.urlencode(
             {
-                "client_id": s.microsoft_client_id,
+                "client_id": client_id,
                 "response_type": "code",
                 "redirect_uri": redirect_uri,
                 "response_mode": "query",
@@ -303,7 +413,7 @@ def verify_signed_state(secret: str, state: str) -> str | None:
 def public_auth_options(db: Session, tenant: Tenant) -> dict[str, Any]:
     policy = ensure_tenant_policy(db, tenant.id)
     plat = ensure_platform_identity(db)
-    runtime = provider_runtime()
+    runtime = tenant_provider_runtime(db, tenant.id)
     return {
         "tenant_code": tenant.code,
         "tenant_name": tenant.name,
