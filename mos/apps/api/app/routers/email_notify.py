@@ -11,6 +11,7 @@ from app.db import get_db
 from app.models_wave1 import EmailAccount, EmailMessage, EmailThread, Notification
 from app.schemas_wave1 import EmailAccountIn, EmailAccountOut, EmailMessageOut, NotificationOut
 from app.security import AuthContext, get_current_auth, require_module
+from app.services.identity import as_aware
 from app.services.recycle import soft_delete
 
 router = APIRouter(tags=["Email & Notify"])
@@ -244,7 +245,9 @@ def _sync_graph_inbox(db: Session, auth: AuthContext, account: EmailAccount, top
             )
         )
         thread.message_count = (thread.message_count or 0) + 1
-        thread.last_message_at = max(thread.last_message_at or sent_at, sent_at)
+        # SQLite returns naive datetimes; Graph timestamps are timezone-aware.
+        prev = as_aware(thread.last_message_at) if thread.last_message_at else sent_at
+        thread.last_message_at = max(prev, sent_at)
         synced += 1
         if status == "review":
             review += 1
