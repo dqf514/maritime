@@ -32,7 +32,13 @@ def compute_next_run(schedule: BackupSchedule, now: datetime) -> datetime:
     weekday 用 python 惯例 Mon=0 … Sun=6。
     """
     hour = max(0, min(23, int(schedule.hour_utc or 0)))
-    now_utc = now.astimezone(timezone.utc).replace(tzinfo=None)
+    # naive 输入按约定视为 UTC（与 run_due_schedules 一致）。
+    # 注意不要对 naive 值直接 astimezone —— Python 会把它当本地时区解释，
+    # 在 UTC+N 机器上会把「明天」算回今天（test_backup_scheduler_runs_due_schedule 曾踩中）。
+    if now.tzinfo is None:
+        now_utc = now
+    else:
+        now_utc = now.astimezone(timezone.utc).replace(tzinfo=None)
     candidate = (now_utc + timedelta(days=1)).replace(hour=hour, minute=0, second=0, microsecond=0)
     if schedule.frequency == "weekly":
         weekday = max(0, min(6, int(schedule.weekday or 0)))

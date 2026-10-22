@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 from datetime import datetime
 from typing import Any
@@ -35,6 +36,8 @@ from app.services.graph_client import (
 from app.services.identity import soft_sign_state
 from app.services.ms_config import effective_mode, resolve_ms_config
 from app.services.ops_crypto import decrypt_token, encrypt_token
+
+log = logging.getLogger("marios.office_hub")
 
 ADDON_CATALOG = [
     {
@@ -297,6 +300,94 @@ def notify_teams(db: Session, tenant_id: UUID, text: str) -> dict[str, Any]:
         link.defaults = {**defaults, "team_id": team_id, "channel_id": channel_id}
         db.flush()
     return client.send_teams_channel_message(team_id, channel_id, text)
+
+
+def connected_graph_client(db: Session, tenant_id: UUID) -> GraphClient | None:
+    """租户显式连接过 M365 才返回客户端 —— 绝不因业务联动把未连接租户悄悄 stub 连上。"""
+    link = db.scalar(select(OfficeTenantLink).where(OfficeTenantLink.tenant_id == tenant_id))
+    if not link or link.status != "connected":
+        return None
+    try:
+        return get_graph_client(db, tenant_id)
+    except Exception:  # noqa: BLE001 — 联动永不阻塞主流程
+        return None
+
+
+def push_entity_document(
+    db: Session,
+    tenant_id: UUID,
+    *,
+    entity_type: str,
+    entity_id: UUID,
+    filename: str,
+    content: bytes,
+    content_type: str = "application/octet-stream",
+    meta: dict | None = None,
+) -> dict[str, Any] | None:
+    """把系统生成的单证/凭据推送到租户 OneDrive/SharePoint，并记 OfficeResourceLink 关联。
+
+    未连接 / Graph 失败一律软失败返回 None（业务单据落地优先，归档尽力而为）。
+    """
+    client = connected_graph_client(db, tenant_id)
+    if client is None:
+        return None
+    try:
+        drives = client.list_drives()
+        if not drives:
+            return None
+        drive = next((d for d in drives if d.get("driveType") == "documentLibrary"), drives[0])
+        parent = "root"
+        try:
+            folder = client.create_folder(drive["id"], "MariOS")
+            parent = folder.get("id") or "root"
+        except Exception:  # noqa: BLE001 — 文件夹已存在等，直接放根目录
+            parent = "root"
+        item = client.upload_small_file(drive["id"], filename, content, parent=parent)
+        link = link_resource(
+            db,
+            tenant_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            resource_kind="drive_item",
+            resource_id=item["id"],
+            web_url=item.get("webUrl"),
+            display_name=item.get("name") or filename,
+            meta={**(meta or {}), "drive_id": drive["id"], "content_type": content_type, "size": item.get("size")},
+        )
+        return {
+            "item_id": item["id"],
+            "name": item.get("name") or filename,
+            "web_url": item.get("webUrl"),
+            "link_id": str(link.id),
+        }
+    except Exception:  # noqa: BLE001
+        log.exception("push_entity_document failed (%s/%s)", entity_type, entity_id)
+        return None
+
+
+def notify_workflow_event(
+    db: Session,
+    tenant_id: UUID,
+    *,
+    title: str,
+    lines: list[str],
+    href: str | None = None,
+) -> dict[str, Any] | None:
+    """把业务事件（复核队列 / 装卸时间定稿 / 发票签发…）推到默认 Teams 频道。
+
+    消息带 MariOS 深链（web_public_base + href）；未连接 / 失败软失败返回 None。
+    """
+    if connected_graph_client(db, tenant_id) is None:
+        return None
+    try:
+        base = get_settings().web_public_base.rstrip("/")
+        text = f"**MariOS · {title}**\n" + "\n".join(f"• {line}" for line in lines)
+        if href:
+            text += f"\n[Open in MariOS]({base}{href})"
+        return notify_teams(db, tenant_id, text)
+    except Exception:  # noqa: BLE001
+        log.exception("notify_workflow_event failed: %s", title)
+        return None
 
 
 def create_webhook(

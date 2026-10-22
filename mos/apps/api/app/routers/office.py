@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -66,6 +67,17 @@ class ProvisionFolderIn(BaseModel):
     entity_type: str
     entity_id: UUID
     title: str
+
+
+class ArchiveIn(BaseModel):
+    """系统单证推送 OneDrive：实体 + 文档（base64）→ drive_item + OfficeResourceLink。"""
+
+    entity_type: str
+    entity_id: UUID
+    filename: str
+    content_b64: str
+    content_type: str = "application/octet-stream"
+    meta: dict[str, Any] | None = None
 
 
 class TeamsNotifyIn(BaseModel):
@@ -364,6 +376,33 @@ def provision_folder(
         return out
     except GraphError as exc:
         raise _graph_http(exc) from exc
+
+
+@router.post("/archive")
+def archive_document(
+    body: ArchiveIn,
+    auth: AuthContext = Depends(require_module("integration")),
+    db: Session = Depends(get_db),
+):
+    """把系统生成的凭据/表单/单证推送到租户 OneDrive（MariOS 文件夹）并建立实体关联。"""
+    try:
+        content = base64.b64decode(body.content_b64)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, detail={"code": "INVALID_BASE64"}) from exc
+    out = hub.push_entity_document(
+        db,
+        auth.tenant_id,
+        entity_type=body.entity_type,
+        entity_id=body.entity_id,
+        filename=body.filename,
+        content=content,
+        content_type=body.content_type,
+        meta=body.meta,
+    )
+    if out is None:
+        raise HTTPException(503, detail={"code": "OFFICE_NOT_CONNECTED", "message": "Connect Microsoft 365 first"})
+    db.commit()
+    return out
 
 
 @router.get("/teams")

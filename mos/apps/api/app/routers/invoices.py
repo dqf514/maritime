@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -36,6 +37,54 @@ from app.services.sanctions import assert_not_sanctioned
 from app.services.tenant_guard import scoped_get, scoped_query
 
 router = APIRouter()
+
+log = logging.getLogger("marios.invoices")
+
+
+def _office_escalate_invoice(db: Session, tenant_id, row) -> None:
+    """发票签发 → 凭证 CSV 归档 OneDrive + Teams 频道提醒（软失败，绝不影响签发本身）。"""
+    try:
+        import csv
+        import io
+
+        from app.services import office_hub
+
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["field", "value"])
+        for k, v in (
+            ("invoice_no", row.invoice_no),
+            ("invoice_type", row.invoice_type),
+            ("status", row.status),
+            ("currency", row.currency),
+            ("amount", row.amount),
+            ("tax_amount", row.tax_amount),
+            ("due_date", row.due_date),
+            ("issued_at", row.issued_at),
+        ):
+            w.writerow([k, v if v is not None else ""])
+        doc = office_hub.push_entity_document(
+            db,
+            tenant_id,
+            entity_type="invoice",
+            entity_id=row.id,
+            filename=f"invoice_{row.invoice_no}.csv",
+            content=buf.getvalue().encode("utf-8-sig"),
+            content_type="text/csv",
+            meta={"invoice_no": row.invoice_no, "status": row.status},
+        )
+        lines = [f"Invoice {row.invoice_no} issued — {row.currency} {row.amount}"]
+        if doc:
+            lines.append(f"Archived to OneDrive: {doc.get('web_url') or doc.get('name')}")
+        office_hub.notify_workflow_event(
+            db,
+            tenant_id,
+            title="Invoice issued",
+            lines=lines,
+            href="/finance/invoices",
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("office escalate failed for invoice %s", row.id)
 
 
 @router.get("/invoices/{invoice_id}")
@@ -205,6 +254,9 @@ def invoice_transition(invoice_id: UUID, target: str, auth: AuthContext = Depend
     if target == "issued":
         row.issued_at = datetime.now().astimezone()
     db.commit()
+    if target == "issued":
+        _office_escalate_invoice(db, auth.tenant_id, row)
+        db.commit()
     return {"id": str(row.id), "status": row.status}
 
 

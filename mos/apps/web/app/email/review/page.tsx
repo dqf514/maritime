@@ -5,6 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
@@ -32,6 +33,43 @@ type Account = {
   status: string;
 };
 
+type ReplyDraft = {
+  to: string;
+  subject: string;
+  body: string;
+  template: string;
+};
+
+const REPLY_TEMPLATES = ["ack_recap", "counter_offer", "nor_ack", "laytime_query", "general"] as const;
+type ReplyTemplate = (typeof REPLY_TEMPLATES)[number];
+
+/** 解析结果 → 结构化字段 chips（替代原始 JSON 预览） */
+function parseFields(r: Msg): { etype: string; pairs: Array<[string, unknown]> } {
+  const p = (r.parse_result || {}) as Record<string, unknown>;
+  const cls = (p.classification || {}) as Record<string, unknown>;
+  const etype = String(p.email_type || cls.type || "");
+  const sub = ((p.fixture_recap || p.nor || p.laytime) as Record<string, unknown>) || p;
+  const pairs: Array<[string, unknown]> = [];
+  const pick = (src: Record<string, unknown>, keys: string[]) => {
+    for (const k of keys) {
+      if (src[k] !== undefined && src[k] !== null && src[k] !== "") pairs.push([k, src[k]]);
+    }
+  };
+  if (etype === "fixture_recap" || etype === "recap") {
+    pick(sub, ["vessel", "vessel_name", "cargo", "laycan", "load_port", "discharge_port", "freight_rate", "demurrage_rate"]);
+  } else if (etype === "nor") {
+    pick(sub, ["vessel", "port", "date_time", "draft"]);
+  } else if (etype === "laytime_statement") {
+    if (Array.isArray(sub.events)) pairs.push(["events", sub.events.length]);
+    pick(sub, ["allowed_days"]);
+  } else {
+    pick(sub, ["vessel", "vessel_name"]);
+  }
+  const matched = (p.matched || {}) as Record<string, unknown>;
+  if (matched.counterparty_name) pairs.push(["counterparty", matched.counterparty_name]);
+  return { etype, pairs };
+}
+
 export default function EmailReviewPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -39,6 +77,11 @@ export default function EmailReviewPage() {
   const [rows, setRows] = useState<Msg[]>([]);
   const [m365, setM365] = useState(false);
   const rowCtx = useContextMenu<Msg>();
+  // 回复对话框状态
+  const [replyFor, setReplyFor] = useState<Msg | null>(null);
+  const [replyTemplate, setReplyTemplate] = useState<ReplyTemplate>("ack_recap");
+  const [replyBody, setReplyBody] = useState("");
+  const [replySending, setReplySending] = useState(false);
 
   async function load() {
     const [acc, review, office] = await Promise.all([
@@ -94,6 +137,78 @@ export default function EmailReviewPage() {
     await load();
   }
 
+  /** 解析结果一键落单：recap→估算草稿 / NOR→盖 nor_at / SOF→装卸时间草稿 */
+  async function applyDraft(m: Msg) {
+    try {
+      const res = await apiPost(`/api/v1/email/review/${m.id}/apply`, {});
+      const created = res.created || [];
+      const hints: string[] = res.hints || [];
+      if (created.length) {
+        const c = created[0];
+        toast.success(
+          t("page.email.apply_done", "Draft created: {kind} — {title}", {
+            kind: c.entity,
+            title: c.title || c.voyage_no || c.id,
+          }),
+        );
+      } else if (hints.length) {
+        toast.error(hints.join(", "));
+      } else {
+        toast.error(t("page.email.apply_none", "This email type has no auto-draft yet."));
+      }
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("page.email.apply_fail", "Create draft failed"));
+    }
+  }
+
+  async function openReply(m: Msg) {
+    setReplyFor(m);
+    setReplyTemplate("ack_recap");
+    setReplyBody("");
+    try {
+      const rendered: ReplyDraft = await apiPost(`/api/v1/email/messages/${m.id}/reply`, {
+        template: "ack_recap",
+        preview: true,
+      });
+      setReplyBody(rendered.body);
+    } catch {
+      toast.error(t("page.email.reply_preview_fail", "Preview failed"));
+    }
+  }
+
+  async function changeReplyTemplate(tpl: ReplyTemplate) {
+    setReplyTemplate(tpl);
+    if (!replyFor) return;
+    try {
+      const rendered: ReplyDraft = await apiPost(`/api/v1/email/messages/${replyFor.id}/reply`, {
+        template: tpl,
+        preview: true,
+      });
+      setReplyBody(rendered.body);
+    } catch {
+      /* 保留当前正文，用户可手改 */
+    }
+  }
+
+  async function sendReply() {
+    if (!replyFor) return;
+    setReplySending(true);
+    try {
+      const res = await apiPost(`/api/v1/email/messages/${replyFor.id}/reply`, {
+        template: replyTemplate,
+        extra: { body_override: replyBody },
+      });
+      toast.success(t("page.email.reply_sent", "Reply sent via {channel}", { channel: res.channel }));
+      setReplyFor(null);
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || t("page.email.reply_fail", "Reply failed"));
+    } finally {
+      setReplySending(false);
+    }
+  }
+
   async function onAccountCellSave(rowId: string, colKey: string, value: unknown, row: Account) {
     const src = row as unknown as Record<string, unknown>;
     if ((src[colKey] ?? "") === (value ?? "")) return;
@@ -135,12 +250,22 @@ export default function EmailReviewPage() {
     ...(m.parse_status === "review"
       ? [
           {
+            key: "apply",
+            label: t("page.email.apply_btn", "Create draft"),
+            onClick: () => applyDraft(m).catch(() => undefined),
+          },
+          {
             key: "confirm",
             label: t("common.confirm", "Confirm"),
             onClick: () => confirm(m.id).catch(() => toast.error(t("page.email.confirm_fail", "Confirm failed"))),
           },
         ]
       : []),
+    {
+      key: "reply",
+      label: t("page.email.reply_btn", "Reply"),
+      onClick: () => openReply(m).catch(() => undefined),
+    },
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyMsgId(m) },
     { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportMsgs([m]) },
   ];
@@ -216,25 +341,53 @@ export default function EmailReviewPage() {
     },
     {
       key: "parse_preview",
-      title: t("page.email.preview", "Parse preview"),
-      minWidth: 220,
+      title: t("page.email.parse_fields", "Parsed fields"),
+      minWidth: 260,
       value: (r) => JSON.stringify(r.parse_result),
-      render: (v) => <code>{String(v)}</code>,
+      render: (_v, r) => {
+        const { etype, pairs } = parseFields(r);
+        return (
+          <span className="chips">
+            {etype ? <span className="badge badge-info">{etype}</span> : null}
+            {pairs.map(([k, val]) => (
+              <span className="badge" key={k}>
+                {k}: {String(val)}
+              </span>
+            ))}
+            {!pairs.length ? <code>{JSON.stringify(r.parse_result).slice(0, 120)}</code> : null}
+          </span>
+        );
+      },
     },
     {
       key: "actions",
       title: "",
-      width: 110,
-      render: (_v, r) =>
-        r.parse_status === "review" ? (
-          <button
-            className="btn"
-            type="button"
-            onClick={() => confirm(r.id).catch(() => toast.error(t("page.email.confirm_fail", "Confirm failed")))}
-          >
-            {t("common.confirm", "Confirm")}
+      width: 190,
+      render: (_v, r) => (
+        <span className="row-actions">
+          <button className="btn btn-sm" type="button" onClick={() => openReply(r).catch(() => undefined)}>
+            {t("page.email.reply_btn", "Reply")}
           </button>
-        ) : null,
+          {r.parse_status === "review" ? (
+            <>
+              <button
+                className="btn btn-sm btn-primary"
+                type="button"
+                onClick={() => applyDraft(r).catch(() => undefined)}
+              >
+                {t("page.email.apply_btn", "Create draft")}
+              </button>
+              <button
+                className="btn btn-sm"
+                type="button"
+                onClick={() => confirm(r.id).catch(() => toast.error(t("page.email.confirm_fail", "Confirm failed")))}
+              >
+                {t("common.confirm", "Confirm")}
+              </button>
+            </>
+          ) : null}
+        </span>
+      ),
     },
   ];
 
@@ -275,6 +428,41 @@ export default function EmailReviewPage() {
         />
         <ContextMenu controller={rowCtx} items={menuItems} />
       </div>
+      <RecordModal
+        open={Boolean(replyFor)}
+        title={t("page.email.reply_title", "Reply to sender")}
+        onClose={() => setReplyFor(null)}
+        onSave={sendReply}
+        saving={replySending}
+        canDelete={false}
+        size="lg"
+      >
+        <div className="form-row">
+          <label>
+            {t("page.email.reply_template", "Template")}
+            <select value={replyTemplate} onChange={(e) => changeReplyTemplate(e.target.value as ReplyTemplate)}>
+              {REPLY_TEMPLATES.map((tpl) => (
+                <option key={tpl} value={tpl}>
+                  {tpl === "ack_recap"
+                    ? t("page.email.tpl_ack_recap", "Confirm recap")
+                    : tpl === "counter_offer"
+                      ? t("page.email.tpl_counter_offer", "Counter offer")
+                      : tpl === "nor_ack"
+                        ? t("page.email.tpl_nor_ack", "Acknowledge NOR")
+                        : tpl === "laytime_query"
+                          ? t("page.email.tpl_laytime_query", "Laytime query")
+                          : t("page.email.tpl_general", "General reply")}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="muted">→ {replyFor?.from_email || "—"} · {replyFor?.subject}</p>
+        <label>
+          {t("page.email.reply_body", "Body (editable)")}
+          <textarea rows={14} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} />
+        </label>
+      </RecordModal>
     </AppShell>
   );
 }

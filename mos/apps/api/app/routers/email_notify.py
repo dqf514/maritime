@@ -3,7 +3,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -188,7 +188,13 @@ def _sync_graph_inbox(db: Session, auth: AuthContext, account: EmailAccount, top
         if exists:
             continue
         subject = (m.get("subject") or "").strip() or "(no subject)"
-        body = (m.get("body") or {}).get("content") or m.get("bodyPreview") or ""
+        # Graph body 形状 = {"content": ...}；部分包装层会直接给纯文本，两种都收
+        body_raw = m.get("body")
+        if isinstance(body_raw, dict):
+            body = body_raw.get("content") or ""
+        else:
+            body = str(body_raw or "")
+        body = body or m.get("bodyPreview") or ""
         frm = (m.get("from") or {}).get("emailAddress") or {}
         from_email = frm.get("address") or m.get("sender", {}).get("emailAddress", {}).get("address")
         sent_at = _graph_dt(m.get("receivedDateTime")) or datetime.now(timezone.utc)
@@ -266,6 +272,21 @@ def _sync_graph_inbox(db: Session, auth: AuthContext, account: EmailAccount, top
             )
         )
     db.commit()
+    if review:
+        # Teams 工作流推送（软失败）：复核队列有新业务邮件 → 频道提醒带深链
+        from app.services import office_hub
+
+        office_hub.notify_workflow_event(
+            db,
+            auth.tenant_id,
+            title="Mailbox review queue",
+            lines=[
+                f"{review} business email(s) awaiting review from {account.email}",
+                "Open Email Review to create drafts (recap → estimate, NOR → voyage, SOF → laytime).",
+            ],
+            href="/email/review",
+        )
+        db.commit()
     return {
         "synced": synced,
         "review_queue": review,
@@ -434,6 +455,73 @@ def confirm_parse(
     row.parse_status = "parsed"
     db.commit()
     return {"status": "parsed", "id": str(row.id)}
+
+
+@router.get("/email/messages/{message_id}")
+def get_message_detail(
+    message_id: UUID,
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """单封邮件详情（含正文）——回复预览 / 人工核对解析结果用。"""
+    row = db.get(EmailMessage, message_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Message not found")
+    return {
+        "id": str(row.id),
+        "message_id": row.message_id,
+        "direction": row.direction,
+        "subject": row.subject,
+        "from_email": row.from_email,
+        "body_text": row.body_text or "",
+        "parse_status": row.parse_status,
+        "parse_confidence": float(row.parse_confidence) if row.parse_confidence is not None else None,
+        "parse_result": row.parse_result or {},
+        "sent_at": row.sent_at.isoformat() if row.sent_at else None,
+    }
+
+
+@router.post("/email/review/{message_id}/apply")
+def apply_parse_to_drafts(
+    message_id: UUID,
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """解析结果一键落单：recap→估算草稿 / NOR→盖 nor_at / SOF→装卸时间草稿。"""
+    from app.services.email_actions import apply_message
+
+    try:
+        return apply_message(db, auth.tenant_id, auth.user_id, message_id)
+    except LookupError as exc:
+        raise HTTPException(404, "Message not found") from exc
+
+
+class EmailReplyIn(BaseModel):
+    template: str = "general"
+    extra: dict = Field(default_factory=dict)
+    preview: bool = False  # True=只渲染不发送（UI 预览）
+
+
+@router.post("/email/messages/{message_id}/reply")
+def reply_to_message(
+    message_id: UUID,
+    body: EmailReplyIn,
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """按模板生成业务回函并发送（SMTP/Graph/console 平台通道），回写同线程。"""
+    from app.services.email_actions import REPLY_TEMPLATES, render_reply, send_reply
+
+    if body.template not in REPLY_TEMPLATES:
+        raise HTTPException(422, detail={"code": "UNKNOWN_TEMPLATE", "allowed": list(REPLY_TEMPLATES)})
+    try:
+        if body.preview:
+            return render_reply(db, auth.tenant_id, message_id, body.template, body.extra)
+        return send_reply(db, auth.tenant_id, auth.user_id, message_id, body.template, body.extra)
+    except LookupError as exc:
+        raise HTTPException(404, "Message not found") from exc
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "REPLY_NOT_SENDABLE", "message": str(exc)}) from exc
 
 
 @router.get("/notifications", response_model=list[NotificationOut])

@@ -214,6 +214,8 @@
 
 /* ── MailAside — related-mail panel attached to business pages ── */
 .mail-aside { margin-top: 1rem; }
+/* ── 解析字段 chips（邮件复核页结构化预览） ── */
+.chips { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; align-items: baseline; }
 .mail-aside > summary {
   cursor: pointer;
   display: flex;

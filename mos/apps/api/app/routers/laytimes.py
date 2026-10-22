@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -42,6 +43,47 @@ from app.services.tenant_guard import scoped_get
 from app.routers._finance_common import _alive, TIMEBAR_DAYS_AFTER_BL
 
 router = APIRouter()
+
+log = logging.getLogger("marios.laytimes")
+
+
+def _office_escalate_laytime(db: Session, tenant_id, row) -> None:
+    """装卸时间定稿 → 凭证 CSV 归档 OneDrive + Teams 频道提醒（软失败，绝不影响定稿本身）。"""
+    try:
+        import csv
+        import io
+        import json as _json
+
+        from app.services import office_hub
+
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["section", "key", "value"])
+        for section, data in (("input", row.inputs or {}), ("result", row.results or {})):
+            for k, v in sorted(data.items()):
+                w.writerow([section, k, _json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v])
+        doc = office_hub.push_entity_document(
+            db,
+            tenant_id,
+            entity_type="laytime",
+            entity_id=row.id,
+            filename=f"laytime_statement_{row.id}.csv",
+            content=buf.getvalue().encode("utf-8-sig"),
+            content_type="text/csv",
+            meta={"status": row.status, "booking_reference": row.booking_reference},
+        )
+        lines = [f"Laytime finalized: {row.booking_reference or row.id}"]
+        if doc:
+            lines.append(f"Archived to OneDrive: {doc.get('web_url') or doc.get('name')}")
+        office_hub.notify_workflow_event(
+            db,
+            tenant_id,
+            title="Laytime statement finalized",
+            lines=lines,
+            href="/finance/laytimes",
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("office escalate failed for laytime %s", row.id)
 
 
 # —— Laytime ——
@@ -89,6 +131,8 @@ def finalize_laytime(laytime_id: UUID, auth: AuthContext = Depends(require_modul
         raise HTTPException(404, "Laytime not found")
     row.status = transition("laytime", row.status, "finalized", LAYTIME_TRANSITIONS)
     row.finalized_at = datetime.now(timezone.utc)
+    db.commit()
+    _office_escalate_laytime(db, auth.tenant_id, row)
     db.commit()
     return {"id": str(row.id), "status": row.status, "results": row.results}
 
