@@ -388,7 +388,8 @@ def test_laytime_finalize_and_invoice_issue_escalate(client, auth_headers, oauth
             .all()
         )
         assert len(lay_links) == 1
-        assert lay_links[0].display_name and lay_links[0].display_name.endswith(".csv")
+        # 归档优先 PDF 计算书；PDF 引擎不可用时退回凭证 CSV（见 _laytime_archive_bytes）
+        assert lay_links[0].display_name and lay_links[0].display_name.endswith((".pdf", ".csv"))
 
     # invoice：create → pending_approval → issued → 归档 drive_item
     inv = client.post(

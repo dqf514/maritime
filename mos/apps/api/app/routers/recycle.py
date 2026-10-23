@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import ApiKey, User
-from app.models_cargo import Cargo
+from app.models_cargo import Cargo, CargoGroup, CargoName, CargoNameProperty
 from app.models_domain import (
     BunkerOption,
     BunkerOrder,
@@ -25,7 +25,16 @@ from app.models_domain import (
     Voyage,
 )
 from app.models_saas import OrgUnit
-from app.models_wave1 import ConnectorInstance, Counterparty, Port, Vessel
+from app.models_vessel_ext import VesselPortConsumption, VesselSpeedConsumption
+from app.models_wave1 import (
+    ConnectorInstance,
+    Counterparty,
+    CounterpartyProperty,
+    Port,
+    PortAlias,
+    PortBerth,
+    Vessel,
+)
 from app.security import AuthContext, get_current_auth
 from app.services.recycle import get_recycle_item, item_public, list_recycle, restore_row
 
@@ -41,6 +50,16 @@ ENTITY_LOOKUP: dict[str, tuple[type, bool]] = {
     "vessel": (Vessel, True),
     "port": (Port, False),
     "counterparty": (Counterparty, True),
+    # —— master data 子表（IMOS Data Center parity）——
+    # port_berth / port_alias 随父级 ports 为全局参照数据，故 tenant_scoped=False。
+    "counterparty_property": (CounterpartyProperty, True),
+    "cargo_group": (CargoGroup, True),
+    "cargo_name": (CargoName, True),
+    "cargo_name_property": (CargoNameProperty, True),
+    "port_berth": (PortBerth, False),
+    "port_alias": (PortAlias, False),
+    "vessel_port_consumption": (VesselPortConsumption, True),
+    "vessel_speed_consumption": (VesselSpeedConsumption, True),
     "user": (User, True),
     "api_key": (ApiKey, True),
     "org_unit": (OrgUnit, True),

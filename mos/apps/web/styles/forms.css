@@ -119,6 +119,12 @@ dl.kv-grid > div { min-width: 0; }
   padding-top: var(--gap-xs);
 }
 .form-section-dense .form-section-body { gap: 1px var(--gap-xs); }
+/* 横跨整行的字段（长文本、开关族）—— 新页面禁用行内 style */
+.form-section-body > .span-all,
+.form-grid > .span-all {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
 
 .field-row {
   display: flex;
@@ -175,6 +181,26 @@ dl.kv-grid > div { min-width: 0; }
   gap: var(--gap-xs);
   align-items: center;
   font-size: var(--font-ui);
+}
+/* 复选行：压过 .record-modal-body / .panel 的 label 布局（两者都比 .check-row 特异性高），
+   并还原 checkbox 被通用 input 规则（height: var(--input-h)）撑高的尺寸 */
+.record-modal-body label.check-row,
+.panel label.check-row,
+.form-section-body label.check-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--gap-xs);
+  color: var(--ink);
+  font-size: var(--font-ui);
+}
+.record-modal-body label.check-row input[type="checkbox"],
+.panel label.check-row input[type="checkbox"],
+.form-section-body label.check-row input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  flex: 0 0 auto;
 }
 
 /* RecordModal 表单内的校验行（ValidateButton 容器） */

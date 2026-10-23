@@ -30,6 +30,9 @@ type CargoBookRow = {
   discharge_port: string;
   laycan_from: string | null;
   laycan_to: string | null;
+  laycan_from_override: string | null;
+  laycan_to_override: string | null;
+  laycan_confirmed: boolean;
   etd: string | null;
   eta: string | null;
   status: string;
@@ -77,11 +80,22 @@ function CargoBookWorkspace() {
       {
         key: "open",
         label: t("common.open", "Open"),
-        onClick: () => {
-          if (target.voyage_id) router.push(`/operations/voyages/${target.voyage_id}/workspace`);
-          else if (target.charter_id) router.push(`/charters/${target.charter_id}`);
-        },
+        onClick: () => router.push(`/cargo/${target.id}`),
       },
+      ...(target.voyage_id
+        ? [{
+            key: "voyage",
+            label: t("page.cargo_detail.open_voyage", "Open voyage"),
+            onClick: () => router.push(`/operations/voyages/${target.voyage_id}/workspace`),
+          }]
+        : []),
+      ...(target.charter_id
+        ? [{
+            key: "fixture",
+            label: t("page.cargo_detail.open_fixture", "Open fixture"),
+            onClick: () => router.push(`/charters/${target.charter_id}`),
+          }]
+        : []),
       { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.id) },
       { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportRows([target]) },
     ];
@@ -107,6 +121,9 @@ function CargoBookWorkspace() {
           discharge_port: String(r.discharge_port ?? ""),
           laycan_from: r.laycan_from ? String(r.laycan_from).slice(0, 10) : null,
           laycan_to: r.laycan_to ? String(r.laycan_to).slice(0, 10) : null,
+          laycan_from_override: r.laycan_from_override ? String(r.laycan_from_override).slice(0, 16).replace(" ", "T") : null,
+          laycan_to_override: r.laycan_to_override ? String(r.laycan_to_override).slice(0, 16).replace(" ", "T") : null,
+          laycan_confirmed: Boolean(r.laycan_confirmed),
           etd: r.etd ? String(r.etd).slice(0, 10) : null,
           eta: r.eta ? String(r.eta).slice(0, 10) : null,
           status: String(r.status ?? "booked"),
@@ -155,9 +172,35 @@ function CargoBookWorkspace() {
       { key: "discharge_port", title: t("page.cargo.disch_port", "Disch port"), width: 110, sortable: true },
       { key: "vessel_name", title: t("page.cargo.vessel", "Vessel"), width: 120, value: (r) => r.vessel_name ?? "" },
       {
-        key: "laycan", title: t("page.cargo.laycan", "Laycan"), width: 160,
+        // P11 IMOS：Laycan Month 单列（分组/筛选口径与 IMOS 一致）
+        key: "laycan_month", title: t("page.cargo.laycan_month", "Laycan month"), width: 110, sortable: true,
+        value: (r) => r.laycan_from ?? "",
+        render: (_v, r) => {
+          if (!r.laycan_from) return "—";
+          const [y, m] = r.laycan_from.split("-");
+          const d = new Date(Number(y), Number(m) - 1, 1);
+          return Number.isFinite(d.getTime())
+            ? d.toLocaleDateString(undefined, { month: "short", year: "numeric" })
+            : r.laycan_from;
+        },
+      },
+      {
+        key: "laycan", title: t("page.cargo.laycan", "Laycan (local)"), width: 160,
         value: (r) => (r.laycan_from && r.laycan_to ? `${r.laycan_from} → ${r.laycan_to}` : r.laycan_from ?? ""),
         render: (_v, r) => (r.laycan_from && r.laycan_to ? `${r.laycan_from} → ${r.laycan_to}` : r.laycan_from ?? "—"),
+      },
+      {
+        // P11 IMOS：Laycan Range GMT（override 四字段中的 GMT 覆盖值）与本地并排
+        key: "laycan_gmt", title: t("page.cargo.laycan_gmt", "Laycan (GMT)"), width: 175,
+        value: (r) =>
+          r.laycan_from_override || r.laycan_to_override
+            ? `${(r.laycan_from_override || "?").slice(0, 16)} → ${(r.laycan_to_override || "?").slice(0, 16)}`
+            : "",
+        render: (_v, r) => {
+          if (!r.laycan_from_override && !r.laycan_to_override) return "—";
+          const range = `${(r.laycan_from_override || "?").slice(0, 16).replace("T", " ")} → ${(r.laycan_to_override || "?").slice(0, 16).replace("T", " ")}`;
+          return r.laycan_confirmed ? <strong title={t("page.cargo_detail.laycan_confirmed", "Confirmed")}>{range} ✓</strong> : range;
+        },
       },
       { key: "etd", title: t("page.cargo.etd", "ETD"), width: 90, value: (r) => r.etd ?? "" },
       { key: "eta", title: t("page.cargo.eta", "ETA"), width: 90, value: (r) => r.eta ?? "" },
@@ -207,9 +250,7 @@ function CargoBookWorkspace() {
             columns={cols}
             data={rows}
             rowKey={(r) => r.id}
-            onRowClick={(r) => {
-              if (r.voyage_id) router.push(`/operations/voyages/${r.voyage_id}/workspace`);
-            }}
+            onRowClick={(r) => router.push(`/cargo/${r.id}`)}
             onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
             storageKey="cargo_book"
             emptyText={t("common.empty", "No records")}

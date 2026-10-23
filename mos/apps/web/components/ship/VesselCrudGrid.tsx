@@ -16,17 +16,23 @@ import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 export type FieldDef = {
   key: string;
   label: string;
-  type: "text" | "number" | "date" | "select";
+  /** kv = 对象字段，用 "KEY=VAL; KEY=VAL" 文本编辑（航速油耗曲线的每油品日耗）；checkbox = 布尔开关 */
+  type: "text" | "number" | "date" | "select" | "kv" | "checkbox";
   options?: { value: string; label: string }[];
   required?: boolean;
   span?: boolean;
   step?: string;
+  placeholder?: string;
 };
 
 export type ColumnDef = {
   key: string;
   label: string;
   render?: (row: Record<string, unknown>) => ReactNode;
+  /** 传给 DataGrid：数值列右对齐，窄列给固定宽（油耗矩阵列很多，全靠内容自适应会挤） */
+  width?: number;
+  minWidth?: number;
+  align?: "left" | "right" | "center";
 };
 
 type Props = {
@@ -38,9 +44,41 @@ type Props = {
   addLabel: string;
   emptyText: string;
   canAdd?: boolean;
+  /** 覆盖默认的 /api/v1/vessels/{id}/{path}（masterdata 子资源走另一个前缀） */
+  basePath?: string;
+  /** 新建时随表单一并提交的固定字段（如银行账户的 counterparty_id —— 父级外键不给用户编辑） */
+  defaults?: Record<string, unknown>;
+  /** 仅挂在列表 GET 上的查询串（"?counterparty_id=…"）；增删改走 /{id}，不能带它 */
+  query?: string;
+  /** 字段多的弹窗（如 17 个工况字段的停泊油耗矩阵）用 xl，否则单列堆叠太高 */
+  size?: "md" | "lg" | "xl";
 };
 
 type Row = Record<string, unknown> & { id: string };
+
+/** "VLF=15.2; LSG=0.1" ↔ {VLF: 15.2, LSG: 0.1} —— 对象字段的可读文本表示。 */
+export function parseKv(text: string): Record<string, number> | null {
+  const s = (text || "").trim();
+  if (!s) return null;
+  const out: Record<string, number> = {};
+  for (const part of s.split(/[;\n]/)) {
+    const seg = part.trim();
+    if (!seg) continue;
+    const i = seg.indexOf("=");
+    const k = i > 0 ? seg.slice(0, i).trim() : "";
+    const v = i > 0 ? Number(seg.slice(i + 1).trim()) : NaN;
+    if (!k || Number.isNaN(v)) throw new Error(seg);
+    out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+export function formatKv(v: unknown): string {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return "";
+  return Object.entries(v as Record<string, unknown>)
+    .map(([k, val]) => `${k}=${val ?? ""}`)
+    .join("; ");
+}
 
 export function VesselCrudGrid({
   vesselId,
@@ -51,6 +89,10 @@ export function VesselCrudGrid({
   addLabel,
   emptyText,
   canAdd = true,
+  basePath,
+  defaults,
+  query,
+  size = "md",
 }: Props) {
   const { t } = useI18n();
   const toast = useToast();
@@ -61,23 +103,24 @@ export function VesselCrudGrid({
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
 
-  const base = `/api/v1/vessels/${vesselId}/${path}`;
+  const base = basePath ?? `/api/v1/vessels/${vesselId}/${path}`;
+  const listUrl = query ? `${base}${query}` : base;
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiGet(base);
+      const data = await apiGet(listUrl);
       setRows(Array.isArray(data) ? data : []);
     } catch {
       setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [base]);
+  }, [listUrl]);
 
   useEffect(() => {
     let alive = true;
-    apiGet(base).then(
+    apiGet(listUrl).then(
       (data) => {
         if (!alive) return;
         setRows(Array.isArray(data) ? data : []);
@@ -92,12 +135,13 @@ export function VesselCrudGrid({
     return () => {
       alive = false;
     };
-  }, [base]);
+  }, [listUrl]);
 
   function openCreate() {
     const init: Record<string, unknown> = {};
     for (const f of fields) {
-      init[f.key] = f.type === "number" ? "" : f.type === "select" ? (f.options?.[0]?.value ?? "") : "";
+      init[f.key] =
+        f.type === "checkbox" ? false : f.type === "select" ? (f.options?.[0]?.value ?? "") : "";
     }
     setDraft(init);
     setEditing(null);
@@ -108,7 +152,14 @@ export function VesselCrudGrid({
     const init: Record<string, unknown> = {};
     for (const f of fields) {
       const v = row[f.key];
-      init[f.key] = v === null || v === undefined ? "" : v;
+      init[f.key] =
+        f.type === "checkbox"
+          ? Boolean(v)
+          : v === null || v === undefined
+            ? ""
+            : f.type === "kv"
+              ? formatKv(v)
+              : v;
     }
     setDraft(init);
     setEditing(row);
@@ -125,12 +176,23 @@ export function VesselCrudGrid({
         if (f.type === "number") {
           if (v === "" || v === null || v === undefined) v = null;
           else v = Number(v);
+        } else if (f.type === "checkbox") {
+          v = Boolean(v);
+        } else if (f.type === "kv") {
+          try {
+            v = parseKv(String(v ?? ""));
+          } catch {
+            toast.error(t("page.vessel.kv_bad", "Expected KEY=VALUE pairs separated by ';'"));
+            setSaving(false);
+            return;
+          }
         } else if (v === "") {
           v = null;
         }
         if (!editing && (v === null || v === undefined) && !f.required) continue;
         payload[f.key] = v;
       }
+      if (!editing && defaults) Object.assign(payload, defaults);
       if (editing) {
         await apiPatch(`${base}/${editing.id}`, payload);
       } else {
@@ -174,6 +236,9 @@ export function VesselCrudGrid({
     ...columns.map((c) => ({
       key: c.key,
       title: c.label,
+      width: c.width,
+      minWidth: c.minWidth,
+      align: c.align,
       value: (r: Row) => r[c.key],
       render: (_v: unknown, r: Row) => (c.render ? c.render(r) : ((r[c.key] as ReactNode) ?? "—")),
     })),
@@ -225,33 +290,56 @@ export function VesselCrudGrid({
         onSave={save}
         onDelete={editing ? remove : undefined}
         saving={saving}
+        size={size}
       >
-        {fields.map((f) => (
-          <label key={f.key} style={f.span ? { gridColumn: "1 / -1" } : undefined}>
-            {f.label}
-            {f.type === "select" ? (
-              <select
-                value={String(draft[f.key] ?? "")}
-                onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
-                required={f.required}
-              >
-                {(f.options ?? []).map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
+        <div className="form-grid">
+          {fields.map((f) =>
+            f.type === "checkbox" ? (
+              <label key={f.key} className="check-row span-all">
+                <input
+                  type="checkbox"
+                  checked={Boolean(draft[f.key])}
+                  onChange={(e) => setDraft({ ...draft, [f.key]: e.target.checked })}
+                />
+                {f.label}
+              </label>
             ) : (
-              <input
-                type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}
-                step={f.step}
-                value={String(draft[f.key] ?? "")}
-                onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
-                required={f.required}
-              />
-            )}
-          </label>
-        ))}
+              <label key={f.key} style={f.span ? { gridColumn: "1 / -1" } : undefined}>
+                {f.label}
+                {f.type === "select" ? (
+                  <select
+                    value={String(draft[f.key] ?? "")}
+                    onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+                    required={f.required}
+                  >
+                    {(f.options ?? []).map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : f.type === "kv" ? (
+                  <textarea
+                    rows={2}
+                    value={String(draft[f.key] ?? "")}
+                    onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+                    placeholder={f.placeholder || "VLF=15.20; LSG=0.10"}
+                    required={f.required}
+                  />
+                ) : (
+                  <input
+                    type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}
+                    step={f.step}
+                    value={String(draft[f.key] ?? "")}
+                    onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+                    placeholder={f.placeholder}
+                    required={f.required}
+                  />
+                )}
+              </label>
+            ),
+          )}
+        </div>
       </RecordModal>
     </div>
   );

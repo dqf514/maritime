@@ -86,6 +86,16 @@ class LLMProviderConfig:
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     provider_id: str | None = None
     provider_name: str | None = None
+    # 凭证来源 —— 决定计费归属：
+    #   tenant          租户自备 key（BYO），调用不扣平台钱包
+    #   platform_gateway 平台公用网关，租户按量付费扣 TenantWallet
+    #   env             运维在主机配置的默认凭证（不扣租户钱包）
+    source: str = "env"
+
+    @property
+    def billable_by_platform(self) -> bool:
+        """是否由平台公用网关提供（True 才扣租户 ai.tokens 钱包）。"""
+        return self.source == "platform_gateway"
 
 
 # ── kill switch / availability ──
@@ -145,6 +155,7 @@ def _config_from_row(row: Any) -> LLMProviderConfig:
         timeout_seconds=s.llm_timeout_seconds,
         provider_id=str(getattr(row, "id", "") or "") or None,
         provider_name=getattr(row, "name", None),
+        source="tenant",
     )
 
 
@@ -179,6 +190,55 @@ def _find_provider_row(db: Any, tenant_id: Any, *, skill_code: str | None, agent
     ).first()
 
 
+def _find_platform_endpoint(db: Any) -> Any:
+    """平台公用 AI 网关：取第一个 active 的 PlatformAiEndpoint 行（无则 None）。"""
+    from sqlalchemy import select
+
+    from app.models_saas import PlatformAiEndpoint
+
+    try:
+        return db.scalars(
+            select(PlatformAiEndpoint)
+            .where(PlatformAiEndpoint.status == "active")
+            .order_by(PlatformAiEndpoint.code)
+            .limit(1)
+        ).first()
+    except Exception:  # noqa: BLE001 — 平台表不可用不阻断，回落 env 默认
+        log.exception("llm_client: platform endpoint lookup failed")
+        return None
+
+
+def _config_from_platform_row(row: Any) -> LLMProviderConfig | None:
+    """PlatformAiEndpoint → provider config。凭证仅存于 ``config.api_key``；
+    无 key 时返回 None（回落 env / ambient creds）。"""
+    s = get_settings()
+    cfg_raw = getattr(row, "config", None) or {}
+    api_key = str(cfg_raw.get("api_key") or "") if isinstance(cfg_raw, dict) else ""
+    if not api_key:
+        return None
+    ptype = (getattr(row, "provider_type", None) or "anthropic").lower()
+    if ptype in ("openai_compatible", "openai-compatible", "azure_openai"):
+        ptype = "openai"
+    if ptype not in ("anthropic", "openai"):
+        ptype = "anthropic"
+    base_url = getattr(row, "base_url", None) or (
+        s.anthropic_base_url if ptype == "anthropic" else s.openai_base_url
+    )
+    model = getattr(row, "model_default", None) or s.llm_model
+    return LLMProviderConfig(
+        provider_type=ptype,
+        api_key=api_key,
+        base_url=str(base_url),
+        model=str(model),
+        max_tokens=s.llm_max_tokens,
+        temperature=s.llm_temperature,
+        timeout_seconds=s.llm_timeout_seconds,
+        provider_id=str(getattr(row, "id", "") or "") or None,
+        provider_name=getattr(row, "name", None),
+        source="platform_gateway",
+    )
+
+
 def config_from_provider_row(row: Any) -> LLMProviderConfig:
     """Build an :class:`LLMProviderConfig` from an ``AiProvider`` ORM row.
 
@@ -209,6 +269,14 @@ def resolve_provider_config(
             row = None
         if row is not None:
             return _config_from_row(row)
+    # 平台公用网关（PlatformAiEndpoint）—— 租户未自备 key 时的共享凭证层。
+    # 由平台运营方配置，租户按量计费消费；位于租户 AiProvider 之下、env 默认之上。
+    if db is not None:
+        prow = _find_platform_endpoint(db)
+        if prow is not None:
+            cfg = _config_from_platform_row(prow)
+            if cfg is not None:
+                return cfg
     if s.anthropic_api_key or _ambient_anthropic_creds():
         return LLMProviderConfig(
             provider_type="anthropic",

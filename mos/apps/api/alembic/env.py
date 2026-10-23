@@ -23,26 +23,49 @@ from alembic import context
 from app.config import get_settings
 from app.db import Base
 
-# Register all models on Base.metadata (mirror of the import block in app/main.py)
+# Register all models on Base.metadata.
+#
+# This block MUST stay an exact mirror of the import block in app/main.py (and
+# tests/conftest.py). If a models_*.py module is missing here, Base.metadata is
+# incomplete and `alembic revision --autogenerate` will emit drop_table for every
+# table that module defines — it did exactly that once, and the generated
+# migration tried to drop ~30 live tables. Diff main.py against this file whenever
+# you add a models_*.py module.
 import app.models  # noqa: F401,E402
 import app.models_audit  # noqa: F401,E402
+import app.models_wave1  # noqa: F401,E402
+import app.models_vessel_ext  # noqa: F401,E402
 import app.models_domain  # noqa: F401,E402
-import app.models_finance_ext  # noqa: F401,E402
-import app.models_i18n  # noqa: F401,E402
+import app.models_saas  # noqa: F401,E402
+import app.models_ship  # noqa: F401,E402
 import app.models_identity  # noqa: F401,E402
+import app.models_i18n  # noqa: F401,E402
 import app.models_office  # noqa: F401,E402
 import app.models_ops  # noqa: F401,E402
 import app.models_recycle  # noqa: F401,E402
 import app.models_reference  # noqa: F401,E402
-import app.models_saas  # noqa: F401,E402
-import app.models_ship  # noqa: F401,E402
-import app.models_wave1  # noqa: F401,E402
+import app.models_task  # noqa: F401,E402
+import app.models_onboarding  # noqa: F401,E402
+import app.models_finance_ext  # noqa: F401,E402
 import app.models_gl  # noqa: F401,E402
 import app.models_time_charter  # noqa: F401,E402
 import app.models_config  # noqa: F401,E402
 import app.models_shipshore  # noqa: F401,E402
 import app.models_ai  # noqa: F401,E402
 import app.models_report  # noqa: F401,E402
+import app.models_jobs  # noqa: F401,E402
+import app.models_clause  # noqa: F401,E402
+import app.models_cargo  # noqa: F401,E402
+import app.models_charter_ext  # noqa: F401,E402
+import app.models_rates  # noqa: F401,E402
+import app.models_coa  # noqa: F401,E402
+import app.models_trading  # noqa: F401,E402
+import app.models_pooling  # noqa: F401,E402
+import app.models_lightering  # noqa: F401,E402
+import app.models_reference_ext  # noqa: F401,E402
+import app.models_interface  # noqa: F401,E402
+import app.models_field_perms  # noqa: F401,E402
+import app.models_doc  # noqa: F401,E402
 
 target_metadata = Base.metadata
 

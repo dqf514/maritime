@@ -13,6 +13,8 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    JSON,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -20,6 +22,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
     func,
 )
@@ -159,3 +162,68 @@ class LoadlineZone(Base):
     valid_to: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class VesselPortConsumption(Base):
+    """In-port consumption matrix — 停泊工况油耗（IMOS In Port Consumption Table）.
+
+    IMOS 按「燃油牌号 x 工况」铺成一张矩阵：同一船在同一港，装货/卸货/停泊开着辅机
+    的油耗并不相同，用两个标量（``consumption_sea`` / ``consumption_port``）无法表达，
+    估算的港口使费与 TCE 会系统性偏高。每行 = 一个燃油牌号。
+    """
+
+    __tablename__ = "vessel_port_consumptions"
+    __table_args__ = (UniqueConstraint("vessel_id", "fuel_grade"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    vessel_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("vessels.id"), nullable=False)
+    inactive: Mapped[bool] = mapped_column(Boolean, default=False)
+    fuel_grade: Mapped[str] = mapped_column(Text, nullable=False)  # VLF / LSG / MGO ...
+    unit: Mapped[str] = mapped_column(Text, default="MT")
+    gas_flag: Mapped[str | None] = mapped_column(Text)  # IMOS 的 G 列，L=liquid / G=gas
+    capacity: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))  # 该牌号舱容 MT
+    margin: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))  # 安全裕度 MT
+    # —— 工况日耗（MT/day）——
+    loading: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    discharge: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    idle_on: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))  # 停泊·辅机开启
+    idle_off: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))  # 停泊·辅机关闭
+    heat: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    heat_plus: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    heat_plus_plus: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    igs: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))  # 惰气系统
+    clean: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))  # 洗舱
+    manoeuvring: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    auxiliary: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    cooling: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    boiler: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    incinerator: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # 软删除列必须存在：services/recycle.soft_delete 靠它隐藏行，缺了会"删除成功但列表还在"。
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VesselSpeedConsumption(Base):
+    """Speed / consumption curve — 航速油耗曲线（IMOS Speed Consumption Table）.
+
+    一行 = 一个航速点。``basis`` 区分 Eco Owner（船东经济航速）与 Warranted Owner
+    （船东保证航速）——两者在同一航速下的油耗承诺不同，租家索赔时要分别举证。
+    各燃油的日耗放在 ``fuel_consumption`` JSON（键 = 牌号），避免每加一种油就加一列。
+    """
+
+    __tablename__ = "vessel_speed_consumptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    vessel_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("vessels.id"), nullable=False)
+    speed: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))  # 节
+    ballast_laden: Mapped[str | None] = mapped_column(Text)  # B=压载 / L=满载
+    engine_load: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))  # MCR 百分比
+    fuel_consumption: Mapped[dict | None] = mapped_column(JSON)  # {"VLF": 18.00, "LSG": 0.10}
+    basis: Mapped[str | None] = mapped_column(Text)  # eco_owner / warranted_owner
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # 同 VesselPortConsumption —— 软删除列缺失会让 recycle.soft_delete 静默失效。
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

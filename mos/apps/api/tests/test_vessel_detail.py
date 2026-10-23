@@ -383,6 +383,9 @@ def test_summary_aggregates_all_tabs(client, auth_headers, vessel_id):
         "tce_targets": 1,
         "vettings": 1,
         "loadline_zones": 1,
+        # P10 IMOS 对齐新增的两张消耗子表（本用例未造数，故为 0）
+        "port_consumptions": 0,
+        "speed_consumptions": 0,
     }
     assert len(body["contacts"]) == 2
     assert body["vettings"][0]["result"] == "fail"

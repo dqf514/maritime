@@ -1,0 +1,233 @@
+/* 单据模板编辑器 — 左：单据类型 · 中：HTML/CSS 代码 · 右：实时预览 + 变量速查 */
+
+.tpl-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(320px, 1fr) minmax(360px, 1.1fr);
+  gap: var(--gap-sm);
+  align-items: start;
+  min-height: 0;
+}
+
+/* ── 左：单据类型清单 ─────────────────────────────────────────────── */
+
+.tpl-types {
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+  position: sticky;
+  top: 0;
+}
+
+.tpl-types-head {
+  padding: 4px var(--cell-pad-x);
+  font-size: var(--font-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--border-light);
+  height: 22px;
+  display: flex;
+  align-items: center;
+}
+
+.tpl-type {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-xs);
+  width: 100%;
+  text-align: left;
+  padding: 3px var(--cell-pad-x);
+  border: none;
+  border-bottom: 1px solid var(--border-light);
+  background: none;
+  cursor: pointer;
+  font-size: var(--font-table);
+  color: var(--ink);
+  min-height: var(--row-h);
+}
+
+.tpl-type:last-child { border-bottom: none; }
+.tpl-type:hover { background: var(--row-hover); }
+.tpl-type.active { background: var(--row-selected); font-weight: 600; }
+
+.tpl-type-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 已改标记 —— 与系统默认不一致时点亮，避免"改了忘了" */
+.tpl-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
+/* ── 中：代码编辑区 ───────────────────────────────────────────────── */
+
+.tpl-editor {
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* HTML/CSS 切换用全站统一的 <Tabs variant="pill">，不自造 tab 条 */
+
+.tpl-code {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: vertical;
+  min-height: 340px;
+  padding: var(--gap-xs) var(--cell-pad-x);
+  font-family: var(--font-mono, ui-monospace, "Cascadia Mono", Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--surface);
+  color: var(--ink);
+  tab-size: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.tpl-editor-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: 3px var(--cell-pad-x);
+  border-top: 1px solid var(--border-light);
+  font-size: var(--font-label);
+  color: var(--muted);
+  min-height: 22px;
+}
+
+.tpl-editor-foot .spacer { flex: 1; }
+
+/* ── 右：预览 + 变量速查 ──────────────────────────────────────────── */
+
+.tpl-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-sm);
+  min-width: 0;
+  position: sticky;
+  top: 0;
+}
+
+.tpl-preview {
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.tpl-preview-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: 3px var(--cell-pad-x);
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--border-light);
+  font-size: var(--font-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  min-height: 22px;
+}
+
+.tpl-preview-head .spacer { flex: 1; }
+
+.tpl-frame {
+  display: block;
+  width: 100%;
+  height: 62vh;
+  min-height: 420px;
+  border: none;
+  background: #fff;
+}
+
+.tpl-empty {
+  padding: var(--gap-lg);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--font-ui);
+}
+
+.tpl-vars {
+  border: 1px solid var(--chrome-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.tpl-vars-head {
+  padding: 3px var(--cell-pad-x);
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--border-light);
+  font-size: var(--font-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+}
+
+.tpl-vars-body {
+  max-height: 220px;
+  overflow: auto;
+  font-size: var(--font-label);
+}
+
+.tpl-var {
+  display: flex;
+  gap: var(--gap-sm);
+  padding: 2px var(--cell-pad-x);
+  border-bottom: 1px solid var(--border-light);
+  cursor: pointer;
+  align-items: baseline;
+}
+
+.tpl-var:last-child { border-bottom: none; }
+.tpl-var:hover { background: var(--accent-bg); }
+
+.tpl-var-name {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  color: var(--accent);
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpl-var-desc { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tpl-note {
+  font-size: var(--font-label);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.tpl-note code {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  background: var(--toolbar-bg);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+@media (max-width: 1280px) {
+  .tpl-layout { grid-template-columns: 1fr; }
+  .tpl-types, .tpl-side { position: static; }
+  .tpl-types-body { display: flex; flex-wrap: wrap; }
+  .tpl-type { border-bottom: none; width: auto; }
+}

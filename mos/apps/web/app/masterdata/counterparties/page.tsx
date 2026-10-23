@@ -35,6 +35,14 @@ type Party = {
   type: string;
   country: string | null;
   sanctions_status: string;
+  // IMOS 对齐字段（CounterpartyIn 全量序列化）
+  short_name?: string | null;
+  company_no?: string | null;
+  ref_no?: string | null;
+  main_contact?: string | null;
+  status?: string | null;
+  credit_term?: number | string | null;
+  address_types?: string[] | null;
   address: string | null;
   tax_id: string | null;
   swift_code: string | null;
@@ -290,7 +298,7 @@ function CounterpartiesPage() {
   }
 
   const partyMenuItems = (r: Party): ContextMenuItem[] => [
-    { key: "open", label: t("ctx.open", "Open"), onClick: () => openRow(r) },
+    { key: "open", label: t("ctx.open", "Open"), onClick: () => router.push(`/masterdata/counterparties/${r.id}`) },
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyId(r.id) },
     { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportParties([r]) },
     { key: "d1", label: "", divider: true },
@@ -314,8 +322,40 @@ function CounterpartiesPage() {
   ];
 
   const partyColumns: ColumnDef<Party>[] = [
-    { key: "name", title: t("common.name", "Name"), minWidth: 150, value: (r) => r.name },
+    {
+      key: "name",
+      title: t("common.name", "Name"),
+      minWidth: 160,
+      value: (r) => r.name,
+      // A5：列表行链接到对手方卡片
+      render: (_v, r) => (
+        <Link href={`/masterdata/counterparties/${r.id}`} onClick={(e) => e.stopPropagation()} className="row-link">
+          {r.name}
+        </Link>
+      ),
+    },
+    {
+      key: "short_name",
+      title: t("page.parties.short_name", "Short name"),
+      width: 120,
+      value: (r) => r.short_name || "",
+      render: (_v, r) => r.short_name || "—",
+    },
     { key: "type", title: t("common.type", "Type"), width: 120, value: (r) => r.type },
+    {
+      key: "company_no",
+      title: t("page.parties.company_no", "Company no."),
+      width: 130,
+      value: (r) => r.company_no || "",
+      render: (_v, r) => r.company_no || "—",
+    },
+    {
+      key: "ref_no",
+      title: t("page.parties.ref_no", "Ref no."),
+      width: 120,
+      value: (r) => r.ref_no || "",
+      render: (_v, r) => r.ref_no || "—",
+    },
     {
       key: "country",
       title: t("page.ports.country", "Country"),
@@ -349,11 +389,56 @@ function CounterpartiesPage() {
       render: (_v, r) => r.phone || "—",
     },
     {
+      key: "main_contact",
+      title: t("page.parties.main_contact", "Main contact"),
+      minWidth: 140,
+      value: (r) => r.main_contact || "",
+      render: (_v, r) => r.main_contact || "—",
+    },
+    {
+      key: "credit_term",
+      title: t("page.parties.credit_term", "Credit term"),
+      width: 110,
+      align: "right",
+      value: (r) => (r.credit_term ?? null) as number | string | null,
+      render: (_v, r) =>
+        r.credit_term === null || r.credit_term === undefined || r.credit_term === "" ? "—" : String(r.credit_term),
+    },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 105,
+      value: (r) => r.status || "active",
+      render: (_v, r) => (
+        <span className={`pill ${r.status === "inactive" ? "warn" : "valid"}`}>
+          {t(`page.parties.status_${r.status || "active"}`, r.status || "active")}
+        </span>
+      ),
+    },
+    {
       key: "updated_at",
       title: t("list.last_modified", "Last modified"),
       width: 135,
       value: (r) => r.updated_at ?? null,
       render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+    },
+    {
+      key: "actions",
+      title: "",
+      width: 90,
+      align: "right",
+      render: (_v, r) => (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={(e) => {
+            e.stopPropagation();
+            openRow(r);
+          }}
+        >
+          {t("common.edit", "Edit")}
+        </button>
+      ),
     },
   ];
 
@@ -526,7 +611,7 @@ function CounterpartiesPage() {
             columns={partyColumns}
             data={rows}
             rowKey={(r) => r.id}
-            onRowClick={(r) => openRow(r)}
+            onRowClick={(r) => router.push(`/masterdata/counterparties/${r.id}`)}
             onRowContextMenu={(r, _i, e) => partyCtx.open(r)(e)}
             storageKey="masterdata_counterparties_grid"
             emptyText={t("common.empty", "No records")}

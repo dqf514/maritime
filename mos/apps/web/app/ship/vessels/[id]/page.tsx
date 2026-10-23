@@ -1,8 +1,9 @@
 "use client";
 
 // U-VESSEL 船舶管理卡片：完整明细页（标准船舶卡片对齐）。
-// Tabs: Summary · DWT/Draft · Contacts · Routes · Tugs · Bunker Tanks ·
+// Tabs: Summary · Consumption · DWT/Draft · Contacts · Routes · Tugs · Bunker Tanks ·
 // L/D Performance · TCE Targets · Vetting · Loadline Zones · Certificates · PMS.
+// Consumption = IMOS 的 In Port Consumption Table + Speed Consumption Table。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -13,14 +14,19 @@ import { Tabs } from "@/components/Tabs";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { VesselCertificates } from "@/components/ShipCertificates";
-import { VesselCrudGrid } from "@/components/ship/VesselCrudGrid";
+import { PartyPicker } from "@/components/DataPicker";
+import { FormSection } from "@/components/form/FormPanel";
+import { formatKv, VesselCrudGrid } from "@/components/ship/VesselCrudGrid";
+import { CLASS_SOCIETIES, OWNERSHIP_OPTIONS, TRADE_AREAS } from "@/lib/vessel-catalog";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
 
 type Tab =
   | "summary"
+  | "consumption"
   | "spec"
+  | "details"
   | "contacts"
   | "routes"
   | "tugs"
@@ -34,7 +40,9 @@ type Tab =
 
 const TABS: { key: Tab; labelKey: string; label: string }[] = [
   { key: "summary", labelKey: "page.vessel.tab_summary", label: "Summary" },
+  { key: "consumption", labelKey: "page.vessel.tab_consumption", label: "Consumption" },
   { key: "spec", labelKey: "page.vessel.tab_spec", label: "DWT / Draft" },
+  { key: "details", labelKey: "page.vessel.tab_details", label: "Details" },
   { key: "contacts", labelKey: "page.vessel.tab_contacts", label: "Contacts" },
   { key: "routes", labelKey: "page.vessel.tab_routes", label: "Routes" },
   { key: "tugs", labelKey: "page.vessel.tab_tugs", label: "Tugs" },
@@ -78,6 +86,63 @@ const SPEC_TEXT_FIELDS: { key: string; label: string }[] = [
   { key: "isps_manager", label: "ISPS manager" },
 ];
 
+// IMOS Vessel Detail > Details：身份 / 主尺度 / 常数与气象安全裕度。
+// 分组名对应 summary.imos 下的 identity / commercial / dimensions / safety。
+type ImosGroup = "identity" | "commercial" | "dimensions" | "safety";
+
+const IMOS_TEXT_FIELDS: { key: string; label: string; group: ImosGroup; list?: string }[] = [
+  { key: "vessel_code", label: "Vessel code", group: "identity" },
+  { key: "type_code", label: "Type code", group: "identity" },
+  { key: "ownership", label: "Ownership", group: "identity" },
+  { key: "trade_area", label: "Trade area", group: "identity" },
+  { key: "class_society", label: "Class society", group: "identity" },
+  { key: "scrubber", label: "Scrubber", group: "dimensions" },
+  { key: "beaufort", label: "Beaufort limit", group: "safety" },
+  { key: "sea_state", label: "Sea state limit", group: "safety" },
+  { key: "sea_swell", label: "Sea swell limit", group: "safety" },
+];
+
+const IMOS_NUM_FIELDS: { key: string; label: string; group: ImosGroup; step?: string }[] = [
+  { key: "daily_cost", label: "Daily cost (USD)", group: "commercial", step: "0.01" },
+  { key: "speed_laden", label: "Speed laden (kn)", group: "commercial", step: "0.01" },
+  { key: "speed_ballast", label: "Speed ballast (kn)", group: "commercial", step: "0.01" },
+  { key: "tpc", label: "TPC (MT/cm)", group: "dimensions", step: "0.01" },
+  { key: "capacity_bale_ft3", label: "Capacity bale (ft3)", group: "dimensions", step: "0.01" },
+  { key: "capacity_grain_ft3", label: "Capacity grain (ft3)", group: "dimensions", step: "0.01" },
+  { key: "deck_capacity_m3", label: "Deck capacity (m3)", group: "dimensions", step: "0.01" },
+  { key: "vessel_type_corr", label: "Type correction", group: "dimensions", step: "0.001" },
+  { key: "constants_sea", label: "Constants · sea (MT)", group: "safety", step: "0.01" },
+  { key: "constants_lakes", label: "Constants · lakes (MT)", group: "safety", step: "0.01" },
+  { key: "fresh_water", label: "Fresh water (MT)", group: "safety", step: "0.01" },
+  { key: "constants_others", label: "Constants · others (MT)", group: "safety", step: "0.01" },
+];
+
+// 停泊油耗矩阵（IMOS In Port Consumption）—— 一行一个燃油牌号，列为各工况日耗。
+const PORT_CONS_NUM_KEYS = [
+  "capacity", "margin", "loading", "discharge", "idle_on", "idle_off", "heat",
+  "heat_plus", "heat_plus_plus", "igs", "clean", "manoeuvring", "auxiliary",
+  "cooling", "boiler", "incinerator",
+] as const;
+
+const PORT_CONS_LABELS: Record<string, string> = {
+  capacity: "Tank capacity (MT)",
+  margin: "Margin (MT)",
+  loading: "Loading",
+  discharge: "Discharge",
+  idle_on: "Idle · aux on",
+  idle_off: "Idle · aux off",
+  heat: "Heat",
+  heat_plus: "Heat +",
+  heat_plus_plus: "Heat ++",
+  igs: "IGS",
+  clean: "Tank cleaning",
+  manoeuvring: "Manoeuvring",
+  auxiliary: "Auxiliary",
+  cooling: "Cooling",
+  boiler: "Boiler",
+  incinerator: "Incinerator",
+};
+
 function fmt(v: unknown): string {
   if (v === null || v === undefined || v === "") return "—";
   return String(v);
@@ -99,6 +164,12 @@ export default function VesselDetailPage() {
   const [specInit, setSpecInit] = useState<Record<string, string>>({});
   const [scale, setScale] = useState<ScalePoint[]>([]);
   const [buildYear, setBuildYear] = useState("");
+
+  // IMOS Details 表单（身份 / 商业 / 主尺度 / 常数与安全裕度）—— 扁平化 summary.imos
+  const [imosForm, setImosForm] = useState<Record<string, string>>({});
+  const [imosInit, setImosInit] = useState<Record<string, string>>({});
+  const [vesselOwner, setVesselOwner] = useState("");
+  const [vesselOwnerInit, setVesselOwnerInit] = useState("");
 
   // max lift calculator
   const [lift, setLift] = useState<any>(null);
@@ -122,6 +193,18 @@ export default function VesselDetailPage() {
     setSpecForm(flat);
     setSpecInit(flat);
     setScale((spec.dwt_draft?.deadweight_scale ?? []).map((p: any) => ({ draft_m: p.draft_m ?? "", deadweight_mt: p.deadweight_mt ?? "" })));
+
+    const imos = data?.imos ?? {};
+    const imosFlat: Record<string, string> = {};
+    for (const f of [...IMOS_TEXT_FIELDS, ...IMOS_NUM_FIELDS]) {
+      const v = imos[f.group]?.[f.key];
+      imosFlat[f.key] = v === null || v === undefined ? "" : String(v);
+    }
+    setImosForm(imosFlat);
+    setImosInit(imosFlat);
+    const ownerId = (imos.vessel_owner_id ?? "") as string;
+    setVesselOwner(ownerId);
+    setVesselOwnerInit(ownerId);
   }, [vesselId]);
 
   const loadShip = useCallback(async () => {
@@ -172,6 +255,35 @@ export default function VesselDetailPage() {
         return;
       }
       await apiPatch(`/api/v1/vessels/${vesselId}/dwt-draft`, payload);
+      toast.success(t("common.saved", "Saved"));
+      await loadSummary();
+    } catch (e: any) {
+      toast.error(e?.message || t("common.failed", "Failed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Details 表单：只提交改过的键（masterdata PATCH 走 exclude_unset，未提交的字段不动）
+  async function saveImos() {
+    setBusy(true);
+    try {
+      const payload: Record<string, unknown> = {};
+      for (const f of IMOS_NUM_FIELDS) {
+        if (imosForm[f.key] === imosInit[f.key]) continue;
+        payload[f.key] = imosForm[f.key] === "" ? null : Number(imosForm[f.key]);
+      }
+      for (const f of IMOS_TEXT_FIELDS) {
+        if (imosForm[f.key] === imosInit[f.key]) continue;
+        payload[f.key] = imosForm[f.key] === "" ? null : imosForm[f.key];
+      }
+      if (vesselOwner !== vesselOwnerInit) payload.vessel_owner_id = vesselOwner || null;
+      if (Object.keys(payload).length === 0) {
+        toast.success(t("common.saved", "Saved"));
+        setBusy(false);
+        return;
+      }
+      await apiPatch(`/api/v1/masterdata/vessels/${vesselId}`, payload);
       toast.success(t("common.saved", "Saved"));
       await loadSummary();
     } catch (e: any) {
@@ -325,6 +437,138 @@ export default function VesselDetailPage() {
     ],
     [t],
   );
+
+  // ── Consumption tab：IMOS In Port Consumption Table + Speed Consumption Table ──
+  const portConsColumns = [
+    { key: "fuel_grade", label: t("page.vessel.pc_fuel_grade", "Fuel grade"), width: 116 },
+    { key: "unit", label: t("page.vessel.pc_unit", "Unit"), width: 84 },
+    ...PORT_CONS_NUM_KEYS.map((k) => ({
+      key: k,
+      label: t(`page.vessel.pc_${k}`, PORT_CONS_LABELS[k]),
+      width: 106,
+      align: "right" as const,
+      render: (r: Record<string, unknown>) => fmt(r[k]),
+    })),
+    {
+      key: "inactive",
+      label: t("common.status", "Status"),
+      width: 96,
+      render: (r: Record<string, unknown>) => (
+        <span className={`pill ${r.inactive ? "warn" : "valid"}`}>
+          {r.inactive ? t("common.inactive", "Inactive") : t("common.active", "Active")}
+        </span>
+      ),
+    },
+  ];
+
+  const portConsFields = [
+    {
+      key: "fuel_grade",
+      label: t("page.vessel.pc_fuel_grade", "Fuel grade"),
+      type: "text" as const,
+      required: true,
+      placeholder: "VLSFO",
+    },
+    {
+      key: "unit",
+      label: t("page.vessel.pc_unit", "Unit"),
+      type: "select" as const,
+      options: [
+        { value: "MT", label: "MT" },
+        { value: "MT/day", label: "MT/day" },
+        { value: "LT", label: "LT" },
+        { value: "BBL", label: "BBL" },
+      ],
+    },
+    { key: "gas_flag", label: t("page.vessel.pc_gas_flag", "L / G"), type: "text" as const, placeholder: "L" },
+    { key: "inactive", label: t("page.vessel.pc_inactive", "Inactive — do not use in estimates"), type: "checkbox" as const },
+    ...PORT_CONS_NUM_KEYS.map((k) => ({
+      key: k,
+      label: t(`page.vessel.pc_${k}`, PORT_CONS_LABELS[k]),
+      type: "number" as const,
+      step: "0.001",
+    })),
+  ];
+
+  const speedConsColumns = [
+    {
+      key: "speed",
+      label: t("page.vessel.sc_speed", "Speed (kn)"),
+      width: 100,
+      align: "right" as const,
+      render: (r: Record<string, unknown>) => fmt(r.speed),
+    },
+    {
+      key: "ballast_laden",
+      label: t("page.vessel.sc_bl", "B / L"),
+      width: 96,
+      render: (r: Record<string, unknown>) =>
+        r.ballast_laden === "B"
+          ? t("page.vessel.sc_ballast", "Ballast")
+          : r.ballast_laden === "L"
+            ? t("page.vessel.sc_laden", "Laden")
+            : "—",
+    },
+    {
+      key: "engine_load",
+      label: t("page.vessel.sc_load", "Engine load (%)"),
+      width: 130,
+      align: "right" as const,
+      render: (r: Record<string, unknown>) => fmt(r.engine_load),
+    },
+    {
+      key: "fuel_consumption",
+      label: t("page.vessel.sc_fuel", "Consumption (MT/day)"),
+      width: 240,
+      render: (r: Record<string, unknown>) => formatKv(r.fuel_consumption) || "—",
+    },
+    {
+      key: "basis",
+      label: t("page.vessel.sc_basis", "Basis"),
+      width: 170,
+      render: (r: Record<string, unknown>) =>
+        r.basis ? t(`page.vessel.basis_${String(r.basis)}`, String(r.basis)) : "—",
+    },
+  ];
+
+  const speedConsFields = [
+    { key: "speed", label: t("page.vessel.sc_speed", "Speed (kn)"), type: "number" as const, step: "0.01" },
+    {
+      key: "ballast_laden",
+      label: t("page.vessel.sc_bl", "B / L"),
+      type: "select" as const,
+      options: [
+        { value: "", label: t("common.none", "None") },
+        { value: "B", label: t("page.vessel.sc_ballast", "Ballast") },
+        { value: "L", label: t("page.vessel.sc_laden", "Laden") },
+      ],
+    },
+    { key: "engine_load", label: t("page.vessel.sc_load", "Engine load (%)"), type: "number" as const, step: "0.01" },
+    {
+      key: "fuel_consumption",
+      label: t("page.vessel.sc_fuel", "Consumption (MT/day)"),
+      type: "kv" as const,
+      span: true,
+      placeholder: "VLSFO=15.20; MGO=0.30",
+    },
+    {
+      key: "basis",
+      label: t("page.vessel.sc_basis", "Basis"),
+      type: "select" as const,
+      options: [
+        { value: "", label: t("common.none", "None") },
+        { value: "eco_owner", label: t("page.vessel.basis_eco_owner", "Eco Owner") },
+        { value: "warranted_owner", label: t("page.vessel.basis_warranted_owner", "Warranted Owner") },
+      ],
+    },
+  ];
+
+  const imosGroups: { key: ImosGroup; labelKey: string; label: string }[] = [
+    { key: "identity", labelKey: "page.vessel.imos_identity", label: "Identity" },
+    { key: "commercial", labelKey: "page.vessel.imos_commercial", label: "Commercial" },
+    { key: "dimensions", labelKey: "page.vessel.imos_dimensions", label: "Dimensions" },
+    { key: "safety", labelKey: "page.vessel.imos_safety", label: "Constants & safety margins" },
+  ];
 
   const defectColumns = useMemo<ColumnDef<any>[]>(
     () => [
@@ -487,6 +731,112 @@ export default function VesselDetailPage() {
             />
           </div>
         </>
+      ) : null}
+
+      {tab === "consumption" ? (
+        <>
+          <VesselCrudGrid
+            vesselId={vesselId}
+            path="port-consumptions"
+            basePath={`/api/v1/masterdata/vessels/${vesselId}/port-consumptions`}
+            size="xl"
+            title={t("page.vessel.tab_port_cons", "In-port consumption")}
+            addLabel={t("page.vessel.add_port_cons", "Add fuel grade")}
+            emptyText={t("page.vessel.no_port_cons", "No in-port consumption rows yet")}
+            columns={portConsColumns}
+            fields={portConsFields}
+          />
+          <VesselCrudGrid
+            vesselId={vesselId}
+            path="speed-consumptions"
+            basePath={`/api/v1/masterdata/vessels/${vesselId}/speed-consumptions`}
+            title={t("page.vessel.tab_speed_cons", "Speed consumption curve")}
+            addLabel={t("page.vessel.add_speed_point", "Add speed point")}
+            emptyText={t("page.vessel.no_speed_cons", "No speed points yet")}
+            columns={speedConsColumns}
+            fields={speedConsFields}
+          />
+        </>
+      ) : null}
+
+      {tab === "details" ? (
+        <div className="panel">
+          <div className="desk-toolbar desk-toolbar-split">
+            <h2>{t("page.vessel.tab_details", "Details")}</h2>
+            <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={saveImos}>
+              {busy ? t("common.saving", "Saving…") : t("common.save", "Save")}
+            </button>
+          </div>
+
+          {imosGroups.map((g) => (
+            <FormSection key={g.key} title={t(g.labelKey, g.label)}>
+              {g.key === "identity" ? (
+                <label>
+                  {t("page.vessel.imos_owner", "Vessel owner")}
+                  <PartyPicker
+                    value={vesselOwner}
+                    onChange={setVesselOwner}
+                    allowEmpty
+                    placeholder={t("page.vessel.imos_owner_ph", "Search counterparty…")}
+                  />
+                </label>
+              ) : null}
+
+              {IMOS_TEXT_FIELDS.filter((f) => f.group === g.key).map((f) => {
+                const label = t(`page.vessel.imos_${f.key}`, f.label);
+                const value = imosForm[f.key] ?? "";
+                const onChange = (next: string) => setImosForm({ ...imosForm, [f.key]: next });
+                if (f.key === "ownership") {
+                  return (
+                    <label key={f.key}>
+                      {label}
+                      <select value={value} onChange={(e) => onChange(e.target.value)}>
+                        {OWNERSHIP_OPTIONS.map((o) => (
+                          <option key={o} value={o}>
+                            {o === "" ? t("page.vessels.ownership.none", "Not specified") : t(`page.vessels.ownership.${o}`, o)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                }
+                if (f.key === "trade_area" || f.key === "class_society") {
+                  const opts = f.key === "trade_area" ? TRADE_AREAS : CLASS_SOCIETIES;
+                  const listId = `vessel-detail-${f.key}`;
+                  return (
+                    <label key={f.key}>
+                      {label}
+                      <input list={listId} value={value} onChange={(e) => onChange(e.target.value)} />
+                      <datalist id={listId}>
+                        {opts.map((o) => (
+                          <option key={o} value={o} />
+                        ))}
+                      </datalist>
+                    </label>
+                  );
+                }
+                return (
+                  <label key={f.key}>
+                    {label}
+                    <input value={value} onChange={(e) => onChange(e.target.value)} />
+                  </label>
+                );
+              })}
+
+              {IMOS_NUM_FIELDS.filter((f) => f.group === g.key).map((f) => (
+                <label key={f.key}>
+                  {t(`page.vessel.imos_${f.key}`, f.label)}
+                  <input
+                    type="number"
+                    step={f.step}
+                    value={imosForm[f.key] ?? ""}
+                    onChange={(e) => setImosForm({ ...imosForm, [f.key]: e.target.value })}
+                  />
+                </label>
+              ))}
+            </FormSection>
+          ))}
+        </div>
       ) : null}
 
       {tab === "spec" ? (

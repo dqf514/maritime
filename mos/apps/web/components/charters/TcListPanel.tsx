@@ -2,6 +2,8 @@
 
 // A5 双重 UI 归并：TC 合同列表面板（原 /charters/tc 列表页）。
 // 挂载于 /charters?type=tc；行点击仍直达详情 /charters/tc/{id}。
+// P11 IMOS 对齐：TC In/Out 由 ?dir=in|out 分列（导航两项直达），列集对齐
+// IMOS TC 列表（TC Code / CP Date / DWT / Gross Hire / Min-Max Redelivery…）。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -13,9 +15,10 @@ import { DateInput } from "@/components/DateInput";
 import { PartyPicker } from "@/components/DataPicker";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
-type RefItem = { id: string; name: string };
+type RefItem = { id: string; name: string; build_year?: number | null; dwt?: number | null };
 
 type TcContract = {
   id: string;
@@ -39,7 +42,28 @@ type TcContract = {
   brokerage_pct: number | null;
   status: string;
   updated_at?: string | null;
+  // ── P11 IMOS TC 列表列 ──
+  tc_code: string | null;
+  date_fixed_at?: string | null;
+  duration_min_days?: number | null;
+  duration_max_days?: number | null;
+  billing_period?: string | null;
+  chtr_specialist?: string | null;
 };
+
+function daysBetween(a: string | null, b: string | null): number | null {
+  if (!a || !b) return null;
+  const ms = Date.parse(b) - Date.parse(a);
+  if (!Number.isFinite(ms)) return null;
+  return Math.round((ms / 86400000) * 100) / 100;
+}
+
+function shiftDays(iso: string | null, days: number | null | undefined): string | null {
+  if (!iso || days == null) return null;
+  const base = Date.parse(iso);
+  if (!Number.isFinite(base)) return null;
+  return new Date(base + days * 86400000).toISOString().slice(0, 10);
+}
 
 type CharterRef = { id: string; charter_no: string; charter_type: string };
 
@@ -60,8 +84,18 @@ export function TcListPanel() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
 
+  // P11: ?dir=in|out 让导航两项（TC In / TC Out）直达分列视图
+  const { query } = useListQuery();
+  const dirParam = query.dir === "in" ? "tci" : query.dir === "out" ? "tco" : "";
   const [typeFilter, setTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+
+  // URL dir 变化时同步本地筛选（用户手动改下拉后以本地为准，直到 dir 再变）
+  const [lastDir, setLastDir] = useState(dirParam);
+  if (dirParam !== lastDir) {
+    setLastDir(dirParam);
+    setTypeFilter(dirParam);
+  }
 
   // create modal
   const [openCreate, setOpenCreate] = useState(false);
@@ -130,12 +164,19 @@ export function TcListPanel() {
   const columns: ColumnDef<TcContract>[] = useMemo(
     () => [
       {
+        // IMOS 首列 TC Code = VESSEL-I#### / -O####（后端自动生成）
+        key: "tc_code",
+        title: t("page.tc.col.tc_code", "TC Code"),
+        width: 140,
+        sticky: true,
+        value: (r) => r.tc_code || charterNo(r.charter_id),
+        render: (v) => <strong>{String(v ?? "")}</strong>,
+      },
+      {
         key: "contract_no",
         title: t("page.tc.col.contract_no", "Contract no"),
-        width: 150,
-        sticky: true,
+        width: 130,
         value: (r) => charterNo(r.charter_id),
-        render: (v) => <strong>{String(v ?? "")}</strong>,
       },
       {
         key: "type",
@@ -162,6 +203,76 @@ export function TcListPanel() {
         value: (r) => nameOf(parties, r.counterparty_id),
       },
       {
+        key: "date_fixed_at",
+        title: t("page.tc.col.cp_date", "CP date"),
+        width: 100,
+        value: (r) => r.date_fixed_at || "",
+        render: (v) => (v ? String(v).slice(0, 10) : "—"),
+      },
+      {
+        key: "dwt",
+        title: t("page.tc.col.dwt", "DWT"),
+        align: "right",
+        width: 90,
+        agg: "max",
+        value: (r) => vessels.find((v) => v.id === r.vessel_id)?.dwt ?? null,
+        render: (v) => (v == null ? "—" : Number(v).toLocaleString()),
+      },
+      {
+        key: "delivery",
+        title: t("page.tc.col.delivery_port_date", "Delivery port / date"),
+        width: 170,
+        value: (r) => `${r.delivery_port || "—"} ${r.delivery_date || ""}`.trim(),
+        render: (v) => {
+          const s = String(v ?? "");
+          const [port, ...rest] = s.split(" ");
+          return (
+            <>
+              {port}
+              {rest.join(" ") ? <span className="muted"> {rest.join(" ")}</span> : null}
+            </>
+          );
+        },
+      },
+      {
+        key: "redelivery_date",
+        title: t("page.tc.col.redelivery", "Redelivery"),
+        width: 105,
+        value: (r) => r.redelivery_date || "",
+      },
+      {
+        key: "redelivery_port",
+        title: t("page.tc.col.redelivery_port", "Redel. port"),
+        width: 120,
+        value: (r) => r.redelivery_port || "",
+      },
+      {
+        key: "gross_hire",
+        title: t("page.tc.col.gross_hire", "Gross hire"),
+        align: "right",
+        width: 120,
+        agg: "sum",
+        value: (r) => {
+          const days = daysBetween(r.delivery_date, r.redelivery_date);
+          return days == null ? null : Math.round(days * r.hire_rate * 100) / 100;
+        },
+        render: (v, r) => (v == null ? "—" : `${Number(v).toLocaleString()} ${r.hire_currency}`),
+      },
+      {
+        key: "min_redel",
+        title: t("page.tc.col.min_redelivery", "Min redel."),
+        width: 105,
+        value: (r) => shiftDays(r.delivery_date, r.duration_min_days) || "",
+        render: (v) => (v ? String(v) : "—"),
+      },
+      {
+        key: "max_redel",
+        title: t("page.tc.col.max_redelivery", "Max redel."),
+        width: 105,
+        value: (r) => shiftDays(r.delivery_date, r.duration_max_days) || "",
+        render: (v) => (v ? String(v) : "—"),
+      },
+      {
         key: "hire_rate",
         title: t("page.tc.col.hire_rate", "Hire rate"),
         align: "right",
@@ -176,18 +287,6 @@ export function TcListPanel() {
         width: 90,
         value: (r) => r.status,
         render: (v) => <span className={`badge tc-status-${String(v)}`}>{String(v)}</span>,
-      },
-      {
-        key: "delivery_date",
-        title: t("page.tc.col.delivery", "Delivery"),
-        width: 105,
-        value: (r) => r.delivery_date || "",
-      },
-      {
-        key: "redelivery_date",
-        title: t("page.tc.col.redelivery", "Redelivery"),
-        width: 105,
-        value: (r) => r.redelivery_date || "",
       },
       {
         key: "updated_at",

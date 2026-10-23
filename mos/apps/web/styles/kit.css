@@ -55,6 +55,15 @@
   color: #ffe0c2;
 }
 
+/* 表格单元格内的名称链接：跟随单元格文字颜色（行内 style 的替代） */
+a.row-link {
+  color: inherit;
+  text-decoration: none;
+}
+a.row-link:hover {
+  text-decoration: underline;
+}
+
 /* 文本型按钮（单元格内联链接动作） */
 .linklike,
 .btn-link {

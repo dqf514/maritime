@@ -1,0 +1,164 @@
+1
+00:00:00,919 --> 00:00:13,703
+MariOS — Maritime Commercial Operating System · Full business walkthrough
+
+2
+00:00:13,703 --> 00:00:24,490
+Signing in as tenant administrator on the demo tenant
+
+3
+00:00:24,490 --> 00:00:32,184
+Personal workbench: tasks, alerts and market indices at a glance
+
+4
+00:00:32,184 --> 00:00:43,961
+Modular navigation: Chartering · Operations · Finance · Technical · Analytics · Platform
+
+5
+00:00:43,961 --> 00:00:53,288
+Ctrl+K global search · theme, language and tenant switch, top right
+
+6
+00:00:53,288 --> 00:01:02,655
+Next: Chartering — voyage estimation
+
+7
+00:01:05,337 --> 00:01:14,997
+Chartering · Voyage estimation desk
+
+8
+00:01:14,997 --> 00:01:24,985
+One-click new estimate from the dry bulk template
+
+9
+00:01:24,996 --> 00:01:36,718
+Enter title, cargo quantity and freight rate — vessel profile flows in automatically
+
+10
+00:01:36,719 --> 00:01:54,320
+Multi-cargo: each parcel priced independently — per ton, lump sum or worldscale
+
+11
+00:01:54,320 --> 00:02:04,118
+One click to calculate: TCE, total freight and per-parcel breakdown
+
+12
+00:02:04,118 --> 00:02:15,357
+Profile & market enrichment: speed, consumption and EU carbon price
+
+13
+00:02:15,357 --> 00:02:24,780
+Quote confirmed — convert to charter party in one click
+
+14
+00:02:24,780 --> 00:02:32,765
+Charter ledger: voyage charters, time charters and contracts of affreightment
+
+15
+00:02:35,255 --> 00:02:44,365
+Operations · Voyage ledger
+
+16
+00:02:44,365 --> 00:02:51,785
+Opening voyage VOY-2407, currently on voyage
+
+17
+00:02:51,785 --> 00:03:01,629
+Noon reports: position, speed and estimated arrival update live
+
+18
+00:03:01,630 --> 00:03:10,778
+Statement of facts — laytime, demurrage and despatch computed automatically
+
+19
+00:03:10,778 --> 00:03:18,875
+Voyage workspace: docked panels for team collaboration
+
+20
+00:03:18,875 --> 00:03:26,859
+Schedule: berth windows and conflict detection
+
+21
+00:03:26,860 --> 00:03:35,705
+Operations loop: contract becomes an executable, traceable voyage
+
+22
+00:03:38,784 --> 00:03:48,783
+Finance · Invoice centre
+
+23
+00:03:48,783 --> 00:03:59,613
+Opening a freight invoice: amounts, taxes and the linked voyage
+
+24
+00:03:59,613 --> 00:04:07,249
+Payments: payables and ageing tracking
+
+25
+00:04:07,249 --> 00:04:16,109
+General ledger: vouchers posted automatically, full audit trail
+
+26
+00:04:16,109 --> 00:04:24,954
+Profit & loss by voyage, vessel and charter
+
+27
+00:04:24,954 --> 00:04:32,911
+Finance and operations on one data spine
+
+28
+00:04:35,502 --> 00:04:42,926
+Technical · Fleet records
+
+29
+00:04:42,926 --> 00:04:53,258
+Speed and consumption baselines feed the estimation engine directly
+
+30
+00:04:53,259 --> 00:05:01,063
+Certificates and surveys with automatic expiry alerts
+
+31
+00:05:01,063 --> 00:05:10,798
+Emissions compliance: EU ETS and FuelEU tracking
+
+32
+00:05:10,798 --> 00:05:17,211
+Technical goal: every vessel in its best condition
+
+33
+00:05:19,813 --> 00:05:31,267
+Master data · Vessel records and fleet groups
+
+34
+00:05:31,268 --> 00:05:40,853
+Port master data: coordinates and EU flag for carbon accounting
+
+35
+00:05:40,853 --> 00:05:49,497
+Bunker zones: global ECAs and EU carbon zones, detected automatically
+
+36
+00:05:49,497 --> 00:05:58,912
+Platform health: one-click full self-check
+
+37
+00:05:58,912 --> 00:06:05,880
+All checks passed — ready for production
+
+38
+00:06:08,451 --> 00:06:16,455
+Digital twin: the whole fleet at a glance
+
+39
+00:06:16,455 --> 00:06:26,155
+Full loop recap: quotation, fixture, execution, finance
+
+40
+00:06:26,156 --> 00:06:40,732
+MariOS — Maritime Commercial Operating System
+
+41
+00:06:40,733 --> 00:06:48,824
+End of demonstration · Thank you for watching
+

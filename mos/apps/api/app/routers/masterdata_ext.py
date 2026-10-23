@@ -1,10 +1,21 @@
-"""主数据扩展 CRUD — 节假日日历 / 工作日模式 / 术语表 / 标准条款段落。
+"""主数据扩展 CRUD — 节假日日历 / 工作日模式 / 术语表 / 标准条款段落 + IMOS Data Center 子表。
 
 Endpoints (all under /api/v1/masterdata):
 - /holiday-calendars       HolidayCalendar 列表/新建/详情/更新/删除
 - /working-day-patterns    WorkingDayPattern 同上
 - /term-lists              TermList 同上（category/code 下拉源）
 - /standard-paragraphs     StandardParagraph 同上（cp_clause/invoice_note/claim_note）
+
+IMOS Data Center parity（P10）子表：
+- /cargo-groups            商品大类
+- /cargo-names[/{id}/properties]  货物品名主数据 + Title/Value 属性
+- /ports/{port_id}/berths|aliases 港口泊位/别名（随 Port 为全局参照数据，写需管理员）
+- /vessels/{id}/port-consumptions|speed-consumptions  停泊工况油耗矩阵 / 航速油耗曲线
+- /counterparties/{id}/properties   对手方 Title/Value 属性
+
+与本文件原有的硬删除不同，上述子表统一走 ``soft_delete``（模型都带 ``deleted_at``，
+删除进回收站），与 ``routers/masterdata.py`` 的 vessel/port/counterparty 口径一致；
+新增的 entity_type 已在 ``routers/recycle.py`` 的 ENTITY_LOOKUP 登记，否则恢复时 400。
 """
 
 from __future__ import annotations
@@ -13,16 +24,53 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models_cargo import CargoGroup, CargoName, CargoNameProperty
 from app.models_reference_ext import (
     HolidayCalendar,
     StandardParagraph,
     TermList,
     WorkingDayPattern,
 )
+from app.models_vessel_ext import VesselPortConsumption, VesselSpeedConsumption
+from app.models_wave1 import (
+    Counterparty,
+    CounterpartyProperty,
+    Port,
+    PortAlias,
+    PortBerth,
+    Vessel,
+)
+from app.routers.masterdata import _require_port_admin
+from app.schemas_wave1 import (
+    CargoGroupIn,
+    CargoGroupOut,
+    CargoGroupPatch,
+    CargoNameIn,
+    CargoNameOut,
+    CargoNamePatch,
+    CargoNamePropertyOut,
+    CounterpartyPropertyOut,
+    PortAliasIn,
+    PortAliasOut,
+    PortAliasPatch,
+    PortBerthIn,
+    PortBerthOut,
+    PortBerthPatch,
+    TitleValueIn,
+    TitleValuePatch,
+    VesselPortConsumptionIn,
+    VesselPortConsumptionOut,
+    VesselPortConsumptionPatch,
+    VesselSpeedConsumptionIn,
+    VesselSpeedConsumptionOut,
+)
 from app.security import AuthContext, require_module
+from app.services.recycle import soft_delete
 from app.services.tenant_guard import scoped_get, scoped_query
 
 router = APIRouter(prefix="/masterdata", tags=["Master Data"])  # 由 main.py 以 /api/v1 挂载
@@ -505,3 +553,628 @@ def delete_standard_paragraph(
     db.delete(row)
     db.commit()
     return {"ok": True}
+
+
+# ══ IMOS Data Center parity（P10）════════════════════════════════════════════
+#
+# 下面 6 组子资源与本文件上方的老资源有两点刻意的不同：
+#   1. 删除走 soft_delete（模型都带 deleted_at，进回收站可恢复）——与同前缀的
+#      routers/masterdata.py 中 vessel/port/counterparty 口径一致；
+#   2. 唯一键冲突统一回落成 409，而不是 SQLAlchemy IntegrityError 冒泡成 500。
+# PATCH 一律 model_dump(exclude_unset=True)：只写提交过的字段，避免未提交字段
+# 被默认值清空（字段集是 IMOS 规模，全量 setattr 代价很大）；请求体用 schemas_wave1
+# 里的 *Patch（键字段可缺省、显式 null 拒绝 422），不能复用 create body。
+
+
+def _parent_or_404(db: Session, model, row_id: UUID, auth: AuthContext, code: str, message: str):
+    """取租户内父记录；不存在/跨租户/已软删一律 404（scoped_get 已按 IDOR 约定不区分原因）。"""
+    row = scoped_get(db, model, row_id, auth.tenant_id)
+    if not row:
+        raise HTTPException(404, detail={"code": code, "message": message})
+    return row
+
+
+def _commit_or_conflict(db: Session, code: str, message: str) -> None:
+    """提交；撞唯一键则回滚并 409（各子表的唯一约束见 models_*.py）。"""
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, detail={"code": code, "message": message})
+
+
+def _port_child_or_404(row, *, port_id: UUID, deleted_ok: bool = False, code: str, message: str):
+    """端口子行：无 tenant_id（全局参照数据），改由 port_id 归属 + 软删除状态判定。"""
+    if row is None or row.port_id != port_id or (not deleted_ok and row.deleted_at):
+        raise HTTPException(404, detail={"code": code, "message": message})
+    return row
+
+
+# ── Cargo groups ──
+
+
+@router.get("/cargo-groups", response_model=list[CargoGroupOut])
+def list_cargo_groups(
+    q: str = "",
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    stmt = scoped_query(db, CargoGroup, auth.tenant_id)
+    if q.strip():
+        stmt = stmt.where(CargoGroup.name.ilike(f"%{q.strip()}%"))
+    rows = db.scalars(stmt.order_by(CargoGroup.name)).all()
+    return [CargoGroupOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/cargo-groups", response_model=CargoGroupOut, status_code=201)
+def create_cargo_group(
+    body: CargoGroupIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = CargoGroup(tenant_id=auth.tenant_id, **body.model_dump())
+    db.add(row)
+    _commit_or_conflict(db, "CARGO_GROUP_EXISTS", "Cargo group name already exists")
+    db.refresh(row)
+    return CargoGroupOut.model_validate(row, from_attributes=True)
+
+
+@router.get("/cargo-groups/{group_id}", response_model=CargoGroupOut)
+def get_cargo_group(
+    group_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = _parent_or_404(db, CargoGroup, group_id, auth, "CARGO_GROUP_NOT_FOUND", "Cargo group not found")
+    return CargoGroupOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/cargo-groups/{group_id}", response_model=CargoGroupOut)
+def update_cargo_group(
+    group_id: UUID,
+    body: CargoGroupPatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = _parent_or_404(db, CargoGroup, group_id, auth, "CARGO_GROUP_NOT_FOUND", "Cargo group not found")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(row, k, v)
+    _commit_or_conflict(db, "CARGO_GROUP_EXISTS", "Cargo group name already exists")
+    db.refresh(row)
+    return CargoGroupOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/cargo-groups/{group_id}")
+def delete_cargo_group(
+    group_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = _parent_or_404(db, CargoGroup, group_id, auth, "CARGO_GROUP_NOT_FOUND", "Cargo group not found")
+    soft_delete(db, tenant_id=auth.tenant_id, user_id=auth.user_id, entity_type="cargo_group", row=row, title=row.name)
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+# ── Cargo names（货物品名主数据）──
+
+
+@router.get("/cargo-names", response_model=list[CargoNameOut])
+def list_cargo_names(
+    q: str = "",
+    group_id: UUID | None = Query(None),
+    inactive: bool | None = Query(None, description="true/false 过滤停用品名；省略则全部"),
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    stmt = scoped_query(db, CargoName, auth.tenant_id)
+    if q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(
+                CargoName.short_name.ilike(like),
+                CargoName.full_name.ilike(like),
+                CargoName.product_code.ilike(like),
+            )
+        )
+    if group_id is not None:
+        stmt = stmt.where(CargoName.cargo_group_id == group_id)
+    if inactive is not None:
+        stmt = stmt.where(CargoName.inactive.is_(bool(inactive)))
+    rows = db.scalars(stmt.order_by(CargoName.short_name)).all()
+    return [CargoNameOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/cargo-names", response_model=CargoNameOut, status_code=201)
+def create_cargo_name(
+    body: CargoNameIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = CargoName(tenant_id=auth.tenant_id, **body.model_dump())
+    db.add(row)
+    _commit_or_conflict(db, "CARGO_NAME_EXISTS", "Cargo short name already exists")
+    db.refresh(row)
+    return CargoNameOut.model_validate(row, from_attributes=True)
+
+
+@router.get("/cargo-names/{cargo_name_id}", response_model=CargoNameOut)
+def get_cargo_name(
+    cargo_name_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = _parent_or_404(db, CargoName, cargo_name_id, auth, "CARGO_NAME_NOT_FOUND", "Cargo name not found")
+    return CargoNameOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/cargo-names/{cargo_name_id}", response_model=CargoNameOut)
+def update_cargo_name(
+    cargo_name_id: UUID,
+    body: CargoNamePatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = _parent_or_404(db, CargoName, cargo_name_id, auth, "CARGO_NAME_NOT_FOUND", "Cargo name not found")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(row, k, v)
+    _commit_or_conflict(db, "CARGO_NAME_EXISTS", "Cargo short name already exists")
+    db.refresh(row)
+    return CargoNameOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/cargo-names/{cargo_name_id}")
+def delete_cargo_name(
+    cargo_name_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = _parent_or_404(db, CargoName, cargo_name_id, auth, "CARGO_NAME_NOT_FOUND", "Cargo name not found")
+    soft_delete(
+        db, tenant_id=auth.tenant_id, user_id=auth.user_id, entity_type="cargo_name", row=row, title=row.short_name
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+# ── Cargo name properties（Title/Value）──
+
+
+@router.get("/cargo-names/{cargo_name_id}/properties", response_model=list[CargoNamePropertyOut])
+def list_cargo_name_properties(
+    cargo_name_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _parent_or_404(db, CargoName, cargo_name_id, auth, "CARGO_NAME_NOT_FOUND", "Cargo name not found")
+    stmt = (
+        scoped_query(db, CargoNameProperty, auth.tenant_id)
+        .where(CargoNameProperty.cargo_name_id == cargo_name_id)
+        .order_by(CargoNameProperty.title)
+    )
+    rows = db.scalars(stmt).all()
+    return [CargoNamePropertyOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/cargo-names/{cargo_name_id}/properties", response_model=CargoNamePropertyOut, status_code=201)
+def create_cargo_name_property(
+    cargo_name_id: UUID,
+    body: TitleValueIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _parent_or_404(db, CargoName, cargo_name_id, auth, "CARGO_NAME_NOT_FOUND", "Cargo name not found")
+    row = CargoNameProperty(tenant_id=auth.tenant_id, cargo_name_id=cargo_name_id, **body.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return CargoNamePropertyOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/cargo-names/{cargo_name_id}/properties/{property_id}", response_model=CargoNamePropertyOut)
+def update_cargo_name_property(
+    cargo_name_id: UUID,
+    property_id: UUID,
+    body: TitleValuePatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, CargoNameProperty, property_id, auth.tenant_id)
+    if row is None or row.cargo_name_id != cargo_name_id:
+        raise HTTPException(404, detail={"code": "CARGO_NAME_PROPERTY_NOT_FOUND", "message": "Property not found"})
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(row, k, v)
+    db.commit()
+    db.refresh(row)
+    return CargoNamePropertyOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/cargo-names/{cargo_name_id}/properties/{property_id}")
+def delete_cargo_name_property(
+    cargo_name_id: UUID,
+    property_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, CargoNameProperty, property_id, auth.tenant_id)
+    if row is None or row.cargo_name_id != cargo_name_id:
+        raise HTTPException(404, detail={"code": "CARGO_NAME_PROPERTY_NOT_FOUND", "message": "Property not found"})
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="cargo_name_property",
+        row=row,
+        title=row.title,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+# ── Port berths / aliases（全局参照数据 —— 随父级 Port 无 tenant_id）──
+# 读不按租户过滤（港口本身全局共享），写必须 tenant_admin/platform_admin，
+# 门槛与 masterdata.update_port 的 _require_port_admin 同一条规则。
+
+
+def _get_global_port(port_id: UUID, db: Session) -> Port:
+    port = db.get(Port, port_id)
+    if not port or port.deleted_at:
+        raise HTTPException(404, detail={"code": "PORT_NOT_FOUND", "message": "Port not found"})
+    return port
+
+
+@router.get("/ports/{port_id}/berths", response_model=list[PortBerthOut])
+def list_port_berths(
+    port_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    _get_global_port(port_id, db)
+    rows = db.scalars(
+        select(PortBerth)
+        .where(PortBerth.port_id == port_id, PortBerth.deleted_at.is_(None))
+        .order_by(PortBerth.short_name)
+    ).all()
+    return [PortBerthOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/ports/{port_id}/berths", response_model=PortBerthOut, status_code=201)
+def create_port_berth(
+    port_id: UUID,
+    body: PortBerthIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _require_port_admin(auth)
+    _get_global_port(port_id, db)
+    row = PortBerth(port_id=port_id, **body.model_dump())
+    db.add(row)
+    _commit_or_conflict(db, "BERTH_EXISTS", "Berth short name already exists for this port")
+    db.refresh(row)
+    return PortBerthOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/ports/{port_id}/berths/{berth_id}", response_model=PortBerthOut)
+def update_port_berth(
+    port_id: UUID,
+    berth_id: UUID,
+    body: PortBerthPatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _require_port_admin(auth)
+    row = _port_child_or_404(
+        db.get(PortBerth, berth_id), port_id=port_id, code="BERTH_NOT_FOUND", message="Berth not found"
+    )
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(row, k, v)
+    _commit_or_conflict(db, "BERTH_EXISTS", "Berth short name already exists for this port")
+    db.refresh(row)
+    return PortBerthOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/ports/{port_id}/berths/{berth_id}")
+def delete_port_berth(
+    port_id: UUID,
+    berth_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _require_port_admin(auth)
+    row = _port_child_or_404(
+        db.get(PortBerth, berth_id), port_id=port_id, code="BERTH_NOT_FOUND", message="Berth not found"
+    )
+    soft_delete(
+        db, tenant_id=auth.tenant_id, user_id=auth.user_id, entity_type="port_berth", row=row, title=row.short_name
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+@router.get("/ports/{port_id}/aliases", response_model=list[PortAliasOut])
+def list_port_aliases(
+    port_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _ = auth
+    _get_global_port(port_id, db)
+    rows = db.scalars(
+        select(PortAlias)
+        .where(PortAlias.port_id == port_id, PortAlias.deleted_at.is_(None))
+        .order_by(PortAlias.alias)
+    ).all()
+    return [PortAliasOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/ports/{port_id}/aliases", response_model=PortAliasOut, status_code=201)
+def create_port_alias(
+    port_id: UUID,
+    body: PortAliasIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _require_port_admin(auth)
+    _get_global_port(port_id, db)
+    row = PortAlias(port_id=port_id, **body.model_dump())
+    db.add(row)
+    _commit_or_conflict(db, "PORT_ALIAS_EXISTS", "Alias already exists for this port")
+    db.refresh(row)
+    return PortAliasOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/ports/{port_id}/aliases/{alias_id}", response_model=PortAliasOut)
+def update_port_alias(
+    port_id: UUID,
+    alias_id: UUID,
+    body: PortAliasPatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _require_port_admin(auth)
+    row = _port_child_or_404(
+        db.get(PortAlias, alias_id), port_id=port_id, code="PORT_ALIAS_NOT_FOUND", message="Alias not found"
+    )
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(row, k, v)
+    _commit_or_conflict(db, "PORT_ALIAS_EXISTS", "Alias already exists for this port")
+    db.refresh(row)
+    return PortAliasOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/ports/{port_id}/aliases/{alias_id}")
+def delete_port_alias(
+    port_id: UUID,
+    alias_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _require_port_admin(auth)
+    row = _port_child_or_404(
+        db.get(PortAlias, alias_id), port_id=port_id, code="PORT_ALIAS_NOT_FOUND", message="Alias not found"
+    )
+    soft_delete(
+        db, tenant_id=auth.tenant_id, user_id=auth.user_id, entity_type="port_alias", row=row, title=row.alias
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+# ── Vessel in-port consumption matrix（IMOS In Port Consumption Table）──
+
+
+@router.get("/vessels/{vessel_id}/port-consumptions", response_model=list[VesselPortConsumptionOut])
+def list_vessel_port_consumptions(
+    vessel_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _parent_or_404(db, Vessel, vessel_id, auth, "VESSEL_NOT_FOUND", "Vessel not found")
+    rows = db.scalars(
+        scoped_query(db, VesselPortConsumption, auth.tenant_id)
+        .where(VesselPortConsumption.vessel_id == vessel_id)
+        .order_by(VesselPortConsumption.fuel_grade)
+    ).all()
+    return [VesselPortConsumptionOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/vessels/{vessel_id}/port-consumptions", response_model=VesselPortConsumptionOut, status_code=201)
+def create_vessel_port_consumption(
+    vessel_id: UUID,
+    body: VesselPortConsumptionIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _parent_or_404(db, Vessel, vessel_id, auth, "VESSEL_NOT_FOUND", "Vessel not found")
+    row = VesselPortConsumption(tenant_id=auth.tenant_id, vessel_id=vessel_id, **body.model_dump())
+    db.add(row)
+    _commit_or_conflict(db, "FUEL_GRADE_EXISTS", "This fuel grade already has a row for the vessel")
+    db.refresh(row)
+    return VesselPortConsumptionOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/vessels/{vessel_id}/port-consumptions/{row_id}", response_model=VesselPortConsumptionOut)
+def update_vessel_port_consumption(
+    vessel_id: UUID,
+    row_id: UUID,
+    body: VesselPortConsumptionPatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, VesselPortConsumption, row_id, auth.tenant_id)
+    if row is None or row.vessel_id != vessel_id:
+        raise HTTPException(404, detail={"code": "PORT_CONSUMPTION_NOT_FOUND", "message": "Row not found"})
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(row, k, v)
+    _commit_or_conflict(db, "FUEL_GRADE_EXISTS", "This fuel grade already has a row for the vessel")
+    db.refresh(row)
+    return VesselPortConsumptionOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/vessels/{vessel_id}/port-consumptions/{row_id}")
+def delete_vessel_port_consumption(
+    vessel_id: UUID,
+    row_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, VesselPortConsumption, row_id, auth.tenant_id)
+    if row is None or row.vessel_id != vessel_id:
+        raise HTTPException(404, detail={"code": "PORT_CONSUMPTION_NOT_FOUND", "message": "Row not found"})
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="vessel_port_consumption",
+        row=row,
+        title=row.fuel_grade,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+# ── Vessel speed / consumption curve（IMOS Speed Consumption Table）──
+
+
+@router.get("/vessels/{vessel_id}/speed-consumptions", response_model=list[VesselSpeedConsumptionOut])
+def list_vessel_speed_consumptions(
+    vessel_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _parent_or_404(db, Vessel, vessel_id, auth, "VESSEL_NOT_FOUND", "Vessel not found")
+    rows = db.scalars(
+        scoped_query(db, VesselSpeedConsumption, auth.tenant_id)
+        .where(VesselSpeedConsumption.vessel_id == vessel_id)
+        .order_by(VesselSpeedConsumption.speed)
+    ).all()
+    return [VesselSpeedConsumptionOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/vessels/{vessel_id}/speed-consumptions", response_model=VesselSpeedConsumptionOut, status_code=201)
+def create_vessel_speed_consumption(
+    vessel_id: UUID,
+    body: VesselSpeedConsumptionIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _parent_or_404(db, Vessel, vessel_id, auth, "VESSEL_NOT_FOUND", "Vessel not found")
+    row = VesselSpeedConsumption(tenant_id=auth.tenant_id, vessel_id=vessel_id, **body.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return VesselSpeedConsumptionOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/vessels/{vessel_id}/speed-consumptions/{row_id}", response_model=VesselSpeedConsumptionOut)
+def update_vessel_speed_consumption(
+    vessel_id: UUID,
+    row_id: UUID,
+    body: VesselSpeedConsumptionIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, VesselSpeedConsumption, row_id, auth.tenant_id)
+    if row is None or row.vessel_id != vessel_id:
+        raise HTTPException(404, detail={"code": "SPEED_CONSUMPTION_NOT_FOUND", "message": "Row not found"})
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(row, k, v)
+    db.commit()
+    db.refresh(row)
+    return VesselSpeedConsumptionOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/vessels/{vessel_id}/speed-consumptions/{row_id}")
+def delete_vessel_speed_consumption(
+    vessel_id: UUID,
+    row_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, VesselSpeedConsumption, row_id, auth.tenant_id)
+    if row is None or row.vessel_id != vessel_id:
+        raise HTTPException(404, detail={"code": "SPEED_CONSUMPTION_NOT_FOUND", "message": "Row not found"})
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="vessel_speed_consumption",
+        row=row,
+        title=str(row.speed),
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}
+
+
+# ── Counterparty properties（Title/Value）──
+
+
+@router.get("/counterparties/{party_id}/properties", response_model=list[CounterpartyPropertyOut])
+def list_counterparty_properties(
+    party_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _parent_or_404(db, Counterparty, party_id, auth, "COUNTERPARTY_NOT_FOUND", "Counterparty not found")
+    rows = db.scalars(
+        scoped_query(db, CounterpartyProperty, auth.tenant_id)
+        .where(CounterpartyProperty.counterparty_id == party_id)
+        .order_by(CounterpartyProperty.title)
+    ).all()
+    return [CounterpartyPropertyOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/counterparties/{party_id}/properties", response_model=CounterpartyPropertyOut, status_code=201)
+def create_counterparty_property(
+    party_id: UUID,
+    body: TitleValueIn,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    _parent_or_404(db, Counterparty, party_id, auth, "COUNTERPARTY_NOT_FOUND", "Counterparty not found")
+    row = CounterpartyProperty(tenant_id=auth.tenant_id, counterparty_id=party_id, **body.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return CounterpartyPropertyOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/counterparties/{party_id}/properties/{property_id}", response_model=CounterpartyPropertyOut)
+def update_counterparty_property(
+    party_id: UUID,
+    property_id: UUID,
+    body: TitleValuePatch,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, CounterpartyProperty, property_id, auth.tenant_id)
+    if row is None or row.counterparty_id != party_id:
+        raise HTTPException(404, detail={"code": "COUNTERPARTY_PROPERTY_NOT_FOUND", "message": "Property not found"})
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(row, k, v)
+    db.commit()
+    db.refresh(row)
+    return CounterpartyPropertyOut.model_validate(row, from_attributes=True)
+
+
+@router.delete("/counterparties/{party_id}/properties/{property_id}")
+def delete_counterparty_property(
+    party_id: UUID,
+    property_id: UUID,
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    row = scoped_get(db, CounterpartyProperty, property_id, auth.tenant_id)
+    if row is None or row.counterparty_id != party_id:
+        raise HTTPException(404, detail={"code": "COUNTERPARTY_PROPERTY_NOT_FOUND", "message": "Property not found"})
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type="counterparty_property",
+        row=row,
+        title=row.title,
+    )
+    db.commit()
+    return {"ok": True, "recycled": True}

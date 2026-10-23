@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 60
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
+    # 按量付费开关：True 时真实 AI 调用（chat / assist / extract）按 tokens 扣
+    # TenantWallet(meter_code="ai.tokens")，余额不足返回 402 QUOTA_EXCEEDED。
+    # 默认关闭 —— 观测性流水（UsageLedger）照记但不阻断业务；生产开箱计费时置 True。
+    ai_metering_enabled: bool = False
 
     def s3_configured(self) -> bool:
         return bool(self.s3_access_key and self.s3_secret_key)

@@ -216,13 +216,27 @@ def _attachment_payload(filename: str, content: bytes, content_type: str) -> dic
     }
 
 
-def _build_attachment(result: dict, output_format: str, stamp: str) -> tuple[dict[str, Any], str]:
-    """Return (send_mail attachment meta, human body note)."""
-    from app.services.report_engine import export_report_csv, export_report_xlsx
+def _build_attachment(
+    result: dict, output_format: str, stamp: str,
+    *, db: Session | None = None, tenant_id=None,
+) -> tuple[dict[str, Any], str]:
+    """Return (send_mail attachment meta, human body note).
+
+    ``pdf`` 曾被静默替换成 xlsx（UI 上明明选了 PDF）—— 现在真出 PDF；
+    Chromium 未安装时才回落 xlsx，且在附件名里体现，避免收件人以为收到的就是 PDF。
+    """
+    from app.services import doc_engine
+    from app.services.report_engine import export_report_csv, export_report_pdf, export_report_xlsx
 
     fmt = (output_format or "excel").lower()
-    if fmt == "pdf":  # no PDF engine yet — fall back to xlsx
-        fmt = "xlsx"
+    if fmt == "pdf":
+        try:
+            payload = export_report_pdf(result, tenant_id=tenant_id, db=db)
+            filename = f"report_{stamp}.pdf"
+            return _attachment_payload(filename, payload, "application/pdf"), filename
+        except doc_engine.PDFEngineUnavailable:
+            log.warning("report schedule: PDF engine unavailable, attaching xlsx instead")
+            fmt = "xlsx"
     if fmt in ("excel", "xlsx"):
         payload = export_report_xlsx(result)
         filename = f"report_{stamp}.xlsx"
@@ -319,7 +333,10 @@ def _run_one(db: Session, schedule: ReportSchedule, now: datetime) -> int:
 
     result = execute_report(db, schedule.tenant_id, report, {})
     stamp = now.strftime("%Y%m%d_%H%M")
-    attachment, filename = _build_attachment(result, schedule.output_format, stamp)
+    attachment, filename = _build_attachment(
+        result, schedule.output_format, stamp,
+        db=db, tenant_id=schedule.tenant_id,
+    )
 
     recipients = [r for r in (schedule.recipients or []) if r]
     subject = f"[MariOS] Scheduled report: {report.report_name}"

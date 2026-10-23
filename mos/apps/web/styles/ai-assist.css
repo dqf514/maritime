@@ -1,0 +1,242 @@
+/* ── Mari Copilot — 全局弹出助手 + 表单内 AI 填充 ──
+   全部走设计 token，暗色主题（slate/indigo）自动适配。 */
+
+/* 悬浮唤起按钮（右下角） */
+.ai-fab {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 85;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ai-fab:hover {
+  filter: brightness(1.08);
+}
+
+/* 滑出面板 */
+.ai-dock {
+  position: fixed;
+  right: 12px;
+  bottom: 66px;
+  z-index: 86;
+  width: min(392px, calc(100vw - 24px));
+  max-height: min(70vh, 620px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.ai-dock-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: var(--gap-xs) var(--gap-sm);
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--border-light);
+}
+.ai-dock-title {
+  font-weight: 700;
+  font-size: var(--font-ui);
+}
+.ai-dock-meta {
+  flex: 1;
+  color: var(--muted);
+  font-size: var(--font-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-dock-ctx {
+  padding: 4px var(--gap-sm);
+  border-bottom: 1px solid var(--border-light);
+  color: var(--muted);
+  font-size: var(--font-label);
+  background: var(--chrome-bg);
+}
+.ai-dock-list {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: var(--gap-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+}
+.ai-dock-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-label);
+  line-height: 1.5;
+}
+.ai-msg {
+  max-width: 92%;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-label);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-msg-user {
+  align-self: flex-end;
+  background: var(--accent-bg);
+  border: 1px solid var(--border-light);
+}
+.ai-msg-assistant {
+  align-self: flex-start;
+  background: var(--chrome-bg);
+  border: 1px solid var(--border-light);
+}
+.ai-msg-busy {
+  color: var(--muted);
+}
+.ai-msg-src {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.ai-dock-actions {
+  display: flex;
+  gap: var(--gap-xs);
+  padding: var(--gap-xs) var(--gap-sm);
+  border-top: 1px solid var(--border-light);
+  flex-wrap: wrap;
+}
+.ai-dock-form {
+  display: flex;
+  gap: var(--gap-xs);
+  padding: var(--gap-xs) var(--gap-sm) var(--gap-sm);
+  border-top: 1px solid var(--border-light);
+}
+.ai-dock-form input {
+  flex: 1;
+  min-width: 0;
+  height: var(--input-h);
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--font-label);
+}
+.ai-dock-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+.ai-dock-billing {
+  padding: 3px var(--gap-sm) var(--gap-xs);
+  color: var(--muted);
+  font-size: var(--font-label);
+  border-top: 1px solid var(--border-light);
+}
+
+/* ── AiFill：表单内按钮 + 建议浮层 ── */
+.ai-fill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.ai-fill-btn {
+  white-space: nowrap;
+}
+.ai-fill-error {
+  margin-left: var(--gap-xs);
+  color: var(--danger);
+  font-size: var(--font-label);
+}
+.ai-fill-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 95;
+  width: min(340px, 80vw);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--gap-xs) var(--gap-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+.ai-fill-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  font-size: var(--font-label);
+  color: var(--ink);
+}
+.ai-fill-src {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.ai-fill-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.ai-fill-row {
+  display: flex;
+  gap: var(--gap-xs);
+  align-items: baseline;
+  font-size: var(--font-label);
+}
+.ai-fill-key {
+  flex-shrink: 0;
+  min-width: 78px;
+  color: var(--muted);
+  font-family: var(--font-mono, monospace);
+}
+.ai-fill-val {
+  color: var(--ink);
+  word-break: break-word;
+}
+.ai-fill-narrative {
+  color: var(--ink);
+  font-size: var(--font-label);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.ai-fill-actions {
+  display: flex;
+  gap: var(--gap-xs);
+  margin-top: 2px;
+}
+
+/* 邮件复核页的 AI 推荐条 */
+.ai-rec {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  padding: 2px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-bg);
+  font-size: var(--font-label);
+}
+.ai-rec-conf {
+  color: var(--muted);
+}

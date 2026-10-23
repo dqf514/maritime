@@ -12,6 +12,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     Numeric,
     String,
     Text,
@@ -85,6 +86,46 @@ class TimeCharterContract(Base):
     # Estimate.inputs["unpriced_components"], see services/unpriced_components.py).
     # Additive: null/empty → hire statements behave exactly as before.
     hire_components: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # ── P11 IMOS TC detail 对齐 — 头部标识 / 期限 / 交还船 / 右栏 ──
+    tc_code: Mapped[str | None] = mapped_column(Text, index=True)  # VESSEL-I#### / -O####，租户内唯一
+    beneficiary: Mapped[str | None] = mapped_column(Text)
+    date_fixed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fixed_by: Mapped[str | None] = mapped_column(Text)
+    company_code: Mapped[str | None] = mapped_column(String(16))
+    department: Mapped[str | None] = mapped_column(Text)
+    trade_area: Mapped[str | None] = mapped_column(String(32))
+    ref_no: Mapped[str | None] = mapped_column(Text)
+    payment_terms: Mapped[str | None] = mapped_column(Text)
+    contract_form: Mapped[str | None] = mapped_column(Text)  # TRIP TC / TCT / Bareboat ...
+    laycan_from_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    laycan_to_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Duration block（Min/Max -Days +Days E/L Redel.）
+    duration_min_days: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    duration_max_days: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    duration_minus_days: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    duration_plus_days: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    el_redel_min: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    el_redel_max: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_basis: Mapped[str | None] = mapped_column(String(32))  # Custom / Laycan / ...
+    use_local_time: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 计费与账务（IMOS header 右列）
+    billing_period: Mapped[str | None] = mapped_column(String(32))  # EVERY 15 DAYS / MONTHLY ...
+    billing_schedule: Mapped[str | None] = mapped_column(String(32))  # IN ADVANCE / IN ARREARS
+    rebillable_admin_fee_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    exchange_rate: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), default=Decimal("1"))
+    ref_contract: Mapped[str | None] = mapped_column(Text)
+    chtr_specialist: Mapped[str | None] = mapped_column(Text)
+    conf_date_gmt: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    intercompany: Mapped[bool] = mapped_column(Boolean, default=False)
+    ic_company: Mapped[str | None] = mapped_column(Text)
+    ic_adj_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    # 右栏 Summary
+    next_open_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    owner_comm_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    owner_comm_pay_to: Mapped[str | None] = mapped_column(Text)
+    valuation_id: Mapped[str | None] = mapped_column(Text)
+    remarks: Mapped[str | None] = mapped_column(Text)
+    notes_to_operations: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -141,6 +182,14 @@ class BrokerRule(Base):
     applies_to: Mapped[str] = mapped_column(
         String(16), default="all"
     )  # hire|off_hire|all
+    # ── P11 IMOS Broker grid 列 ──
+    payment_method: Mapped[str] = mapped_column(
+        String(24), default="pay_directly"
+    )  # pay_directly|deduct_from_hire
+    m_method: Mapped[int] = mapped_column(Integer, default=0)  # IMOS "M" 列（计佣口径）
+    from_gmt: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    to_gmt: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    remarks: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

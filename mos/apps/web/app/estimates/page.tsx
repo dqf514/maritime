@@ -18,6 +18,8 @@ import { Num } from "@/components/Num";
 import { StatusLegend } from "@/components/StatusLegend";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { PageGuide } from "@/components/PageGuide";
+import { AiFill } from "@/components/ai/AiFill";
+import { useAiContextBinder } from "@/components/ai/aiContextStore";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
@@ -335,6 +337,8 @@ function EstimatesPage() {
   const [vessels, setVessels] = useState<RefItem[]>([]);
   const [parties, setParties] = useState<RefItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(typeof query.id === "string" ? query.id : null);
+  // 全局 AI 助手上下文：把当前选中的估算交给 Copilot
+  useAiContextBinder({ entity_type: "estimate", entity_id: selectedId, page: "/estimates" });
   const [title, setTitle] = useState("New voyage estimate");
   const [mode, setMode] = useState<"voyage" | "tct">("voyage");
   const [vesselId, setVesselId] = useState("");
@@ -918,6 +922,21 @@ function EstimatesPage() {
               {t("page.estimates.to_cp", "To CP")}
             </button>
             <ValidateButton onValidate={validateEstimate} disabled={!selectedId} />
+            <AiFill
+              formFields={fields as unknown as Record<string, unknown>}
+              entityType="estimate"
+              entityId={selectedId || undefined}
+              onApply={(sug) => {
+                setFields((prev) => {
+                  const next = { ...prev };
+                  for (const [k, v] of Object.entries(sug)) {
+                    if (k in next) (next as Record<string, string>)[k] = v == null ? "" : String(v);
+                  }
+                  return next;
+                });
+                toast.success(t("ai.fill.applied", "已应用 AI 建议值 — 请复核后保存"));
+              }}
+            />
             <button className="btn btn-danger btn-sm" type="button" disabled={busy || !selectedId} onClick={() => setConfirmDel(true)}>
               {t("common.delete", "删除")}
             </button>

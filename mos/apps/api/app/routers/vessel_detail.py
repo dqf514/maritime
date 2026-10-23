@@ -22,13 +22,15 @@ from app.models_vessel_ext import (
     LoadlineZone,
     VesselContact,
     VesselPerformance,
+    VesselPortConsumption,
     VesselRoute,
+    VesselSpeedConsumption,
     VesselTank,
     VesselTceTarget,
     VesselTug,
     VesselVetting,
 )
-from app.models_wave1 import Vessel
+from app.models_wave1 import Counterparty, Vessel
 from app.security import AuthContext, require_module
 from app.services.tenant_guard import scoped_get, scoped_query
 
@@ -448,6 +450,34 @@ _CONSUMPTION_FIELDS = (
     "ifo_mdo_ratio",
 )
 _CAPACITY_FIELDS = ("max_lift_qty", "stowage_factor", "design_speed", "tank_capacity_total")
+# IMOS 对齐的顶层商业/主尺度/安全裕度字段（migration 26c3fccfee50）。它们不属于
+# dwt-draft spec 块，而是 vessels 表的直接列，故单独成组随 summary 下发。
+_IMOS_IDENTITY_FIELDS = ("vessel_code", "type_code", "ownership", "trade_area", "class_society")
+_IMOS_COMMERCIAL_FIELDS = ("daily_cost", "speed_laden", "speed_ballast")
+_IMOS_DIMENSION_FIELDS = (
+    "tpc", "capacity_bale_ft3", "capacity_grain_ft3", "deck_capacity_m3",
+    "vessel_type_corr", "scrubber",
+)
+_IMOS_SAFETY_FIELDS = (
+    "constants_sea", "constants_lakes", "fresh_water", "constants_others",
+    "beaufort", "sea_state", "sea_swell",
+)
+
+
+def _imos_out(v: Vessel) -> dict:
+    """Vessel 卡片的 IMOS 分组字段 —— 数值走 float，文本原样。"""
+
+    def _g(f: str):
+        val = getattr(v, f, None)
+        return _num(val) if isinstance(val, Decimal) else val
+
+    return {
+        "identity": {f: _g(f) for f in _IMOS_IDENTITY_FIELDS},
+        "commercial": {f: _g(f) for f in _IMOS_COMMERCIAL_FIELDS},
+        "dimensions": {f: _g(f) for f in _IMOS_DIMENSION_FIELDS},
+        "safety": {f: _g(f) for f in _IMOS_SAFETY_FIELDS},
+        "vessel_owner_id": str(v.vessel_owner_id) if v.vessel_owner_id else None,
+    }
 
 
 def _spec_out(v: Vessel) -> dict:
@@ -671,6 +701,35 @@ def vessel_summary(
     loadline_zones = _all(LoadlineZone, LoadlineZone.zone_name)
 
     spec = _spec_out(v)
+
+    # IMOS 停泊油耗矩阵 / 航速油耗曲线 —— 与其它子表一起随卡片下发（只读聚合，
+    # 写入走 /masterdata/vessels/{id}/port-consumptions 与 /speed-consumptions）。
+    port_cons = db.scalars(
+        scoped_query(db, VesselPortConsumption, tid)
+        .where(VesselPortConsumption.vessel_id == vessel_id)
+        .order_by(VesselPortConsumption.fuel_grade)
+    ).all()
+    speed_cons = db.scalars(
+        scoped_query(db, VesselSpeedConsumption, tid)
+        .where(VesselSpeedConsumption.vessel_id == vessel_id)
+        .order_by(VesselSpeedConsumption.speed)
+    ).all()
+    pc_fields = (
+        "fuel_grade", "unit", "gas_flag", "inactive", "capacity", "margin",
+        "loading", "discharge", "idle_on", "idle_off", "heat", "heat_plus",
+        "heat_plus_plus", "igs", "clean", "manoeuvring", "auxiliary",
+        "cooling", "boiler", "incinerator",
+    )
+    sc_fields = ("speed", "ballast_laden", "engine_load", "fuel_consumption", "basis")
+    port_consumptions = [_row_out(r, pc_fields) for r in port_cons]
+    speed_consumptions = [_row_out(r, sc_fields) for r in speed_cons]
+
+    # 船东显示名（vessel_owner_id → counterparties），跨租户交给 scoped_get 404 兜底。
+    owner_name = None
+    if v.vessel_owner_id:
+        owner = scoped_get(db, Counterparty, v.vessel_owner_id, tid)
+        owner_name = owner.name if owner is not None else None
+
     return {
         "vessel": {
             "id": str(v.id),
@@ -684,7 +743,11 @@ def vessel_summary(
             "consumption_sea": _num(v.consumption_sea),
             "consumption_port": _num(v.consumption_port),
             "status": v.status,
+            "fleet_group": v.fleet_group,
+            "updated_at": v.updated_at.isoformat() if v.updated_at else None,
         },
+        "imos": _imos_out(v),
+        "vessel_owner_name": owner_name,
         "spec": spec,
         "contacts": contacts,
         "routes": routes,
@@ -694,6 +757,8 @@ def vessel_summary(
         "tce_targets": tce_targets,
         "vettings": vettings,
         "loadline_zones": loadline_zones,
+        "port_consumptions": port_consumptions,
+        "speed_consumptions": speed_consumptions,
         "counts": {
             "contacts": len(contacts),
             "routes": len(routes),
@@ -703,5 +768,7 @@ def vessel_summary(
             "tce_targets": len(tce_targets),
             "vettings": len(vettings),
             "loadline_zones": len(loadline_zones),
+            "port_consumptions": len(port_consumptions),
+            "speed_consumptions": len(speed_consumptions),
         },
     }

@@ -142,7 +142,39 @@ def _redact_body_preview(body: str) -> str:
     return preview[:2000]
 
 
-def _smtp_send(plat: PlatformIdentitySettings, to_email: str, subject: str, body: str) -> dict[str, Any]:
+def _attachment_payloads(atts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """统一附件载荷形状 → ``{filename, content_type, payload(bytes)}``。
+
+    支持 ``content(bytes)`` 与 ``content_b64(str)`` 两种来源（Graph 通道接受
+    base64，SMTP 通道要原始字节）。坏条目直接丢弃而不是让整封信发不出去。
+    """
+    import base64
+
+    out: list[dict[str, Any]] = []
+    for a in atts or []:
+        if not isinstance(a, dict):
+            continue
+        name = str(a.get("filename") or "attachment")
+        ctype = str(a.get("content_type") or "application/octet-stream")
+        raw = a.get("content")
+        if raw is None and a.get("content_b64"):
+            try:
+                raw = base64.b64decode(a["content_b64"])
+            except Exception:  # noqa: BLE001 — 坏附件不拖垮整封信
+                continue
+        if not isinstance(raw, (bytes, bytearray)) or not raw:
+            continue
+        out.append({"filename": name, "content_type": ctype, "payload": bytes(raw)})
+    return out
+
+
+def _smtp_send(
+    plat: PlatformIdentitySettings,
+    to_email: str,
+    subject: str,
+    body: str,
+    attachments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Deliver one mail over the platform-configured SMTP relay.
 
     Raises on any transport/auth failure — the caller logs the error and falls
@@ -174,6 +206,21 @@ def _smtp_send(plat: PlatformIdentitySettings, to_email: str, subject: str, body
     msg["Subject"] = subject
     msg.set_content(body)
 
+    # PDF 等单据附件 —— SMTP 与 Graph 现已对齐（此前 SMTP 静默丢弃）
+    attached = 0
+    for a in _attachment_payloads(attachments):
+        try:
+            main, _, sub = a["content_type"].partition("/")
+            msg.add_attachment(
+                a["payload"],
+                maintype=main or "application",
+                subtype=sub or "octet-stream",
+                filename=a["filename"],
+            )
+            attached += 1
+        except Exception:  # noqa: BLE001 — 单个附件失败不应阻断投递
+            continue
+
     ctx = ssl.create_default_context()
     started = datetime.now().astimezone()
     if security == "ssl":
@@ -191,7 +238,8 @@ def _smtp_send(plat: PlatformIdentitySettings, to_email: str, subject: str, body
                 smtp.login(username, password)
             smtp.send_message(msg)
     elapsed = (datetime.now().astimezone() - started).total_seconds()
-    return {"host": host, "port": port, "security": security, "latency_ms": int(elapsed * 1000)}
+    return {"host": host, "port": port, "security": security,
+            "latency_ms": int(elapsed * 1000), "attachments": attached}
 
 
 def send_mail(
@@ -218,7 +266,9 @@ def send_mail(
     atts = list(attachments or [])
     if atts:
         send_meta["attachments"] = [
-            {"filename": a.get("filename"), "size": a.get("size") or len(a.get("content") or b"")}
+            {"filename": a.get("filename"),
+             "size": a.get("size") or len(a.get("content") or b"")
+                     or (len(a["content_b64"]) * 3 // 4 if a.get("content_b64") else 0)}
             for a in atts
         ]
     # Prefer Graph when channel is graph and tenant has Office link (or stub)
@@ -234,10 +284,10 @@ def send_mail(
             status = "fallback_console"
             send_meta["graph_error"] = str(exc)
     elif channel in {"smtp", "email.smtp"}:
-        # Real SMTP delivery via the platform-configured relay. Attachments are
-        # not supported on this channel yet (Graph-only feature).
+        # Real SMTP delivery via the platform-configured relay.
+        # 附件此前是 Graph 独有 —— SMTP 通道现在同样支持（PDF 单据外发靠它）。
         try:
-            send_meta["smtp"] = _smtp_send(plat, to_email, subject, body)
+            send_meta["smtp"] = _smtp_send(plat, to_email, subject, body, atts)
             channel = "smtp"
         except Exception as exc:  # noqa: BLE001
             status = "fallback_console"

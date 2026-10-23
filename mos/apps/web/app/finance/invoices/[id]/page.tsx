@@ -471,7 +471,13 @@ function InvoiceDetailPage() {
       {err ? <p className="err-text">{err}</p> : null}
 
       <div className={showDraftWatermark ? "draft-watermark" : undefined}>
-      <PrintDoc title={t("page.finance.invoice_doc", "INVOICE")} no={inv?.invoice_no} meta={inv ? `${inv.status} · ${inv.currency || "USD"}` : undefined}>
+      <PrintDoc
+        title={t("page.finance.invoice_doc", "INVOICE")}
+        no={inv?.invoice_no}
+        meta={inv ? `${inv.status} · ${inv.currency || "USD"}` : undefined}
+        entityType="invoice"
+        entityId={id}
+      >
       <div className="panel">
         <div className="form-grid">
           <label>

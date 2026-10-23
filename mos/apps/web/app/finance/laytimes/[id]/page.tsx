@@ -233,7 +233,13 @@ export default function LaytimeDetailPage() {
       {!st ? (
         <SkeletonCard />
       ) : (
-        <PrintDoc title={t("page.finance.lt_statement", "LAYTIME STATEMENT")} no={st.id?.slice(0, 8)} meta={st.terms || undefined}>
+        <PrintDoc
+          title={t("page.finance.lt_statement", "LAYTIME STATEMENT")}
+          no={st.id?.slice(0, 8)}
+          meta={st.terms || undefined}
+          entityType="laytime_statement"
+          entityId={st.id || id}
+        >
           <div className="panel">
             <div className="desk-results">
               <div className="kv-box">

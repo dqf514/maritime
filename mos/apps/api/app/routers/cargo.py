@@ -16,11 +16,12 @@ Route order matters: ``/cargo/book`` is registered before ``/cargo/{cargo_id}``.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -32,9 +33,23 @@ from app.services.state_machine import CARGO_TRANSITIONS, transition
 from app.services.tenant_guard import scoped_get
 
 from app.models_cargo import Cargo
+from app.models_charter_ext import CargoItineraryRow, CargoPortOption
 from app.models_domain import Voyage
 
 router = APIRouter(tags=["Cargo"])
+
+# P11 IMOS Cargo detail 对齐 — 头部 / CP 条款 / Laycan 四字段 / 支付块
+_CARGO_P11_FIELDS = (
+    "cargo_name_id", "api_gravity", "specific_gravity",
+    "cp_date", "cp_form", "option_pct", "option_type", "min_qty", "max_qty",
+    "freight_type", "currency", "exchange_rate", "min_inv_qty",
+    "freight_via", "demurrage_via", "cp_draft_m", "coordinator",
+    "reference_no", "booking_no", "vc_in_id", "nominated_vessel_id", "voyage_no",
+    "contract_link", "company_code", "department", "trade_area",
+    "laycan_from_override", "laycan_to_override", "laycan_confirmed",
+    "remittance_bank", "invoice_pct", "balance_pct",
+    "payment_terms_code", "payment_terms_desc",
+)
 
 
 class CargoIn(BaseModel):
@@ -53,6 +68,41 @@ class CargoIn(BaseModel):
     charter_id: UUID | None = None
     coa_id: UUID | None = None
     notes: str | None = None
+    # ── P11 IMOS Cargo detail 对齐 ──
+    cargo_name_id: UUID | None = None
+    api_gravity: float | None = None
+    specific_gravity: float | None = None
+    cp_date: date | None = None
+    cp_form: str | None = None
+    option_pct: float | None = None
+    option_type: str | None = None  # MOLOO|MINLO|MOLOA...
+    min_qty: float | None = None
+    max_qty: float | None = None
+    freight_type: str | None = None  # F|L|LS
+    currency: str | None = None
+    exchange_rate: float | None = None
+    min_inv_qty: float | None = None
+    freight_via: str | None = None
+    demurrage_via: str | None = None
+    cp_draft_m: float | None = None
+    coordinator: str | None = None
+    reference_no: str | None = None
+    booking_no: str | None = None
+    vc_in_id: str | None = None
+    nominated_vessel_id: UUID | None = None
+    voyage_no: str | None = None
+    contract_link: str | None = None
+    company_code: str | None = None
+    department: str | None = None
+    trade_area: str | None = None
+    laycan_from_override: datetime | None = None
+    laycan_to_override: datetime | None = None
+    laycan_confirmed: bool | None = None
+    remittance_bank: str | None = None
+    invoice_pct: float | None = None
+    balance_pct: float | None = None
+    payment_terms_code: str | None = None
+    payment_terms_desc: str | None = None
 
 
 class CargoPatch(BaseModel):
@@ -71,6 +121,41 @@ class CargoPatch(BaseModel):
     charter_id: UUID | None = None
     coa_id: UUID | None = None
     notes: str | None = None
+    # ── P11 IMOS Cargo detail 对齐 ──
+    cargo_name_id: UUID | None = None
+    api_gravity: float | None = None
+    specific_gravity: float | None = None
+    cp_date: date | None = None
+    cp_form: str | None = None
+    option_pct: float | None = None
+    option_type: str | None = None
+    min_qty: float | None = None
+    max_qty: float | None = None
+    freight_type: str | None = None
+    currency: str | None = None
+    exchange_rate: float | None = None
+    min_inv_qty: float | None = None
+    freight_via: str | None = None
+    demurrage_via: str | None = None
+    cp_draft_m: float | None = None
+    coordinator: str | None = None
+    reference_no: str | None = None
+    booking_no: str | None = None
+    vc_in_id: str | None = None
+    nominated_vessel_id: UUID | None = None
+    voyage_no: str | None = None
+    contract_link: str | None = None
+    company_code: str | None = None
+    department: str | None = None
+    trade_area: str | None = None
+    laycan_from_override: datetime | None = None
+    laycan_to_override: datetime | None = None
+    laycan_confirmed: bool | None = None
+    remittance_bank: str | None = None
+    invoice_pct: float | None = None
+    balance_pct: float | None = None
+    payment_terms_code: str | None = None
+    payment_terms_desc: str | None = None
 
 
 class AllocateIn(BaseModel):
@@ -166,6 +251,10 @@ def cargo_book_rows(
             "discharge_port": ports.get(str(r.disch_port_id), "") if r.disch_port_id else "",
             "laycan_from": r.laycan_from.isoformat() if r.laycan_from else None,
             "laycan_to": r.laycan_to.isoformat() if r.laycan_to else None,
+            # P11 IMOS Cargo list：Laycan 本地 + GMT（override）并排显示
+            "laycan_from_override": r.laycan_from_override.isoformat() if r.laycan_from_override else None,
+            "laycan_to_override": r.laycan_to_override.isoformat() if r.laycan_to_override else None,
+            "laycan_confirmed": bool(r.laycan_confirmed),
             "etd": None,
             "eta": None,
             "status": r.status,
@@ -193,9 +282,9 @@ def update_cargo(
     db: Session = Depends(get_db),
 ):
     row = _get_cargo(db, cargo_id, auth.tenant_id)
-    # model_dump() keeps explicit nulls as "don't care" for PATCH semantics:
-    # update_cargo ignores None values (see services.cargo.update_cargo).
-    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    # exclude_unset —— 只提交显式字段：显式 null 用于清空（IMOS 编辑器需要能清空支付块/附件字段），
+    # 未提交的字段保持原值（与 CharterUpdate 的 PATCH 语义一致）。
+    fields = body.model_dump(exclude_unset=True)
     row = cargo_svc.update_cargo(db, row, **fields)
     return cargo_svc.cargo_public(row)
 
@@ -242,3 +331,254 @@ def allocate_cargo(
     _get_cargo(db, cargo_id, auth.tenant_id)  # tenant check before the service writes
     row = cargo_svc.allocate_to_voyage(db, cargo_id, body.voyage_id)
     return cargo_svc.cargo_public(row)
+
+
+# —— P11: Cargo Itinerary / Options grids（IMOS Cargo detail 表格） ——
+
+
+class CargoItineraryIn(BaseModel):
+    seq: int = 0
+    flag: str = "L"  # L=load | D=disch
+    port_id: UUID | None = None
+    port_name: str | None = None
+    berth: str | None = None
+    qty: float | None = None
+    ld_rate: float | None = None
+    ru: str | None = None
+    terms: str | None = None
+    incoterms: str | None = None
+    port_exp: float | None = None
+    oexp_per_t: float | None = None
+    liner_exp: float | None = None
+    draft: float | None = None
+    unit: str | None = None
+    salinity: float | None = None
+
+
+class CargoItineraryPatch(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    seq: int | None = None
+    flag: str | None = None
+    port_id: UUID | None = None
+    port_name: str | None = None
+    berth: str | None = None
+    qty: float | None = None
+    ld_rate: float | None = None
+    ru: str | None = None
+    terms: str | None = None
+    incoterms: str | None = None
+    port_exp: float | None = None
+    oexp_per_t: float | None = None
+    liner_exp: float | None = None
+    draft: float | None = None
+    unit: str | None = None
+    salinity: float | None = None
+
+
+def _itin_public(r: CargoItineraryRow) -> dict:
+    return {
+        "id": str(r.id),
+        "cargo_id": str(r.cargo_id),
+        "seq": r.seq,
+        "flag": r.flag,
+        "port_id": str(r.port_id) if r.port_id else None,
+        "port_name": r.port_name,
+        "berth": r.berth,
+        "qty": float(r.qty) if r.qty is not None else None,
+        "ld_rate": float(r.ld_rate) if r.ld_rate is not None else None,
+        "ru": r.ru,
+        "terms": r.terms,
+        "incoterms": r.incoterms,
+        "port_exp": float(r.port_exp) if r.port_exp is not None else None,
+        "oexp_per_t": float(r.oexp_per_t) if r.oexp_per_t is not None else None,
+        "liner_exp": float(r.liner_exp) if r.liner_exp is not None else None,
+        "draft": float(r.draft) if r.draft is not None else None,
+        "unit": r.unit,
+        "salinity": float(r.salinity) if r.salinity is not None else None,
+    }
+
+
+@router.get("/cargo/{cargo_id}/itinerary")
+def list_cargo_itinerary(
+    cargo_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_cargo(db, cargo_id, auth.tenant_id)
+    rows = db.scalars(
+        select(CargoItineraryRow)
+        .where(
+            CargoItineraryRow.tenant_id == auth.tenant_id,
+            CargoItineraryRow.cargo_id == cargo_id,
+        )
+        .order_by(CargoItineraryRow.seq, CargoItineraryRow.created_at)
+    ).all()
+    return [_itin_public(r) for r in rows]
+
+
+@router.post("/cargo/{cargo_id}/itinerary", status_code=201)
+def add_cargo_itinerary(
+    cargo_id: UUID,
+    body: CargoItineraryIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_cargo(db, cargo_id, auth.tenant_id)
+    row = CargoItineraryRow(
+        tenant_id=auth.tenant_id,
+        cargo_id=cargo_id,
+        **body.model_dump(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _itin_public(row)
+
+
+@router.patch("/cargo/{cargo_id}/itinerary/{row_id}")
+def update_cargo_itinerary(
+    cargo_id: UUID,
+    row_id: UUID,
+    body: CargoItineraryPatch,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_cargo(db, cargo_id, auth.tenant_id)
+    row = scoped_get(db, CargoItineraryRow, row_id, auth.tenant_id)
+    if not row or row.cargo_id != cargo_id:
+        raise HTTPException(404, "Itinerary row not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return _itin_public(row)
+
+
+@router.delete("/cargo/{cargo_id}/itinerary/{row_id}")
+def delete_cargo_itinerary(
+    cargo_id: UUID,
+    row_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_cargo(db, cargo_id, auth.tenant_id)
+    row = scoped_get(db, CargoItineraryRow, row_id, auth.tenant_id)
+    if not row or row.cargo_id != cargo_id:
+        raise HTTPException(404, "Itinerary row not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+class CargoOptionIn(BaseModel):
+    kind: str  # load | disch
+    seq: int = 0
+    port_area: str | None = None
+    ld_rate: float | None = None
+    ru: str | None = None
+    terms: str | None = None
+    tt_days: float | None = None
+    pexp: float | None = None
+    draft: float | None = None
+
+
+class CargoOptionPatch(BaseModel):
+    kind: str | None = None
+    seq: int | None = None
+    port_area: str | None = None
+    ld_rate: float | None = None
+    ru: str | None = None
+    terms: str | None = None
+    tt_days: float | None = None
+    pexp: float | None = None
+    draft: float | None = None
+
+
+def _opt_public(r: CargoPortOption) -> dict:
+    return {
+        "id": str(r.id),
+        "cargo_id": str(r.cargo_id),
+        "kind": r.kind,
+        "seq": r.seq,
+        "port_area": r.port_area,
+        "ld_rate": float(r.ld_rate) if r.ld_rate is not None else None,
+        "ru": r.ru,
+        "terms": r.terms,
+        "tt_days": float(r.tt_days) if r.tt_days is not None else None,
+        "pexp": float(r.pexp) if r.pexp is not None else None,
+        "draft": float(r.draft) if r.draft is not None else None,
+    }
+
+
+@router.get("/cargo/{cargo_id}/options")
+def list_cargo_options(
+    cargo_id: UUID,
+    kind: str | None = Query(None, pattern="^(load|disch)$"),
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_cargo(db, cargo_id, auth.tenant_id)
+    q = select(CargoPortOption).where(
+        CargoPortOption.tenant_id == auth.tenant_id,
+        CargoPortOption.cargo_id == cargo_id,
+    )
+    if kind:
+        q = q.where(CargoPortOption.kind == kind)
+    rows = db.scalars(q.order_by(CargoPortOption.kind, CargoPortOption.seq)).all()
+    return [_opt_public(r) for r in rows]
+
+
+@router.post("/cargo/{cargo_id}/options", status_code=201)
+def add_cargo_option(
+    cargo_id: UUID,
+    body: CargoOptionIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_cargo(db, cargo_id, auth.tenant_id)
+    if body.kind not in ("load", "disch"):
+        raise HTTPException(422, "kind must be load or disch")
+    row = CargoPortOption(
+        tenant_id=auth.tenant_id,
+        cargo_id=cargo_id,
+        **body.model_dump(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _opt_public(row)
+
+
+@router.patch("/cargo/{cargo_id}/options/{row_id}")
+def update_cargo_option(
+    cargo_id: UUID,
+    row_id: UUID,
+    body: CargoOptionPatch,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_cargo(db, cargo_id, auth.tenant_id)
+    row = scoped_get(db, CargoPortOption, row_id, auth.tenant_id)
+    if not row or row.cargo_id != cargo_id:
+        raise HTTPException(404, "Option row not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return _opt_public(row)
+
+
+@router.delete("/cargo/{cargo_id}/options/{row_id}")
+def delete_cargo_option(
+    cargo_id: UUID,
+    row_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_cargo(db, cargo_id, auth.tenant_id)
+    row = scoped_get(db, CargoPortOption, row_id, auth.tenant_id)
+    if not row or row.cargo_id != cargo_id:
+        raise HTTPException(404, "Option row not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}

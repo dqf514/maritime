@@ -325,17 +325,20 @@
   outline: 1px solid var(--accent);
 }
 
-/* Print doc */
+/* Print doc —— 信头用租户品牌色（brand_primary），未设置时退回边框色 */
 .print-doc-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: var(--gap-md);
   padding: var(--gap-sm) 0;
-  border-bottom: 2px solid var(--border);
+  border-bottom: 2px solid var(--print-brand, var(--border));
   margin-bottom: var(--gap-sm);
 }
-.print-doc-title { text-align: right; }
+.print-doc-company { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.print-doc-logo { max-height: 44px; max-width: 160px; object-fit: contain; margin-bottom: 4px; }
+.print-doc-title { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.print-doc-h2 { margin: 0; }
 @media print {
   .print-doc-head { break-inside: avoid; }
   .print-doc-body .panel { border: none; box-shadow: none; padding: 0; }

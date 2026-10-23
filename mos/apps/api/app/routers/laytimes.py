@@ -47,30 +47,68 @@ router = APIRouter()
 log = logging.getLogger("marios.laytimes")
 
 
-def _office_escalate_laytime(db: Session, tenant_id, row) -> None:
-    """装卸时间定稿 → 凭证 CSV 归档 OneDrive + Teams 频道提醒（软失败，绝不影响定稿本身）。"""
-    try:
-        import csv
-        import io
-        import json as _json
+def _laytime_archive_bytes(db: Session, tenant_id, row) -> tuple[bytes, str, str, dict]:
+    """定稿用的计算书文件 —— PDF 优先，缺引擎退回凭证 CSV。
 
+    返回 ``(content, filename, content_type, meta)``。注意 entity_type 双轨：
+    office_hub 归档路径沿用历史的 ``laytime``，模板体系用的是 ``laytime_statement``。
+    """
+    meta = {"status": row.status, "booking_reference": row.booking_reference}
+    from app.services import doc_engine
+
+    try:
+        result = doc_engine.render_document(
+            db, tenant_id,
+            entity_type="laytime_statement", entity_id=row.id,
+        )
+        pdf = doc_engine.html_to_pdf(result.html)
+        doc_engine.record_render(
+            db, tenant_id,
+            entity_type="laytime_statement", entity_id=row.id,
+            result=result, content=pdf, fmt="pdf",
+            content_type="application/pdf",
+            snapshot=doc_engine.build_letterhead(db, tenant_id),
+        )
+        meta["template_version"] = result.template_version
+        return pdf, result.filename, "application/pdf", meta
+    except doc_engine.PDFEngineUnavailable:
+        pass
+    except Exception:  # noqa: BLE001
+        log.exception("laytime PDF archive failed for %s, falling back to CSV", row.id)
+
+    import csv
+    import io
+    import json as _json
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["section", "key", "value"])
+    for section, data in (("input", row.inputs or {}), ("result", row.results or {})):
+        for k, v in sorted(data.items()):
+            w.writerow([section, k, _json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v])
+    return (buf.getvalue().encode("utf-8-sig"),
+            f"laytime_statement_{row.id}.csv", "text/csv", meta)
+
+
+def _office_escalate_laytime(db: Session, tenant_id, row) -> None:
+    """装卸时间定稿 → 正式 PDF 归档 OneDrive + Teams 频道提醒（软失败，绝不影响定稿本身）。
+
+    优先出租户模板渲染的 PDF（带公司抬头，对手方能直接收）；Chromium 未装时退回
+    凭证 CSV —— 归档链路不能因为缺 PDF 引擎就断。
+    """
+    try:
         from app.services import office_hub
 
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(["section", "key", "value"])
-        for section, data in (("input", row.inputs or {}), ("result", row.results or {})):
-            for k, v in sorted(data.items()):
-                w.writerow([section, k, _json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v])
+        content, filename, ctype, meta = _laytime_archive_bytes(db, tenant_id, row)
         doc = office_hub.push_entity_document(
             db,
             tenant_id,
             entity_type="laytime",
             entity_id=row.id,
-            filename=f"laytime_statement_{row.id}.csv",
-            content=buf.getvalue().encode("utf-8-sig"),
-            content_type="text/csv",
-            meta={"status": row.status, "booking_reference": row.booking_reference},
+            filename=filename,
+            content=content,
+            content_type=ctype,
+            meta=meta,
         )
         lines = [f"Laytime finalized: {row.booking_reference or row.id}"]
         if doc:

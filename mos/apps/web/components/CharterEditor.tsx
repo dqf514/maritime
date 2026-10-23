@@ -67,6 +67,54 @@ type Charter = {
   planning_periods: Record<string, unknown> | null;
   rev_exp: Record<string, unknown> | null;
   properties: Record<string, unknown> | null;
+  // ── P11 IMOS Fixture header ──
+  fixture_no?: string | null;
+  voyage_no?: string | null;
+  opr_type?: string | null;
+  performing_vessel_id?: string | null;
+  chtr_specialist?: string | null;
+  ops_coordinator?: string | null;
+  commence_at?: string | null;
+  ballast_bonus?: number | null;
+  in_progress_voyage?: boolean;
+  ls_only?: boolean;
+  piracy_routing?: string | null;
+  dwf_pct?: number | null;
+  company_code?: string | null;
+  lob?: string | null;
+  trade_area?: string | null;
+};
+
+// P11 — Fixture 内嵌航次计算器（Miles/Spd/SDays/…/PortExp/LinerExp，带页脚合计）
+type ItinRow = {
+  id: string;
+  seq: number;
+  port: string | null;
+  flag: string;
+  cargo: string | null;
+  ld_qty: number | null;
+  ld_rate: number | null;
+  terms: string | null;
+  miles: number | null;
+  speed: number | null;
+  sea_days: number | null;
+  xsd: number | null;
+  port_days: number | null;
+  xpd: number | null;
+  port_exp: number | null;
+  liner_exp: number | null;
+  oexp_per_t: number | null;
+  remarks: string | null;
+};
+
+type ItinTotals = {
+  rows: number;
+  miles: number;
+  sea_days: number;
+  port_days: number;
+  xpd: number;
+  port_exp: number;
+  liner_exp: number;
 };
 
 type MasterContractOpt = { id: string; contract_no: string; title: string; contract_type: string; status: string };
@@ -378,6 +426,19 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
     planning_json: "{}",
     revexp_json: "{}",
     properties_json: "{}",
+    // P11 IMOS Fixture header
+    voyage_no: "",
+    opr_type: "",
+    chtr_specialist: "",
+    ops_coordinator: "",
+    ballast_bonus: "",
+    ls_only: false as boolean,
+    piracy_routing: "",
+    dwf_pct: "",
+    company_code: "",
+    lob: "",
+    trade_area: "",
+    in_progress_voyage: false as boolean,
     ...EMPTY_TERMS,
   });
   const [tab, setTab] = useState("general");
@@ -397,6 +458,27 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
   const [liftPeriod, setLiftPeriod] = useState("2026-Q4");
   const [liftQty, setLiftQty] = useState("50000");
   const [brModalOpen, setBrModalOpen] = useState(false);
+  // P11 — Fixture 航次计算器
+  const [itinRows, setItinRows] = useState<ItinRow[]>([]);
+  const [itinTotals, setItinTotals] = useState<ItinTotals | null>(null);
+  const [itinBusy, setItinBusy] = useState(false);
+  const [itinForm, setItinForm] = useState({
+    seq: "",
+    port: "",
+    flag: "L",
+    cargo: "",
+    ld_qty: "",
+    ld_rate: "",
+    terms: "",
+    miles: "",
+    speed: "",
+    sea_days: "",
+    xsd: "",
+    port_days: "",
+    xpd: "",
+    port_exp: "",
+    liner_exp: "",
+  });
   const [liftModalOpen, setLiftModalOpen] = useState(false);
   const [amendModalOpen, setAmendModalOpen] = useState(false);
   const [err, setErr] = useState("");
@@ -483,6 +565,19 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       planning_json: JSON.stringify(r.planning_periods ?? {}, null, 2),
       revexp_json: JSON.stringify(r.rev_exp ?? {}, null, 2),
       properties_json: JSON.stringify(r.properties ?? {}, null, 2),
+      // P11 IMOS Fixture header
+      voyage_no: r.voyage_no || "",
+      opr_type: r.opr_type || "",
+      chtr_specialist: r.chtr_specialist || "",
+      ops_coordinator: r.ops_coordinator || "",
+      ballast_bonus: numStr(r.ballast_bonus),
+      ls_only: Boolean(r.ls_only),
+      piracy_routing: r.piracy_routing || "",
+      dwf_pct: numStr(r.dwf_pct),
+      company_code: r.company_code || "",
+      lob: r.lob || "",
+      trade_area: r.trade_area || "",
+      in_progress_voyage: Boolean(r.in_progress_voyage),
     });
   }, [charterId]);
 
@@ -513,6 +608,57 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       });
   }, [loadCharter, loadSide]);
 
+  const loadItinerary = useCallback(async () => {
+    setItinBusy(true);
+    try {
+      const res = await apiGet(`/api/v1/charters/${charterId}/itinerary-rows`);
+      setItinRows(Array.isArray(res?.items) ? res.items : []);
+      setItinTotals(res?.totals ?? null);
+    } catch {
+      setItinRows([]);
+      setItinTotals(null);
+    } finally {
+      setItinBusy(false);
+    }
+  }, [charterId]);
+
+  // P11 — voyage calculator row CRUD（合计由后端 totals 计算）
+  async function addItinRow() {
+    try {
+      await apiPost(`/api/v1/charters/${charterId}/itinerary-rows`, {
+        seq: itinForm.seq === "" ? itinRows.length + 1 : Number(itinForm.seq),
+        port: itinForm.port || null,
+        flag: itinForm.flag,
+        cargo: itinForm.cargo || null,
+        ld_qty: itinForm.ld_qty === "" ? null : Number(itinForm.ld_qty),
+        ld_rate: itinForm.ld_rate === "" ? null : Number(itinForm.ld_rate),
+        terms: itinForm.terms || null,
+        miles: itinForm.miles === "" ? null : Number(itinForm.miles),
+        speed: itinForm.speed === "" ? null : Number(itinForm.speed),
+        sea_days: itinForm.sea_days === "" ? null : Number(itinForm.sea_days),
+        xsd: itinForm.xsd === "" ? null : Number(itinForm.xsd),
+        port_days: itinForm.port_days === "" ? null : Number(itinForm.port_days),
+        xpd: itinForm.xpd === "" ? null : Number(itinForm.xpd),
+        port_exp: itinForm.port_exp === "" ? null : Number(itinForm.port_exp),
+        liner_exp: itinForm.liner_exp === "" ? null : Number(itinForm.liner_exp),
+      });
+      setItinForm({ ...itinForm, seq: "", port: "", cargo: "", ld_qty: "", ld_rate: "", terms: "", miles: "", speed: "", sea_days: "", xsd: "", port_days: "", xpd: "", port_exp: "", liner_exp: "" });
+      toast.success(t("common.saved", "已保存"));
+      await loadItinerary();
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
+  async function delItinRow(id: string) {
+    try {
+      await apiDelete(`/api/v1/charters/${charterId}/itinerary-rows/${id}`);
+      await loadItinerary();
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
   useEffect(() => {
     if (!charter) return;
     if (charter.charter_type === "coa") {
@@ -525,7 +671,9 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
         .then((s: HireSummary) => setHireSummary(s))
         .catch((ex: unknown) => setHireErr(ex instanceof Error ? ex.message : String(ex)));
     }
-  }, [charter]);
+    // P11 — voyage calculator rows（任何 fixture 类型都可有行程）
+    loadItinerary();
+  }, [charter, loadItinerary]);
 
   async function save() {
     if (!charter) return;
@@ -570,6 +718,19 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
           codes: clauseCodes,
           ...(edit.notes ? { notes: edit.notes } : {}),
         },
+        // ── P11 IMOS Fixture header ──
+        voyage_no: edit.voyage_no || null,
+        opr_type: edit.opr_type || null,
+        chtr_specialist: edit.chtr_specialist || null,
+        ops_coordinator: edit.ops_coordinator || null,
+        ballast_bonus: edit.ballast_bonus === "" ? null : Number(edit.ballast_bonus),
+        ls_only: Boolean(edit.ls_only),
+        piracy_routing: edit.piracy_routing || null,
+        dwf_pct: edit.dwf_pct === "" ? null : Number(edit.dwf_pct),
+        company_code: edit.company_code || null,
+        lob: edit.lob || null,
+        trade_area: edit.trade_area || null,
+        in_progress_voyage: Boolean(edit.in_progress_voyage),
       });
       toast.success(t("common.saved", "已保存"));
       await loadCharter();
@@ -793,6 +954,121 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
     );
   }
 
+  // P11 IMOS Fixture voyage calculator — 页脚合计：Miles / S Days / P Days / XPD / PortExp / LinerExp
+  const itinColumns: ColumnDef<ItinRow>[] = [
+    { key: "seq", title: "#", width: 46, align: "right", value: (r) => r.seq },
+    { key: "port", title: t("page.fixtures.port", "Port"), minWidth: 130, value: (r) => r.port || "", render: (v) => (v == null || v === "" ? "—" : String(v)) },
+    { key: "flag", title: t("page.fixtures.flag", "F"), width: 44, value: (r) => r.flag },
+    { key: "cargo", title: t("page.fixtures.cargo", "Cargo"), minWidth: 120, value: (r) => r.cargo || "", render: (v) => (v == null || v === "" ? "—" : String(v)) },
+    {
+      key: "ld_qty",
+      title: t("page.fixtures.ld_qty", "L/D Qty"),
+      width: 100,
+      align: "right",
+      agg: "sum",
+      value: (r) => r.ld_qty ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toLocaleString()),
+    },
+    {
+      key: "ld_rate",
+      title: t("page.fixtures.ld_rate", "L/D Rate"),
+      width: 95,
+      align: "right",
+      value: (r) => r.ld_rate ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toLocaleString()),
+    },
+    { key: "terms", title: t("page.fixtures.terms", "Terms"), width: 90, value: (r) => r.terms || "", render: (v) => (v == null || v === "" ? "—" : String(v)) },
+    {
+      key: "miles",
+      title: t("page.fixtures.miles", "Miles"),
+      width: 85,
+      align: "right",
+      agg: "sum",
+      value: (r) => r.miles ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toLocaleString()),
+    },
+    {
+      key: "speed",
+      title: t("page.fixtures.speed", "Spd"),
+      width: 65,
+      align: "right",
+      value: (r) => r.speed ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toFixed(1)),
+    },
+    {
+      key: "sea_days",
+      title: t("page.fixtures.sea_days", "S Days"),
+      width: 80,
+      align: "right",
+      agg: "sum",
+      value: (r) => r.sea_days ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toFixed(2)),
+    },
+    {
+      key: "xsd",
+      title: t("page.fixtures.xsd", "XSD"),
+      width: 70,
+      align: "right",
+      value: (r) => r.xsd ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toFixed(2)),
+    },
+    {
+      key: "port_days",
+      title: t("page.fixtures.port_days", "P Days"),
+      width: 80,
+      align: "right",
+      agg: "sum",
+      value: (r) => r.port_days ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toFixed(2)),
+    },
+    {
+      key: "xpd",
+      title: t("page.fixtures.xpd", "XPD"),
+      width: 95,
+      align: "right",
+      agg: "sum",
+      value: (r) => r.xpd ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toLocaleString()),
+    },
+    {
+      key: "port_exp",
+      title: t("page.fixtures.port_exp", "PortExp"),
+      width: 100,
+      align: "right",
+      agg: "sum",
+      value: (r) => r.port_exp ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toLocaleString()),
+    },
+    {
+      key: "liner_exp",
+      title: t("page.fixtures.liner_exp", "LinerExp"),
+      width: 100,
+      align: "right",
+      agg: "sum",
+      value: (r) => r.liner_exp ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toLocaleString()),
+    },
+    {
+      key: "oexp_per_t",
+      title: t("page.fixtures.oexp_per_t", "OExp/t"),
+      width: 90,
+      align: "right",
+      value: (r) => r.oexp_per_t ?? null,
+      render: (v) => (v == null ? "—" : Number(v).toFixed(2)),
+    },
+    { key: "remarks", title: t("page.fixtures.remarks", "Remarks"), minWidth: 120, value: (r) => r.remarks || "", render: (v) => (v == null || v === "" ? "—" : String(v)) },
+    {
+      key: "actions",
+      title: "",
+      width: 72,
+      render: (_v, r) => (
+        <button className="btn btn-danger btn-sm" type="button" disabled={itinBusy} onClick={() => void delItinRow(r.id)}>
+          {t("common.delete", "删除")}
+        </button>
+      ),
+    },
+  ];
+
   const brokerRuleColumns: ColumnDef<BrokerRule>[] = [
     {
       key: "broker_party_id",
@@ -950,6 +1226,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
           onChange={setTab}
           items={[
             { key: "general", label: t("page.charters.tab_general", "General") },
+            { key: "itinerary", label: t("page.charters.tab_itinerary", "Voyage Calc") },
             { key: "cargoes", label: t("page.charters.tab_cargoes", "Cargoes") },
             { key: "pricing", label: t("page.charters.tab_pricing", "Pricing") },
             { key: "rebill", label: t("page.charters.tab_rebill", "Rebill Settings") },
@@ -1024,7 +1301,74 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 {t("page.estimates.commission", "佣金 %")}
                 <input value={edit.commission_pct} onChange={(e) => setEdit({ ...edit, commission_pct: e.target.value })} />
               </label>
-              <label style={{ gridColumn: "1 / -1" }}>
+              {/* P11 IMOS Fixture header — Fixture No. 只读，其余可编辑 */}
+              <label>
+                {t("page.fixtures.fixture_no", "Fixture No.")}
+                <input value={charter?.fixture_no || ""} readOnly placeholder="auto" />
+              </label>
+              <label>
+                {t("page.fixtures.voyage_no", "Voyage No.")}
+                <input value={edit.voyage_no} onChange={(e) => setEdit({ ...edit, voyage_no: e.target.value })} />
+              </label>
+              <label>
+                {t("page.fixtures.opr_type", "Opr type")}
+                <input value={edit.opr_type} onChange={(e) => setEdit({ ...edit, opr_type: e.target.value })} placeholder="TCOV…" />
+              </label>
+              <label>
+                {t("page.fixtures.chtr_specialist", "Chtr specialist")}
+                <input value={edit.chtr_specialist} onChange={(e) => setEdit({ ...edit, chtr_specialist: e.target.value })} />
+              </label>
+              <label>
+                {t("page.fixtures.ops_coordinator", "Ops coordinator")}
+                <input value={edit.ops_coordinator} onChange={(e) => setEdit({ ...edit, ops_coordinator: e.target.value })} />
+              </label>
+              <label>
+                {t("page.fixtures.ballast_bonus", "Ballast bonus")}
+                <input type="number" step="any" value={edit.ballast_bonus} onChange={(e) => setEdit({ ...edit, ballast_bonus: e.target.value })} />
+              </label>
+              <label>
+                {t("page.fixtures.piracy_routing", "Piracy routing")}
+                <select value={edit.piracy_routing} onChange={(e) => setEdit({ ...edit, piracy_routing: e.target.value })}>
+                  <option value="">—</option>
+                  <option value="default">{t("page.fixtures.piracy_default", "Default")}</option>
+                  <option value="best">{t("page.fixtures.piracy_best", "Best route")}</option>
+                  <option value="avoid">{t("page.fixtures.piracy_avoid", "Avoid HRA")}</option>
+                </select>
+              </label>
+              <label>
+                {t("page.fixtures.dwf_pct", "DWF %")}
+                <input type="number" step="any" value={edit.dwf_pct} onChange={(e) => setEdit({ ...edit, dwf_pct: e.target.value })} />
+              </label>
+              <label>
+                {t("page.fixtures.lob", "LOB")}
+                <input value={edit.lob} onChange={(e) => setEdit({ ...edit, lob: e.target.value })} placeholder="BULK…" />
+              </label>
+              <label>
+                {t("page.fixtures.trade_area", "Trade area")}
+                <input value={edit.trade_area} onChange={(e) => setEdit({ ...edit, trade_area: e.target.value })} />
+              </label>
+              <label>
+                {t("page.fixtures.company_code", "Company code")}
+                <input value={edit.company_code} onChange={(e) => setEdit({ ...edit, company_code: e.target.value })} />
+              </label>
+              <label>
+                {t("page.fixtures.ls_only", "LS only")}
+                <select value={edit.ls_only ? "1" : "0"} onChange={(e) => setEdit({ ...edit, ls_only: e.target.value === "1" })}>
+                  <option value="0">{t("common.no", "No")}</option>
+                  <option value="1">{t("common.yes", "Yes")}</option>
+                </select>
+              </label>
+              <label>
+                {t("page.fixtures.in_progress", "In progress voyage")}
+                <select
+                  value={edit.in_progress_voyage ? "1" : "0"}
+                  onChange={(e) => setEdit({ ...edit, in_progress_voyage: e.target.value === "1" })}
+                >
+                  <option value="0">{t("common.no", "No")}</option>
+                  <option value="1">{t("common.yes", "Yes")}</option>
+                </select>
+              </label>
+              <label className="span-all">
                 {t("page.charters.notes", "条款备注")}
                 <input value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} />
               </label>
@@ -1057,6 +1401,144 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 </div>
               ) : null}
             </>
+          ) : null}
+          {tab === "itinerary" ? (
+            <div className="span-all">
+              <div className="desk-toolbar desk-toolbar-split">
+                <span className="muted">
+                  {t("page.fixtures.calc_hint", "Voyage calculator — miles / days / port & liner expenses; totals recompute on every change.")}
+                </span>
+                <span className="muted">
+                  {itinTotals
+                    ? t("page.fixtures.calc_totals", "{rows} rows · {miles} sm · sea {sea} d · port {port} d · port exp {pexp} · liner {lexp}", {
+                        rows: itinTotals.rows,
+                        miles: itinTotals.miles,
+                        sea: Number(itinTotals.sea_days).toFixed(2),
+                        port: Number(itinTotals.port_days).toFixed(2),
+                        pexp: Number(itinTotals.port_exp).toLocaleString(),
+                        lexp: Number(itinTotals.liner_exp).toLocaleString(),
+                      })
+                    : t("page.fixtures.calc_empty", "No itinerary rows yet")}
+                </span>
+              </div>
+              <DataGrid<ItinRow>
+                columns={itinColumns}
+                data={itinRows}
+                rowKey={(r) => r.id}
+                loading={itinBusy}
+                showFooter
+                storageKey="charter_itinerary_grid"
+                emptyText={t("page.fixtures.calc_no_rows", "Add the first leg below")}
+              />
+              <div className="desk-toolbar mt-sm">
+                <input
+                  type="number"
+                  placeholder={t("page.fixtures.seq", "Seq")}
+                  value={itinForm.seq}
+                  onChange={(e) => setItinForm((f) => ({ ...f, seq: e.target.value }))}
+                />
+                <input
+                  placeholder={t("page.fixtures.port", "Port")}
+                  value={itinForm.port}
+                  onChange={(e) => setItinForm((f) => ({ ...f, port: e.target.value }))}
+                />
+                <select
+                  aria-label={t("page.fixtures.flag", "Flag")}
+                  value={itinForm.flag}
+                  onChange={(e) => setItinForm((f) => ({ ...f, flag: e.target.value }))}
+                >
+                  <option value="L">L — Load</option>
+                  <option value="D">D — Discharge</option>
+                  <option value="F">F — Forward</option>
+                  <option value="Z">Z — Zero</option>
+                  <option value="P">P — Pass</option>
+                  <option value="Y">Y — Yard</option>
+                </select>
+                <input
+                  placeholder={t("page.fixtures.cargo", "Cargo")}
+                  value={itinForm.cargo}
+                  onChange={(e) => setItinForm((f) => ({ ...f, cargo: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.ld_qty", "L/D qty")}
+                  value={itinForm.ld_qty}
+                  onChange={(e) => setItinForm((f) => ({ ...f, ld_qty: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.ld_rate", "L/D rate")}
+                  value={itinForm.ld_rate}
+                  onChange={(e) => setItinForm((f) => ({ ...f, ld_rate: e.target.value }))}
+                />
+                <input
+                  placeholder={t("page.fixtures.terms", "Terms")}
+                  value={itinForm.terms}
+                  onChange={(e) => setItinForm((f) => ({ ...f, terms: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.miles", "Miles")}
+                  value={itinForm.miles}
+                  onChange={(e) => setItinForm((f) => ({ ...f, miles: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.speed", "Spd")}
+                  value={itinForm.speed}
+                  onChange={(e) => setItinForm((f) => ({ ...f, speed: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.sea_days", "S days")}
+                  value={itinForm.sea_days}
+                  onChange={(e) => setItinForm((f) => ({ ...f, sea_days: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.xsd", "XSD")}
+                  value={itinForm.xsd}
+                  onChange={(e) => setItinForm((f) => ({ ...f, xsd: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.port_days", "P days")}
+                  value={itinForm.port_days}
+                  onChange={(e) => setItinForm((f) => ({ ...f, port_days: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.xpd", "XPD")}
+                  value={itinForm.xpd}
+                  onChange={(e) => setItinForm((f) => ({ ...f, xpd: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.port_exp", "Port exp")}
+                  value={itinForm.port_exp}
+                  onChange={(e) => setItinForm((f) => ({ ...f, port_exp: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={t("page.fixtures.liner_exp", "Liner exp")}
+                  value={itinForm.liner_exp}
+                  onChange={(e) => setItinForm((f) => ({ ...f, liner_exp: e.target.value }))}
+                />
+                <button type="button" className="btn btn-primary" onClick={() => void addItinRow()}>
+                  {t("common.add", "Add")}
+                </button>
+              </div>
+            </div>
           ) : null}
           {tab === "cargoes" ? (
             <>

@@ -37,6 +37,7 @@ import app.models_report  # noqa: F401
 import app.models_jobs  # noqa: F401
 import app.models_clause  # noqa: F401
 import app.models_cargo  # noqa: F401
+import app.models_charter_ext  # noqa: F401
 import app.models_rates  # noqa: F401
 import app.models_coa  # noqa: F401
 import app.models_trading  # noqa: F401
@@ -45,9 +46,11 @@ import app.models_lightering  # noqa: F401
 import app.models_reference_ext  # noqa: F401
 import app.models_interface  # noqa: F401
 import app.models_field_perms  # noqa: F401
+import app.models_doc  # noqa: F401
 from app.routers.admin_platform import router as admin_router
 from app.routers.ai_chat import router as ai_chat_router
 from app.routers.ai_actions import router as ai_actions_router
+from app.routers.ai_assist import router as ai_assist_router
 from app.routers.metrics import router as metrics_router
 from app.routers.ai_hub import router as ai_router
 from app.routers.webhooks import router as webhooks_router
@@ -108,6 +111,7 @@ from app.routers.masterdata_ext import router as masterdata_ext_router
 from app.routers.interface_messages import router as interface_messages_router
 from app.routers.field_perms import router as field_perms_router
 from app.routers.udf import router as udf_router
+from app.routers.docs import router as docs_router
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo
 from app.seed_demo_flow import seed_full_demo_flow
 from app.seed_i18n import seed_i18n
@@ -404,6 +408,7 @@ app.include_router(reference_router, prefix="/api/v1")
 app.include_router(ai_router, prefix="/api/v1")
 app.include_router(ai_chat_router, prefix="/api/v1")
 app.include_router(ai_actions_router, prefix="/api/v1")
+app.include_router(ai_assist_router, prefix="/api/v1")
 app.include_router(metrics_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(market_data_router, prefix="/api/v1")
@@ -458,6 +463,7 @@ app.include_router(masterdata_ext_router, prefix="/api/v1")
 app.include_router(interface_messages_router, prefix="/api/v1")
 app.include_router(field_perms_router, prefix="/api/v1")
 app.include_router(udf_router, prefix="/api/v1")
+app.include_router(docs_router, prefix="/api/v1")
 
 # Only branding assets are public; backups and other uploads are never statically served
 app.mount("/uploads/branding", StaticFiles(directory=str(UPLOAD_ROOT / "branding")), name="branding")

@@ -51,6 +51,8 @@ class MailSendIn(BaseModel):
     subject: str
     body: str
     content_type: str = "Text"
+    # 附件条目：{filename, content_type, content_b64 | content}
+    attachments: list[dict] | None = None
 
 
 class ResourceLinkIn(BaseModel):
@@ -281,7 +283,8 @@ def send_mail(
 ):
     try:
         client = hub.get_graph_client(db, auth.tenant_id)
-        out = client.send_mail(to=body.to, subject=body.subject, body=body.body, content_type=body.content_type)
+        out = client.send_mail(to=body.to, subject=body.subject, body=body.body,
+                           content_type=body.content_type, attachments=body.attachments)
         db.commit()
         return out
     except GraphError as exc:

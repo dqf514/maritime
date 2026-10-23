@@ -163,6 +163,56 @@ def consume_usage(
     return wallet
 
 
+def bill_ai_tokens(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    tokens: int,
+    user_id: UUID | None = None,
+    ref_type: str | None = None,
+    ref_id: str | None = None,
+    note: str | None = None,
+    billable: bool = True,
+) -> dict:
+    """按 tokens 记账一次真实 AI 调用（meter_code="ai.tokens"）。
+
+    - ``billable=False``（租户自备 key / 主机 env 凭证）：不扣平台钱包，
+      对标 Oracle AI Connector —— BYO key 的成本由租户自己承担。
+    - ``ai_metering_enabled=False``（默认）：只写观测性流水（allow_negative），
+      不因余额不足阻断业务 —— 观测与强制计费解耦。
+    - ``ai_metering_enabled=True``：原子扣减；余额不足抛 402 QUOTA_EXCEEDED，
+      由调用方决定是否回落规则路径。
+
+    tokens<=0（规则回落 / 未发生真实 LLM 调用）时跳过。
+    """
+    from app.config import get_settings
+
+    if tokens <= 0:
+        return {"billed": 0, "meter": "ai.tokens", "mode": "skip"}
+    if not billable:
+        return {"billed": 0, "meter": "ai.tokens", "mode": "byo_key"}
+    qty = Decimal(str(int(tokens)))
+    metering = bool(get_settings().ai_metering_enabled)
+    wallet = consume_usage(
+        db,
+        tenant_id=tenant_id,
+        meter_code="ai.tokens",
+        quantity=qty,
+        ref_type=ref_type,
+        ref_id=ref_id,
+        note=note,
+        user_id=user_id,
+        allow_negative=not metering,
+    )
+    db.commit()
+    return {
+        "billed": int(tokens),
+        "meter": "ai.tokens",
+        "mode": "enforced" if metering else "observational",
+        "balance": float(wallet.balance),
+    }
+
+
 def start_workflow(
     db: Session,
     *,

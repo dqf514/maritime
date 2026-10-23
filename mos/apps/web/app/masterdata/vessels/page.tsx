@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { ExportButton } from "@/components/ExportButton";
+import { FormSection } from "@/components/form/FormPanel";
 import { LookupSelect } from "@/components/LookupSelect";
 import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
@@ -18,6 +19,7 @@ import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { useListQuery } from "@/lib/useListQuery";
+import { CLASS_SOCIETIES, FLEET_GROUPS, OWNERSHIP_OPTIONS, TRADE_AREAS } from "@/lib/vessel-catalog";
 
 type Vessel = {
   id: string;
@@ -28,10 +30,31 @@ type Vessel = {
   status: string;
   fleet_group?: string;
   updated_at?: string | null;
+  // IMOS 对齐字段（migration 26c3fccfee50）
+  vessel_code?: string | null;
+  ownership?: string | null;
+  trade_area?: string | null;
+  class_society?: string | null;
+  dwt?: number | string | null;
+  speed_laden?: number | string | null;
+  speed_ballast?: number | string | null;
+  tpc?: number | string | null;
+  daily_cost?: number | string | null;
 };
 
-// IMOS 对齐的业务分组（母船队 / 船管 / 拖驳 / 灵便重吊）
-const FLEET_GROUPS = ["mother_vessel", "ship_management", "tugs_barges", "flf", "other"] as const;
+const emptyVessel = {
+  name: "", imo: "", flag: "", vessel_type: "", status: "active", fleet_group: "mother_vessel",
+  vessel_code: "", ownership: "", trade_area: "", class_society: "",
+  dwt: "", speed_laden: "", speed_ballast: "", tpc: "", daily_cost: "",
+};
+
+// 表单值（字符串）↔ API 值（数字/null）互转：空串一律归 null，避免写成 0。
+function numIn(v: string): number | null {
+  return v === "" || v === null || v === undefined ? null : Number(v);
+}
+function numOut(v: number | string | null | undefined): string {
+  return v === null || v === undefined || v === "" ? "" : String(v);
+}
 
 function VesselsPage() {
   const { t } = useI18n();
@@ -43,7 +66,7 @@ function VesselsPage() {
   const [rows, setRows] = useState<Vessel[]>([]);
   const [open, setOpen] = useState<Vessel | null>(null);
   const [creating, setCreating] = useState(false);
-  const [edit, setEdit] = useState({ name: "", imo: "", flag: "", vessel_type: "", status: "active", fleet_group: "mother_vessel" });
+  const [edit, setEdit] = useState({ ...emptyVessel });
   const [saving, setSaving] = useState(false);
 
   async function load() {
@@ -57,7 +80,7 @@ function VesselsPage() {
   function openCreate() {
     setCreating(true);
     setOpen(null);
-    setEdit({ name: "", imo: "", flag: "", vessel_type: "", status: "active", fleet_group: "mother_vessel" });
+    setEdit({ ...emptyVessel });
   }
 
   useListHotkeys(openCreate);
@@ -77,6 +100,15 @@ function VesselsPage() {
       vessel_type: r.vessel_type || "",
       status: r.status || "active",
       fleet_group: r.fleet_group || "mother_vessel",
+      vessel_code: r.vessel_code || "",
+      ownership: r.ownership || "",
+      trade_area: r.trade_area || "",
+      class_society: r.class_society || "",
+      dwt: numOut(r.dwt),
+      speed_laden: numOut(r.speed_laden),
+      speed_ballast: numOut(r.speed_ballast),
+      tpc: numOut(r.tpc),
+      daily_cost: numOut(r.daily_cost),
     });
   }
 
@@ -88,6 +120,15 @@ function VesselsPage() {
       vessel_type: edit.vessel_type || null,
       status: edit.status,
       fleet_group: edit.fleet_group || "mother_vessel",
+      vessel_code: edit.vessel_code || null,
+      ownership: edit.ownership || null,
+      trade_area: edit.trade_area || null,
+      class_society: edit.class_society || null,
+      dwt: numIn(edit.dwt),
+      speed_laden: numIn(edit.speed_laden),
+      speed_ballast: numIn(edit.speed_ballast),
+      tpc: numIn(edit.tpc),
+      daily_cost: numIn(edit.daily_cost),
     };
   }
 
@@ -129,8 +170,12 @@ function VesselsPage() {
         return (
           r.name.toLowerCase().includes(needle) ||
           (r.imo || "").toLowerCase().includes(needle) ||
+          (r.vessel_code || "").toLowerCase().includes(needle) ||
           (r.flag || "").toLowerCase().includes(needle) ||
           (r.vessel_type || "").toLowerCase().includes(needle) ||
+          (r.class_society || "").toLowerCase().includes(needle) ||
+          (r.trade_area || "").toLowerCase().includes(needle) ||
+          (r.ownership || "").toLowerCase().includes(needle) ||
           (r.fleet_group || "").toLowerCase().includes(needle) ||
           (r.status || "").toLowerCase().includes(needle)
         );
@@ -155,6 +200,13 @@ function VesselsPage() {
       ),
     },
     {
+      key: "vessel_code",
+      title: t("page.vessels.vessel_code", "Code"),
+      width: 96,
+      value: (r) => r.vessel_code || "",
+      render: (_v, r) => r.vessel_code || "—",
+    },
+    {
       key: "imo",
       title: t("page.vessels.imo", "IMO"),
       width: 110,
@@ -169,6 +221,60 @@ function VesselsPage() {
       render: (_v, r) => r.vessel_type || "—",
     },
     {
+      key: "dwt",
+      title: t("page.vessels.dwt", "DWT (MT)"),
+      width: 110,
+      align: "right",
+      value: (r) => (r.dwt ?? null) as number | string | null,
+      render: (_v, r) => (r.dwt === null || r.dwt === undefined || r.dwt === "" ? "—" : String(r.dwt)),
+    },
+    {
+      key: "speed_laden",
+      title: t("page.vessels.speed_laden", "Speed laden (kn)"),
+      width: 120,
+      align: "right",
+      value: (r) => (r.speed_laden ?? null) as number | string | null,
+      render: (_v, r) => (r.speed_laden === null || r.speed_laden === undefined || r.speed_laden === "" ? "—" : String(r.speed_laden)),
+    },
+    {
+      key: "speed_ballast",
+      title: t("page.vessels.speed_ballast", "Speed ballast (kn)"),
+      width: 125,
+      align: "right",
+      value: (r) => (r.speed_ballast ?? null) as number | string | null,
+      render: (_v, r) => (r.speed_ballast === null || r.speed_ballast === undefined || r.speed_ballast === "" ? "—" : String(r.speed_ballast)),
+    },
+    {
+      key: "tpc",
+      title: t("page.vessels.tpc", "TPC"),
+      width: 90,
+      align: "right",
+      value: (r) => (r.tpc ?? null) as number | string | null,
+      render: (_v, r) => (r.tpc === null || r.tpc === undefined || r.tpc === "" ? "—" : String(r.tpc)),
+    },
+    {
+      key: "class_society",
+      title: t("page.vessels.class_society", "Class society"),
+      width: 130,
+      value: (r) => r.class_society || "",
+      render: (_v, r) => r.class_society || "—",
+    },
+    {
+      key: "trade_area",
+      title: t("page.vessels.trade_area", "Trade area"),
+      width: 120,
+      value: (r) => r.trade_area || "",
+      render: (_v, r) => r.trade_area || "—",
+    },
+    {
+      key: "ownership",
+      title: t("page.vessels.ownership", "Ownership"),
+      width: 120,
+      value: (r) => r.ownership || "",
+      render: (_v, r) =>
+        r.ownership ? t(`page.vessels.ownership.${r.ownership}`, r.ownership) : "—",
+    },
+    {
       key: "fleet_group",
       title: t("page.vessels.fleet_group", "Fleet group"),
       width: 140,
@@ -178,7 +284,7 @@ function VesselsPage() {
     {
       key: "flag",
       title: t("page.vessels.flag", "Flag"),
-      width: 120,
+      width: 110,
       value: (r) => r.flag || "",
       render: (_v, r) => r.flag || "—",
     },
@@ -311,6 +417,76 @@ function VesselsPage() {
             <option value="sold">sold</option>
           </select>
         </label>
+
+        <FormSection title={t("page.vessels.section_commercial", "IMOS · commercial identity")}>
+          <label>
+            {t("page.vessels.vessel_code", "Code")}
+            <input
+              value={edit.vessel_code}
+              onChange={(e) => setEdit({ ...edit, vessel_code: e.target.value })}
+              maxLength={12}
+              placeholder={t("page.vessels.vessel_code_ph", "e.g. ACKATH")}
+            />
+          </label>
+          <label>
+            {t("page.vessels.ownership", "Ownership")}
+            <select value={edit.ownership} onChange={(e) => setEdit({ ...edit, ownership: e.target.value })}>
+              {OWNERSHIP_OPTIONS.map((o) => (
+                <option key={o} value={o}>
+                  {o === "" ? t("common.none", "None") : t(`page.vessels.ownership.${o}`, o)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            {t("page.vessels.trade_area", "Trade area")}
+            <input
+              list="vessel-trade-areas"
+              value={edit.trade_area}
+              onChange={(e) => setEdit({ ...edit, trade_area: e.target.value })}
+              placeholder={t("page.vessels.trade_area_ph", "e.g. ASIA / EURO")}
+            />
+            <datalist id="vessel-trade-areas">
+              {TRADE_AREAS.map((a) => (
+                <option key={a} value={a} />
+              ))}
+            </datalist>
+          </label>
+          <label>
+            {t("page.vessels.class_society", "Class society")}
+            <input
+              list="vessel-class-societies"
+              value={edit.class_society}
+              onChange={(e) => setEdit({ ...edit, class_society: e.target.value })}
+              placeholder="ABS"
+            />
+            <datalist id="vessel-class-societies">
+              {CLASS_SOCIETIES.map((s) => (
+                <option key={s} value={s} />
+              ))}
+            </datalist>
+          </label>
+          <label>
+            {t("page.vessels.dwt", "DWT (MT)")}
+            <input type="number" value={edit.dwt} onChange={(e) => setEdit({ ...edit, dwt: e.target.value })} />
+          </label>
+          <label>
+            {t("page.vessels.speed_laden", "Speed laden (kn)")}
+            <input type="number" step="0.01" value={edit.speed_laden} onChange={(e) => setEdit({ ...edit, speed_laden: e.target.value })} />
+          </label>
+          <label>
+            {t("page.vessels.speed_ballast", "Speed ballast (kn)")}
+            <input type="number" step="0.01" value={edit.speed_ballast} onChange={(e) => setEdit({ ...edit, speed_ballast: e.target.value })} />
+          </label>
+          <label>
+            {t("page.vessels.tpc", "TPC")}
+            <input type="number" step="0.01" value={edit.tpc} onChange={(e) => setEdit({ ...edit, tpc: e.target.value })} />
+          </label>
+          <label>
+            {t("page.vessels.daily_cost", "Daily cost (USD)")}
+            <input type="number" step="0.01" value={edit.daily_cost} onChange={(e) => setEdit({ ...edit, daily_cost: e.target.value })} />
+          </label>
+        </FormSection>
       </RecordModal>
     </AppShell>
   );

@@ -28,6 +28,8 @@
 @import "../styles/report-builder.css";
 @import "../styles/report-gallery.css";
 @import "../styles/ai-settings.css";
+@import "../styles/ai-assist.css";
+@import "../styles/templates.css";
 @import "../styles/workspace.css";
 @import "../styles/gantt.css";
 @import "../styles/misc.css";

@@ -28,6 +28,7 @@ from app.models import User
 from app.models_domain import Charter, Invoice, Payment, Voyage
 from app.models_ship import ShipCertificate
 from app.models_shipshore import ShipForm, ShipTerminal
+from app.models_reference import PortDistance
 from app.models_task import Task
 from app.models_wave1 import Counterparty, Vessel
 from app.routers.ship_mgmt import _cert_status_for
@@ -199,6 +200,30 @@ def _vessels(db: Session, auth: AuthContext, lang: str) -> tuple[list[str], list
     return headers, data
 
 
+def _distances(db: Session, auth: AuthContext, lang: str) -> tuple[list[str], list[list[Any]]]:
+    # 全局参照表（port_distances 无 tenant_id）——与 /commercial/distances 同口径
+    headers = {
+        "zh": ["起运港", "到达港", "距离(海里)", "航线", "运河", "过闸(天)", "运河费用", "备注", "数据来源"],
+        "en": ["From", "To", "Distance (NM)", "Route", "Canal", "Transit (days)", "Canal toll", "Notes", "Source"],
+    }[lang]
+    rows = db.scalars(select(PortDistance).order_by(PortDistance.from_port_unlocode).limit(MAX_ROWS)).all()
+    data = [
+        [
+            r.from_port_unlocode,
+            r.to_port_unlocode,
+            _num(r.distance_nm),
+            r.route_type,
+            r.canal_transit or "",
+            _num(r.transit_days),
+            _num(r.canal_toll),
+            r.notes or "",
+            r.source,
+        ]
+        for r in rows
+    ]
+    return headers, data
+
+
 Builder = Callable[[Session, AuthContext, str], tuple[list[str], list[list[Any]]]]
 
 ENTITIES: dict[str, tuple[str | None, Builder]] = {
@@ -207,6 +232,7 @@ ENTITIES: dict[str, tuple[str | None, Builder]] = {
     "certificates": ("ship_mgmt", _certificates),
     "tasks": (None, _tasks),
     "vessels": ("masterdata", _vessels),
+    "distances": ("operations", _distances),
 }
 
 

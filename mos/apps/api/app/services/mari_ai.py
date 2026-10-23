@@ -1036,6 +1036,35 @@ Respond in the same language as the user's query.""",
         ],
         "model_name": "default",
     },
+    {
+        "agent_name": "copilot",
+        "display_name": "Mari Copilot",
+        "description": "Context-aware assistant available on every screen — asks about the record you are viewing, fills routine fields, summarizes and drafts",
+        "system_prompt": """You are Mari Copilot, the always-available AI assistant embedded across the MariOS shipping platform.
+
+You appear as a popup assistant next to whatever screen the user is on — a form being filled, a comparison table, an email under review, a voyage, an invoice. You see the CONTEXT block describing the current record; use it to answer about *this* record rather than asking the user to re-explain.
+
+You help with:
+- Explaining the record on screen (what it is, why a value looks odd, what to check next)
+- Filling routine form fields — return crisp values, not prose
+- Summarizing (voyage status, email threads, P&L variance, laytime exposure)
+- Drafting daily reports, follow-up notes and email replies
+- Comparing options (routes, rates, suppliers) with specific numbers
+
+Rules:
+- Use the CONTEXT block when present. Cite real figures from it or from tools — never invent numbers.
+- When asked to fill fields, return ONLY the requested values in the exact form asked (e.g. JSON), so the UI can apply them for human confirmation. Never claim you already saved anything.
+- Keep answers tight and actionable. Match the user's language (Chinese↔English).
+- You suggest; the human confirms and submits. Do not imply an action was already taken.""",
+        "tools_json": [
+            "calculate_tce", "calculate_laytime", "search_port_distance", "check_compliance",
+            "query_voyage_pnl", "list_vessels", "get_vessel", "list_voyages", "get_voyage",
+            "list_port_calls", "list_charters", "get_charter", "list_estimates", "list_cargo",
+            "list_invoices", "get_invoice", "list_claims", "get_laytime", "list_exceptions",
+            "get_exposure", "get_market_quotes", "list_tasks",
+        ],
+        "model_name": "default",
+    },
 ]
 
 
@@ -1285,6 +1314,11 @@ def _llm_chat(
     if model in ("", "default"):
         model = None  # provider default
     temperature = getattr(agent_def, "temperature", None)
+    # 上下文注入：conv.context_json 存了页面/实体快照（此前从未进过 prompt）。
+    system_prompt = agent_def.system_prompt or ""
+    ctx_block = _context_block(conv.context_json)
+    if ctx_block:
+        system_prompt = f"{system_prompt}\n\n{ctx_block}"
 
     tool_log: list[dict] = []
     total_tokens = 0
@@ -1297,7 +1331,7 @@ def _llm_chat(
             messages,
             model=model,
             temperature=temperature,
-            system=agent_def.system_prompt or "",
+            system=system_prompt,
             tools=tools or None,
             provider=provider,
         )
@@ -1347,6 +1381,10 @@ def _llm_chat(
         tokens_used=total_tokens,
         latency_ms=total_latency,
     )
+    billing = _bill_chat_usage(
+        db, tenant_id, conv.user_id, total_tokens, msg.id,
+        billable=bool(provider is not None and provider.billable_by_platform),
+    )
     return {
         "conversation_id": str(conv_id),
         "agent": conv.agent_name,
@@ -1356,7 +1394,60 @@ def _llm_chat(
         "tokens_used": total_tokens,
         "latency_ms": total_latency,
         "source": "llm",
+        "billing": billing,
     }
+
+
+def _context_block(context_json: dict | None) -> str:
+    """conv.context_json → 注入 system prompt 的 CONTEXT 文本块（无内容返回 ""）。"""
+    if not isinstance(context_json, dict) or not context_json:
+        return ""
+    lines: list[str] = ["## CONTEXT (current screen / record — answer about THIS)"]
+    page = context_json.get("page")
+    if page:
+        lines.append(f"- Screen: {page}")
+    etype = context_json.get("entity_type")
+    eid = context_json.get("entity_id")
+    if etype:
+        lines.append(f"- Record type: {etype}" + (f" (id {eid})" if eid else ""))
+    summary = context_json.get("summary")
+    if isinstance(summary, dict):
+        for k, v in list(summary.items())[:20]:
+            if v is not None and v != "":
+                lines.append(f"- {k}: {v}")
+    elif isinstance(summary, str) and summary.strip():
+        lines.append(summary.strip()[:4000])
+    raw = context_json.get("text")
+    if isinstance(raw, str) and raw.strip():
+        lines.append(raw.strip()[:4000])
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _bill_chat_usage(db, tenant_id, user_id, tokens: int, message_id, *, billable: bool = True) -> dict:
+    """真实 LLM 调用按 tokens 记账。计量开启且余额不足时 402 向上传播。
+
+    ``billable=False`` 表示本次用的是租户自备 key / 主机 env 凭证 —— 不扣平台钱包。
+    """
+    from fastapi import HTTPException
+
+    from app.services.saas_engine import bill_ai_tokens
+
+    try:
+        return bill_ai_tokens(
+            db,
+            tenant_id=tenant_id,
+            tokens=tokens,
+            user_id=user_id,
+            ref_type="ai_message",
+            ref_id=str(message_id),
+            note="mari_ai.chat",
+            billable=billable,
+        )
+    except HTTPException:
+        raise  # 计费开启且余额不足 —— 明确告知调用方
+    except Exception:  # noqa: BLE001 — 记账失败不阻断已生成的答复
+        log.exception("mari_ai: usage billing failed (tokens=%s)", tokens)
+        return {"billed": 0, "meter": "ai.tokens", "mode": "error"}
 
 
 def _fallback_chat(

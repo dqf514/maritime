@@ -29,6 +29,18 @@ type Port = {
   timezone: string;
   holidays?: string[] | null;
   is_eu?: boolean;
+  // IMOS 对齐字段（PortIn 全量序列化）
+  port_type?: string | null;
+  region_code?: string | null;
+  loadline_zone?: string | null;
+  std_gmt_offset?: number | string | null;
+  dst_gmt_offset?: number | string | null;
+  fuel_zone_default?: string | null;
+  bunkering_port?: boolean;
+  lightering_port?: boolean;
+  inactive?: boolean;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
 };
 
 function parseHolidays(v: string): string[] {
@@ -165,7 +177,7 @@ function PortsPage() {
   }
 
   const menuItems = (r: Port): ContextMenuItem[] => [
-    { key: "open", label: t("ctx.open", "Open"), onClick: () => openRow(r) },
+    { key: "open", label: t("ctx.open", "Open"), onClick: () => router.push(`/masterdata/ports/${r.id}`) },
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyId(r.id) },
     { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportPorts([r]) },
     { key: "d1", label: "", divider: true },
@@ -178,34 +190,131 @@ function PortsPage() {
         return (
           r.name.toLowerCase().includes(needle) ||
           (r.unlocode || "").toLowerCase().includes(needle) ||
-          (r.country || "").toLowerCase().includes(needle)
+          (r.country || "").toLowerCase().includes(needle) ||
+          (r.port_type || "").toLowerCase().includes(needle) ||
+          (r.region_code || "").toLowerCase().includes(needle) ||
+          (r.loadline_zone || "").toLowerCase().includes(needle) ||
+          (r.fuel_zone_default || "").toLowerCase().includes(needle)
         );
       })
     : rows;
 
+  const dash = (v: string | null | undefined) => v || "—";
+
   const columns: ColumnDef<Port>[] = [
-    { key: "name", title: t("common.name", "Name"), minWidth: 140, value: (r) => r.name },
+    {
+      key: "name",
+      title: t("common.name", "Name"),
+      minWidth: 150,
+      value: (r) => r.name,
+      // A5：列表行链接到港口卡片（list masterdata / detail 同域）
+      render: (_v, r) => (
+        <Link href={`/masterdata/ports/${r.id}`} onClick={(e) => e.stopPropagation()} className="row-link">
+          {r.name}
+        </Link>
+      ),
+    },
     {
       key: "unlocode",
       title: t("page.ports.unlocode", "UN/LOCODE"),
       width: 120,
       value: (r) => r.unlocode || "",
-      render: (_v, r) => r.unlocode || "—",
+      render: (_v, r) => dash(r.unlocode),
     },
     {
       key: "country",
       title: t("page.ports.country", "Country"),
-      width: 110,
+      width: 100,
       value: (r) => r.country || "",
-      render: (_v, r) => r.country || "—",
+      render: (_v, r) => dash(r.country),
     },
-    { key: "timezone", title: t("page.ports.timezone", "Time zone"), width: 140, value: (r) => r.timezone },
     {
-      key: "is_eu",
-      title: t("page.ports.eu", "EU"),
-      width: 80,
-      value: (r) => Boolean(r.is_eu),
-      render: (_v, r) => (r.is_eu ? <span className="badge badge-pass">{t("page.ports.eu", "EU")}</span> : "—"),
+      key: "port_type",
+      title: t("page.ports.port_type", "Port type"),
+      width: 130,
+      value: (r) => r.port_type || "",
+      render: (_v, r) => (r.port_type ? t(`page.port.type_${r.port_type}`, r.port_type) : "—"),
+    },
+    {
+      key: "region_code",
+      title: t("page.ports.region", "Region"),
+      width: 110,
+      value: (r) => r.region_code || "",
+      render: (_v, r) => dash(r.region_code),
+    },
+    {
+      key: "loadline_zone",
+      title: t("page.ports.loadline", "Loadline"),
+      width: 120,
+      value: (r) => r.loadline_zone || "",
+      render: (_v, r) => dash(r.loadline_zone),
+    },
+    { key: "timezone", title: t("page.ports.timezone", "Time zone"), width: 135, value: (r) => r.timezone },
+    {
+      key: "std_gmt_offset",
+      title: t("page.ports.std_gmt", "STD GMT +/−"),
+      width: 110,
+      align: "right",
+      value: (r) => (r.std_gmt_offset ?? null) as number | string | null,
+      render: (_v, r) => (r.std_gmt_offset === null || r.std_gmt_offset === undefined || r.std_gmt_offset === "" ? "—" : String(r.std_gmt_offset)),
+    },
+    {
+      key: "dst_gmt_offset",
+      title: t("page.ports.dst_gmt", "DST GMT +/−"),
+      width: 110,
+      align: "right",
+      value: (r) => (r.dst_gmt_offset ?? null) as number | string | null,
+      render: (_v, r) => (r.dst_gmt_offset === null || r.dst_gmt_offset === undefined || r.dst_gmt_offset === "" ? "—" : String(r.dst_gmt_offset)),
+    },
+    {
+      key: "fuel_zone_default",
+      title: t("page.ports.fuel_zone", "Fuel zone"),
+      width: 120,
+      value: (r) => r.fuel_zone_default || "",
+      render: (_v, r) => dash(r.fuel_zone_default),
+    },
+    {
+      key: "flags",
+      title: t("page.ports.flags", "Flags"),
+      width: 170,
+      value: (r) => (r.is_eu ? "EU" : ""),
+      render: (_v, r) => (
+        <>
+          {r.is_eu ? <span className="badge badge-pass">{t("page.ports.eu", "EU")}</span> : null}{" "}
+          {r.bunkering_port ? <span className="badge">{t("page.ports.bunkering", "Bunker")}</span> : null}{" "}
+          {r.lightering_port ? <span className="badge">{t("page.ports.lightering", "LTG")}</span> : null}
+        </>
+      ),
+    },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => (r.inactive ? "inactive" : "active"),
+      render: (_v, r) =>
+        r.inactive ? (
+          <span className="badge badge-warn">{t("common.inactive", "Inactive")}</span>
+        ) : (
+          <span className="badge badge-pass">{t("common.active", "Active")}</span>
+        ),
+    },
+    {
+      key: "actions",
+      title: "",
+      width: 90,
+      align: "right",
+      render: (_v, r) => (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={(e) => {
+            e.stopPropagation();
+            openRow(r);
+          }}
+        >
+          {t("common.edit", "Edit")}
+        </button>
+      ),
     },
   ];
 
@@ -214,7 +323,7 @@ function PortsPage() {
       <PageHeader
         breadcrumb={[{ label: t("nav.master", "Master data") }]}
         title={t("page.ports.title", "Ports")}
-        subtitle={t("page.ports.sub", "Port master data (UN/LOCODE). Open a row to edit.")}
+        subtitle={t("page.ports.sub", "Port master data (UN/LOCODE). Click a row to open the port card.")}
         actions={
           <Link href="/settings/recycle" className="btn btn-ghost">
             {t("nav.recycle", "Recycle bin")}
@@ -250,7 +359,7 @@ function PortsPage() {
           columns={columns}
           data={filtered}
           rowKey={(r) => r.id}
-          onRowClick={(r) => openRow(r)}
+          onRowClick={(r) => router.push(`/masterdata/ports/${r.id}`)}
           onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
           storageKey="masterdata_ports_grid"
           emptyText={t("common.empty", "No records")}

@@ -46,7 +46,69 @@ type TcContract = {
   address_comm_pct: number | null;
   brokerage_pct: number | null;
   status: string;
+  // ── P11 IMOS TC header ──
+  tc_code: string | null;
+  beneficiary: string | null;
+  date_fixed_at: string | null;
+  fixed_by: string | null;
+  company_code: string | null;
+  trade_area: string | null;
+  contract_form: string | null;
+  payment_terms: string | null;
+  duration_min_days: number | null;
+  duration_max_days: number | null;
+  duration_minus_days: number | null;
+  duration_plus_days: number | null;
+  el_redel_min: string | null;
+  el_redel_max: string | null;
+  duration_basis: string | null;
+  use_local_time: boolean;
+  billing_period: string | null;
+  billing_schedule: string | null;
+  chtr_specialist: string | null;
+  owner_comm_pct: number | null;
+  intercompany: boolean;
+  ic_company: string | null;
+  remarks: string | null;
+  notes_to_operations: string | null;
 };
+
+// P11 — Delivery/Redelivery lay event（Est / Proj-Act GMT / Difference 计算列）
+type LayEventRow = {
+  id: string;
+  kind: string;
+  port: string | null;
+  est_gmt: string | null;
+  proj_act_gmt: string | null;
+  difference_hours: number | null;
+  remarks: string | null;
+};
+
+// P11 — Pricing ladder（Hire Rate / Rate Type / From-To GMT / Duration / TCL Ins）
+type PricingRow = {
+  id: string;
+  hire_rate: number;
+  rate_type: string;
+  from_gmt: string | null;
+  to_gmt: string | null;
+  duration_days: number | null;
+  tcl_ins: number | null;
+  locked: boolean;
+  comments: string | null;
+};
+
+// P11 — Other-items expense grid（BALLA/CABLE/VICTU/ALLOW/LASHS/ILOHC/INTHC）
+type OtherItemRow = {
+  id: string;
+  code: string;
+  description: string | null;
+  rate_type: string;
+  rate: number;
+  comm: boolean;
+  currency: string;
+};
+
+const OTHER_ITEM_CODES = ["BALLA", "CABLE", "VICTU", "ALLOW", "LASHS", "ILOHC", "INTHC"] as const;
 
 type BillingRow = {
   id: string;
@@ -76,6 +138,12 @@ type BrokerRow = {
   commission_type: string;
   commission_pct: number;
   applies_to: string;
+  // ── P11 IMOS broker grid columns ──
+  payment_method?: string;
+  m_method?: number;
+  from_gmt?: string | null;
+  to_gmt?: string | null;
+  remarks?: string | null;
 };
 
 type StatementRow = {
@@ -131,10 +199,13 @@ type HireSummary = {
 
 const TABS = [
   "contract",
+  "lay_events",
+  "pricing",
   "hire",
   "billing",
   "profit_share",
   "broker",
+  "other_items",
   "surveys",
   "children",
 ] as const;
@@ -176,6 +247,10 @@ export default function TcWorkspacePage() {
   const [billing, setBilling] = useState<BillingRow[]>([]);
   const [psRows, setPsRows] = useState<PsRow[]>([]);
   const [brokerRows, setBrokerRows] = useState<BrokerRow[]>([]);
+  // P11 — lay events / pricing ladder / other items
+  const [layRows, setLayRows] = useState<LayEventRow[]>([]);
+  const [pricingRows, setPricingRows] = useState<PricingRow[]>([]);
+  const [otherRows, setOtherRows] = useState<OtherItemRow[]>([]);
   const [statements, setStatements] = useState<StatementRow[]>([]);
   const [offHire, setOffHire] = useState<OffHireRow[]>([]);
   const [surveys, setSurveys] = useState<SurveyRow[]>([]);
@@ -183,7 +258,10 @@ export default function TcWorkspacePage() {
   const [tabBusy, setTabBusy] = useState(false);
 
   // Inline add forms
-  const [brokerForm, setBrokerForm] = useState({ broker_party_id: "", commission_type: "brokerage", commission_pct: "", applies_to: "all" });
+  const [brokerForm, setBrokerForm] = useState({ broker_party_id: "", commission_type: "brokerage", commission_pct: "", applies_to: "all", payment_method: "pay_directly", m_method: "0" });
+  const [layForm, setLayForm] = useState({ kind: "delivery", port: "", est_gmt: "", proj_act_gmt: "", remarks: "" });
+  const [pricingForm, setPricingForm] = useState({ hire_rate: "", rate_type: "per_day", from_gmt: "", to_gmt: "", duration_days: "", tcl_ins: "", comments: "" });
+  const [otherForm, setOtherForm] = useState({ code: "BALLA", description: "", rate_type: "lumpsum", rate: "", comm: true });
   const [surveyForm, setSurveyForm] = useState({ kind: "on_hire", surveyed_at: "" });
   const [childForm, setChildForm] = useState({ contract_type: "tci", contract_style: "time_charter", hire_rate: "", hire_currency: "USD", delivery_date: "", redelivery_date: "" });
 
@@ -228,6 +306,28 @@ export default function TcWorkspacePage() {
       profit_share_threshold: c.profit_share_threshold == null ? "" : String(c.profit_share_threshold),
       address_comm_pct: c.address_comm_pct == null ? "" : String(c.address_comm_pct),
       brokerage_pct: c.brokerage_pct == null ? "" : String(c.brokerage_pct),
+      // ── P11 IMOS header ──
+      beneficiary: c.beneficiary || "",
+      company_code: c.company_code || "",
+      trade_area: c.trade_area || "",
+      contract_form: c.contract_form || "",
+      payment_terms: c.payment_terms || "",
+      billing_period: c.billing_period || "",
+      billing_schedule: c.billing_schedule || "",
+      chtr_specialist: c.chtr_specialist || "",
+      ic_company: c.ic_company || "",
+      owner_comm_pct: c.owner_comm_pct == null ? "" : String(c.owner_comm_pct),
+      remarks: c.remarks || "",
+      notes_to_operations: c.notes_to_operations || "",
+      duration_min_days: c.duration_min_days == null ? "" : String(c.duration_min_days),
+      duration_max_days: c.duration_max_days == null ? "" : String(c.duration_max_days),
+      duration_minus_days: c.duration_minus_days == null ? "" : String(c.duration_minus_days),
+      duration_plus_days: c.duration_plus_days == null ? "" : String(c.duration_plus_days),
+      el_redel_min: d(c.el_redel_min),
+      el_redel_max: d(c.el_redel_max),
+      duration_basis: c.duration_basis || "",
+      use_local_time: c.use_local_time ? "1" : "0",
+      intercompany: c.intercompany ? "1" : "0",
     });
   }, []);
 
@@ -276,6 +376,12 @@ export default function TcWorkspacePage() {
           setPsRows(rows.map((r) => ({ ...r, isNew: false })));
         } else if (which === "broker") {
           setBrokerRows(await apiGet(`/api/v1/tc/contracts/${contractId}/broker-rules`));
+        } else if (which === "lay_events") {
+          setLayRows(await apiGet(`/api/v1/tc/contracts/${contractId}/lay-events`));
+        } else if (which === "pricing") {
+          setPricingRows(await apiGet(`/api/v1/tc/contracts/${contractId}/pricing-rows`));
+        } else if (which === "other_items") {
+          setOtherRows(await apiGet(`/api/v1/tc/contracts/${contractId}/other-items`));
         } else if (which === "hire") {
           const [st, voyages] = await Promise.all([
             apiGet(`/api/v1/tc-contracts/${contractId}/statements`).catch(() => []),
@@ -339,6 +445,23 @@ export default function TcWorkspacePage() {
       if (draft.profit_share_threshold !== "") payload.profit_share_threshold = Number(draft.profit_share_threshold);
       if (draft.address_comm_pct !== "") payload.address_comm_pct = Number(draft.address_comm_pct);
       if (draft.brokerage_pct !== "") payload.brokerage_pct = Number(draft.brokerage_pct);
+      // ── P11 IMOS header ──
+      const strFields = [
+        "beneficiary", "company_code", "trade_area", "contract_form", "payment_terms",
+        "billing_period", "billing_schedule", "chtr_specialist", "ic_company", "remarks",
+        "notes_to_operations", "duration_basis",
+      ] as const;
+      strFields.forEach((k) => {
+        if (draft[k]) payload[k] = draft[k];
+      });
+      const numFields = ["owner_comm_pct", "duration_min_days", "duration_max_days", "duration_minus_days", "duration_plus_days"] as const;
+      numFields.forEach((k) => {
+        if (draft[k] !== "") payload[k] = Number(draft[k]);
+      });
+      if (draft.el_redel_min) payload.el_redel_min = draft.el_redel_min;
+      if (draft.el_redel_max) payload.el_redel_max = draft.el_redel_max;
+      payload.use_local_time = draft.use_local_time === "1";
+      payload.intercompany = draft.intercompany === "1";
       const updated = await apiPatch(`/api/v1/tc/contracts/${contractId}`, payload);
       setContract(updated);
       toast.success(t("common.saved", "Saved"));
@@ -428,11 +551,105 @@ export default function TcWorkspacePage() {
         commission_type: brokerForm.commission_type,
         commission_pct: Number(brokerForm.commission_pct),
         applies_to: brokerForm.applies_to,
+        payment_method: brokerForm.payment_method,
+        m_method: Number(brokerForm.m_method),
       });
-      setBrokerForm({ broker_party_id: "", commission_type: "brokerage", commission_pct: "", applies_to: "all" });
+      setBrokerForm({ broker_party_id: "", commission_type: "brokerage", commission_pct: "", applies_to: "all", payment_method: "pay_directly", m_method: "0" });
       toast.success(t("common.saved", "Saved"));
       await loadTab("broker");
       await reloadSummary();
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
+  async function delBrokerRule(id: string) {
+    try {
+      await apiDelete(`/api/v1/tc/contracts/${contractId}/broker-rules/${id}`);
+      await loadTab("broker");
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
+  // ── P11: lay events (Delivery/Redelivery) ──
+  async function addLayEvent() {
+    try {
+      await apiPost(`/api/v1/tc/contracts/${contractId}/lay-events`, {
+        kind: layForm.kind,
+        port: layForm.port || null,
+        est_gmt: layForm.est_gmt || null,
+        proj_act_gmt: layForm.proj_act_gmt || null,
+        remarks: layForm.remarks || null,
+      });
+      setLayForm({ kind: "delivery", port: "", est_gmt: "", proj_act_gmt: "", remarks: "" });
+      toast.success(t("common.saved", "Saved"));
+      await loadTab("lay_events");
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
+  async function delLayEvent(id: string) {
+    try {
+      await apiDelete(`/api/v1/tc/contracts/${contractId}/lay-events/${id}`);
+      await loadTab("lay_events");
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
+  // ── P11: pricing ladder ──
+  async function addPricingRow() {
+    try {
+      await apiPost(`/api/v1/tc/contracts/${contractId}/pricing-rows`, {
+        hire_rate: Number(pricingForm.hire_rate),
+        rate_type: pricingForm.rate_type,
+        from_gmt: pricingForm.from_gmt || null,
+        to_gmt: pricingForm.to_gmt || null,
+        duration_days: pricingForm.duration_days === "" ? null : Number(pricingForm.duration_days),
+        tcl_ins: pricingForm.tcl_ins === "" ? null : Number(pricingForm.tcl_ins),
+        comments: pricingForm.comments || null,
+      });
+      setPricingForm({ hire_rate: "", rate_type: "per_day", from_gmt: "", to_gmt: "", duration_days: "", tcl_ins: "", comments: "" });
+      toast.success(t("common.saved", "Saved"));
+      await loadTab("pricing");
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
+  async function delPricingRow(id: string) {
+    try {
+      await apiDelete(`/api/v1/tc/contracts/${contractId}/pricing-rows/${id}`);
+      await loadTab("pricing");
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
+  // ── P11: other items (BALLA/CABLE/VICTU/…) ──
+  async function addOtherItem() {
+    try {
+      await apiPost(`/api/v1/tc/contracts/${contractId}/other-items`, {
+        code: otherForm.code,
+        description: otherForm.description || null,
+        rate_type: otherForm.rate_type,
+        rate: Number(otherForm.rate),
+        comm: otherForm.comm,
+      });
+      setOtherForm({ code: "BALLA", description: "", rate_type: "lumpsum", rate: "", comm: true });
+      toast.success(t("common.saved", "Saved"));
+      await loadTab("other_items");
+    } catch (ex) {
+      toast.error(String(ex));
+    }
+  }
+
+  async function delOtherItem(id: string) {
+    try {
+      await apiDelete(`/api/v1/tc/contracts/${contractId}/other-items/${id}`);
+      await loadTab("other_items");
     } catch (ex) {
       toast.error(String(ex));
     }
@@ -645,8 +862,214 @@ export default function TcWorkspacePage() {
         render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
       },
       { key: "applies_to", title: t("page.tc.col.applies_to", "Applies to"), width: 100, value: (r) => r.applies_to },
+      // P11 IMOS：Payment Method / M / From-To GMT
+      {
+        key: "payment_method",
+        title: t("page.tc.col.payment_method", "Payment method"),
+        width: 140,
+        value: (r) => r.payment_method || "pay_directly",
+        render: (v) =>
+          v === "deduct_from_hire"
+            ? t("page.tc.pay.deduct_from_hire", "Deduct from hire")
+            : t("page.tc.pay.pay_directly", "Pay directly"),
+      },
+      { key: "m_method", title: t("page.tc.col.m_method", "M"), width: 55, align: "right", value: (r) => r.m_method ?? 0 },
+      { key: "from_gmt", title: t("page.tc.col.from_gmt", "From GMT"), width: 130, value: (r) => dt(r.from_gmt) },
+      { key: "to_gmt", title: t("page.tc.col.to_gmt", "To GMT"), width: 130, value: (r) => dt(r.to_gmt) },
+      { key: "remarks", title: t("page.tc.col.remarks", "Remarks"), minWidth: 120, value: (r) => r.remarks || "" },
+      {
+        key: "actions",
+        title: "",
+        width: 60,
+        value: () => "",
+        render: (_v, r) => (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              void delBrokerRule(r.id);
+            }}
+          >
+            {t("common.delete", "Delete")}
+          </button>
+        ),
+      },
     ],
     [t, parties],
+  );
+
+  // ── P11 grids: lay events / pricing ladder / other items ──
+  const layColumns: ColumnDef<LayEventRow>[] = useMemo(
+    () => [
+      {
+        key: "kind",
+        title: t("page.tc.lay.kind", "Lay"),
+        width: 100,
+        value: (r) => r.kind,
+        render: (v) =>
+          v === "delivery" ? t("page.tc.lay.delivery", "Delivery") : t("page.tc.lay.redelivery", "Redelivery"),
+      },
+      { key: "port", title: t("page.tc.lay.port", "Port"), width: 150, value: (r) => r.port || "" },
+      { key: "est_gmt", title: t("page.tc.lay.est_gmt", "Est GMT"), width: 150, value: (r) => dt(r.est_gmt) },
+      { key: "proj_act_gmt", title: t("page.tc.lay.proj_act", "Proj/Act GMT"), width: 150, value: (r) => dt(r.proj_act_gmt) },
+      {
+        key: "difference_hours",
+        title: t("page.tc.lay.difference", "Difference"),
+        align: "right",
+        width: 100,
+        value: (r) => r.difference_hours,
+        render: (v) => (v == null ? "—" : `${Number(v) > 0 ? "+" : ""}${Number(v).toFixed(2)} h`),
+      },
+      { key: "remarks", title: t("page.tc.col.remarks", "Remarks"), minWidth: 150, value: (r) => r.remarks || "" },
+      {
+        key: "actions",
+        title: "",
+        width: 60,
+        value: () => "",
+        render: (_v, r) => (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              void delLayEvent(r.id);
+            }}
+          >
+            {t("common.delete", "Delete")}
+          </button>
+        ),
+      },
+    ],
+    [t],
+  );
+
+  const pricingColumns: ColumnDef<PricingRow>[] = useMemo(
+    () => [
+      {
+        key: "hire_rate",
+        title: t("page.tc.col.hire_rate", "Hire rate"),
+        align: "right",
+        width: 110,
+        agg: "avg",
+        value: (r) => r.hire_rate,
+        render: (v) => <Num v={Number(v ?? 0)} digits={2} />,
+      },
+      {
+        key: "rate_type",
+        title: t("page.tc.pricing.rate_type", "Rate type"),
+        width: 110,
+        value: (r) => r.rate_type,
+        render: (v) =>
+          v === "per_day"
+            ? t("page.tc.pricing.per_day", "per day")
+            : v === "lumpsum"
+              ? t("page.tc.pricing.lumpsum", "lumpsum")
+              : t("page.tc.pricing.per_30", "per 30 days"),
+      },
+      { key: "from_gmt", title: t("page.tc.col.from_gmt", "From GMT"), width: 150, value: (r) => dt(r.from_gmt) },
+      { key: "to_gmt", title: t("page.tc.col.to_gmt", "To GMT"), width: 150, value: (r) => dt(r.to_gmt) },
+      {
+        key: "duration_days",
+        title: t("page.tc.pricing.duration", "Duration (d)"),
+        align: "right",
+        width: 110,
+        agg: "sum",
+        value: (r) => r.duration_days,
+        render: (v) => (v == null ? "—" : Number(v).toFixed(1)),
+      },
+      {
+        key: "tcl_ins",
+        title: t("page.tc.pricing.tcl_ins", "TCL Ins"),
+        align: "right",
+        width: 95,
+        agg: "sum",
+        value: (r) => r.tcl_ins,
+        render: (v) => (v == null ? "—" : Number(v).toLocaleString()),
+      },
+      {
+        key: "locked",
+        title: t("page.tc.pricing.locked", "Locked"),
+        width: 75,
+        value: (r) => r.locked,
+        render: (v) => (v ? t("common.yes", "Yes") : t("common.no", "No")),
+      },
+      { key: "comments", title: t("page.tc.col.remarks", "Comments"), minWidth: 130, value: (r) => r.comments || "" },
+      {
+        key: "actions",
+        title: "",
+        width: 60,
+        value: () => "",
+        render: (_v, r) => (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              void delPricingRow(r.id);
+            }}
+          >
+            {t("common.delete", "Delete")}
+          </button>
+        ),
+      },
+    ],
+    [t],
+  );
+
+  const otherColumns: ColumnDef<OtherItemRow>[] = useMemo(
+    () => [
+      {
+        key: "code",
+        title: t("page.tc.other.code", "Code"),
+        width: 90,
+        sticky: true,
+        value: (r) => r.code,
+        render: (v) => <strong>{String(v)}</strong>,
+      },
+      { key: "description", title: t("common.description", "Description"), minWidth: 180, value: (r) => r.description || "" },
+      {
+        key: "rate_type",
+        title: t("page.tc.pricing.rate_type", "Rate type"),
+        width: 110,
+        value: (r) => r.rate_type,
+      },
+      {
+        key: "rate",
+        title: t("page.tc.other.rate", "Rate"),
+        align: "right",
+        width: 110,
+        agg: "sum",
+        value: (r) => r.rate,
+        render: (v, r) => `${Number(v ?? 0).toLocaleString()} ${r.currency}`,
+      },
+      {
+        key: "comm",
+        title: t("page.tc.other.comm", "Comm"),
+        width: 75,
+        value: (r) => r.comm,
+        render: (v) => (v ? t("common.yes", "Yes") : t("common.no", "No")),
+      },
+      {
+        key: "actions",
+        title: "",
+        width: 60,
+        value: () => "",
+        render: (_v, r) => (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              void delOtherItem(r.id);
+            }}
+          >
+            {t("common.delete", "Delete")}
+          </button>
+        ),
+      },
+    ],
+    [t],
   );
 
   const surveyColumns: ColumnDef<SurveyRow>[] = useMemo(
@@ -703,10 +1126,13 @@ export default function TcWorkspacePage() {
 
   const tabLabels: Record<TabId, string> = {
     contract: t("page.tc.tab.contract", "Contract"),
+    lay_events: t("page.tc.tab.lay_events", "Delivery / Redel."),
+    pricing: t("page.tc.tab.pricing", "Pricing Ladder"),
     hire: t("page.tc.tab.hire", "Hire & Off-hire"),
     billing: t("page.tc.tab.billing", "Billing Schedule"),
     profit_share: t("page.tc.tab.profit_share", "Profit Share"),
     broker: t("page.tc.tab.broker", "Broker Rules"),
+    other_items: t("page.tc.tab.other_items", "Other Items"),
     surveys: t("page.tc.tab.surveys", "Surveys"),
     children: t("page.tc.tab.children", "Child TCs"),
   };
@@ -926,8 +1352,360 @@ export default function TcWorkspacePage() {
                           onChange={(e) => setDraft((f) => ({ ...f, brokerage_pct: e.target.value }))}
                         />
                       </FieldRow>
+                      <FieldRow label={t("page.tc.col.owner_comm", "Owner comm %")}>
+                        <input
+                          type="number"
+                          step="any"
+                          value={draft.owner_comm_pct || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, owner_comm_pct: e.target.value }))}
+                        />
+                      </FieldRow>
+                    </FormSection>
+                    {/* P11 IMOS：Duration 块 — Min/Max/-Days/+Days/E/L Redel. */}
+                    <FormSection title={t("page.tc.terms.duration", "Duration")} dense>
+                      <FieldRow label={t("page.tc.duration.min", "Min (days)")}>
+                        <input
+                          type="number"
+                          step="any"
+                          value={draft.duration_min_days || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, duration_min_days: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.duration.max", "Max (days)")}>
+                        <input
+                          type="number"
+                          step="any"
+                          value={draft.duration_max_days || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, duration_max_days: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.duration.minus", "- Days")}>
+                        <input
+                          type="number"
+                          step="any"
+                          value={draft.duration_minus_days || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, duration_minus_days: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.duration.plus", "+ Days")}>
+                        <input
+                          type="number"
+                          step="any"
+                          value={draft.duration_plus_days || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, duration_plus_days: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.duration.el_min", "E redel.")}>
+                        <DateInput
+                          value={draft.el_redel_min || ""}
+                          onChange={(v) => setDraft((f) => ({ ...f, el_redel_min: v }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.duration.el_max", "L redel.")}>
+                        <DateInput
+                          value={draft.el_redel_max || ""}
+                          onChange={(v) => setDraft((f) => ({ ...f, el_redel_max: v }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.duration.basis", "Basis")}>
+                        <input
+                          value={draft.duration_basis || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, duration_basis: e.target.value }))}
+                          placeholder="WEATHER WORKING…"
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.duration.local_time", "Use local time")}>
+                        <select
+                          value={draft.use_local_time || "0"}
+                          onChange={(e) => setDraft((f) => ({ ...f, use_local_time: e.target.value }))}
+                        >
+                          <option value="0">{t("common.no", "No")}</option>
+                          <option value="1">{t("common.yes", "Yes")}</option>
+                        </select>
+                      </FieldRow>
+                    </FormSection>
+                    {/* P11 IMOS：合同抬头其余字段 */}
+                    <FormSection title={t("page.tc.terms.header_extra", "Contract header")} dense>
+                      <FieldRow label={t("page.tc.header.beneficiary", "Beneficiary")}>
+                        <input
+                          value={draft.beneficiary || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, beneficiary: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.company_code", "Company code")}>
+                        <input
+                          value={draft.company_code || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, company_code: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.trade_area", "Trade area")}>
+                        <input
+                          value={draft.trade_area || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, trade_area: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.contract_form", "Contract form")}>
+                        <input
+                          value={draft.contract_form || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, contract_form: e.target.value }))}
+                          placeholder="NYPE 2015…"
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.payment_terms", "Payment terms")}>
+                        <input
+                          value={draft.payment_terms || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, payment_terms: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.billing_period", "Billing period")}>
+                        <input
+                          value={draft.billing_period || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, billing_period: e.target.value }))}
+                          placeholder="EVERY 15 DAYS…"
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.billing_schedule", "Billing schedule")}>
+                        <input
+                          value={draft.billing_schedule || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, billing_schedule: e.target.value }))}
+                          placeholder="IN ADVANCE…"
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.chtr_specialist", "Chtr specialist")}>
+                        <input
+                          value={draft.chtr_specialist || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, chtr_specialist: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.ic_company", "IC company")}>
+                        <input
+                          value={draft.ic_company || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, ic_company: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.intercompany", "Intercompany")}>
+                        <select
+                          value={draft.intercompany || "0"}
+                          onChange={(e) => setDraft((f) => ({ ...f, intercompany: e.target.value }))}
+                        >
+                          <option value="0">{t("common.no", "No")}</option>
+                          <option value="1">{t("common.yes", "Yes")}</option>
+                        </select>
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.col.remarks", "Remarks")}>
+                        <input
+                          value={draft.remarks || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, remarks: e.target.value }))}
+                        />
+                      </FieldRow>
+                      <FieldRow label={t("page.tc.header.notes_ops", "Notes to operations")}>
+                        <input
+                          value={draft.notes_to_operations || ""}
+                          onChange={(e) => setDraft((f) => ({ ...f, notes_to_operations: e.target.value }))}
+                        />
+                      </FieldRow>
                     </FormSection>
                   </FormPanel>
+                </div>
+              </div>
+            ) : null}
+
+            {/* P11：Delivery/Redelivery 表 — Est / Proj-Act GMT / Difference */}
+            {tab === "lay_events" ? (
+              <div className="tc-panel">
+                <div className="tc-panel-head">
+                  <h3>{t("page.tc.lay.title", "Delivery / Redelivery")}</h3>
+                </div>
+                <div className="tc-panel-body">
+                  <DataGrid
+                    columns={layColumns}
+                    data={layRows}
+                    rowKey={(r) => r.id}
+                    loading={tabBusy}
+                    storageKey="tc-lay-events"
+                    emptyText={t("common.empty", "No records")}
+                  />
+                  <div className="quick-row mt-sm">
+                    <select
+                      aria-label={t("page.tc.lay.kind", "Lay")}
+                      value={layForm.kind}
+                      onChange={(e) => setLayForm((f) => ({ ...f, kind: e.target.value }))}
+                    >
+                      <option value="delivery">{t("page.tc.lay.delivery", "Delivery")}</option>
+                      <option value="redelivery">{t("page.tc.lay.redelivery", "Redelivery")}</option>
+                    </select>
+                    <input
+                      placeholder={t("page.tc.lay.port", "Port")}
+                      value={layForm.port}
+                      onChange={(e) => setLayForm((f) => ({ ...f, port: e.target.value }))}
+                    />
+                    <label className="muted">
+                      {t("page.tc.lay.est_gmt", "Est GMT")}
+                      <input
+                        type="datetime-local"
+                        value={layForm.est_gmt}
+                        onChange={(e) => setLayForm((f) => ({ ...f, est_gmt: e.target.value }))}
+                      />
+                    </label>
+                    <label className="muted">
+                      {t("page.tc.lay.proj_act", "Proj/Act GMT")}
+                      <input
+                        type="datetime-local"
+                        value={layForm.proj_act_gmt}
+                        onChange={(e) => setLayForm((f) => ({ ...f, proj_act_gmt: e.target.value }))}
+                      />
+                    </label>
+                    <input
+                      placeholder={t("page.tc.col.remarks", "Remarks")}
+                      value={layForm.remarks}
+                      onChange={(e) => setLayForm((f) => ({ ...f, remarks: e.target.value }))}
+                    />
+                    <button type="button" className="btn btn-primary" onClick={() => void addLayEvent()}>
+                      {t("common.create", "Create")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* P11：Pricing ladder — 多段租金 */}
+            {tab === "pricing" ? (
+              <div className="tc-panel">
+                <div className="tc-panel-head">
+                  <h3>{t("page.tc.pricing.title", "Pricing ladder")}</h3>
+                </div>
+                <div className="tc-panel-body">
+                  <DataGrid
+                    columns={pricingColumns}
+                    data={pricingRows}
+                    rowKey={(r) => r.id}
+                    loading={tabBusy}
+                    showFooter
+                    storageKey="tc-pricing-ladder"
+                    emptyText={t("common.empty", "No records")}
+                  />
+                  <div className="quick-row mt-sm">
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder={t("page.tc.col.hire_rate", "Hire rate")}
+                      value={pricingForm.hire_rate}
+                      onChange={(e) => setPricingForm((f) => ({ ...f, hire_rate: e.target.value }))}
+                    />
+                    <select
+                      aria-label={t("page.tc.pricing.rate_type", "Rate type")}
+                      value={pricingForm.rate_type}
+                      onChange={(e) => setPricingForm((f) => ({ ...f, rate_type: e.target.value }))}
+                    >
+                      <option value="per_day">{t("page.tc.pricing.per_day", "per day")}</option>
+                      <option value="lumpsum">{t("page.tc.pricing.lumpsum", "lumpsum")}</option>
+                      <option value="per_30_days">{t("page.tc.pricing.per_30", "per 30 days")}</option>
+                    </select>
+                    <label className="muted">
+                      {t("page.tc.col.from_gmt", "From GMT")}
+                      <input
+                        type="datetime-local"
+                        value={pricingForm.from_gmt}
+                        onChange={(e) => setPricingForm((f) => ({ ...f, from_gmt: e.target.value }))}
+                      />
+                    </label>
+                    <label className="muted">
+                      {t("page.tc.col.to_gmt", "To GMT")}
+                      <input
+                        type="datetime-local"
+                        value={pricingForm.to_gmt}
+                        onChange={(e) => setPricingForm((f) => ({ ...f, to_gmt: e.target.value }))}
+                      />
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder={t("page.tc.pricing.duration", "Duration (d)")}
+                      value={pricingForm.duration_days}
+                      onChange={(e) => setPricingForm((f) => ({ ...f, duration_days: e.target.value }))}
+                    />
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder={t("page.tc.pricing.tcl_ins", "TCL Ins")}
+                      value={pricingForm.tcl_ins}
+                      onChange={(e) => setPricingForm((f) => ({ ...f, tcl_ins: e.target.value }))}
+                    />
+                    <input
+                      placeholder={t("page.tc.col.remarks", "Comments")}
+                      value={pricingForm.comments}
+                      onChange={(e) => setPricingForm((f) => ({ ...f, comments: e.target.value }))}
+                    />
+                    <button type="button" className="btn btn-primary" onClick={() => void addPricingRow()}>
+                      {t("common.create", "Create")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* P11：Other items — BALLA/CABLE/VICTU/… */}
+            {tab === "other_items" ? (
+              <div className="tc-panel">
+                <div className="tc-panel-head">
+                  <h3>{t("page.tc.other.title", "Other items")}</h3>
+                </div>
+                <div className="tc-panel-body">
+                  <DataGrid
+                    columns={otherColumns}
+                    data={otherRows}
+                    rowKey={(r) => r.id}
+                    loading={tabBusy}
+                    showFooter
+                    storageKey="tc-other-items"
+                    emptyText={t("common.empty", "No records")}
+                  />
+                  <div className="quick-row mt-sm">
+                    <select
+                      aria-label={t("page.tc.other.code", "Code")}
+                      value={otherForm.code}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, code: e.target.value }))}
+                    >
+                      {OTHER_ITEM_CODES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      placeholder={t("common.description", "Description")}
+                      value={otherForm.description}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, description: e.target.value }))}
+                    />
+                    <select
+                      aria-label={t("page.tc.pricing.rate_type", "Rate type")}
+                      value={otherForm.rate_type}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, rate_type: e.target.value }))}
+                    >
+                      <option value="lumpsum">{t("page.tc.pricing.lumpsum", "lumpsum")}</option>
+                      <option value="monthly">{t("page.tc.other.monthly", "monthly")}</option>
+                      <option value="per_30_days">{t("page.tc.pricing.per_30", "per 30 days")}</option>
+                      <option value="per_day">{t("page.tc.pricing.per_day", "per day")}</option>
+                    </select>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder={t("page.tc.other.rate", "Rate")}
+                      value={otherForm.rate}
+                      onChange={(e) => setOtherForm((f) => ({ ...f, rate: e.target.value }))}
+                    />
+                    <label className="muted">
+                      <input
+                        type="checkbox"
+                        checked={otherForm.comm}
+                        onChange={(e) => setOtherForm((f) => ({ ...f, comm: e.target.checked }))}
+                      />{" "}
+                      {t("page.tc.other.comm", "Comm")}
+                    </label>
+                    <button type="button" className="btn btn-primary" onClick={() => void addOtherItem()}>
+                      {t("common.create", "Create")}
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -1078,6 +1856,25 @@ export default function TcWorkspacePage() {
                         <option value="hire">hire</option>
                         <option value="off_hire">off_hire</option>
                       </select>
+                    </label>
+                    <label>
+                      {t("page.tc.col.payment_method", "Payment method")}
+                      <select
+                        value={brokerForm.payment_method}
+                        onChange={(e) => setBrokerForm((f) => ({ ...f, payment_method: e.target.value }))}
+                      >
+                        <option value="pay_directly">{t("page.tc.pay.pay_directly", "Pay directly")}</option>
+                        <option value="deduct_from_hire">{t("page.tc.pay.deduct_from_hire", "Deduct from hire")}</option>
+                      </select>
+                    </label>
+                    <label>
+                      {t("page.tc.col.m_method", "M")}
+                      <input
+                        type="number"
+                        step="1"
+                        value={brokerForm.m_method}
+                        onChange={(e) => setBrokerForm((f) => ({ ...f, m_method: e.target.value }))}
+                      />
                     </label>
                     <button type="button" className="btn btn-primary" onClick={addBrokerRule}>
                       {t("common.add", "Add")}

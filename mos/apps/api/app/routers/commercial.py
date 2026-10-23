@@ -28,6 +28,7 @@ from app.models_domain import (
 )
 from app.models_wave1 import Counterparty, Vessel
 from app.models_time_charter import HireSurvey
+from app.models_charter_ext import CharterItineraryRow
 from app.security import AuthContext, require_module
 from app.services.doc_numbering import next_doc_number
 from app.services.optimistic_lock import assert_fresh
@@ -132,6 +133,21 @@ class _CharterTermsMixin(BaseModel):
     planning_periods: dict | None = None
     rev_exp: dict | None = None
     properties: dict | None = None
+    # ── P11 IMOS Fixture header 对齐 ──
+    voyage_no: str | None = None
+    opr_type: str | None = None
+    performing_vessel_id: UUID | None = None
+    chtr_specialist: str | None = None
+    ops_coordinator: str | None = None
+    commence_at: datetime | None = None
+    ballast_bonus: float | None = None
+    in_progress_voyage: bool = False
+    ls_only: bool = False
+    piracy_routing: Literal["default", "best", "avoid"] | None = None
+    dwf_pct: float | None = None
+    company_code: str | None = None
+    lob: str | None = None
+    trade_area: str | None = None
 
     @field_validator("laytime_terms")
     @classmethod
@@ -154,6 +170,8 @@ class CharterIn(_CharterTermsMixin):
     commission_pct: float | None = None
     freight_terms: dict = Field(default_factory=dict)
     clauses: dict = Field(default_factory=dict)
+    # Fixture No. 为系统编号（YYYYNNNN）；显式传入时沿用
+    fixture_no: str | None = None
 
 
 class CharterOut(BaseModel):
@@ -201,6 +219,22 @@ class CharterOut(BaseModel):
     planning_periods: dict | None = None
     rev_exp: dict | None = None
     properties: dict | None = None
+    # ── P11 IMOS Fixture header 对齐 ──
+    fixture_no: str | None = None
+    voyage_no: str | None = None
+    opr_type: str | None = None
+    performing_vessel_id: UUID | None = None
+    chtr_specialist: str | None = None
+    ops_coordinator: str | None = None
+    commence_at: datetime | None = None
+    ballast_bonus: float | None = None
+    in_progress_voyage: bool = False
+    ls_only: bool = False
+    piracy_routing: str | None = None
+    dwf_pct: float | None = None
+    company_code: str | None = None
+    lob: str | None = None
+    trade_area: str | None = None
     updated_at: datetime | None = None
 
 
@@ -843,6 +877,21 @@ def _charter_out(c: Charter) -> CharterOut:
         planning_periods=c.planning_periods,
         rev_exp=c.rev_exp,
         properties=c.properties,
+        fixture_no=c.fixture_no,
+        voyage_no=c.voyage_no,
+        opr_type=c.opr_type,
+        performing_vessel_id=c.performing_vessel_id,
+        chtr_specialist=c.chtr_specialist,
+        ops_coordinator=c.ops_coordinator,
+        commence_at=c.commence_at,
+        ballast_bonus=_f(c.ballast_bonus) if c.ballast_bonus is not None else None,
+        in_progress_voyage=bool(c.in_progress_voyage),
+        ls_only=bool(c.ls_only),
+        piracy_routing=c.piracy_routing,
+        dwf_pct=_f(c.dwf_pct) if c.dwf_pct is not None else None,
+        company_code=c.company_code,
+        lob=c.lob,
+        trade_area=c.trade_area,
         updated_at=c.updated_at,
     )
 
@@ -1156,6 +1205,185 @@ def delete_broker_rule(
     return {"ok": True}
 
 
+# —— P11: Fixture embedded voyage calculator (Itinerary grid + footer totals) ——
+
+
+class ItineraryRowIn(BaseModel):
+    seq: int = 0
+    port: str | None = None
+    miles: float | None = None
+    speed: float | None = None
+    sea_days: float | None = None
+    xsd: float | None = None
+    flag: Literal["F", "L", "D", "Z", "P", "Y"] | None = None  # F=Fuel L=Load D=Disch Z=Special P=Port Y=Pass
+    cargo: str | None = None
+    ld_qty: float | None = None
+    ld_rate: float | None = None
+    terms: str | None = None
+    port_days: float | None = None
+    xpd: float | None = None
+    port_exp: float | None = None
+    liner_exp: float | None = None
+    oexp_per_t: float | None = None
+    status: str | None = None
+
+
+class ItineraryRowPatch(BaseModel):
+    seq: int | None = None
+    port: str | None = None
+    miles: float | None = None
+    speed: float | None = None
+    sea_days: float | None = None
+    xsd: float | None = None
+    flag: Literal["F", "L", "D", "Z", "P", "Y"] | None = None
+    cargo: str | None = None
+    ld_qty: float | None = None
+    ld_rate: float | None = None
+    terms: str | None = None
+    port_days: float | None = None
+    xpd: float | None = None
+    port_exp: float | None = None
+    liner_exp: float | None = None
+    oexp_per_t: float | None = None
+    status: str | None = None
+
+
+class ItineraryRowOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    charter_id: UUID
+    seq: int
+    port: str | None
+    miles: float | None
+    speed: float | None
+    sea_days: float | None
+    xsd: float | None
+    flag: str | None
+    cargo: str | None
+    ld_qty: float | None
+    ld_rate: float | None
+    terms: str | None
+    port_days: float | None
+    xpd: float | None
+    port_exp: float | None
+    liner_exp: float | None
+    oexp_per_t: float | None
+    status: str | None
+
+
+def _itin_out(r: CharterItineraryRow) -> ItineraryRowOut:
+    return ItineraryRowOut(
+        id=r.id,
+        charter_id=r.charter_id,
+        seq=r.seq,
+        port=r.port,
+        miles=_f(r.miles),
+        speed=_f(r.speed),
+        sea_days=_f(r.sea_days),
+        xsd=_f(r.xsd),
+        flag=r.flag,
+        cargo=r.cargo,
+        ld_qty=_f(r.ld_qty),
+        ld_rate=_f(r.ld_rate),
+        terms=r.terms,
+        port_days=_f(r.port_days),
+        xpd=_f(r.xpd),
+        port_exp=_f(r.port_exp),
+        liner_exp=_f(r.liner_exp),
+        oexp_per_t=_f(r.oexp_per_t),
+        status=r.status,
+    )
+
+
+def _itin_totals(rows: list[CharterItineraryRow]) -> dict:
+    """IMOS footer totals: miles / sea days / port days / XPD / port+liner exp."""
+    def _sum(attr: str) -> float:
+        return round(sum(float(getattr(r, attr) or 0) for r in rows), 4)
+
+    return {
+        "miles": _sum("miles"),
+        "sea_days": _sum("sea_days"),
+        "port_days": _sum("port_days"),
+        "xsd": _sum("xsd"),
+        "xpd": _sum("xpd"),
+        "port_exp": _sum("port_exp"),
+        "liner_exp": _sum("liner_exp"),
+        "rows": len(rows),
+    }
+
+
+@router.get("/charters/{charter_id}/itinerary-rows")
+def list_itinerary_rows(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_charter(db, auth, charter_id)
+    rows = db.scalars(
+        select(CharterItineraryRow)
+        .where(
+            CharterItineraryRow.tenant_id == auth.tenant_id,
+            CharterItineraryRow.charter_id == charter_id,
+        )
+        .order_by(CharterItineraryRow.seq, CharterItineraryRow.created_at)
+    ).all()
+    return {"items": [_itin_out(r) for r in rows], "totals": _itin_totals(rows)}
+
+
+@router.post("/charters/{charter_id}/itinerary-rows", response_model=ItineraryRowOut, status_code=201)
+def add_itinerary_row(
+    charter_id: UUID,
+    body: ItineraryRowIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_charter(db, auth, charter_id)
+    row = CharterItineraryRow(
+        tenant_id=auth.tenant_id,
+        charter_id=charter_id,
+        **body.model_dump(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _itin_out(row)
+
+
+@router.patch("/charters/{charter_id}/itinerary-rows/{row_id}", response_model=ItineraryRowOut)
+def update_itinerary_row(
+    charter_id: UUID,
+    row_id: UUID,
+    body: ItineraryRowPatch,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_charter(db, auth, charter_id)
+    row = scoped_get(db, CharterItineraryRow, row_id, auth.tenant_id)
+    if not row or row.charter_id != charter_id:
+        raise HTTPException(404, "Itinerary row not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return _itin_out(row)
+
+
+@router.delete("/charters/{charter_id}/itinerary-rows/{row_id}")
+def delete_itinerary_row(
+    charter_id: UUID,
+    row_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_charter(db, auth, charter_id)
+    row = scoped_get(db, CharterItineraryRow, row_id, auth.tenant_id)
+    if not row or row.charter_id != charter_id:
+        raise HTTPException(404, "Itinerary row not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
 # —— 条款库（D1） ——
 
 
@@ -1449,6 +1677,21 @@ CHARTER_TAB_FIELDS = (
     "planning_periods",
     "rev_exp",
     "properties",
+    # ── P11 IMOS Fixture header 直通字段 ──
+    "voyage_no",
+    "opr_type",
+    "performing_vessel_id",
+    "chtr_specialist",
+    "ops_coordinator",
+    "commence_at",
+    "ballast_bonus",
+    "in_progress_voyage",
+    "ls_only",
+    "piracy_routing",
+    "dwf_pct",
+    "company_code",
+    "lob",
+    "trade_area",
 )
 
 
@@ -1465,6 +1708,35 @@ CHARTER_AMENDABLE_FIELDS = (
 )
 
 
+def _next_fixture_no(db: Session, tenant_id) -> str:
+    """IMOS Fixture No. — tenant sequence ``YYYYNNNN`` (year + 4-digit serial)."""
+    from sqlalchemy import func as _func
+
+    year = datetime.now().year
+    prefix = str(year)
+    last = db.scalar(
+        select(Charter.fixture_no)
+        .where(
+            Charter.tenant_id == tenant_id,
+            Charter.fixture_no.is_not(None),
+            Charter.fixture_no.like(f"{prefix}%"),
+        )
+        .order_by(Charter.fixture_no.desc())
+        .limit(1)
+    )
+    seq = int(last[4:]) + 1 if last and len(last) >= 8 and last[4:].isdigit() else 1
+    # guard against gaps from deleted rows: also probe the count
+    count = db.scalar(
+        select(_func.count()).select_from(Charter).where(
+            Charter.tenant_id == tenant_id,
+            Charter.fixture_no.is_not(None),
+            Charter.fixture_no.like(f"{prefix}%"),
+        )
+    ) or 0
+    seq = max(seq, count + 1)
+    return f"{prefix}{seq:04d}"
+
+
 @router.post("/charters", response_model=CharterOut)
 def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("chartering")), db: Session = Depends(get_db)):
     blocked = False
@@ -1476,13 +1748,23 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
             blocked = True
     if body.vessel_id is not None and scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
         raise HTTPException(404, "Vessel not found")
+    if body.performing_vessel_id is not None and scoped_get(db, Vessel, body.performing_vessel_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Performing vessel not found")
     if body.estimate_id is not None and scoped_get(db, Estimate, body.estimate_id, auth.tenant_id) is None:
         raise HTTPException(404, "Estimate not found")
     if body.master_contract_id is not None and scoped_get(db, MasterContract, body.master_contract_id, auth.tenant_id) is None:
         raise HTTPException(404, "Master contract not found")
+    # 列默认值（charter_direction="out" / fixture_type="voyage_fixture"）只在属性
+    # 未赋值时生效；显式传 None 会写成 NULL。此处剔除 None，让 ORM 默认接管。
+    tab_kwargs = {
+        f: getattr(body, f)
+        for f in CHARTER_TAB_FIELDS
+        if getattr(body, f) is not None or f not in ("charter_direction", "fixture_type")
+    }
     row = Charter(
         tenant_id=auth.tenant_id,
         charter_no=next_doc_number(db, auth.tenant_id, Charter, Charter.charter_no, "CP"),
+        fixture_no=body.fixture_no or _next_fixture_no(db, auth.tenant_id),
         charter_type=body.charter_type,
         vessel_id=body.vessel_id,
         counterparty_id=body.counterparty_id,
@@ -1494,7 +1776,7 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
         clauses=body.clauses,
         sanctions_blocked=blocked,
         **{f: getattr(body, f) for f in CHARTER_TERM_FIELDS},
-        **{f: getattr(body, f) for f in CHARTER_TAB_FIELDS},
+        **tab_kwargs,
     )
     db.add(row)
     db.commit()
@@ -2685,6 +2967,50 @@ def lookup_worldscale(
 # ── Port Distance ──
 
 
+def _distance_out(row: PortDistance) -> dict:
+    return {
+        "id": str(row.id),
+        "from_port_unlocode": row.from_port_unlocode,
+        "to_port_unlocode": row.to_port_unlocode,
+        "distance_nm": float(row.distance_nm),
+        "route_type": row.route_type,
+        "canal_transit": row.canal_transit,
+        "canal_toll": float(row.canal_toll) if row.canal_toll is not None else None,
+        "transit_days": float(row.transit_days) if row.transit_days is not None else None,
+        "notes": row.notes,
+        "source": row.source,
+    }
+
+
+@router.get("/distances/list")
+def list_distances(
+    q: str | None = Query(None, description="Match from/to UN/LOCODE (case-insensitive)"),
+    route_type: str | None = Query(None, description="standard | canal | cape"),
+    limit: int = Query(500, ge=1, le=2000),
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """Browse the distance master (IMOS Data Center > Distances).
+
+    ``port_distances`` is global nautical reference data — it carries no
+    ``tenant_id`` column, exactly like ``ports`` / ``port_berths`` — so the
+    listing is deliberately not tenant-filtered. Accepted in
+    ``tests/arch_baseline.json`` for the same reason as ``upsert_distance``.
+    """
+    stmt = select(PortDistance)
+    if q and q.strip():
+        like = f"%{q.strip().upper()}%"
+        stmt = stmt.where(
+            or_(PortDistance.from_port_unlocode.like(like), PortDistance.to_port_unlocode.like(like))
+        )
+    if route_type:
+        stmt = stmt.where(PortDistance.route_type == route_type)
+    rows = db.scalars(
+        stmt.order_by(PortDistance.from_port_unlocode, PortDistance.to_port_unlocode).limit(limit)
+    ).all()
+    return [_distance_out(r) for r in rows]
+
+
 @router.get("/distances")
 def query_distance(
     from_port: str = Query(...),
@@ -3142,3 +3468,106 @@ def offer_transition(
         charter_id = str(charter.id)
     db.commit()
     return {"id": str(row.id), "status": row.status, "charter_id": charter_id}
+
+
+# —— P11: IMOS Open Positions（TC 还船空档 + 未成交航次货盘） ——
+
+
+@router.get("/chartering/open-positions")
+def chartering_open_positions(
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """IMOS Open Positions — TC In redelivery openings + unfixed voyage fixtures.
+
+    Rows: kind (tc_open | voyage_fix), vessel identity (code/name/dwt/type/
+    cubic capacity), open date (TC redelivery_date / voyage laycan_to as
+    proxy), TC code, company, hire rate where known.
+    """
+    items: list[dict] = []
+
+    # 1) Active TC In contracts → open date = redelivery date
+    tc_q = (
+        select(TimeCharterContract, Vessel)
+        .join(Vessel, TimeCharterContract.vessel_id == Vessel.id)
+        .where(
+            TimeCharterContract.tenant_id == auth.tenant_id,
+            TimeCharterContract.contract_type == "tci",
+            TimeCharterContract.status == "active",
+        )
+    )
+    if date_from:
+        tc_q = tc_q.where(TimeCharterContract.redelivery_date >= date_from)
+    if date_to:
+        tc_q = tc_q.where(TimeCharterContract.redelivery_date <= date_to)
+    for tc, vessel in db.execute(tc_q.order_by(TimeCharterContract.redelivery_date)):
+        items.append(
+            {
+                "kind": "tc_open",
+                "id": str(tc.id),
+                "tc_code": tc.tc_code,
+                "vessel_id": str(vessel.id),
+                "vessel_code": vessel.vessel_code,
+                "vessel_name": vessel.name,
+                "dwt": _f(vessel.dwt),
+                "vessel_type": vessel.vessel_type,
+                "cubic_capacity": _f(vessel.capacity_grain_ft3),
+                "company_code": tc.company_code,
+                "counterparty_id": str(tc.counterparty_id),
+                "open_date": tc.redelivery_date,
+                "open_port": tc.redelivery_port,
+                "hire_rate": _f(tc.hire_rate),
+                "hire_currency": tc.hire_currency,
+                "trade_area": tc.trade_area,
+            }
+        )
+
+    # 2) Open voyage fixtures (charter_direction=out, not yet executed) →
+    #    laycan_to as the latest date the fixture can still be worked.
+    #    draft/pending_approval = still open; active = fixed but voyage not
+    #    completed yet (IMOS keeps it visible until the voyage closes).
+    #    NULL direction predates the column default — treat as "out".
+    #    outerjoin: unfixed fixtures often have no vessel nominated yet.
+    voy_q = (
+        select(Charter, Vessel)
+        .outerjoin(Vessel, Charter.vessel_id == Vessel.id)
+        .where(
+            Charter.tenant_id == auth.tenant_id,
+            Charter.charter_type == "voyage",
+            or_(Charter.charter_direction == "out", Charter.charter_direction.is_(None)),
+            Charter.status.in_(("draft", "pending_approval", "active")),
+        )
+    )
+    if date_from:
+        voy_q = voy_q.where(Charter.laycan_to >= date_from)
+    if date_to:
+        voy_q = voy_q.where(Charter.laycan_to <= date_to)
+    for ch, vessel in db.execute(voy_q.order_by(Charter.laycan_to)):
+        items.append(
+            {
+                "kind": "voyage_fix",
+                "id": str(ch.id),
+                "fixture_no": ch.fixture_no,
+                "charter_no": ch.charter_no,
+                "vessel_id": str(vessel.id) if vessel else None,
+                "vessel_code": vessel.vessel_code if vessel else None,
+                "vessel_name": vessel.name if vessel else None,
+                "dwt": _f(vessel.dwt) if vessel else None,
+                "vessel_type": vessel.vessel_type if vessel else None,
+                "cubic_capacity": _f(vessel.capacity_grain_ft3) if vessel else None,
+                "company_code": ch.company_code,
+                "counterparty_id": str(ch.counterparty_id) if ch.counterparty_id else None,
+                "open_date": ch.laycan_to,
+                "open_port": None,
+                "laycan_from": ch.laycan_from,
+                "laycan_to": ch.laycan_to,
+                "cargo_qty": _f(ch.cargo_qty),
+                "freight_rate": _f(ch.freight_rate),
+                "freight_basis": ch.freight_basis,
+            }
+        )
+
+    items.sort(key=lambda r: (r.get("open_date") is None, r.get("open_date")))
+    return {"items": items, "count": len(items)}

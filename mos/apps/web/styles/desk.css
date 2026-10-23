@@ -242,6 +242,9 @@
 .desk-section-tight { margin: 0.5rem 0; }
 .desk-section-tight > h3 { margin-top: 0; }
 .desk-toolbar-flush { margin: 0; }
+/* 标题左、动作右的工具栏（行内 style 的替代） */
+.desk-toolbar-split { justify-content: space-between; }
+.desk-toolbar h2 { margin: 0; }
 .h3-compact { margin: 0; font-size: 0.95rem; }
 .mt-sm { margin-top: 0.5rem; }
 .m-0 { margin: 0; }

@@ -22,6 +22,7 @@ from app.schemas_wave1 import (
     ExchangeRateOut,
     PortIn,
     PortOut,
+    PortUpdate,
     VesselIn,
     VesselOut,
     VesselUpdate,
@@ -184,7 +185,9 @@ def update_vessel(
     assert_fresh(row, body.expected_updated_at)
     payload_fields = set(body.model_fields_set) - {"expected_updated_at"} or set(body.model_dump().keys())
     assert_fields_writable(db, auth.tenant_id, "vessel", auth.roles, payload_fields)
-    for k, v in body.model_dump().items():
+    # exclude_unset：只写客户端显式提交的字段。全量 model_dump() 会把未提交字段
+    # 补成默认值，setattr 就把存量值清成 None —— 字段集扩到 IMOS 规模后尤其危险。
+    for k, v in body.model_dump(exclude_unset=True, exclude={"expected_updated_at"}).items():
         setattr(row, k, v)
     row.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -259,7 +262,7 @@ def _require_port_admin(auth: AuthContext) -> None:
 @router.patch("/ports/{port_id}", response_model=PortOut)
 def update_port(
     port_id: UUID,
-    body: PortIn,
+    body: PortUpdate,
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
@@ -267,7 +270,8 @@ def update_port(
     row = db.get(Port, port_id)
     if not row or row.deleted_at:
         raise HTTPException(404, "Port not found")
-    for k, v in body.model_dump().items():
+    # exclude_unset —— 同 update_vessel：全量 model_dump() 补默认值会清掉存量值。
+    for k, v in body.model_dump(exclude_unset=True).items():
         setattr(row, k, v)
     db.commit()
     db.refresh(row)
@@ -347,7 +351,8 @@ def update_counterparty(
     assert_fresh(row, body.expected_updated_at)
     payload_fields = set(body.model_fields_set) - {"expected_updated_at"} or set(body.model_dump().keys())
     assert_fields_writable(db, auth.tenant_id, "counterparty", auth.roles, payload_fields)
-    for k, v in body.model_dump().items():
+    # exclude_unset —— 同 update_vessel，避免未提交字段被默认值清空。
+    for k, v in body.model_dump(exclude_unset=True, exclude={"expected_updated_at"}).items():
         setattr(row, k, v)
     row.updated_at = datetime.now(timezone.utc)
     db.commit()

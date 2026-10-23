@@ -21,8 +21,11 @@ NAV_DESK: list[dict[str, Any]] = [
     {"id": "tasks", "label": "Tasks", "href": "/tasks", "roles": ["*"]},
     {"id": "estimates", "label": "Estimates", "href": "/estimates", "roles": ["chartering", "management"]},
     {"id": "charters", "label": "Charters", "href": "/charters", "roles": ["chartering", "management"]},
-    {"id": "tc-contracts", "label": "Time Charter", "label_zh": "期租管理", "href": "/charters/tc", "roles": ["chartering", "management"]},
+    # P11 IMOS：TC In / TC Out 分列目的地（同一列表面板，?dir 分列）
+    {"id": "tc-in", "label": "TC In", "label_zh": "期租租入", "href": "/charters?type=tc&dir=in", "roles": ["chartering", "management"]},
+    {"id": "tc-out", "label": "TC Out", "label_zh": "期租租出", "href": "/charters?type=tc&dir=out", "roles": ["chartering", "management"]},
     {"id": "coa-contracts", "label": "COA", "label_zh": "包运合同", "href": "/charters/coa", "roles": ["chartering", "management"]},
+    {"id": "open-positions", "label": "Open Positions", "label_zh": "租家机会", "href": "/charters/open-positions", "roles": ["chartering", "management"]},
     {"id": "email", "label": "Email Review", "href": "/email/review", "roles": ["chartering", "operations"]},
     {"id": "ops", "label": "Voyages", "href": "/operations/voyages", "roles": ["operations", "management", "technical"]},
     {"id": "schedule", "label": "Scheduling", "label_zh": "调度管理", "href": "/operations/schedule", "roles": ["operations", "management", "technical", "chartering"]},
@@ -70,6 +73,8 @@ NAV_MASTER: list[dict[str, Any]] = [
     {"id": "rate-tables", "label": "Rate Tables", "label_zh": "费率表", "href": "/masterdata/rates", "roles": ["chartering", "operations", "tenant_admin", "finance", "bunker"]},
     {"id": "fuel_zones", "label": "Fuel zones", "href": "/masterdata/fuel-zones", "roles": ["operations", "bunker", "tenant_admin", "compliance"]},
     {"id": "parties", "label": "Counterparties", "href": "/masterdata/counterparties", "roles": ["chartering", "finance", "tenant_admin", "compliance"]},
+    {"id": "cargo_names", "label": "Cargo names", "label_zh": "货物品名", "href": "/masterdata/cargo-names", "roles": ["chartering", "operations", "tenant_admin", "bunker"]},
+    {"id": "distances", "label": "Distances", "label_zh": "航线距离", "href": "/masterdata/distances", "roles": ["chartering", "operations", "tenant_admin"]},
     {"id": "import_wizard", "label": "Import wizard", "label_zh": "导入向导", "href": "/masterdata/import", "roles": ["chartering", "operations", "tenant_admin"]},
 ]
 
@@ -78,6 +83,7 @@ NAV_ADMIN: list[dict[str, Any]] = [
     {"id": "settings_hub", "label": "System settings", "href": "/settings", "roles": ["tenant_admin"]},
     {"id": "flags", "label": "Configuration flags", "label_zh": "配置标志", "href": "/settings/flags", "roles": ["tenant_admin"]},
     {"id": "udf", "label": "User-defined fields", "label_zh": "用户自定义字段", "href": "/settings/udf", "roles": ["tenant_admin"]},
+    {"id": "doc_templates", "label": "Document templates", "label_zh": "单据模板", "href": "/settings/templates", "roles": ["tenant_admin", "finance", "chartering", "management"]},
 ]
 
 NAV_PLATFORM: list[dict[str, Any]] = [
@@ -97,7 +103,7 @@ MODULES: list[dict[str, Any]] = [
     {
         "id": "chartering",
         "label": "Chartering",
-        "item_ids": ["estimates", "charters", "tc-contracts", "coa-contracts", "email"],
+        "item_ids": ["estimates", "charters", "tc-in", "tc-out", "coa-contracts", "open-positions", "email"],
         "roles": ["chartering", "management", "risk"],
         "collapsed_default": False,
     },

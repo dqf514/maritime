@@ -15,3 +15,8 @@ pytest==9.1.1
 openpyxl==3.1.5
 email-validator==2.3.0
 anthropic>=0.79.0
+# 单据模板：Jinja2 渲染（沙箱环境）+ Playwright 无头 Chromium 出 PDF。
+# Chromium 二进制需单独执行 `python -m playwright install chromium`；
+# 未安装时 doc_engine.html_to_pdf 抛 PDFEngineUnavailable，上层回落 HTML。
+jinja2==3.1.6
+playwright==1.56.0

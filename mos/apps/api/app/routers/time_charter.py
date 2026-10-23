@@ -8,17 +8,22 @@ commercial.py stays untouched. All ORM access is tenant-scoped
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal, Optional
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models_charter_ext import (
+    TimeCharterLayEvent,
+    TimeCharterOtherItem,
+    TimeCharterPricingRow,
+)
 from app.models_domain import Charter
 from app.models_time_charter import (
     BrokerRule,
@@ -26,7 +31,7 @@ from app.models_time_charter import (
     ProfitShareRule,
     TimeCharterContract,
 )
-from app.models_wave1 import Counterparty
+from app.models_wave1 import Counterparty, Vessel
 from app.security import AuthContext, require_module
 from app.services import hire_engine
 from app.services.audit import audit
@@ -68,6 +73,46 @@ class TCContractIn(BaseModel):
     # 指数联动定价 — index-linked hire components (same spec as
     # Estimate.inputs["unpriced_components"]); additive, optional.
     hire_components: Optional[list[dict]] = None
+    # ── P11 IMOS TC header 对齐 ──
+    tc_code: Optional[str] = None  # 缺省自动编号 VESSEL-I#### / -O####
+    beneficiary: Optional[str] = None
+    date_fixed_at: Optional[datetime] = None
+    fixed_by: Optional[str] = None
+    company_code: Optional[str] = None
+    department: Optional[str] = None
+    trade_area: Optional[str] = None
+    ref_no: Optional[str] = None
+    payment_terms: Optional[str] = None
+    contract_form: Optional[str] = None
+    laycan_from_at: Optional[datetime] = None
+    laycan_to_at: Optional[datetime] = None
+    # Duration block（Min/Max -Days +Days E/L Redel.）
+    duration_min_days: Optional[Decimal] = None
+    duration_max_days: Optional[Decimal] = None
+    duration_minus_days: Optional[Decimal] = None
+    duration_plus_days: Optional[Decimal] = None
+    el_redel_min: Optional[datetime] = None
+    el_redel_max: Optional[datetime] = None
+    duration_basis: Optional[str] = None
+    use_local_time: bool = False
+    # 计费与账务
+    billing_period: Optional[str] = None
+    billing_schedule: Optional[str] = None
+    rebillable_admin_fee_pct: Optional[Decimal] = None
+    exchange_rate: Optional[Decimal] = Decimal("1")
+    ref_contract: Optional[str] = None
+    chtr_specialist: Optional[str] = None
+    conf_date_gmt: Optional[datetime] = None
+    intercompany: bool = False
+    ic_company: Optional[str] = None
+    ic_adj_pct: Optional[Decimal] = None
+    # 右栏 Summary
+    next_open_date: Optional[datetime] = None
+    owner_comm_pct: Optional[Decimal] = None
+    owner_comm_pay_to: Optional[str] = None
+    valuation_id: Optional[str] = None
+    remarks: Optional[str] = None
+    notes_to_operations: Optional[str] = None
 
 
 class TCContractPatch(BaseModel):
@@ -85,6 +130,43 @@ class TCContractPatch(BaseModel):
     address_comm_pct: Optional[Decimal] = None
     brokerage_pct: Optional[Decimal] = None
     hire_components: Optional[list[dict]] = None
+    # ── P11 IMOS TC header 对齐 ──
+    tc_code: Optional[str] = None
+    beneficiary: Optional[str] = None
+    date_fixed_at: Optional[datetime] = None
+    fixed_by: Optional[str] = None
+    company_code: Optional[str] = None
+    department: Optional[str] = None
+    trade_area: Optional[str] = None
+    ref_no: Optional[str] = None
+    payment_terms: Optional[str] = None
+    contract_form: Optional[str] = None
+    laycan_from_at: Optional[datetime] = None
+    laycan_to_at: Optional[datetime] = None
+    duration_min_days: Optional[Decimal] = None
+    duration_max_days: Optional[Decimal] = None
+    duration_minus_days: Optional[Decimal] = None
+    duration_plus_days: Optional[Decimal] = None
+    el_redel_min: Optional[datetime] = None
+    el_redel_max: Optional[datetime] = None
+    duration_basis: Optional[str] = None
+    use_local_time: Optional[bool] = None
+    billing_period: Optional[str] = None
+    billing_schedule: Optional[str] = None
+    rebillable_admin_fee_pct: Optional[Decimal] = None
+    exchange_rate: Optional[Decimal] = None
+    ref_contract: Optional[str] = None
+    chtr_specialist: Optional[str] = None
+    conf_date_gmt: Optional[datetime] = None
+    intercompany: Optional[bool] = None
+    ic_company: Optional[str] = None
+    ic_adj_pct: Optional[Decimal] = None
+    next_open_date: Optional[datetime] = None
+    owner_comm_pct: Optional[Decimal] = None
+    owner_comm_pay_to: Optional[str] = None
+    valuation_id: Optional[str] = None
+    remarks: Optional[str] = None
+    notes_to_operations: Optional[str] = None
 
 
 class TCContractOut(BaseModel):
@@ -109,8 +191,49 @@ class TCContractOut(BaseModel):
     address_comm_pct: Optional[float] = None
     brokerage_pct: Optional[float] = None
     hire_components: Optional[list[dict]] = None
+    # ── P11 IMOS TC header 对齐 ──
+    tc_code: Optional[str] = None
+    beneficiary: Optional[str] = None
+    date_fixed_at: Optional[datetime] = None
+    fixed_by: Optional[str] = None
+    company_code: Optional[str] = None
+    department: Optional[str] = None
+    trade_area: Optional[str] = None
+    ref_no: Optional[str] = None
+    payment_terms: Optional[str] = None
+    contract_form: Optional[str] = None
+    laycan_from_at: Optional[datetime] = None
+    laycan_to_at: Optional[datetime] = None
+    duration_min_days: Optional[float] = None
+    duration_max_days: Optional[float] = None
+    duration_minus_days: Optional[float] = None
+    duration_plus_days: Optional[float] = None
+    el_redel_min: Optional[datetime] = None
+    el_redel_max: Optional[datetime] = None
+    duration_basis: Optional[str] = None
+    use_local_time: bool = False
+    billing_period: Optional[str] = None
+    billing_schedule: Optional[str] = None
+    rebillable_admin_fee_pct: Optional[float] = None
+    exchange_rate: Optional[float] = None
+    ref_contract: Optional[str] = None
+    chtr_specialist: Optional[str] = None
+    conf_date_gmt: Optional[datetime] = None
+    intercompany: bool = False
+    ic_company: Optional[str] = None
+    ic_adj_pct: Optional[float] = None
+    next_open_date: Optional[datetime] = None
+    owner_comm_pct: Optional[float] = None
+    owner_comm_pay_to: Optional[str] = None
+    valuation_id: Optional[str] = None
+    remarks: Optional[str] = None
+    notes_to_operations: Optional[str] = None
     status: str
     updated_at: Optional[datetime] = None
+
+
+def _opt_f(v) -> float | None:
+    return _f(v) if v is not None else None
 
 
 def _contract_out(c: TimeCharterContract) -> TCContractOut:
@@ -130,11 +253,47 @@ def _contract_out(c: TimeCharterContract) -> TCContractOut:
         hire_currency=c.hire_currency,
         payment_frequency=c.payment_frequency,
         cancel_date=c.cancel_date,
-        profit_share_pct=_f(c.profit_share_pct) if c.profit_share_pct is not None else None,
-        profit_share_threshold=_f(c.profit_share_threshold) if c.profit_share_threshold is not None else None,
-        address_comm_pct=_f(c.address_comm_pct) if c.address_comm_pct is not None else None,
-        brokerage_pct=_f(c.brokerage_pct) if c.brokerage_pct is not None else None,
+        profit_share_pct=_opt_f(c.profit_share_pct),
+        profit_share_threshold=_opt_f(c.profit_share_threshold),
+        address_comm_pct=_opt_f(c.address_comm_pct),
+        brokerage_pct=_opt_f(c.brokerage_pct),
         hire_components=c.hire_components,
+        tc_code=c.tc_code,
+        beneficiary=c.beneficiary,
+        date_fixed_at=c.date_fixed_at,
+        fixed_by=c.fixed_by,
+        company_code=c.company_code,
+        department=c.department,
+        trade_area=c.trade_area,
+        ref_no=c.ref_no,
+        payment_terms=c.payment_terms,
+        contract_form=c.contract_form,
+        laycan_from_at=c.laycan_from_at,
+        laycan_to_at=c.laycan_to_at,
+        duration_min_days=_opt_f(c.duration_min_days),
+        duration_max_days=_opt_f(c.duration_max_days),
+        duration_minus_days=_opt_f(c.duration_minus_days),
+        duration_plus_days=_opt_f(c.duration_plus_days),
+        el_redel_min=c.el_redel_min,
+        el_redel_max=c.el_redel_max,
+        duration_basis=c.duration_basis,
+        use_local_time=bool(c.use_local_time),
+        billing_period=c.billing_period,
+        billing_schedule=c.billing_schedule,
+        rebillable_admin_fee_pct=_opt_f(c.rebillable_admin_fee_pct),
+        exchange_rate=_opt_f(c.exchange_rate),
+        ref_contract=c.ref_contract,
+        chtr_specialist=c.chtr_specialist,
+        conf_date_gmt=c.conf_date_gmt,
+        intercompany=bool(c.intercompany),
+        ic_company=c.ic_company,
+        ic_adj_pct=_opt_f(c.ic_adj_pct),
+        next_open_date=c.next_open_date,
+        owner_comm_pct=_opt_f(c.owner_comm_pct),
+        owner_comm_pay_to=c.owner_comm_pay_to,
+        valuation_id=c.valuation_id,
+        remarks=c.remarks,
+        notes_to_operations=c.notes_to_operations,
         status=c.status,
         updated_at=c.updated_at,
     )
@@ -221,6 +380,22 @@ class BrokerRuleIn(BaseModel):
     commission_type: Literal["brokerage", "address"]
     commission_pct: Decimal = Field(..., ge=0, le=100)
     applies_to: Literal["hire", "off_hire", "all"] = "all"
+    # ── P11 IMOS Broker grid 列 ──
+    payment_method: Literal["pay_directly", "deduct_from_hire"] = "pay_directly"
+    m_method: int = 0  # IMOS "M" 列（计佣口径）
+    from_gmt: Optional[datetime] = None
+    to_gmt: Optional[datetime] = None
+    remarks: Optional[str] = None
+
+
+class BrokerRulePatch(BaseModel):
+    commission_pct: Optional[Decimal] = Field(default=None, ge=0, le=100)
+    applies_to: Optional[Literal["hire", "off_hire", "all"]] = None
+    payment_method: Optional[Literal["pay_directly", "deduct_from_hire"]] = None
+    m_method: Optional[int] = None
+    from_gmt: Optional[datetime] = None
+    to_gmt: Optional[datetime] = None
+    remarks: Optional[str] = None
 
 
 class BrokerRuleOut(BaseModel):
@@ -231,6 +406,11 @@ class BrokerRuleOut(BaseModel):
     commission_type: str
     commission_pct: float
     applies_to: str
+    payment_method: str = "pay_directly"
+    m_method: int = 0
+    from_gmt: Optional[datetime] = None
+    to_gmt: Optional[datetime] = None
+    remarks: Optional[str] = None
 
 
 def _broker_out(r: BrokerRule) -> BrokerRuleOut:
@@ -241,6 +421,11 @@ def _broker_out(r: BrokerRule) -> BrokerRuleOut:
         commission_type=r.commission_type,
         commission_pct=_f(r.commission_pct),
         applies_to=r.applies_to,
+        payment_method=r.payment_method or "pay_directly",
+        m_method=r.m_method or 0,
+        from_gmt=r.from_gmt,
+        to_gmt=r.to_gmt,
+        remarks=r.remarks,
     )
 
 
@@ -301,6 +486,57 @@ def list_tc_contracts(
     return [_contract_out(c) for c in rows]
 
 
+def _next_tc_code(db: Session, tenant_id, vessel_id, contract_type: str) -> str:
+    """IMOS TC Code: ``VESSEL-I####`` (TC In) / ``VESSEL-O####`` (TC Out).
+
+    Slug is the uppercased alnum form of the vessel name; sequence counts
+    existing contracts of the same direction for this tenant (max + 1), so
+    re-creates after delete never collide.
+    """
+    vessel = db.get(Vessel, vessel_id)
+    slug = "".join(ch for ch in (vessel.name if vessel else "TC").upper() if ch.isalnum())[:8] or "TC"
+    suffix = "I" if contract_type == "tci" else "O"
+    count = db.scalar(
+        select(func.count())
+        .select_from(TimeCharterContract)
+        .where(
+            TimeCharterContract.tenant_id == tenant_id,
+            TimeCharterContract.contract_type == contract_type,
+            TimeCharterContract.status != "deleted",
+        )
+    ) or 0
+    seq = count + 1
+    code = f"{slug}-{suffix}{seq:04d}"
+    # collision guard: loop while an active row already holds the code
+    while db.scalar(
+        select(func.count())
+        .select_from(TimeCharterContract)
+        .where(
+            TimeCharterContract.tenant_id == tenant_id,
+            TimeCharterContract.tc_code == code,
+            TimeCharterContract.status != "deleted",
+        )
+    ):
+        seq += 1
+        code = f"{slug}-{suffix}{seq:04d}"
+    return code
+
+
+# P11 header passthrough fields (In ↔ ORM) — kept as tuples to avoid drift.
+_TC_HEADER_FIELDS = (
+    "beneficiary", "date_fixed_at", "fixed_by", "company_code", "department",
+    "trade_area", "ref_no", "payment_terms", "contract_form",
+    "laycan_from_at", "laycan_to_at",
+    "duration_min_days", "duration_max_days", "duration_minus_days", "duration_plus_days",
+    "el_redel_min", "el_redel_max", "duration_basis", "use_local_time",
+    "billing_period", "billing_schedule", "rebillable_admin_fee_pct", "exchange_rate",
+    "ref_contract", "chtr_specialist", "conf_date_gmt",
+    "intercompany", "ic_company", "ic_adj_pct",
+    "next_open_date", "owner_comm_pct", "owner_comm_pay_to", "valuation_id",
+    "remarks", "notes_to_operations",
+)
+
+
 @router.post("/tc/contracts", response_model=TCContractOut, status_code=201)
 def create_tc_contract(
     body: TCContractIn,
@@ -309,6 +545,8 @@ def create_tc_contract(
 ):
     if not scoped_get(db, Charter, body.charter_id, auth.tenant_id):
         raise HTTPException(404, "Charter not found")
+    if body.vessel_id and scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Vessel not found")
     if body.parent_contract_id and not scoped_get(
         db, TimeCharterContract, body.parent_contract_id, auth.tenant_id
     ):
@@ -334,6 +572,8 @@ def create_tc_contract(
         address_comm_pct=body.address_comm_pct,
         brokerage_pct=body.brokerage_pct,
         hire_components=body.hire_components,
+        tc_code=body.tc_code or _next_tc_code(db, auth.tenant_id, body.vessel_id, body.contract_type),
+        **{f: getattr(body, f) for f in _TC_HEADER_FIELDS},
     )
     db.add(contract)
     audit(
@@ -614,11 +854,54 @@ def add_broker_rule(
         commission_type=body.commission_type,
         commission_pct=body.commission_pct,
         applies_to=body.applies_to,
+        payment_method=body.payment_method,
+        m_method=body.m_method,
+        from_gmt=body.from_gmt,
+        to_gmt=body.to_gmt,
+        remarks=body.remarks,
     )
     db.add(rule)
     db.commit()
     db.refresh(rule)
     return _broker_out(rule)
+
+
+@router.patch(
+    "/tc/contracts/{contract_id}/broker-rules/{rule_id}",
+    response_model=BrokerRuleOut,
+)
+def update_broker_rule(
+    contract_id: UUID,
+    rule_id: UUID,
+    body: BrokerRulePatch,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    rule = scoped_get(db, BrokerRule, rule_id, auth.tenant_id)
+    if not rule or rule.tc_contract_id != contract_id:
+        raise HTTPException(404, "Broker rule not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(rule, field, value)
+    db.commit()
+    db.refresh(rule)
+    return _broker_out(rule)
+
+
+@router.delete("/tc/contracts/{contract_id}/broker-rules/{rule_id}")
+def delete_broker_rule(
+    contract_id: UUID,
+    rule_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    rule = scoped_get(db, BrokerRule, rule_id, auth.tenant_id)
+    if not rule or rule.tc_contract_id != contract_id:
+        raise HTTPException(404, "Broker rule not found")
+    db.delete(rule)
+    db.commit()
+    return {"ok": True}
 
 
 # ── Child TCs ────────────────────────────────────────────────────────────────
@@ -735,3 +1018,432 @@ def tc_hire_summary(
             "total_commission_pct": sum(_f(r.commission_pct) for r in broker_rules),
         },
     }
+
+
+# ── P11: Delivery/Redelivery lay events ──────────────────────────────────────
+
+
+class LayEventIn(BaseModel):
+    kind: Literal["delivery", "redelivery"]
+    port: Optional[str] = None
+    est_gmt: Optional[datetime] = None
+    proj_act_gmt: Optional[datetime] = None
+    remarks: Optional[str] = None
+
+
+class LayEventPatch(BaseModel):
+    kind: Optional[Literal["delivery", "redelivery"]] = None
+    port: Optional[str] = None
+    est_gmt: Optional[datetime] = None
+    proj_act_gmt: Optional[datetime] = None
+    remarks: Optional[str] = None
+
+
+class LayEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    tc_contract_id: str
+    kind: str
+    port: Optional[str] = None
+    est_gmt: Optional[datetime] = None
+    proj_act_gmt: Optional[datetime] = None
+    difference_hours: Optional[float] = None  # IMOS "Difference" 列
+    remarks: Optional[str] = None
+
+
+def _lay_event_out(r: TimeCharterLayEvent) -> LayEventOut:
+    diff = None
+    if r.est_gmt and r.proj_act_gmt:
+        est, act = r.est_gmt, r.proj_act_gmt
+        # datetime-local UI 提交的是 naive 值，DB 里可能是 aware —— 统一按 UTC 处理
+        if est.tzinfo is None and act.tzinfo is not None:
+            est = est.replace(tzinfo=timezone.utc)
+        elif est.tzinfo is not None and act.tzinfo is None:
+            act = act.replace(tzinfo=timezone.utc)
+        diff = round((act - est).total_seconds() / 3600.0, 2)
+    return LayEventOut(
+        id=str(r.id),
+        tc_contract_id=str(r.tc_contract_id),
+        kind=r.kind,
+        port=r.port,
+        est_gmt=r.est_gmt,
+        proj_act_gmt=r.proj_act_gmt,
+        difference_hours=diff,
+        remarks=r.remarks,
+    )
+
+
+@router.get(
+    "/tc/contracts/{contract_id}/lay-events",
+    response_model=list[LayEventOut],
+)
+def list_lay_events(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    rows = db.scalars(
+        select(TimeCharterLayEvent)
+        .where(
+            TimeCharterLayEvent.tenant_id == auth.tenant_id,
+            TimeCharterLayEvent.tc_contract_id == contract_id,
+        )
+        .order_by(TimeCharterLayEvent.kind, TimeCharterLayEvent.created_at)
+    ).all()
+    return [_lay_event_out(r) for r in rows]
+
+
+@router.post(
+    "/tc/contracts/{contract_id}/lay-events",
+    response_model=LayEventOut,
+    status_code=201,
+)
+def add_lay_event(
+    contract_id: UUID,
+    body: LayEventIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    row = TimeCharterLayEvent(
+        tenant_id=auth.tenant_id,
+        tc_contract_id=contract_id,
+        kind=body.kind,
+        port=body.port,
+        est_gmt=body.est_gmt,
+        proj_act_gmt=body.proj_act_gmt,
+        remarks=body.remarks,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _lay_event_out(row)
+
+
+@router.patch(
+    "/tc/contracts/{contract_id}/lay-events/{row_id}",
+    response_model=LayEventOut,
+)
+def update_lay_event(
+    contract_id: UUID,
+    row_id: UUID,
+    body: LayEventPatch,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    row = scoped_get(db, TimeCharterLayEvent, row_id, auth.tenant_id)
+    if not row or row.tc_contract_id != contract_id:
+        raise HTTPException(404, "Lay event not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return _lay_event_out(row)
+
+
+@router.delete("/tc/contracts/{contract_id}/lay-events/{row_id}")
+def delete_lay_event(
+    contract_id: UUID,
+    row_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    row = scoped_get(db, TimeCharterLayEvent, row_id, auth.tenant_id)
+    if not row or row.tc_contract_id != contract_id:
+        raise HTTPException(404, "Lay event not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+# ── P11: Pricing ladder ──────────────────────────────────────────────────────
+
+
+class PricingRowIn(BaseModel):
+    hire_rate: Decimal = Field(..., ge=0)
+    rate_type: Literal["per_day", "lumpsum", "per_30_days"] = "per_day"
+    locked: bool = False
+    from_gmt: Optional[datetime] = None
+    to_gmt: Optional[datetime] = None
+    duration_days: Optional[Decimal] = None
+    period_unit: str = "Days"
+    tcl_ins: Optional[Decimal] = None
+    comments: Optional[str] = None
+
+
+class PricingRowPatch(BaseModel):
+    hire_rate: Optional[Decimal] = Field(default=None, ge=0)
+    rate_type: Optional[Literal["per_day", "lumpsum", "per_30_days"]] = None
+    locked: Optional[bool] = None
+    from_gmt: Optional[datetime] = None
+    to_gmt: Optional[datetime] = None
+    duration_days: Optional[Decimal] = None
+    period_unit: Optional[str] = None
+    tcl_ins: Optional[Decimal] = None
+    comments: Optional[str] = None
+
+
+class PricingRowOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    tc_contract_id: str
+    hire_rate: float
+    rate_type: str
+    locked: bool
+    from_gmt: Optional[datetime] = None
+    to_gmt: Optional[datetime] = None
+    duration_days: Optional[float] = None
+    period_unit: str
+    tcl_ins: Optional[float] = None
+    comments: Optional[str] = None
+
+
+def _pricing_out(r: TimeCharterPricingRow) -> PricingRowOut:
+    return PricingRowOut(
+        id=str(r.id),
+        tc_contract_id=str(r.tc_contract_id),
+        hire_rate=_f(r.hire_rate),
+        rate_type=r.rate_type,
+        locked=bool(r.locked),
+        from_gmt=r.from_gmt,
+        to_gmt=r.to_gmt,
+        duration_days=_opt_f(r.duration_days),
+        period_unit=r.period_unit or "Days",
+        tcl_ins=_opt_f(r.tcl_ins),
+        comments=r.comments,
+    )
+
+
+@router.get(
+    "/tc/contracts/{contract_id}/pricing-rows",
+    response_model=list[PricingRowOut],
+)
+def list_pricing_rows(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    rows = db.scalars(
+        select(TimeCharterPricingRow)
+        .where(
+            TimeCharterPricingRow.tenant_id == auth.tenant_id,
+            TimeCharterPricingRow.tc_contract_id == contract_id,
+        )
+        .order_by(TimeCharterPricingRow.from_gmt.nullsfirst(), TimeCharterPricingRow.created_at)
+    ).all()
+    return [_pricing_out(r) for r in rows]
+
+
+@router.post(
+    "/tc/contracts/{contract_id}/pricing-rows",
+    response_model=PricingRowOut,
+    status_code=201,
+)
+def add_pricing_row(
+    contract_id: UUID,
+    body: PricingRowIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    row = TimeCharterPricingRow(
+        tenant_id=auth.tenant_id,
+        tc_contract_id=contract_id,
+        hire_rate=body.hire_rate,
+        rate_type=body.rate_type,
+        locked=body.locked,
+        from_gmt=body.from_gmt,
+        to_gmt=body.to_gmt,
+        duration_days=body.duration_days,
+        period_unit=body.period_unit,
+        tcl_ins=body.tcl_ins,
+        comments=body.comments,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _pricing_out(row)
+
+
+@router.patch(
+    "/tc/contracts/{contract_id}/pricing-rows/{row_id}",
+    response_model=PricingRowOut,
+)
+def update_pricing_row(
+    contract_id: UUID,
+    row_id: UUID,
+    body: PricingRowPatch,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    row = scoped_get(db, TimeCharterPricingRow, row_id, auth.tenant_id)
+    if not row or row.tc_contract_id != contract_id:
+        raise HTTPException(404, "Pricing row not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return _pricing_out(row)
+
+
+@router.delete("/tc/contracts/{contract_id}/pricing-rows/{row_id}")
+def delete_pricing_row(
+    contract_id: UUID,
+    row_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    row = scoped_get(db, TimeCharterPricingRow, row_id, auth.tenant_id)
+    if not row or row.tc_contract_id != contract_id:
+        raise HTTPException(404, "Pricing row not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+# ── P11: Other-items expense grid (BALLA/CABLE/VICTU/...) ────────────────────
+
+
+class OtherItemIn(BaseModel):
+    code: Literal["BALLA", "CABLE", "VICTU", "ALLOW", "LASHS", "ILOHC", "INTHC"]
+    description: Optional[str] = None
+    rate_type: Literal["lumpsum", "monthly", "per_30_days", "per_day"] = "lumpsum"
+    rate: Decimal = Decimal("0")
+    comm: bool = False
+    from_gmt: Optional[datetime] = None
+    to_gmt: Optional[datetime] = None
+    remarks: Optional[str] = None
+
+
+class OtherItemPatch(BaseModel):
+    description: Optional[str] = None
+    rate_type: Optional[Literal["lumpsum", "monthly", "per_30_days", "per_day"]] = None
+    rate: Optional[Decimal] = None
+    comm: Optional[bool] = None
+    from_gmt: Optional[datetime] = None
+    to_gmt: Optional[datetime] = None
+    remarks: Optional[str] = None
+
+
+class OtherItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    tc_contract_id: str
+    code: str
+    description: Optional[str] = None
+    rate_type: str
+    rate: float
+    comm: bool
+    from_gmt: Optional[datetime] = None
+    to_gmt: Optional[datetime] = None
+    remarks: Optional[str] = None
+
+
+def _other_item_out(r: TimeCharterOtherItem) -> OtherItemOut:
+    return OtherItemOut(
+        id=str(r.id),
+        tc_contract_id=str(r.tc_contract_id),
+        code=r.code,
+        description=r.description,
+        rate_type=r.rate_type,
+        rate=_f(r.rate),
+        comm=bool(r.comm),
+        from_gmt=r.from_gmt,
+        to_gmt=r.to_gmt,
+        remarks=r.remarks,
+    )
+
+
+@router.get(
+    "/tc/contracts/{contract_id}/other-items",
+    response_model=list[OtherItemOut],
+)
+def list_other_items(
+    contract_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    rows = db.scalars(
+        select(TimeCharterOtherItem)
+        .where(
+            TimeCharterOtherItem.tenant_id == auth.tenant_id,
+            TimeCharterOtherItem.tc_contract_id == contract_id,
+        )
+        .order_by(TimeCharterOtherItem.code, TimeCharterOtherItem.created_at)
+    ).all()
+    return [_other_item_out(r) for r in rows]
+
+
+@router.post(
+    "/tc/contracts/{contract_id}/other-items",
+    response_model=OtherItemOut,
+    status_code=201,
+)
+def add_other_item(
+    contract_id: UUID,
+    body: OtherItemIn,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    row = TimeCharterOtherItem(
+        tenant_id=auth.tenant_id,
+        tc_contract_id=contract_id,
+        code=body.code,
+        description=body.description,
+        rate_type=body.rate_type,
+        rate=body.rate,
+        comm=body.comm,
+        from_gmt=body.from_gmt,
+        to_gmt=body.to_gmt,
+        remarks=body.remarks,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _other_item_out(row)
+
+
+@router.patch(
+    "/tc/contracts/{contract_id}/other-items/{row_id}",
+    response_model=OtherItemOut,
+)
+def update_other_item(
+    contract_id: UUID,
+    row_id: UUID,
+    body: OtherItemPatch,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    row = scoped_get(db, TimeCharterOtherItem, row_id, auth.tenant_id)
+    if not row or row.tc_contract_id != contract_id:
+        raise HTTPException(404, "Other item not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return _other_item_out(row)
+
+
+@router.delete("/tc/contracts/{contract_id}/other-items/{row_id}")
+def delete_other_item(
+    contract_id: UUID,
+    row_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    _get_tc(db, auth, contract_id)
+    row = scoped_get(db, TimeCharterOtherItem, row_id, auth.tenant_id)
+    if not row or row.tc_contract_id != contract_id:
+        raise HTTPException(404, "Other item not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}

@@ -40,6 +40,18 @@ type ReplyDraft = {
   template: string;
 };
 
+/** AI 动作推荐（/ai/assist/recommend/email）—— 只建议，执行仍由人工确认 */
+type Recommend = {
+  message_id: string;
+  email_type: string;
+  recommendation: "apply" | "reply" | "review";
+  confidence: number;
+  reason: string;
+  reply_template: string;
+  already_applied: boolean;
+  source: string;
+};
+
 const REPLY_TEMPLATES = ["ack_recap", "counter_offer", "nor_ack", "laytime_query", "general"] as const;
 type ReplyTemplate = (typeof REPLY_TEMPLATES)[number];
 
@@ -82,6 +94,10 @@ export default function EmailReviewPage() {
   const [replyTemplate, setReplyTemplate] = useState<ReplyTemplate>("ack_recap");
   const [replyBody, setReplyBody] = useState("");
   const [replySending, setReplySending] = useState(false);
+  // AI 推荐
+  const [recFor, setRecFor] = useState<Msg | null>(null);
+  const [rec, setRec] = useState<Recommend | null>(null);
+  const [recBusy, setRecBusy] = useState(false);
 
   async function load() {
     const [acc, review, office] = await Promise.all([
@@ -209,6 +225,40 @@ export default function EmailReviewPage() {
     }
   }
 
+  /** AI 推荐下一步动作（apply/reply/review）—— 建议，不落库 */
+  async function openRecommend(m: Msg) {
+    setRecFor(m);
+    setRec(null);
+    setRecBusy(true);
+    try {
+      const r: Recommend = await apiPost(`/api/v1/ai/assist/recommend/email/${m.id}`, {});
+      setRec(r);
+    } catch (ex: any) {
+      toast.error(ex?.message || t("page.email.rec_fail", "AI 推荐失败"));
+      setRecFor(null);
+    } finally {
+      setRecBusy(false);
+    }
+  }
+
+  /** 按 AI 推荐执行 —— 仍走既有的人工确认端点 */
+  async function actOnRecommend() {
+    if (!recFor || !rec) return;
+    if (rec.recommendation === "apply") {
+      setRecFor(null);
+      await applyDraft(recFor).catch(() => undefined);
+      return;
+    }
+    if (rec.recommendation === "reply") {
+      const target = recFor;
+      const tpl = (rec.reply_template || "ack_recap") as ReplyTemplate;
+      setRecFor(null);
+      await openReply(target).catch(() => undefined);
+      if (tpl !== "ack_recap") await changeReplyTemplate(tpl).catch(() => undefined);
+    }
+    // "review" → 保持人工复核，无需自动动作
+  }
+
   async function onAccountCellSave(rowId: string, colKey: string, value: unknown, row: Account) {
     const src = row as unknown as Record<string, unknown>;
     if ((src[colKey] ?? "") === (value ?? "")) return;
@@ -247,6 +297,11 @@ export default function EmailReviewPage() {
   }
 
   const menuItems = (m: Msg): ContextMenuItem[] => [
+    {
+      key: "ai",
+      label: t("page.email.ai_rec", "AI 建议"),
+      onClick: () => openRecommend(m).catch(() => undefined),
+    },
     ...(m.parse_status === "review"
       ? [
           {
@@ -362,9 +417,12 @@ export default function EmailReviewPage() {
     {
       key: "actions",
       title: "",
-      width: 190,
+      width: 250,
       render: (_v, r) => (
         <span className="row-actions">
+          <button className="btn btn-sm" type="button" onClick={() => openRecommend(r).catch(() => undefined)}>
+            ✦ {t("page.email.ai_rec", "AI 建议")}
+          </button>
           <button className="btn btn-sm" type="button" onClick={() => openReply(r).catch(() => undefined)}>
             {t("page.email.reply_btn", "Reply")}
           </button>
@@ -462,6 +520,56 @@ export default function EmailReviewPage() {
           {t("page.email.reply_body", "Body (editable)")}
           <textarea rows={14} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} />
         </label>
+      </RecordModal>
+
+      {/* AI 推荐 —— 建议在此确认，执行才落到业务端点 */}
+      <RecordModal
+        open={Boolean(recFor)}
+        title={t("page.email.rec_title", "AI 建议的下一步")}
+        onClose={() => setRecFor(null)}
+        canEdit={false}
+        canDelete={false}
+        size="md"
+      >
+        {recBusy ? (
+          <p className="muted">{t("page.email.rec_loading", "正在分析…")}</p>
+        ) : rec ? (
+          <>
+            <div className="form-row">
+              <span className="ai-rec">
+                {rec.recommendation === "apply"
+                  ? t("page.email.rec_apply", "生成业务草稿")
+                  : rec.recommendation === "reply"
+                    ? t("page.email.rec_reply", "回复发件人")
+                    : t("page.email.rec_review", "人工复核")}
+                <span className="ai-rec-conf">
+                  <Num v={rec.confidence * 100} digits={0} />%
+                </span>
+                <span className="badge">{rec.source === "llm" ? "AI" : "rules"}</span>
+              </span>
+            </div>
+            <p>{rec.reason}</p>
+            <p className="muted">
+              {t("page.email.rec_type", "识别类型")}：{rec.email_type || "—"}
+              {rec.reply_template ? ` · ${t("page.email.rec_tpl", "回复模板")}：${rec.reply_template}` : ""}
+              {rec.already_applied ? ` · ${t("page.email.rec_applied", "草稿已生成")}` : ""}
+            </p>
+            {rec.recommendation !== "review" ? (
+              <p className="row-actions">
+                <button className="btn btn-primary" type="button" onClick={() => actOnRecommend().catch(() => undefined)}>
+                  {t("page.email.rec_act", "按建议执行")}
+                </button>
+              </p>
+            ) : (
+              <p className="hint">{t("page.email.rec_review_hint", "无法自动处理，请人工复核该邮件。")}</p>
+            )}
+            {!rec.already_applied && rec.recommendation === "reply" ? (
+              <p className="hint">{t("page.email.rec_reply_hint", "执行后会打开回复草稿，发送前可编辑正文。")}</p>
+            ) : null}
+          </>
+        ) : (
+          <p className="muted">{t("page.email.rec_none", "无推荐")}</p>
+        )}
       </RecordModal>
     </AppShell>
   );

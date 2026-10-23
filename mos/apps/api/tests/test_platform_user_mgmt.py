@@ -283,7 +283,7 @@ def test_smtp_test_success_and_fallback(client, monkeypatch):
     # 成功路径
     monkeypatch.setattr(
         "app.services.identity._smtp_send",
-        lambda plat, to, subj, body: {"host": "smtp.example.com", "port": 587, "security": "starttls", "latency_ms": 5},
+        lambda plat, to, subj, body, attachments=None: {"host": "smtp.example.com", "port": 587, "security": "starttls", "latency_ms": 5},
     )
     ok = client.post(f"{API}/platform/identity/smtp-test", headers=hp, json={})
     assert ok.status_code == 200, ok.text
@@ -291,7 +291,7 @@ def test_smtp_test_success_and_fallback(client, monkeypatch):
     assert ok.json()["status"] == "sent"
 
     # 失败路径 → fallback_console，不抛 500
-    def _boom(plat, to, subj, body):
+    def _boom(plat, to, subj, body, attachments=None):
         raise OSError("connection refused")
 
     monkeypatch.setattr("app.services.identity._smtp_send", _boom)
@@ -313,7 +313,7 @@ def test_smtp_channel_used_for_account_mail(client, monkeypatch):
     )
     seen = {}
 
-    def _fake_send(plat, to, subj, body):
+    def _fake_send(plat, to, subj, body, attachments=None):
         seen["to"] = to
         return {"host": "smtp.example.com", "port": 465, "security": "ssl", "latency_ms": 3}
 

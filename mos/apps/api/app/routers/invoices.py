@@ -41,37 +41,75 @@ router = APIRouter()
 log = logging.getLogger("marios.invoices")
 
 
-def _office_escalate_invoice(db: Session, tenant_id, row) -> None:
-    """发票签发 → 凭证 CSV 归档 OneDrive + Teams 频道提醒（软失败，绝不影响签发本身）。"""
+def _invoice_archive_bytes(db: Session, tenant_id, row) -> tuple[bytes, str, str, dict]:
+    """归档用的发票文件 —— PDF 优先，缺引擎退回凭证 CSV。
+
+    返回 ``(content, filename, content_type, meta)``。PDF 路径会顺带写一行
+    :class:`DocumentRender` 出档记录，之后在「出档」里能回溯到这一份。
+    """
+    meta = {"invoice_no": row.invoice_no, "status": row.status}
+    from app.services import doc_engine
+
     try:
-        import csv
-        import io
+        result = doc_engine.render_document(
+            db, tenant_id,
+            entity_type="invoice", entity_id=row.id,
+        )
+        pdf = doc_engine.html_to_pdf(result.html)
+        doc_engine.record_render(
+            db, tenant_id,
+            entity_type="invoice", entity_id=row.id,
+            result=result, content=pdf, fmt="pdf",
+            content_type="application/pdf",
+            snapshot=doc_engine.build_letterhead(db, tenant_id),
+        )
+        meta["template_version"] = result.template_version
+        return pdf, result.filename, "application/pdf", meta
+    except doc_engine.PDFEngineUnavailable:
+        # Chromium 未装 —— 退回 CSV，归档链路不能断
+        pass
+    except Exception:  # noqa: BLE001
+        log.exception("invoice PDF archive failed for %s, falling back to CSV", row.id)
 
-        from app.services import office_hub
+    import csv
+    import io
 
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(["field", "value"])
-        for k, v in (
-            ("invoice_no", row.invoice_no),
-            ("invoice_type", row.invoice_type),
-            ("status", row.status),
-            ("currency", row.currency),
-            ("amount", row.amount),
-            ("tax_amount", row.tax_amount),
-            ("due_date", row.due_date),
-            ("issued_at", row.issued_at),
-        ):
-            w.writerow([k, v if v is not None else ""])
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["field", "value"])
+    for k, v in (
+        ("invoice_no", row.invoice_no),
+        ("invoice_type", row.invoice_type),
+        ("status", row.status),
+        ("currency", row.currency),
+        ("amount", row.amount),
+        ("tax_amount", row.tax_amount),
+        ("due_date", row.due_date),
+        ("issued_at", row.issued_at),
+    ):
+        w.writerow([k, v if v is not None else ""])
+    return buf.getvalue().encode("utf-8-sig"), f"invoice_{row.invoice_no}.csv", "text/csv", meta
+
+
+def _office_escalate_invoice(db: Session, tenant_id, row) -> None:
+    """发票签发 → 正式 PDF 归档 OneDrive + Teams 频道提醒（软失败，绝不影响签发本身）。
+
+    优先出租户模板渲染的 PDF（带公司抬头/logo/收款银行，可直接转发对手方）；
+    Chromium 未装时退回凭证 CSV，归档动作本身不能因为缺 PDF 引擎就丢掉。
+    """
+    try:
+        from app.services import doc_engine, office_hub
+
+        content, filename, ctype, meta = _invoice_archive_bytes(db, tenant_id, row)
         doc = office_hub.push_entity_document(
             db,
             tenant_id,
             entity_type="invoice",
             entity_id=row.id,
-            filename=f"invoice_{row.invoice_no}.csv",
-            content=buf.getvalue().encode("utf-8-sig"),
-            content_type="text/csv",
-            meta={"invoice_no": row.invoice_no, "status": row.status},
+            filename=filename,
+            content=content,
+            content_type=ctype,
+            meta=meta,
         )
         lines = [f"Invoice {row.invoice_no} issued — {row.currency} {row.amount}"]
         if doc:

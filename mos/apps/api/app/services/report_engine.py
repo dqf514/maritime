@@ -2785,6 +2785,57 @@ def export_report_xlsx(result: dict) -> bytes:
     return buf.getvalue()
 
 
+def export_report_pdf(result: dict, *, tenant_id=None, db=None, title: str | None = None) -> bytes:
+    """报表结果 → PDF（带公司抬头）。
+
+    定时报表此前把 ``pdf`` 静默替换成 xlsx —— UI 上明明选了 PDF，收到的却是
+    Excel。现在真出 PDF：表格渲染成 HTML 交给 :func:`doc_engine.html_to_pdf`。
+
+    :raises doc_engine.PDFEngineUnavailable: Chromium 未安装（调用方自行回落 xlsx）。
+    """
+    from html import escape
+
+    from app.services import doc_engine
+
+    columns = result.get("columns", []) or []
+    rows = result.get("rows", []) or []
+    head = title or result.get("title") or result.get("name") or "Report"
+
+    def _cell(raw: Any) -> str:
+        if raw is None:
+            return ""
+        if isinstance(raw, (Decimal, float)):
+            return f"{raw:,.2f}"
+        return escape(str(raw))
+
+    ths = "".join(f"<th>{escape(str(c.get('label') or c.get('key') or ''))}</th>" for c in columns)
+    body_rows = "".join(
+        "<tr>" + "".join(f"<td>{_cell(row.get(c.get('key', '')))}</td>" for c in columns) + "</tr>"
+        for row in rows
+    )
+
+    company: dict = {}
+    if db is not None and tenant_id is not None:
+        company = doc_engine.build_letterhead(db, tenant_id).get("company") or {}
+    name = company.get("legal_name") or company.get("display_name") or ""
+    address = company.get("address") or ""
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    css = doc_engine._brand_css({"company": company}) + doc_engine._BASE_CSS
+
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>{escape(str(head))}</title>
+<style>{css}</style></head>
+<body>
+  <div class="doc-head">
+    <div class="doc-brand"><strong>{escape(name)}</strong><div class="muted">{escape(address)}</div></div>
+    <div class="doc-title"><h1>{escape(str(head))}</h1><div class="muted">{generated}</div></div>
+  </div>
+  <table><thead><tr>{ths}</tr></thead><tbody>{body_rows}</tbody></table>
+  <p class="note">{len(rows)} row(s)</p>
+</body></html>"""
+    return doc_engine.html_to_pdf(html)
+
+
 # ---------------------------------------------------------------------------
 # Schedules
 # ---------------------------------------------------------------------------

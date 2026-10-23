@@ -13,6 +13,8 @@ import { Breadcrumb, type BreadcrumbItem } from "@/components/Breadcrumb";
 import { clearLookupCache } from "@/components/LookupSelect";
 import { apiGet, apiLogout, apiMe, assetUrl, readStorage, removeStorage, TOKEN_STORAGE_KEY, type Me } from "@/lib/api";
 import { LanguageSwitcher, useI18n } from "@/lib/i18n";
+import { AiAssistant } from "@/components/ai/AiAssistant";
+import { patchAiContext } from "@/components/ai/aiContextStore";
 
 export type NavSection = {
   section: string;
@@ -170,6 +172,8 @@ export function AppShell({
 
   useEffect(() => {
     setMobileNavOpen(false);
+    // AI 助手上下文：只更新当前页面路径，保留实体绑定（由页面 binder 管理）
+    patchAiContext({ page: pathname });
   }, [pathname]);
 
   useEffect(() => {
@@ -478,6 +482,8 @@ export function AppShell({
             ‹
           </button>
         ) : null}
+        {/* 全局 AI 助手（悬浮按钮 + 滑出面板，Ctrl+J 切换） */}
+        <AiAssistant />
       </div>
     </div>
   );
