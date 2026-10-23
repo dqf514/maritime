@@ -21,22 +21,6 @@ type Item = {
   deleted_at: string | null;
 };
 
-const TYPE_KEYS: Record<string, string> = {
-  vessel: "recycle.type.vessel",
-  port: "recycle.type.port",
-  counterparty: "recycle.type.counterparty",
-  user: "recycle.type.user",
-  api_key: "recycle.type.api_key",
-  org_unit: "recycle.type.org_unit",
-  connector: "recycle.type.connector",
-  estimate: "recycle.type.estimate",
-  charter: "recycle.type.charter",
-  voyage: "recycle.type.voyage",
-  invoice: "recycle.type.invoice",
-  claim: "recycle.type.claim",
-  laytime: "recycle.type.laytime",
-};
-
 function RecycleBinPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -75,7 +59,7 @@ function RecycleBinPage() {
       title: t("page.recycle.type", "Type"),
       width: 140,
       value: (r) => r.entity_type,
-      render: (v) => t(TYPE_KEYS[String(v)] || "", String(v)),
+      render: (v) => t(`recycle.type.${String(v)}`, String(v)),
     },
     { key: "title", title: t("common.title", "Title"), minWidth: 180, value: (r) => r.title },
     {
@@ -91,7 +75,7 @@ function RecycleBinPage() {
       width: 200,
       align: "right",
       render: (_v, r) => (
-        <span style={{ display: "flex", gap: "0.4rem" }}>
+        <span className="row-actions">
           <button className="btn btn-primary" type="button" onClick={() => restore(r.id).catch(() => toast.error(t("common.failed", "Failed")))}>
             {t("page.recycle.restore", "Restore")}
           </button>
@@ -135,7 +119,7 @@ function RecycleBinPage() {
             <option value="">{t("common.all", "All")}</option>
             {typeOptions.map((ty) => (
               <option key={ty} value={ty}>
-                {t(TYPE_KEYS[ty] || "", ty)}
+                {t(`recycle.type.${ty}`, ty)}
               </option>
             ))}
           </select>
@@ -144,7 +128,7 @@ function RecycleBinPage() {
         <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
           ↻
         </button>
-        <span className="muted" style={{ fontSize: "var(--font-label)" }}>
+        <span className="muted">
           {filtered.length} / {rows.length}
         </span>
       </Toolbar>

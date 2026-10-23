@@ -44,6 +44,34 @@ function dueInfo(dueAt: string | null, t: any, locale: string) {
 
 type TaskFilter = "all" | "open" | "today" | "overdue" | "done";
 
+type ActivityItem = {
+  id: string;
+  action: string;
+  entity_type: string | null;
+  module: string | null;
+  actor: string | null;
+  href: string | null;
+  created_at: string | null;
+};
+
+/** 审计动作码 → 展示文案（去掉 action 前缀域，如 voyage.update → update） */
+function actionLabel(action: string): string {
+  const a = action || "";
+  const dot = a.lastIndexOf(".");
+  return dot >= 0 ? a.slice(dot + 1) : a;
+}
+
+function timeAgo(iso: string | null, t: any): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return t("page.home.time_just", "just now");
+  if (s < 3600) return t("page.home.time_min", "{n}m", { n: Math.floor(s / 60) });
+  if (s < 86400) return t("page.home.time_hr", "{n}h", { n: Math.floor(s / 3600) });
+  return t("page.home.time_day", "{n}d", { n: Math.floor(s / 86400) });
+}
+
 function WorkbenchPageInner() {
   const { shell } = useShellBootstrap();
   const { t, locale } = useI18n();
@@ -52,6 +80,7 @@ function WorkbenchPageInner() {
   const { query, setQuery } = useListQuery();
   const [fullName, setFullName] = useState("");
   const [summary, setSummary] = useState<HomeSummary | null>(null);
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
@@ -69,7 +98,12 @@ function WorkbenchPageInner() {
     setLoading(true);
     setError("");
     try {
-      setSummary(await apiGet("/api/v1/home/summary"));
+      const [sum, act] = await Promise.all([
+        apiGet("/api/v1/home/summary"),
+        apiGet("/api/v1/activity/feed?limit=12").catch(() => ({ items: [] })),
+      ]);
+      setSummary(sum);
+      setActivity((act as any)?.items || []);
     } catch (e: any) {
       setError(e?.message || t("common.failed", "Failed"));
     } finally {
@@ -196,7 +230,7 @@ function WorkbenchPageInner() {
         <div className="wb-statusbar-right">
           {shell?.quick_actions?.slice(0, 3).map((a) => (
             <Link key={a.href + a.label} href={a.href} className="wb-quick-btn">
-              {a.label}
+              {locale.startsWith("zh") ? a.label_zh || a.label : a.label}
             </Link>
           ))}
         </div>
@@ -341,6 +375,43 @@ function WorkbenchPageInner() {
 
           {/* Right: Alerts + Schedule + Queues */}
           <div className="wb-right-col">
+            {/* Recent activity (operation log) — role-scoped, click-through */}
+            <div className="wb-panel">
+              <div className="wb-panel-head">
+                <h2 className="wb-panel-title">
+                  <NavIcon id="exceptions" size={14} />
+                  {t("page.home.recent_activity", "Recent activity")}
+                </h2>
+              </div>
+              <div className="wb-alert-list">
+                {activity.length ? (
+                  activity.slice(0, 8).map((a) => {
+                    const body = (
+                      <>
+                        <span className="wb-alert-title">
+                          {a.actor || t("page.home.someone", "Someone")}{" "}
+                          <span className="wb-activity-action">{actionLabel(a.action)}</span>{" "}
+                          {a.entity_type}
+                        </span>
+                        <span className="wb-activity-time">{timeAgo(a.created_at, t)}</span>
+                      </>
+                    );
+                    return a.href ? (
+                      <Link key={a.id} href={a.href} className="wb-alert-item">
+                        {body}
+                      </Link>
+                    ) : (
+                      <div key={a.id} className="wb-alert-item">
+                        {body}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="wb-empty">{t("page.home.no_activity", "No recent activity")}</div>
+                )}
+              </div>
+            </div>
+
             {/* Alerts & Approvals */}
             <div className="wb-panel">
               <div className="wb-panel-head">
@@ -374,7 +445,9 @@ function WorkbenchPageInner() {
                     href={a.href || "/home"}
                     className={`wb-alert-item ${a.severity === "critical" ? "wb-alert-danger" : "wb-alert-warn"}`}
                   >
-                    <span className="wb-alert-title">{a.title}</span>
+                    <span className="wb-alert-title">
+                      {locale.startsWith("zh") ? a.title_i18n?.zh || a.title : a.title_i18n?.en || a.title}
+                    </span>
                     {a.detail ? <span className="wb-alert-detail">{a.detail}</span> : null}
                   </Link>
                 ))}
@@ -465,7 +538,7 @@ function WorkbenchPageInner() {
           {(shell?.home_widgets || []).map((w) => (
             <Link key={w.id} href={w.href} className="wb-link-tile">
               <NavIcon id={w.icon || resolveIconId(w.href)} size={14} />
-              <span>{w.title}</span>
+              <span>{locale.startsWith("zh") ? w.title_zh || w.title : w.title}</span>
             </Link>
           ))}
         </div>

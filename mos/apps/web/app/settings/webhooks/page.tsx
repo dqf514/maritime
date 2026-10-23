@@ -162,6 +162,7 @@ function WebhooksPage() {
       title: t("common.status", "Status"),
       width: 100,
       value: (r) => r.status,
+      render: (v) => <span className={`badge badge-${v === "active" ? "ok" : "warn"}`}>{t(`status.${v}`, String(v))}</span>,
     },
     {
       key: "_actions",
@@ -192,7 +193,13 @@ function WebhooksPage() {
       value: (r) => r.event,
       render: (v) => <code>{String(v)}</code>,
     },
-    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => r.status,
+      render: (v) => <span className={`badge badge-${v === "delivered" ? "ok" : v === "failed" ? "err" : "warn"}`}>{t(`status.${v}`, String(v))}</span>,
+    },
     {
       key: "attempts",
       title: t("webhooks.attempts", "Attempts"),
@@ -254,7 +261,7 @@ function WebhooksPage() {
           ↻
         </button>
       </Toolbar>
-      <div className="space-y-6">
+      <div className="stack-panels">
 
         {/* Subscriptions list */}
         <div className="panel">

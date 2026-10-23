@@ -13,6 +13,7 @@ import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { StateView } from "@/components/StateView";
+import { useTodoAdd } from "@/components/TodoQuickAdd";
 import { apiList } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
@@ -52,6 +53,7 @@ function CargoBookWorkspace() {
   const [loadErr, setLoadErr] = useState("");
   const [rows, setRows] = useState<CargoBookRow[]>([]);
   const rowCtx = useContextMenu<CargoBookRow>();
+  const todo = useTodoAdd();
 
   function exportRows(selected: CargoBookRow[]) {
     downloadCsv(
@@ -98,6 +100,8 @@ function CargoBookWorkspace() {
         : []),
       { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.id) },
       { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportRows([target]) },
+      { key: "divider", divider: true },
+      todo.menuItem({ entityType: "cargo", entityId: target.id, title: target.cargo_ref }),
     ];
   }
 
@@ -160,7 +164,7 @@ function CargoBookWorkspace() {
             : s === "cancelled" ? "badge-fail"
             : s === "fixed" || s === "nominated" ? "badge-info"
             : "badge-warn";
-          return <span className={`badge ${cls}`}>{s}</span>;
+          return <span className={`badge ${cls}`}>{t(`status.${s}`, s)}</span>;
         },
       },
       { key: "cargo_type", title: t("page.cargo.type", "Cargo"), width: 90, sortable: true },
@@ -215,7 +219,7 @@ function CargoBookWorkspace() {
     ];
     for (const s of STATUS_OPTIONS) {
       const c = statusCounts.get(s) ?? 0;
-      if (c > 0) items.push({ key: s, label: s.replace("_", " "), badge: c });
+      if (c > 0) items.push({ key: s, label: t(`status.${s}`, s.replace("_", " ")), badge: c });
     }
     return items;
   }, [rows.length, statusCounts, t]);
@@ -259,6 +263,7 @@ function CargoBookWorkspace() {
       </StateView>
 
       <ContextMenu controller={rowCtx} items={rowMenuItems} />
+      {todo.element}
     </AppShell>
   );
 }

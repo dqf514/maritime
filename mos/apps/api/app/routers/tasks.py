@@ -74,6 +74,20 @@ def task_out(db: Session, row: Task) -> dict:
     }
 
 
+def _entity_href(entity_type: str | None, entity_id: UUID | None) -> str:
+    """任务关联系统实体时，通知直达对应页面；否则回任务箱。"""
+    if entity_type and entity_id:
+        if entity_type == "voyage":
+            return f"/operations/voyages/{entity_id}/workspace"
+        if entity_type in ("invoice",):
+            return f"/finance/invoices/{entity_id}"
+        if entity_type in ("charter", "time_charter"):
+            return f"/charters/{entity_id}"
+        if entity_type == "estimate":
+            return f"/estimates"
+    return "/tasks"
+
+
 def _task_or_404(db: Session, tenant_id: UUID, task_id: UUID) -> Task:
     row = db.get(Task, task_id)
     if not row or row.tenant_id != tenant_id or row.status == "deleted":
@@ -163,7 +177,7 @@ def create_task(
                 title=row.title,
                 body=(row.description or "")[:500] or None,
                 level="info",
-                href="/tasks",
+                href=_entity_href(row.entity_type, row.entity_id),
             )
         )
     audit(

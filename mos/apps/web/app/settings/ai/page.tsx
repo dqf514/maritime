@@ -54,6 +54,7 @@ type TestResult = {
   models: string[];
   model: string | null;
   message: string;
+  detail?: string | null;
   tested_at: string;
 };
 
@@ -100,7 +101,8 @@ type Binding = {
 
 type Tab = "providers" | "models" | "skills" | "usage";
 
-const PROVIDER_TYPES = ["anthropic", "openai", "ollama"];
+// 与后端 llm_client 对齐：openai_compatible / azure_openai 同属 OpenAI 协议族
+const PROVIDER_TYPES = ["anthropic", "openai", "openai_compatible", "azure_openai", "ollama"];
 
 const EMPTY_FORM: ProviderForm = {
   name: "",
@@ -275,20 +277,27 @@ function AiSettingsPage() {
       const res = await apiPost(`/api/v1/settings/ai/providers/${p.id}/test`, {});
       const clientLatency = Date.now() - started;
       const models = Array.isArray(res?.models) ? res.models.map((m: unknown) => String(m)) : [];
+      const ok = res?.ok !== false;
       setTestResult({
         provider_name: p.name,
-        ok: res?.ok !== false,
+        ok,
         latency_ms: num(res?.latency_ms) ?? clientLatency,
         models,
         model: res?.model ? String(res.model) : p.model_default,
         message: res?.message ? String(res.message) : String(res?.status ?? ""),
+        detail: res?.detail ? String(res.detail) : null,
         tested_at: res?.tested_at ? String(res.tested_at) : new Date().toISOString(),
       });
-      toast.success(
-        t("ai.test.ok", { en: "Connection OK — {ms} ms", zh: "连接正常 — {ms} 毫秒" }, {
-          ms: String(num(res?.latency_ms) ?? clientLatency),
-        }),
-      );
+      if (ok) {
+        toast.success(
+          t("ai.test.ok", { en: "Connection OK — {ms} ms", zh: "连接正常 — {ms} 毫秒" }, {
+            ms: String(num(res?.latency_ms) ?? clientLatency),
+          }),
+        );
+      } else {
+        // 探测失败（后端已给出友好提示）→ 红色 toast，别再报「连接正常」
+        toast.error(String(res?.message || ""));
+      }
     } catch (err) {
       setTestResult({
         provider_name: p.name,
@@ -322,8 +331,9 @@ function AiSettingsPage() {
       {
         key: "provider_type",
         title: t("common.type", "Type"),
-        width: 100,
+        width: 130,
         value: (r) => r.provider_type,
+        render: (v) => (v ? t(`ai.ptype.${v}`, String(v)) : "—"),
       },
       {
         key: "base_url",
@@ -345,7 +355,7 @@ function AiSettingsPage() {
         width: 90,
         value: (r) => r.status,
         render: (v) => (
-          <span className={`ai-pill ${v === "active" ? "on" : "off"}`}>{String(v ?? "—")}</span>
+          <span className={`ai-pill ${v === "active" ? "on" : "off"}`}>{v ? t(`status.${v}`, String(v)) : "—"}</span>
         ),
       },
       {
@@ -807,7 +817,10 @@ function AiSettingsPage() {
                   </div>
                 )}
                 {testResult.message && (
-                  <div style={{ marginTop: 4, color: "var(--muted)" }}>{testResult.message}</div>
+                  <div style={{ marginTop: 4, color: "var(--muted)" }} title={testResult.detail || undefined}>
+                    {testResult.message}
+                    {testResult.detail ? <span className="hint"> （{t("ai.test.detail", "technical detail on hover")}）</span> : null}
+                  </div>
                 )}
               </div>
             )}
@@ -1176,7 +1189,7 @@ function AiSettingsPage() {
               >
                 {PROVIDER_TYPES.map((x) => (
                   <option key={x} value={x}>
-                    {x}
+                    {t(`ai.ptype.${x}`, x)}
                   </option>
                 ))}
               </select>
@@ -1246,7 +1259,7 @@ function AiSettingsPage() {
                 <option value="">{t("ai.bind.none", "— none —")}</option>
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} ({p.provider_type})
+                    {p.name} ({t(`ai.ptype.${p.provider_type}`, p.provider_type)})
                   </option>
                 ))}
               </select>
@@ -1256,7 +1269,7 @@ function AiSettingsPage() {
                 <option value="">{t("ai.bind.none", "— none —")}</option>
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} ({p.provider_type})
+                    {p.name} ({t(`ai.ptype.${p.provider_type}`, p.provider_type)})
                   </option>
                 ))}
               </select>

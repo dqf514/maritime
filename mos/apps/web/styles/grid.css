@@ -20,7 +20,9 @@
 }
 
 .grid-table {
-  width: 100%;
+  /* 宽表不压缩列宽：max-content 保留 th 的 width/minWidth，overflow 交给 .grid-scroll 横向滚动 */
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: var(--font-table);
   table-layout: fixed;

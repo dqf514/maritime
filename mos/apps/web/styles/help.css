@@ -159,7 +159,149 @@
 .help-body p { margin: 0 0 1rem; line-height: 1.65; max-width: 46em; }
 .help-article-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1.5rem; }
 
+/* ── 知识中心首页 · 视频演示入口条 ───────────────────── */
+.help-feature {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.85rem;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--accent-soft);
+  border-radius: 10px;
+  background: var(--row-selected);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s;
+}
+.help-feature:hover { border-color: var(--accent); }
+.help-feature-badge {
+  flex: none;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 6px;
+  padding: 0.15rem 0.45rem;
+}
+.help-feature-title { font-weight: 600; font-size: 0.95rem; }
+.help-feature-sub { color: var(--muted); font-size: 0.85rem; }
+
+/* ── 视频演示讲解（VideoDemos） ───────────────────────── */
+.vd-root { margin: 0.5rem 0 1.5rem; }
+.vd-tabs { margin-bottom: 0.75rem; }
+.vd-player video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 66vh;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: block;
+}
+.vd-failed {
+  padding: 1.5rem;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+}
+.vd-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.5rem 0 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.vd-meta { margin-left: auto; }
+.vd-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+.vd-chapters {
+  position: sticky;
+  top: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #fff;
+  max-height: 72vh;
+  overflow: auto;
+}
+.vd-chapters h3,
+.vd-transcript h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.vd-chapters ul { list-style: none; margin: 0; padding: 0; }
+.vd-chapter {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  padding: 0.35rem 0.45rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.86rem;
+  color: inherit;
+}
+.vd-chapter:hover { background: var(--row-selected); }
+.vd-chapter.on { background: var(--row-selected); color: var(--sea-mid); font-weight: 600; }
+.vd-chapter-time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 0.78rem;
+  min-width: 2.6em;
+}
+.vd-chapter.on .vd-chapter-time { color: var(--sea-mid); }
+.vd-transcript {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  background: #fff;
+  max-height: 72vh;
+  overflow: auto;
+}
+.vd-cue-chapter { margin-bottom: 1.1rem; }
+.vd-cue-chapter h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.vd-cue-chapter.on h4 { color: var(--sea-mid); }
+.vd-cue { display: flex; gap: 0.6rem; margin: 0.3rem 0; align-items: baseline; }
+.vd-cue-btn {
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 0 0.15rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.vd-cue-btn:hover { color: var(--accent); text-decoration: underline; }
+.vd-cue-text { font-size: 0.88rem; line-height: 1.55; max-width: 52em; }
+
 @media (max-width: 900px) {
   .help-layout { grid-template-columns: 1fr; }
   .help-cats { position: static; }
+  .vd-layout { grid-template-columns: 1fr; }
+  .vd-chapters { position: static; max-height: none; }
 }

@@ -60,7 +60,7 @@ type PUserRow = {
 type RoleRow = { id: string; code: string; name: string };
 
 function PlatformTenantsPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const router = useRouter();
   const pathname = usePathname();
@@ -530,7 +530,7 @@ function PlatformTenantsPage() {
       width: 100,
       value: (r) => r.status,
       render: (v) => (
-        <span className={v === "active" ? "badge badge-pass" : "badge badge-fail"}>{String(v)}</span>
+        <span className={v === "active" ? "badge badge-pass" : "badge badge-fail"}>{t(`status.${v}`, String(v))}</span>
       ),
     },
     {
@@ -583,7 +583,7 @@ function PlatformTenantsPage() {
       width: 100,
       value: (r) => r.status,
       render: (v) => (
-        <span className={v === "active" ? "badge badge-pass" : "badge badge-warn"}>{String(v)}</span>
+        <span className={v === "active" ? "badge badge-pass" : "badge badge-warn"}>{t(`status.${v}`, String(v))}</span>
       ),
     },
     {
@@ -728,9 +728,9 @@ function PlatformTenantsPage() {
                     </button>
                   </td>
                   <td>{u.full_name || "—"}</td>
-                  <td>{u.roles.join(", ")}</td>
+                  <td>{u.roles.map((c) => t(`role.${c}`, c)).join(locale.startsWith("zh") ? "、" : ", ")}</td>
                   <td>
-                    <span className={u.status === "active" ? "badge badge-pass" : "badge badge-warn"}>{u.status}</span>
+                    <span className={u.status === "active" ? "badge badge-pass" : "badge badge-warn"}>{t(`status.${u.status}`, u.status)}</span>
                   </td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                     <button className="btn btn-sm" type="button" onClick={() => setResetTarget(u)}>
@@ -1103,9 +1103,9 @@ function PlatformTenantsPage() {
             <label>
               {t("common.status", "状态")}
               <select value={userEdit.status} onChange={(e) => setUserEdit({ ...userEdit, status: e.target.value })}>
-                <option value="active">active</option>
-                <option value="disabled">disabled</option>
-                <option value="invited">invited</option>
+                <option value="active">{t("status.active", "active")}</option>
+                <option value="disabled">{t("status.disabled", "disabled")}</option>
+                <option value="invited">{t("status.invited", "invited")}</option>
               </select>
             </label>
           </div>

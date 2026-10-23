@@ -1,0 +1,252 @@
+1
+00:00:00,938 --> 00:00:15,822
+MariOS Maritime Operating System · Full business demo
+
+2
+00:00:15,822 --> 00:00:33,995
+Secure two-step login: account first, then password
+
+3
+00:00:33,996 --> 00:00:46,265
+Personal workbench: tasks · alerts · shortcuts · indices
+
+4
+00:00:46,265 --> 00:01:00,830
+Modular navigation: Chartering · Operations · Finance · Tech
+
+5
+00:01:00,830 --> 00:01:12,662
+Ctrl+K global search · theme and language switch
+
+6
+00:01:12,662 --> 00:01:21,142
+First stop: Chartering — estimates and quotations
+
+7
+00:01:24,642 --> 00:01:33,938
+Chartering desk · Voyage estimate workspace
+
+8
+00:01:33,938 --> 00:01:42,374
+One click: new estimate from dry-bulk template
+
+9
+00:01:42,374 --> 00:01:54,652
+Enter quantity and rate · vessel profile pulls through
+
+10
+00:01:54,652 --> 00:03:14,198
+Multi-cargo: per-ton · lump sum · index, priced separately
+
+11
+00:03:14,198 --> 00:03:23,638
+One click: TCE · total freight · per-cargo breakdown
+
+12
+00:03:23,638 --> 00:03:40,403
+Profile + market enrich: speed/consumption · EU carbon
+
+13
+00:03:40,403 --> 00:03:49,939
+Quotation confirmed · convert to CP in one click
+
+14
+00:03:49,939 --> 00:03:57,822
+Next: cargo book and fixture details
+
+15
+00:04:01,384 --> 00:04:09,863
+Cargo book: open parcels and laycan at a glance
+
+16
+00:04:09,864 --> 00:04:19,768
+Open a parcel: terms · itinerary · options
+
+17
+00:04:19,768 --> 00:04:28,157
+Terms tab: laytime · freight · payment conditions
+
+18
+00:04:28,157 --> 00:04:39,874
+Itinerary tab: per-port detail with totals
+
+19
+00:04:39,874 --> 00:04:47,241
+Options tab: quantity options and percentages
+
+20
+00:04:47,242 --> 00:04:56,404
+Linked charter: clauses and state machine
+
+21
+00:04:56,404 --> 00:05:05,559
+State machine guards every transition
+
+22
+00:05:05,560 --> 00:05:13,383
+Next: time charters and open positions
+
+23
+00:05:16,839 --> 00:05:24,626
+Charter list: voyage · time charter · COA
+
+24
+00:05:24,626 --> 00:05:34,853
+Open a live TC: KPI header + ten business tabs
+
+25
+00:05:34,853 --> 00:05:42,576
+Pricing ladder: multi-tier rates and periods
+
+26
+00:05:42,576 --> 00:05:50,033
+Billing schedule: payable hire and status
+
+27
+00:05:50,033 --> 00:05:59,459
+Broker commission and other items computed automatically
+
+28
+00:05:59,459 --> 00:06:09,329
+Open positions: fleet availability windows
+
+29
+00:06:09,329 --> 00:06:17,179
+Next: voyage execution — the workspace in action
+
+30
+00:06:20,631 --> 00:06:28,364
+Voyage register: under way · planned · completed
+
+31
+00:06:28,364 --> 00:06:42,640
+Voyage workspace VOY-2407: nine integrated panels
+
+32
+00:06:42,640 --> 00:06:54,317
+Summary tab: state machine, bilingual status, KPIs
+
+33
+00:06:54,317 --> 00:07:03,319
+P&L tab: revenues and costs, live TCE
+
+34
+00:07:03,320 --> 00:07:11,793
+Port activity: calls, SOF, laytime trigger
+
+35
+00:07:11,793 --> 00:07:18,630
+Notes tab: jot it down, share with the team
+
+36
+00:07:18,630 --> 00:07:27,180
+Instructions tab: owners and charterers, acknowledged
+
+37
+00:07:27,180 --> 00:07:34,581
+Activity tab: the full audit trail
+
+38
+00:07:34,581 --> 00:07:40,770
+Next: schedule conflicts and demurrage claims
+
+39
+00:07:44,572 --> 00:07:52,105
+Schedule: berth windows · drag planning · conflicts
+
+40
+00:07:52,105 --> 00:08:02,249
+Finance desk · laytime queue
+
+41
+00:08:02,249 --> 00:08:11,671
+Laytime detail: facts · laytime used · despatch rate
+
+42
+00:08:11,671 --> 00:08:20,113
+Claims register: time bar · amount ladder · follow-up
+
+43
+00:08:20,113 --> 00:08:28,433
+Open a claim: action log and recovery status
+
+44
+00:08:28,433 --> 00:08:36,801
+Next: invoices · GL · P&L
+
+45
+00:08:40,056 --> 00:08:48,568
+Invoice centre: freight · demurrage · debit notes
+
+46
+00:08:48,568 --> 00:08:57,650
+Open a freight invoice: lines · tax · linked voyage
+
+47
+00:08:57,650 --> 00:09:06,004
+Payments: terms and ageing tracking
+
+48
+00:09:06,004 --> 00:09:16,222
+General ledger: vouchers generated · audit intact
+
+49
+00:09:16,222 --> 00:09:23,981
+Voyage P&L: revenues and costs, multi-dimensional
+
+50
+00:09:23,982 --> 00:09:32,300
+Next: fleet technical and emissions compliance
+
+51
+00:09:35,678 --> 00:09:42,787
+Technical management · Fleet profiles
+
+52
+00:09:42,787 --> 00:09:52,857
+Speed/consumption baselines feed the estimate engine
+
+53
+00:09:52,857 --> 00:10:02,454
+Bunkers: ROB in real time and procurement plan
+
+54
+00:10:02,454 --> 00:10:11,586
+Emissions: EU ETS · FuelEU · CII
+
+55
+00:10:11,586 --> 00:10:17,122
+Next: market data and the AI assistant
+
+56
+00:10:20,511 --> 00:10:28,064
+Market: indices and chartering trends
+
+57
+00:10:28,064 --> 00:10:46,657
+AI assistant: a friendly notice when no model is set
+
+58
+00:10:46,657 --> 00:10:54,806
+Still useful: deterministic rule-based replies
+
+59
+00:10:54,806 --> 00:11:03,986
+Email review: AI advises, humans decide
+
+60
+00:11:03,987 --> 00:11:12,001
+Back to the workbench: the loop complete
+
+61
+00:11:15,995 --> 00:11:27,151
+One dataset, one platform, every role
+
+62
+00:11:27,151 --> 00:11:34,309
+MariOS — Maritime Operating System
+
+63
+00:11:34,309 --> 00:11:41,936
+End of demonstration · Thank you for watching
+

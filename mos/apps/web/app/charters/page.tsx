@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { DateInput } from "@/components/DateInput";
@@ -15,6 +16,7 @@ import { FormPanel, FormSection } from "@/components/form/FormPanel";
 import { Tabs, type TabItem } from "@/components/Tabs";
 import { CoaListPanel } from "@/components/charters/CoaListPanel";
 import { TcListPanel } from "@/components/charters/TcListPanel";
+import { useTodoAdd } from "@/components/TodoQuickAdd";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -35,6 +37,7 @@ type Charter = {
   vessel_id: string | null;
   counterparty_id: string | null;
   estimate_id: string | null;
+  estimate_title?: string | null;
   fixture_type?: string | null;
   sanctions_blocked: boolean;
   updated_at?: string | null;
@@ -228,6 +231,18 @@ function ChartersPage() {
   const [busy, setBusy] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
 
+  // 行右键菜单：打开 / 添加到个人待办 / 复制 id
+  const rowCtx = useContextMenu<Charter>();
+  const todo = useTodoAdd();
+  function charterMenuItems(row: Charter): ContextMenuItem[] {
+    return [
+      { key: "open", label: t("common.open", "Open"), onClick: () => router.push(`/charters/${row.id}`) },
+      { key: "divider", divider: true },
+      todo.menuItem({ entityType: "charter", entityId: row.id, title: row.charter_no }),
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(row.id) },
+    ];
+  }
+
   const [docKind, setDocKind] = useState<DocKind>("voyage_fixture");
   const [charterType, setCharterType] = useState("voyage");
   const [vesselId, setVesselId] = useState("");
@@ -383,12 +398,16 @@ function ChartersPage() {
     {
       key: "estimate_id",
       title: t("page.charters.estimate", "估算"),
-      width: 110,
-      value: (r) => r.estimate_id || "",
+      width: 150,
+      value: (r) => r.estimate_title || r.estimate_id || "",
       render: (_v, r) =>
         r.estimate_id ? (
-          <Link href="/estimates" onClick={(e) => e.stopPropagation()}>
-            {r.estimate_id.slice(0, 8)}
+          <Link
+            href="/estimates"
+            title={r.estimate_title || r.estimate_id}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {r.estimate_title || r.estimate_id.slice(0, 8)}
           </Link>
         ) : (
           "—"
@@ -441,6 +460,7 @@ function ChartersPage() {
               data={rows}
               rowKey={(r) => r.id}
               onRowClick={(r) => router.push(`/charters/${r.id}`)}
+              onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
               storageKey="charters_list_grid"
               emptyText={t("common.empty", "No records")}
             />
@@ -588,6 +608,9 @@ function ChartersPage() {
           ) : null}
         </FormPanel>
       </RecordModal>
+
+      <ContextMenu controller={rowCtx} items={charterMenuItems} />
+      {todo.element}
     </AppShell>
   );
 }

@@ -28,6 +28,75 @@ router = APIRouter(tags=["Home"])
 
 ALERT_NOTIFY_ROLES = ("technical", "management", "tenant_admin")
 
+# ── Activity feed (operation log) — role-scoped, click-through ──
+# Supervisors (management/tenant_admin/platform_admin) see every module's log.
+# Everyone sees their own actions + others' actions for modules their roles cover.
+
+_SUPERVISOR_ROLES = frozenset({"management", "tenant_admin", "platform_admin"})
+
+_ALL_MODULES = frozenset(
+    {"operations", "finance", "chartering", "commercial", "bunker", "masterdata", "ship", "tasks", "platform", "analytics"}
+)
+
+# entity_type -> module (for permission scoping + nav grouping)
+_ENTITY_MODULE: dict[str, str] = {
+    "voyage": "operations", "port_call": "operations", "sof_event": "operations",
+    "noon_report": "operations", "off_hire_event": "operations", "port_disbursement": "operations",
+    "invoice": "finance", "claim": "finance", "laytime": "finance", "laytime_statement": "finance",
+    "pda": "finance", "journal": "finance", "accrual": "finance", "payment": "finance",
+    "charter": "chartering", "tc_contract": "chartering", "time_charter": "chartering",
+    "time_charter_contract": "chartering", "charter_offer": "chartering", "cargo": "chartering",
+    "coa_contract": "chartering", "coa_lifting": "chartering", "master_contract": "chartering",
+    "clause_template": "chartering",
+    "estimate": "commercial", "rate_table": "commercial", "pricing_template": "commercial",
+    "bunker_order": "bunker", "bunker_requirement": "bunker", "bunker_option": "bunker",
+    "vessel": "masterdata", "port": "masterdata", "counterparty": "masterdata",
+    "cargo_name": "masterdata", "cargo_group": "masterdata", "port_berth": "masterdata",
+    "port_alias": "masterdata", "port_distance": "masterdata", "company": "masterdata", "trade": "masterdata",
+    "user": "platform", "tenant": "platform", "connector": "platform", "org_unit": "platform",
+    "email_account": "platform", "webhook_endpoint": "platform", "platform": "platform",
+    "task": "tasks",
+    "ship_certificate": "ship", "ship_work_order": "ship", "ship_terminal": "ship",
+    "ship_report": "ship", "work_order": "ship",
+    "dq_issue": "analytics",
+}
+
+# role -> modules whose logs the role may view
+_ROLE_MODULES: dict[str, frozenset[str]] = {
+    "management": _ALL_MODULES, "tenant_admin": _ALL_MODULES, "platform_admin": _ALL_MODULES,
+    "operations": frozenset({"operations", "ship", "masterdata", "bunker", "tasks"}),
+    "chartering": frozenset({"chartering", "commercial", "masterdata", "tasks"}),
+    "finance": frozenset({"finance", "tasks"}),
+    "demurrage": frozenset({"finance", "tasks"}),
+    "technical": frozenset({"operations", "ship", "masterdata", "tasks"}),
+    "bunker": frozenset({"bunker", "operations", "masterdata", "tasks"}),
+    "pool_manager": frozenset({"finance", "tasks"}),
+    "risk": frozenset({"operations", "finance", "tasks"}),
+    "viewer": frozenset({"tasks"}),
+    "agent": frozenset({"tasks"}),
+}
+
+# entity_type -> frontend route template (click-through直达)
+_ENTITY_HREF: dict[str, str] = {
+    "voyage": "/operations/voyages/{id}/workspace",
+    "invoice": "/finance/invoices/{id}",
+    "charter": "/charters/{id}",
+    "time_charter": "/charters/tc/{id}",
+    "time_charter_contract": "/charters/tc/{id}",
+    "tc_contract": "/charters/tc/{id}",
+    "coa_contract": "/charters/coa/{id}",
+    "estimate": "/estimates",
+    "claim": "/finance/claims",
+    "laytime_statement": "/finance/laytimes/{id}",
+    "bunker_order": "/bunker",
+    "cargo": "/cargo",
+    "vessel": "/masterdata/vessels",
+    "counterparty": "/masterdata/counterparties",
+    "port": "/masterdata/ports",
+    "task": "/tasks",
+    "user": "/admin/users",
+}
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -120,10 +189,12 @@ def _ship_alerts(db: Session, auth: AuthContext) -> list[dict]:
         expired = c.status == "expired"
         kind = "ship_cert_expired" if expired else "ship_cert_expiring"
         title = f"{'Certificate expired' if expired else 'Certificate expiring'}: {c.cert_name} ({vessel_name})".strip()
+        title_zh = f"{'证书已过期' if expired else '证书即将到期'}：{c.cert_name}（{vessel_name}）".strip()
         alerts.append(
             {
                 "kind": kind,
                 "title": title,
+                "title_i18n": {"en": title, "zh": title_zh},
                 "detail": f"{c.cert_code} · {c.expires_on.isoformat() if c.expires_on else '—'} · {c.issuing_body or ''}".strip(),
                 "href": "/ship",
                 "severity": "critical" if expired else "warning",
@@ -155,10 +226,12 @@ def _ship_alerts(db: Session, auth: AuthContext) -> list[dict]:
             due_in = (expires_on - today).days
             expired = due_in < 0
             title = f"Crew certificate {'expired' if expired else 'expiring'}: {cert.get('code') or '—'} — {member.full_name}"
+            title_zh = f"船员证书{'已过期' if expired else '即将到期'}：{cert.get('code') or '—'} — {member.full_name}"
             alerts.append(
                 {
                     "kind": "crew_cert_expiring",
                     "title": title,
+                    "title_i18n": {"en": title, "zh": title_zh},
                     "detail": f"{member.rank} · expires {expires_on.isoformat()}",
                     "href": "/ship",
                     "severity": "critical" if expired else "warning",
@@ -459,6 +532,77 @@ def _queues_section(db: Session, auth: AuthContext) -> list[dict]:
             }
         )
     return queues
+
+
+@router.get("/activity/feed")
+def activity_feed(
+    limit: int = 30,
+    module: str | None = None,
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
+    """Role-scoped operation log for the workbench. Newest first, click-through.
+
+    - supervisors (management / tenant_admin / platform_admin): every module's log;
+    - everyone else: their own actions + others' actions for modules their roles cover.
+    Each item carries a frontend ``href`` so a click jumps straight to the record.
+    """
+    from app.models_audit import AuditLog
+
+    roles = set(auth.roles)
+    supervisor = bool(roles & _SUPERVISOR_ROLES)
+    my_modules: set[str] = set()
+    for r in roles:
+        my_modules |= _ROLE_MODULES.get(r, frozenset())
+
+    window = min(max(limit, 1) * 4, 200)
+    rows = db.scalars(
+        select(AuditLog)
+        .where(AuditLog.tenant_id == auth.tenant_id)
+        .order_by(AuditLog.created_at.desc())
+        .limit(window)
+    ).all()
+
+    actor_ids = {r.actor_user_id for r in rows if r.actor_user_id}
+    users = (
+        {u.id: u for u in db.scalars(select(User).where(User.id.in_(actor_ids))).all()}
+        if actor_ids
+        else {}
+    )
+
+    out: list[dict] = []
+    for r in rows:
+        ent_mod = _ENTITY_MODULE.get(r.entity_type or "")
+        if module and ent_mod != module:
+            continue
+        visible = (
+            supervisor
+            or (r.actor_user_id is not None and r.actor_user_id == auth.user_id)
+            or (ent_mod in my_modules if ent_mod else False)
+        )
+        if not visible:
+            continue
+        actor = users.get(r.actor_user_id)
+        href = None
+        if r.entity_type in _ENTITY_HREF and r.entity_id:
+            href = _ENTITY_HREF[r.entity_type].format(id=r.entity_id)
+        out.append(
+            {
+                "id": str(r.id),
+                "action": r.action,
+                "entity_type": r.entity_type,
+                "entity_id": r.entity_id,
+                "module": ent_mod,
+                "actor": (actor.full_name or actor.email) if actor else None,
+                "actor_user_id": str(r.actor_user_id) if r.actor_user_id else None,
+                "detail": r.detail or {},
+                "href": href,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+        )
+        if len(out) >= limit:
+            break
+    return {"items": out, "count": len(out), "supervisor": supervisor}
 
 
 @router.get("/home/summary")

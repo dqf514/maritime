@@ -23,6 +23,12 @@ from app.services.identity import send_mail
 from app.services.ms_config import effective_mode, mask_ms_secret, resolve_ms_config
 from app.services.ops_crypto import encrypt_secret
 from app.services.search_acl import allowed_path_prefixes
+from app.services.upload_policy import (
+    KINDS as UPLOAD_KINDS,
+    get_all_upload_policies,
+    get_upload_policy,
+    save_upload_policy,
+)
 from app.services.shell_nav import (
     build_home_widgets,
     build_navigation,
@@ -93,21 +99,22 @@ def set_workspace(body: WorkspaceIn, auth: AuthContext = Depends(get_current_aut
 
 
 def _quick_actions(roles: list[str]) -> list[dict]:
-    actions = [{"label": "Live dashboard", "href": "/dashboards"}]
+    # label_zh — 工作台右上快捷按钮的中文名（前端按 locale 取 label_zh || label）
+    actions = [{"label": "Live dashboard", "label_zh": "实时看板", "href": "/dashboards"}]
     if "chartering" in roles or "tenant_admin" in roles:
-        actions.append({"label": "New estimate", "href": "/estimates"})
-        actions.append({"label": "Email review", "href": "/email/review"})
+        actions.append({"label": "New estimate", "label_zh": "新建估算", "href": "/estimates"})
+        actions.append({"label": "Email review", "label_zh": "邮件识别", "href": "/email/review"})
     if "operations" in roles or "tenant_admin" in roles:
-        actions.append({"label": "Voyages", "href": "/operations/voyages"})
+        actions.append({"label": "Voyages", "label_zh": "航次列表", "href": "/operations/voyages"})
     if "technical" in roles or "operations" in roles or "tenant_admin" in roles:
-        actions.append({"label": "Ship management", "href": "/ship"})
+        actions.append({"label": "Ship management", "label_zh": "船舶管理", "href": "/ship"})
     if "finance" in roles or "tenant_admin" in roles:
-        actions.append({"label": "Finance desk", "href": "/finance"})
+        actions.append({"label": "Finance desk", "label_zh": "财务工作台", "href": "/finance"})
     if "tenant_admin" in roles:
-        actions.append({"label": "SelfCheck", "href": "/settings/selfcheck"})
-        actions.append({"label": "Users", "href": "/admin/users"})
+        actions.append({"label": "SelfCheck", "label_zh": "系统自检", "href": "/settings/selfcheck"})
+        actions.append({"label": "Users", "label_zh": "用户管理", "href": "/admin/users"})
     if "platform_admin" in roles:
-        actions.append({"label": "Tenants", "href": "/platform/tenants"})
+        actions.append({"label": "Tenants", "label_zh": "租户管理", "href": "/platform/tenants"})
     return actions
 
 
@@ -855,6 +862,91 @@ def platform_list_modules(auth: AuthContext = Depends(require_roles("platform_ad
     return [{"code": m.code, "name": m.name, "is_core": m.is_core, "description": m.description} for m in rows]
 
 
+def _db_size_bytes() -> int | None:
+    """Best-effort DB size. SQLite: file size. Others: None (no cheap portable probe)."""
+    try:
+        url = get_settings().database_url
+        if url.startswith("sqlite"):
+            path = url.split("///", 1)[-1]
+            import os as _os
+
+            return _os.path.getsize(path) if _os.path.exists(path) else None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _disk_pct() -> float:
+    try:
+        import os as _os
+
+        if _os.name == "nt":
+            import shutil
+
+            total, used, _free = shutil.disk_usage(_os.path.abspath("."))
+            return round(used / total * 100, 2) if total else 0.0
+        st = _os.statvfs(".")
+        total = st.f_blocks * st.f_frsize
+        used = total - st.f_bavail * st.f_frsize
+        return round(used / total * 100, 2) if total else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _resource_snapshot(db: Session) -> dict:
+    import time as _time
+    import os as _os
+
+    t0 = _time.perf_counter()
+    try:
+        db.execute(select(1))
+        ping_ok = True
+    except Exception:  # noqa: BLE001
+        ping_ok = False
+    ping_ms = round((_time.perf_counter() - t0) * 1000, 2)
+    return {
+        "disk_pct": _disk_pct(),
+        "db_ping_ms": ping_ms,
+        "db_up": ping_ok,
+        "db_size_bytes": _db_size_bytes(),
+        "cpu_count": _os.cpu_count(),
+    }
+
+
+def _per_tenant_usage(db: Session) -> list[dict]:
+    """Row counts for a few core tables, grouped by tenant (demo-scale cheap)."""
+    from app.models_domain import Invoice, Voyage
+    from app.models_task import Task
+
+    def _counts(model) -> dict:
+        rows = db.execute(select(model.tenant_id, func.count()).group_by(model.tenant_id)).all()
+        return {str(tid): n for tid, n in rows if tid}
+
+    v_counts = _counts(Voyage)
+    i_counts = _counts(Invoice)
+    t_counts = _counts(Task)
+    tenants = db.scalars(select(Tenant).where(Tenant.code != "sys").order_by(Tenant.code)).all()
+    user_counts = dict(
+        db.execute(select(User.tenant_id, func.count()).group_by(User.tenant_id)).all()
+    )
+    out: list[dict] = []
+    for t in tenants:
+        tid = str(t.id)
+        out.append(
+            {
+                "id": tid,
+                "code": t.code,
+                "name": t.name,
+                "status": t.status,
+                "users": int(user_counts.get(t.id, 0)),
+                "voyages": int(v_counts.get(tid, 0)),
+                "invoices": int(i_counts.get(tid, 0)),
+                "tasks": int(t_counts.get(tid, 0)),
+            }
+        )
+    return out
+
+
 @router.get("/platform/health")
 def platform_health(auth: AuthContext = Depends(require_roles("platform_admin")), db: Session = Depends(get_db)):
     _ = auth
@@ -865,7 +957,43 @@ def platform_health(auth: AuthContext = Depends(require_roles("platform_admin"))
         "suspended": sum(1 for t in tenants if t.status == "suspended"),
         "api_version": "1.4.2-platform",
         "checked_at": datetime.now(timezone.utc).astimezone().isoformat(),
+        "resources": _resource_snapshot(db),
+        "tenants_usage": _per_tenant_usage(db),
     }
+
+
+# —— Platform: central upload policy (type + size limits) ——
+class UploadPolicyIn(BaseModel):
+    max_bytes: int | None = None
+    exts: list[str] | None = None
+
+
+class UploadSettingsIn(BaseModel):
+    kinds: dict[str, UploadPolicyIn] = Field(default_factory=dict)
+
+
+@router.get("/platform/upload-settings")
+def get_platform_upload_settings(auth: AuthContext = Depends(require_roles("platform_admin")), db: Session = Depends(get_db)):
+    _ = auth
+    return {"kinds": get_all_upload_policies(db)}
+
+
+@router.put("/platform/upload-settings")
+def put_platform_upload_settings(
+    body: UploadSettingsIn,
+    auth: AuthContext = Depends(require_roles("platform_admin")),
+    db: Session = Depends(get_db),
+):
+    saved: dict = {}
+    for kind, patch in body.kinds.items():
+        saved[kind] = save_upload_policy(
+            db,
+            kind,
+            max_bytes=patch.max_bytes,
+            exts=patch.exts,
+            updated_by=auth.user_id,
+        )
+    return {"kinds": saved}
 
 
 # —— Platform: per-tenant Microsoft 365 app credentials ——

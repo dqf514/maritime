@@ -5,9 +5,33 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { HelpFrame } from "@/components/HelpFrame";
 import { PageHeader } from "@/components/PageHeader";
+import { VideoDemos } from "@/components/help/VideoDemos";
 import { useI18n } from "@/lib/i18n";
 
 import { API_BASE } from "@/lib/api";
+
+/** 视频演示讲解页 —— 内嵌播放器与讲解稿，数据自带，无需拉取文章正文。 */
+function VideoDemoArticle() {
+  const { t } = useI18n();
+  return (
+    <HelpFrame>
+      <PageHeader
+        breadcrumb={[
+          { label: t("help.centre", "Knowledge Centre"), href: "/help" },
+          { label: t("help.video.title", "Video walkthrough") },
+        ]}
+        title={t("help.video.title", "Video walkthrough")}
+        subtitle={t("help.video.sub", "Narrated product videos with click-to-seek transcripts — full business flow and administrator operations.")}
+      />
+      <VideoDemos />
+      <div className="help-article-actions">
+        <Link className="btn" href="/help">
+          {t("help.back_list", "All articles")}
+        </Link>
+      </div>
+    </HelpFrame>
+  );
+}
 
 type Article = {
   slug: string;
@@ -21,6 +45,8 @@ type Article = {
 export default function HelpArticlePage() {
   const { slug } = useParams<{ slug: string }>();
   const { t, locale } = useI18n();
+
+  if (slug === "video-demos") return <VideoDemoArticle />;
   const [art, setArt] = useState<Article | null>(null);
   const [err, setErr] = useState("");
   const loc = locale?.startsWith("zh") ? "zh-CN" : "en";

@@ -84,6 +84,15 @@ export function AiFill({
             {source ? <span className="ai-fill-src">{source === "llm" ? "AI" : "rules"}</span> : null}
           </span>
 
+          {source && source !== "llm" ? (
+            <span className="ai-fill-note">
+              {t(
+                "ai.fill.rules_note",
+                "AI 模型未配置或暂不可用 — 以上建议由内置规则生成。",
+              )}
+            </span>
+          ) : null}
+
           {entries.length ? (
             <span className="ai-fill-rows">
               {entries.map(([k, v]) => (

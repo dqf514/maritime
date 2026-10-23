@@ -282,7 +282,11 @@ function PaymentsPage() {
     () => [
       { key: "batch_number", title: t("page.payments.batch_no", "Batch no"), sticky: true },
       { key: "batch_date", title: t("page.payments.batch_date", "Date"), editor: { type: "date" } },
-      { key: "status", title: t("common.status", "Status") },
+      {
+        key: "status",
+        title: t("common.status", "Status"),
+        render: (v) => <span className={`badge badge-${v === "completed" ? "ok" : v === "reversed" ? "warn" : "info"}`}>{t(`status.${v}`, String(v))}</span>,
+      },
       {
         key: "payment_count",
         title: t("page.payments.count", "Payments"),
@@ -303,14 +307,13 @@ function PaymentsPage() {
       {
         key: "bank_charge_mode",
         title: t("page.payments.charge_mode", "Bank charges"),
-        render: (v) => (v ? String(v) : "—"),
+        render: (v) => (v ? t(`page.payments.charge_${v}`, String(v)) : "—"),
         editor: {
           type: "select",
-          options: [
-            { value: "shared", label: "shared" },
-            { value: "sender", label: "sender" },
-            { value: "receiver", label: "receiver" },
-          ],
+          options: ["shared", "sender", "receiver"].map((m) => ({
+            value: m,
+            label: t(`page.payments.charge_${m}`, m),
+          })),
         },
       },
       {
@@ -481,9 +484,9 @@ function PaymentsPage() {
           <label>
             {t("page.payments.charge_mode", "Bank charges")}
             <select value={chargeMode} onChange={(e) => setChargeMode(e.target.value)}>
-              <option value="shared">shared</option>
-              <option value="sender">sender</option>
-              <option value="receiver">receiver</option>
+              <option value="shared">{t("page.payments.charge_shared", "Shared")}</option>
+              <option value="sender">{t("page.payments.charge_sender", "Sender")}</option>
+              <option value="receiver">{t("page.payments.charge_receiver", "Receiver")}</option>
             </select>
           </label>
         </div>
@@ -502,7 +505,7 @@ function PaymentsPage() {
 
       <RecordModal
         open={!!detail}
-        title={detail ? `${detail.batch_number} · ${detail.status}` : ""}
+        title={detail ? `${detail.batch_number} · ${t(`status.${detail.status}`, detail.status)}` : ""}
         onClose={() => setDetail(null)}
         onSave={detail && detail.status === "draft" ? saveDetail : undefined}
         canEdit={detail?.status === "draft"}
@@ -529,15 +532,18 @@ function PaymentsPage() {
                   <label>
                     {t("page.payments.charge_mode", "Bank charges")}
                     <select value={detailCharge} onChange={(e) => setDetailCharge(e.target.value)}>
-                      <option value="shared">shared</option>
-                      <option value="sender">sender</option>
-                      <option value="receiver">receiver</option>
+                      <option value="shared">{t("page.payments.charge_shared", "Shared")}</option>
+                      <option value="sender">{t("page.payments.charge_sender", "Sender")}</option>
+                      <option value="receiver">{t("page.payments.charge_receiver", "Receiver")}</option>
                     </select>
                   </label>
                 </>
               ) : (
                 <span>
-                  {t("page.payments.charge_mode", "Bank charges")}: {detail.bank_charge_mode || "—"}
+                  {t("page.payments.charge_mode", "Bank charges")}:{" "}
+                  {detail.bank_charge_mode
+                    ? t(`page.payments.charge_${detail.bank_charge_mode}`, detail.bank_charge_mode)
+                    : "—"}
                 </span>
               )}
             </div>

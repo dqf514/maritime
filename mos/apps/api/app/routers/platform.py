@@ -566,7 +566,10 @@ async def upload_excel(
     from openpyxl import load_workbook
     import io
 
-    MAX_EXCEL_BYTES = 10 * 1024 * 1024
+    from app.services.upload_policy import get_upload_policy
+
+    policy = get_upload_policy(db, "document")
+    MAX_EXCEL_BYTES = policy["max_bytes"]
 
     job = db.get(MigrationJob, job_id)
     if not job or job.tenant_id != auth.tenant_id:

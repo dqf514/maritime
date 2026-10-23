@@ -1,0 +1,130 @@
+
+> build
+> next build
+
+▲ Next.js 16.3.5 (Turbopack)
+✓ Running next.config.js took 14ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 2.1s
+  Running TypeScript ...
+  Finished TypeScript in 1476ms ...
+  Collecting page data using 19 workers ...
+  Generating static pages using 19 workers (0/89) ...
+  Generating static pages using 19 workers (22/89) 
+  Generating static pages using 19 workers (44/89) 
+  Generating static pages using 19 workers (66/89) 
+✓ Generating static pages using 19 workers (89/89) in 505ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /account
+├ ○ /account/security
+├ ○ /admin/billing
+├ ○ /admin/company
+├ ○ /admin/i18n
+├ ○ /admin/org
+├ ○ /admin/organization
+├ ○ /admin/permissions
+├ ○ /admin/security
+├ ○ /admin/users
+├ ○ /admin/workflows
+├ ○ /ai/chat
+├ ○ /analytics
+├ ○ /analytics/market
+├ ○ /analytics/reports
+├ ○ /analytics/reports/builder
+├ ○ /analytics/scheduler
+├ ○ /bunker
+├ ○ /cargo
+├ ○ /charters
+├ ƒ /charters/[id]
+├ ○ /charters/coa
+├ ƒ /charters/coa/[id]
+├ ○ /charters/tc
+├ ƒ /charters/tc/[id]
+├ ○ /dashboards
+├ ƒ /dashboards/[role]
+├ ○ /denied
+├ ○ /email/review
+├ ○ /emissions
+├ ○ /emissions/compliance
+├ ○ /estimates
+├ ƒ /estimates/[estimate_id]/sensitivity
+├ ○ /exceptions
+├ ○ /finance
+├ ƒ /finance/claims/[id]
+├ ○ /finance/gl
+├ ƒ /finance/invoices/[id]
+├ ƒ /finance/laytimes/[id]
+├ ○ /finance/payments
+├ ○ /finance/pnl
+├ ƒ /finance/pnl/[voyage_id]
+├ ○ /help
+├ ƒ /help/[slug]
+├ ○ /home
+├ ○ /login
+├ ○ /login/accept-invite
+├ ○ /login/magic
+├ ○ /login/oauth-done
+├ ○ /login/oauth-stub
+├ ○ /login/verify-email
+├ ƒ /manual
+├ ○ /market-positions
+├ ○ /masterdata/cargo-names
+├ ƒ /masterdata/cargo-names/[id]
+├ ○ /masterdata/counterparties
+├ ƒ /masterdata/counterparties/[id]
+├ ○ /masterdata/distances
+├ ○ /masterdata/fuel-zones
+├ ○ /masterdata/import
+├ ○ /masterdata/port-reference
+├ ○ /masterdata/ports
+├ ƒ /masterdata/ports/[id]
+├ ○ /masterdata/rates
+├ ○ /masterdata/vessels
+├ ○ /operations/marilink
+├ ○ /operations/schedule
+├ ○ /operations/voyages
+├ ƒ /operations/voyages/[id]
+├ ƒ /operations/voyages/[id]/workspace
+├ ○ /platform
+├ ○ /platform/branding
+├ ○ /platform/health
+├ ○ /platform/i18n
+├ ○ /platform/identity
+├ ○ /platform/interfaces
+├ ○ /platform/ops
+├ ○ /platform/saas
+├ ○ /platform/tenants
+├ ○ /pool
+├ ○ /settings
+├ ○ /settings/ai
+├ ○ /settings/api-keys
+├ ○ /settings/connectors
+├ ○ /settings/dataops
+├ ○ /settings/dataops/backup
+├ ○ /settings/dataops/migrate
+├ ○ /settings/flags
+├ ○ /settings/licenses
+├ ○ /settings/office
+├ ○ /settings/recycle
+├ ○ /settings/reference
+├ ○ /settings/selfcheck
+├ ○ /settings/templates
+├ ○ /settings/udf
+├ ○ /settings/webhooks
+├ ○ /ship
+├ ƒ /ship/vessels/[id]
+├ ○ /tasks
+├ ○ /trading
+├ ○ /twin
+└ ○ /workflows/inbox
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+EXIT=0

@@ -357,7 +357,13 @@ export default function BunkerDeskPage() {
   const columns: ColumnDef<Order>[] = [
     { key: "order_no", title: t("page.finance.number", "No."), width: 130, value: (r) => r.order_no },
     { key: "grade", title: t("page.bunker.grade", "Grade"), width: 110, value: (r) => r.grade, editor: { type: "text" } },
-    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => r.status,
+      render: (v) => <span className={`badge badge-${v === "delivered" || v === "closed" ? "ok" : "info"}`}>{t(`status.${v}`, String(v))}</span>,
+    },
     {
       key: "qty_ordered",
       title: t("page.bunker.qty", "Ordered qty (mt)"),
@@ -444,7 +450,7 @@ export default function BunkerDeskPage() {
       value: (r) => r.status,
       render: (_v, r) => (
         <span className={`badge ${r.status === "accepted" ? "badge-pass" : r.status === "rejected" ? "badge-fail" : "badge-warn"}`}>
-          {r.status}
+          {t(`status.${r.status}`, r.status)}
         </span>
       ),
     },

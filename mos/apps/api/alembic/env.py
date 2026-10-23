@@ -66,6 +66,7 @@ import app.models_reference_ext  # noqa: F401,E402
 import app.models_interface  # noqa: F401,E402
 import app.models_field_perms  # noqa: F401,E402
 import app.models_doc  # noqa: F401,E402
+import app.models_voyage_ext  # noqa: F401,E402
 
 target_metadata = Base.metadata
 

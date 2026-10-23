@@ -13,18 +13,19 @@ from sqlalchemy.orm import Session
 from app.models_saas import FeaturePermission, TenantWallet, UsageLedger, WorkflowDefinition, WorkflowInstance
 
 
+# name_zh — 权限矩阵界面按 locale 取 name_zh || name（走查：矩阵整页英文）
 FEATURE_CATALOG = [
-    {"code": "estimate.create", "name": "Create estimates", "module": "estimate"},
-    {"code": "estimate.convert_cp", "name": "Convert estimate to CP", "module": "chartering"},
-    {"code": "charter.activate", "name": "Activate charter", "module": "chartering"},
-    {"code": "voyage.operate", "name": "Operate voyages", "module": "operations"},
-    {"code": "invoice.issue", "name": "Issue invoices", "module": "finance"},
-    {"code": "invoice.collect", "name": "Record payments", "module": "finance"},
-    {"code": "laytime.finalize", "name": "Finalize laytime", "module": "laytime"},
-    {"code": "ai.invoke", "name": "Invoke AI skills", "module": "ai"},
-    {"code": "admin.users", "name": "Manage users", "module": "rbac"},
-    {"code": "admin.billing", "name": "Manage subscription & top-up", "module": "license"},
-    {"code": "workflow.approve", "name": "Approve workflow steps", "module": "workflow"},
+    {"code": "estimate.create", "name": "Create estimates", "name_zh": "新建估算", "module": "estimate"},
+    {"code": "estimate.convert_cp", "name": "Convert estimate to CP", "name_zh": "估算转租约", "module": "chartering"},
+    {"code": "charter.activate", "name": "Activate charter", "name_zh": "生效租约", "module": "chartering"},
+    {"code": "voyage.operate", "name": "Operate voyages", "name_zh": "执行航次", "module": "operations"},
+    {"code": "invoice.issue", "name": "Issue invoices", "name_zh": "开票", "module": "finance"},
+    {"code": "invoice.collect", "name": "Record payments", "name_zh": "登记收款", "module": "finance"},
+    {"code": "laytime.finalize", "name": "Finalize laytime", "name_zh": "滞期费终局计算", "module": "laytime"},
+    {"code": "ai.invoke", "name": "Invoke AI skills", "name_zh": "调用 AI 技能", "module": "ai"},
+    {"code": "admin.users", "name": "Manage users", "name_zh": "用户管理", "module": "rbac"},
+    {"code": "admin.billing", "name": "Manage subscription & top-up", "name_zh": "订阅与充值管理", "module": "license"},
+    {"code": "workflow.approve", "name": "Approve workflow steps", "name_zh": "审批工作流节点", "module": "workflow"},
 ]
 
 

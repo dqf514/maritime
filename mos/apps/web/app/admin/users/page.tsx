@@ -33,7 +33,7 @@ const BUSINESS_ROLES_HINT =
   "可同时勾选多个业务角色（如租船+营运），适合小型企业一人多岗；租户管理员可与业务角色并存。";
 
 function UsersAdminPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const router = useRouter();
   const { query, setQuery } = useListQuery();
@@ -183,7 +183,7 @@ function UsersAdminPage() {
               checked={value.includes(r.code)}
               onChange={() => onChange(toggleRole(value, r.code))}
             />
-            <span>{r.name}</span>
+            <span>{t(`role.${r.code}`, r.name)}</span>
             <code>{r.code}</code>
           </label>
         ))}
@@ -208,9 +208,18 @@ function UsersAdminPage() {
       title: t("common.roles", "角色"),
       minWidth: 160,
       value: (r) => r.roles.join(", "),
-      render: (_v, r) => <span>{r.roles.join(", ")}</span>,
+      // 角色 code → role.* 词表（未知 code 回退原文）
+      render: (_v, r) => (
+        <span>{r.roles.map((c) => t(`role.${c}`, c)).join(locale.startsWith("zh") ? "、" : ", ")}</span>
+      ),
     },
-    { key: "status", title: t("common.status", "状态"), width: 100, value: (r) => r.status },
+    {
+      key: "status",
+      title: t("common.status", "状态"),
+      width: 100,
+      value: (r) => r.status,
+      render: (v) => <span className={`badge badge-${v === "active" ? "ok" : v === "invited" ? "info" : "warn"}`}>{t(`status.${v}`, String(v))}</span>,
+    },
   ];
 
   return (
@@ -320,9 +329,9 @@ function UsersAdminPage() {
           <label>
             {t("common.status", "状态")}
             <select value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>
-              <option value="active">active</option>
-              <option value="disabled">disabled</option>
-              <option value="invited">invited</option>
+              <option value="active">{t("status.active", "active")}</option>
+              <option value="disabled">{t("status.disabled", "disabled")}</option>
+              <option value="invited">{t("status.invited", "invited")}</option>
             </select>
           </label>
         ) : null}

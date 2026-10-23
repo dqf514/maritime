@@ -62,6 +62,33 @@ Use this Knowledge Centre to learn workflows, configure Office connectivity, and
 5. 需要指引时，从侧栏或顶部进入「帮助 → 知识中心」。""",
     },
     {
+        "slug": "video-demos",
+        "category": "start",
+        "tags": ["video", "demo", "walkthrough", "screencast", "narration", "视频", "演示", "讲解", "录屏"],
+        "title_en": "Video walkthrough",
+        "title_zh": "视频演示讲解",
+        "summary_en": "Narrated product videos — full business flow (Chinese & English) and administrator operations — with click-to-seek transcripts.",
+        "summary_zh": "带讲解的产品视频——全业务流程（中文与英文）与管理员操作，附可点击跳转的完整讲解稿。",
+        "body_en": """Watch MariOS end to end without leaving the app. This page embeds three narrated videos:
+
+- Business demo (Chinese) — estimate → fixture → voyage execution → laytime/claims → finance → technical → market & AI, about 13 minutes, 10 chapters.
+- Business demo (English) — the same flow with English narration, about 12 minutes.
+- Admin operations (Chinese) — tenant administrator (users, permissions, languages, settings, module licences, self-check) and platform operations (tenants, subscriptions, identity, health), about 5 minutes, 3 chapters.
+
+Each video ships with a full transcript: click any chapter or transcript line and the player jumps to that exact moment. Subtitle files (.srt) can be downloaded next to the player for offline use or re-use in training.
+
+Tip: first-time users should watch the opening chapter (sign-in and workbench) before exploring their own modules.""",
+        "body_zh": """无需离开系统即可完整了解 MariOS。本页内嵌三段带讲解的视频：
+
+- 业务演示（中文）——估算 → 成交 → 航次执行 → 滞期与索赔 → 财务 → 技术 → 行情与 AI，约 13 分钟，10 个章节。
+- 业务演示（英文）——同一流程的英文讲解版，约 12 分钟。
+- 管理演示（中文）——租户管理员（用户、权限、语言、设置、模块许可、系统自检）与平台运营（租户、订阅、身份、健康）约 5 分钟，3 个章节。
+
+每段视频均附完整讲解稿：点击任意章节或讲解段落，播放器即跳转到对应画面；播放器旁可下载字幕文件（.srt），便于离线观看或用于内部培训。
+
+建议：初次使用者先观看开篇章节（登录与工作台），再进入自己负责的模块。""",
+    },
+    {
         "slug": "estimates",
         "category": "commercial",
         "tags": ["tce", "worldscale", "estimate", "估算", "运价"],

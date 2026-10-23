@@ -79,6 +79,7 @@ CATALOG: list[dict[str, Any]] = [
         "connector_type": "email.imap",
         "name": "IMAP mailbox", "name_en": "IMAP mailbox", "name_zh": "IMAP 邮箱",
         "category": "email",
+        "description": "IMAP mailbox send & receive sync", "description_en": "IMAP mailbox send & receive sync", "description_zh": "IMAP 邮箱收发同步",
         "config_schema": [
             _f("host", "IMAP host", "IMAP 主机", required=True),
             _f("port", "Port", "端口", kind="number", placeholder="993"),
@@ -91,43 +92,49 @@ CATALOG: list[dict[str, Any]] = [
         "connector_type": "email.graph",
         "name": "Microsoft Graph Mail",
         "category": "email",
+        "description": "Microsoft Graph mailbox sync", "description_en": "Microsoft Graph mailbox sync", "description_zh": "微软 Graph 邮箱同步",
         "config_schema": [_f("mailbox", "Mailbox", "邮箱", placeholder="ops@company.com")],
     },
     {
         "connector_type": "m365_mail",
         "name": "M365 Mail (Office Hub)", "name_en": "M365 Mail (Office Hub)", "name_zh": "M365 邮件 (Office Hub)",
         "category": "office",
+        "description": "Microsoft 365 mail channel", "description_en": "Microsoft 365 mail channel", "description_zh": "Microsoft 365 邮件通道",
         "config_schema": [],
     },
     {
         "connector_type": "m365_files",
         "name": "M365 Files / OneDrive", "name_en": "M365 Files / OneDrive", "name_zh": "M365 文件 / OneDrive",
         "category": "office",
+        "description": "OneDrive / M365 file sync", "description_en": "OneDrive / M365 file sync", "description_zh": "OneDrive / M365 文件同步",
         "config_schema": [],
     },
     {
         "connector_type": "sharepoint",
         "name": "SharePoint",
         "category": "office",
+        "description": "SharePoint site document sync", "description_en": "SharePoint site document sync", "description_zh": "SharePoint 站点文档同步",
         "config_schema": [_f("site_url", "Site URL", "站点 URL")],
     },
     {
         "connector_type": "onedrive",
         "name": "OneDrive for Business",
         "category": "office",
+        "description": "OneDrive for Business file sync", "description_en": "OneDrive for Business file sync", "description_zh": "OneDrive for Business 文件同步",
         "config_schema": [],
     },
     {
         "connector_type": "teams",
         "name": "Microsoft Teams",
         "category": "office",
+        "description": "Teams incoming webhook notifications", "description_en": "Teams incoming webhook notifications", "description_zh": "Teams 入站 Webhook 通知",
         "config_schema": [_f("webhook_url", "Incoming Webhook", secret=True)],
     },
     {
         "connector_type": "ais.generic",
-        "name": "AIS 位置源",
+        "name": "AIS 位置源", "name_en": "AIS position feed", "name_zh": "AIS 位置源",
         "category": "ais",
-        "description": "通用 AIS HTTP API（位置/航迹）",
+        "description": "通用 AIS HTTP API（位置/航迹）", "description_en": "Generic AIS HTTP API (position/track)",
         "config_schema": [
             _f("base_url", "API Base URL", required=True),
             _f("api_key", "API Key", secret=True),
@@ -136,9 +143,9 @@ CATALOG: list[dict[str, Any]] = [
     },
     {
         "connector_type": "bunker.price",
-        "name": "燃油价格指数",
+        "name": "燃油价格指数", "name_en": "Bunker price index", "name_zh": "燃油价格指数",
         "category": "bunker",
-        "description": "同步 VLSFO/MGO 等价格指数到市场报价",
+        "description": "同步 VLSFO/MGO 等价格指数到市场报价", "description_en": "Sync VLSFO/MGO price indexes into market quotes",
         "config_schema": [
             _f("base_url", "API Base URL", "API Base URL", placeholder="https://… or leave blank for mock", placeholder_zh="https://… 或留空用模拟"),
             _f("api_key", "API Key", secret=True),
@@ -148,8 +155,9 @@ CATALOG: list[dict[str, Any]] = [
     },
     {
         "connector_type": "market.baltic",
-        "name": "波罗的海指数 / 市场",
+        "name": "波罗的海指数 / 市场", "name_en": "Baltic Exchange / Market", "name_zh": "波罗的海指数 / 市场",
         "category": "market",
+        "description": "Baltic & market index feed", "description_en": "Baltic & market index feed", "description_zh": "波罗的海指数与市场行情源",
         "config_schema": [
             _f("base_url", "API Base URL"),
             _f("api_key", "API Key", secret=True),
@@ -158,9 +166,9 @@ CATALOG: list[dict[str, Any]] = [
     },
     {
         "connector_type": "erp.generic",
-        "name": "通用财务/ERP Webhook",
+        "name": "通用财务/ERP Webhook", "name_en": "Generic finance/ERP webhook", "name_zh": "通用财务/ERP Webhook",
         "category": "erp",
-        "description": "向企业财务系统推送发票/凭证 JSON",
+        "description": "向企业财务系统推送发票/凭证 JSON", "description_en": "Post invoices / vouchers JSON to finance systems",
         "config_schema": [
             _f("post_url", "过账 URL", required=True),
             _f("auth_header", "Authorization", secret=True, placeholder="Bearer …"),
@@ -169,8 +177,9 @@ CATALOG: list[dict[str, Any]] = [
     },
     {
         "connector_type": "erp.sap",
-        "name": "SAP 财务对接",
+        "name": "SAP 财务对接", "name_en": "SAP finance connector", "name_zh": "SAP 财务对接",
         "category": "erp",
+        "description": "SAP finance integration", "description_en": "SAP finance integration", "description_zh": "SAP 财务对接",
         "config_schema": [
             _f("odata_url", "OData / RFC 网关", required=True),
             _f("client", "Client", placeholder="100"),
@@ -183,6 +192,7 @@ CATALOG: list[dict[str, Any]] = [
         "connector_type": "erp.oracle",
         "name": "Oracle ERP Cloud",
         "category": "erp",
+        "description": "Oracle ERP Cloud integration", "description_en": "Oracle ERP Cloud integration", "description_zh": "Oracle ERP Cloud 对接",
         "config_schema": [
             _f("base_url", "REST Base URL", required=True),
             _f("username", "Username", "用户名", required=True),
@@ -194,12 +204,14 @@ CATALOG: list[dict[str, Any]] = [
         "connector_type": "pms.mock",
         "name": "MariOS Mock PMS",
         "category": "ship_mgmt",
+        "description": "Seeded mock PMS for demos", "description_en": "Seeded mock PMS for demos", "description_zh": "演示用内置模拟 PMS",
         "config_schema": [],
     },
     {
         "connector_type": "pms.generic_webhook",
-        "name": "通用 PMS Webhook",
+        "name": "通用 PMS Webhook", "name_en": "Generic PMS Webhook", "name_zh": "通用 PMS Webhook",
         "category": "ship_mgmt",
+        "description": "Generic PMS webhook bridge", "description_en": "Generic PMS webhook bridge", "description_zh": "通用 PMS Webhook 桥接",
         "config_schema": [
             _f("inbound_secret", "入站校验密钥", secret=True),
             _f("outbound_url", "出站 URL"),
@@ -209,24 +221,28 @@ CATALOG: list[dict[str, Any]] = [
         "connector_type": "pms.spectec",
         "name": "SpecTec / AMOS",
         "category": "ship_mgmt",
+        "description": "SpecTec / AMOS PMS sync", "description_en": "SpecTec / AMOS PMS sync", "description_zh": "SpecTec / AMOS PMS 同步",
         "config_schema": [_f("base_url", "API URL", required=True), _f("api_key", "API Key", secret=True)],
     },
     {
         "connector_type": "pms.abs_ns",
         "name": "ABS Nautical Systems",
         "category": "ship_mgmt",
+        "description": "ABS Nautical Systems sync", "description_en": "ABS Nautical Systems sync", "description_zh": "ABS Nautical Systems 同步",
         "config_schema": [_f("base_url", "API URL", required=True), _f("api_key", "API Key", secret=True)],
     },
     {
         "connector_type": "pms.shipnet",
         "name": "ShipNet One",
         "category": "ship_mgmt",
+        "description": "ShipNet One sync", "description_en": "ShipNet One sync", "description_zh": "ShipNet One 同步",
         "config_schema": [_f("base_url", "API URL", required=True), _f("api_key", "API Key", secret=True)],
     },
     {
         "connector_type": "emissions.verifier",
-        "name": "排放核验 / MRV 上报",
+        "name": "排放核验 / MRV 上报", "name_en": "Emissions verifier / MRV", "name_zh": "排放核验 / MRV 上报",
         "category": "emissions",
+        "description": "Emissions verification / MRV reporting", "description_en": "Emissions verification / MRV reporting", "description_zh": "排放核验 / MRV 上报",
         "config_schema": [
             _f("base_url", "上报 URL"),
             _f("api_key", "API Key", secret=True),
@@ -235,8 +251,9 @@ CATALOG: list[dict[str, Any]] = [
     },
     {
         "connector_type": "webhook.custom",
-        "name": "自定义出站 Webhook",
+        "name": "自定义出站 Webhook", "name_en": "Custom outbound webhook", "name_zh": "自定义出站 Webhook",
         "category": "outbound",
+        "description": "Custom outbound event webhook", "description_en": "Custom outbound event webhook", "description_zh": "自定义出站事件 Webhook",
         "config_schema": [
             _f("url", "Webhook URL", required=True),
             _f("secret", "签名密钥", secret=True),

@@ -193,7 +193,7 @@ function VesselsPage() {
         <Link
           href={`/ship/vessels/${r.id}`}
           onClick={(e) => e.stopPropagation()}
-          style={{ color: "inherit", textDecoration: "none" }}
+          className="row-link"
         >
           {r.name}
         </Link>
@@ -218,7 +218,10 @@ function VesselsPage() {
       title: t("common.type", "Type"),
       width: 130,
       value: (r) => r.vessel_type || "",
-      render: (_v, r) => r.vessel_type || "—",
+      render: (_v, r) =>
+        r.vessel_type
+          ? t(`page.vessels.type_${r.vessel_type.toLowerCase().replace(/\s+/g, "_")}`, r.vessel_type)
+          : "—",
     },
     {
       key: "dwt",

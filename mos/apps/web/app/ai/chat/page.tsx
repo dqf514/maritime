@@ -34,7 +34,10 @@ type Message = {
   content: string;
   tool_calls_json: Record<string, unknown> | null;
   created_at: string;
+  source?: string | null;
 };
+
+type AiStatus = { available: boolean; provider: string | null; fallback_mode: string | null };
 
 export default function AiChatPage() {
   const { t } = useI18n();
@@ -48,6 +51,9 @@ export default function AiChatPage() {
   const [loading, setLoading] = useState(false);
   const [renaming, setRenaming] = useState<Conversation | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
+  // LLM 可用性：未配置 → 顶部常驻提示；已配置但回落 → 回复后追加提示
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [fallbackNotice, setFallbackNotice] = useState(false);
   const convCtx = useContextMenu<Conversation>();
 
   async function loadAgents() {
@@ -81,6 +87,9 @@ export default function AiChatPage() {
   useEffect(() => {
     loadAgents();
     loadConversations();
+    apiGet("/api/v1/ai/assist/status")
+      .then((s: AiStatus) => setAiStatus(s))
+      .catch(() => setAiStatus({ available: false, provider: null, fallback_mode: "rules" }));
   }, []);
 
   useEffect(() => {
@@ -93,8 +102,7 @@ export default function AiChatPage() {
     await loadAgents();
   }
 
-  async function startConversation(e: FormEvent) {
-    e.preventDefault();
+  async function startConversation() {
     if (!selectedAgent) return;
     const conv = await apiPost("/api/v1/ai/conversations", {
       agent_name: selectedAgent,
@@ -110,18 +118,21 @@ export default function AiChatPage() {
     if (!input.trim() || !activeConv) return;
     setLoading(true);
     try {
-      const result = await apiPost(`/api/v1/ai/conversations/${activeConv.id}/chat`, {
+      const result = (await apiPost(`/api/v1/ai/conversations/${activeConv.id}/chat`, {
         message: input,
-      });
+      })) as { response: string; message_id?: string; tool_calls?: unknown; source?: string };
+      const source = result.source || null;
+      // 规则引擎回落（模型未配置/不可达）→ 给出友好说明，而非让用户误以为是 AI
+      if (source && source !== "llm" && aiStatus?.available !== false) setFallbackNotice(true);
       setMessages((prev) => [
         ...prev,
         { id: "user-" + Date.now(), role: "user", content: input, tool_calls_json: null, created_at: new Date().toISOString() },
-        { id: result.message_id || "ai-" + Date.now(), role: "assistant", content: result.response, tool_calls_json: result.tool_calls, created_at: new Date().toISOString() },
+        { id: result.message_id || "ai-" + Date.now(), role: "assistant", content: result.response, tool_calls_json: (result.tool_calls as Record<string, unknown>) || null, created_at: new Date().toISOString(), source },
       ]);
       setInput("");
       setActiveConv({ ...activeConv, message_count: (activeConv.message_count || 0) + 2 });
     } catch {
-      toast.error(t("ai.error", "Chat error"));
+      toast.error(t("ai.chat.send_fail", "Couldn't send — please try again."));
     }
     setLoading(false);
   }
@@ -206,142 +217,160 @@ export default function AiChatPage() {
         title={t("page.ai.chat.title", "MariAI Chat")}
         subtitle={t("page.ai.chat.sub", "Ask the fleet copilot — estimates, voyages, laytime and market context.")}
       />
-      <div className="space-y-4">
-
-        <div className="flex gap-4">
-          {/* Sidebar */}
-          <div className="w-64 shrink-0 space-y-3">
-            <div className="rounded-lg border bg-white p-3">
-              <h3 className="mb-2 text-sm font-semibold">{t("ai.agents", "Agents")}</h3>
-              {agents.length === 0 && (
-                <button onClick={seedAgents} className="text-sm text-blue-600 hover:underline">
-                  {t("ai.seed", "Seed preset agents")}
-                </button>
+      <div className="ai-chat">
+        {/* 大模型未配置 → 友好常驻提示；已配置但回落 → 回复后提示 */}
+        {aiStatus !== null && !aiStatus.available ? (
+          <div className="ai-notice ai-notice-warn" role="status">
+            <strong>{t("ai.chat.no_model_title", "No AI model configured yet")}</strong>
+            <span>
+              {t(
+                "ai.chat.no_model",
+                "Replies come from the built-in rules engine. Configure a provider in Settings → AI to enable full AI chat.",
               )}
-              {agents.map((a) => (
-                <button
-                  key={a.agent_name}
-                  onClick={() => setSelectedAgent(a.agent_name)}
-                  className={`block w-full rounded px-2 py-1.5 text-left text-sm ${
-                    selectedAgent === a.agent_name ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                  }`}
-                >
-                  {a.display_name}
-                </button>
-              ))}
-            </div>
+            </span>
+          </div>
+        ) : null}
+        {aiStatus?.available && fallbackNotice ? (
+          <div className="ai-notice" role="status">
+            {t(
+              "ai.chat.fallback_reply",
+              "The model didn't respond just now — the reply above was generated by the built-in rules engine. You can check the provider connection in Settings → AI.",
+            )}
+          </div>
+        ) : null}
 
-            <div className="rounded-lg border bg-white p-3">
-              <h3 className="mb-2 text-sm font-semibold">{t("ai.history", "History")}</h3>
-              <StatusLegend statuses={["active", "archived"]} />
-              <div className="max-h-64 space-y-1 overflow-y-auto">
-                {conversations.map((c) => (
+        <div className="desk-split">
+          {/* Sidebar */}
+          <div className="ai-chat-side">
+            <div className="panel">
+              <div className="panel-header">{t("ai.agents", "Agents")}</div>
+              <div className="panel-body ai-chat-list">
+                {agents.length === 0 && (
+                  <button type="button" className="btn btn-sm" onClick={() => seedAgents().catch(() => undefined)}>
+                    {t("ai.seed", "Seed preset agents")}
+                  </button>
+                )}
+                {agents.map((a) => (
                   <button
-                    key={c.id}
-                    onClick={() => setActiveConv(c)}
-                    onContextMenu={convCtx.open(c)}
-                    className={`block w-full truncate rounded px-2 py-1 text-left text-xs ${
-                      activeConv?.id === c.id ? "bg-blue-50 text-blue-700" : "hover:bg-gray-50"
-                    }`}
+                    key={a.agent_name}
+                    type="button"
+                    className={`ai-chat-pick${selectedAgent === a.agent_name ? " active" : ""}`}
+                    onClick={() => setSelectedAgent(a.agent_name)}
                   >
-                    <span>{c.title || c.agent_name}</span>{" "}
-                    <Num v={c.message_count} digits={0} />
-                    <span className="text-[10px] text-gray-400"> · {t("ai.updated_at", "Updated")} {formatTs(c.updated_at ?? c.created_at)}</span>
+                    {t(`ai.agent.${a.agent_name}`, a.display_name)}
                   </button>
                 ))}
-                {conversations.length === 0 && (
-                  <p className="text-xs text-gray-400">{t("ai.no_history", "No conversations yet")}</p>
-                )}
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel-header">{t("ai.history", "History")}</div>
+              <div className="panel-body">
+                <StatusLegend statuses={["active", "archived"]} />
+                <div className="ai-chat-list ai-chat-hist">
+                  {conversations.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`ai-chat-pick${activeConv?.id === c.id ? " active" : ""}`}
+                      onClick={() => setActiveConv(c)}
+                      onContextMenu={convCtx.open(c)}
+                    >
+                      <span>{c.title || c.agent_name}</span>{" "}
+                      <Num v={c.message_count} digits={0} />
+                      <span className="ai-chat-hist-meta">
+                        {" "}· {t("ai.updated_at", "Updated")} {formatTs(c.updated_at ?? c.created_at)}
+                      </span>
+                    </button>
+                  ))}
+                  {conversations.length === 0 && (
+                    <p className="hint">{t("ai.no_history", "No conversations yet")}</p>
+                  )}
+                </div>
               </div>
               <ContextMenu controller={convCtx} items={convMenuItems} />
             </div>
           </div>
 
           {/* Chat area */}
-          <div className="flex-1 rounded-lg border bg-white">
-            <div className="border-b p-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="font-semibold">{agent?.display_name || selectedAgent}</h2>
-                  {agent?.description && <p className="text-xs text-gray-500">{agent.description}</p>}
-                </div>
-                <form onSubmit={startConversation}>
-                  <button
-                    type="submit"
-                    className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
-                  >
-                    {t("ai.new_chat", "New chat")}
-                  </button>
-                </form>
-              </div>
-              {agent && (
-                <div className="mt-1 flex gap-1">
-                  {agent.tools.map((tool) => (
-                    <span key={tool} className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
-                      {tool}
-                    </span>
-                  ))}
-                </div>
-              )}
+          <div className="panel ai-chat-main">
+            <div className="panel-header">
+              <span className="ai-chat-agent-head">
+                <strong>
+                  {agent ? t(`ai.agent.${agent.agent_name}`, agent.display_name) : selectedAgent || t("page.ai.chat.title", "MariAI Chat")}
+                </strong>
+                {agent?.description ? (
+                  <span className="ai-chat-agent-desc">{t(`ai.agent_desc.${agent.agent_name}`, agent.description)}</span>
+                ) : null}
+              </span>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => startConversation().catch(() => undefined)}>
+                {t("ai.new_chat", "New chat")}
+              </button>
             </div>
+            {agent && agent.tools.length > 0 ? (
+              <div className="chips ai-chat-tools">
+                {agent.tools.map((tool) => (
+                  <span key={tool} className="badge">
+                    {tool}
+                  </span>
+                ))}
+              </div>
+            ) : null}
 
-            <div className="h-96 overflow-y-auto p-4 space-y-3">
+            <div className="ai-chat-body">
               {messages.length === 0 && (
-                <p className="text-center text-sm text-gray-400">
+                <p className="hint ai-chat-empty">
                   {activeConv
                     ? t("ai.start_typing", "Start typing to chat with the agent")
                     : t("ai.select_or_create", "Select an agent and start a new conversation")}
                 </p>
               )}
               {messages.map((m) => (
-                <div key={m.id} className={m.role === "user" ? "text-right" : "text-left"}>
+                <div key={m.id} className={`ai-chat-line ${m.role === "user" ? "right" : "left"}`}>
                   <div
-                    className={`inline-block max-w-[80%] rounded-lg px-3 py-2 text-sm ${
-                      m.role === "user"
-                        ? "bg-blue-600 text-white"
-                        : m.role === "tool"
-                        ? "bg-yellow-50 text-yellow-900"
-                        : "bg-gray-100 text-gray-800"
+                    className={`ai-chat-bubble ${
+                      m.role === "user" ? "user" : m.role === "tool" ? "tool" : "assistant"
                     }`}
                   >
-                    <pre className="whitespace-pre-wrap font-sans">{m.content}</pre>
+                    <pre className="ai-chat-text">{m.content}</pre>
+                    {m.source ? (
+                      <span className="ai-msg-src">
+                        {m.source === "llm"
+                          ? "AI"
+                          : t("ai.assist.rules_badge", "rules")}
+                      </span>
+                    ) : null}
                     {m.tool_calls_json && (
-                      <details className="mt-1 text-[10px] opacity-70">
+                      <details className="ai-chat-tools-details">
                         <summary>{t("ai.tool_calls", "Tool calls")}</summary>
-                        <pre className="mt-1 overflow-x-auto text-[10px]">
-                          {JSON.stringify(m.tool_calls_json, null, 2)}
-                        </pre>
+                        <pre>{JSON.stringify(m.tool_calls_json, null, 2)}</pre>
                       </details>
                     )}
                   </div>
                 </div>
               ))}
               {loading && (
-                <div className="text-left">
-                  <div className="inline-block rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-500">
-                    {t("ai.thinking", "Thinking...")}
-                  </div>
+                <div className="ai-chat-line left">
+                  <div className="ai-chat-bubble assistant">{t("ai.thinking", "Thinking...")}</div>
                 </div>
               )}
             </div>
 
-            <form onSubmit={sendMessage} className="border-t p-3">
-              <div className="flex gap-2">
-                <input
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={t("ai.placeholder", "Ask about TCE, voyage P&L, port distances, compliance...")}
-                  className="flex-1 rounded border px-3 py-2 text-sm"
-                  disabled={!activeConv || loading}
-                />
-                <button
-                  type="submit"
-                  disabled={!activeConv || loading || !input.trim()}
-                  className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {t("ai.send", "Send")}
-                </button>
-              </div>
+            <form className="ai-chat-form" onSubmit={(e) => sendMessage(e).catch(() => undefined)}>
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={t("ai.placeholder", "Ask about TCE, voyage P&L, port distances, compliance...")}
+                aria-label={t("ai.placeholder", "Ask about TCE, voyage P&L, port distances, compliance...")}
+                disabled={!activeConv || loading}
+              />
+              <button
+                type="submit"
+                disabled={!activeConv || loading || !input.trim()}
+                className="btn btn-primary"
+              >
+                {t("ai.send", "Send")}
+              </button>
             </form>
           </div>
         </div>

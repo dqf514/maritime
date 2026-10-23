@@ -864,11 +864,11 @@ function EstimatesPage() {
                   aria-label={t("common.status", "Status")}
                 >
                   <option value="">{t("page.estimates.all_status", "All statuses")}</option>
-                  <option value="draft">draft</option>
-                  <option value="calculated">calculated</option>
-                  <option value="confirmed">confirmed</option>
-                  <option value="converted">converted</option>
-                  <option value="cancelled">cancelled</option>
+                  {ESTIMATE_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {t(`status.${s}`, s)}
+                    </option>
+                  ))}
                 </select>
               </>
             }
@@ -890,7 +890,7 @@ function EstimatesPage() {
                 <button type="button" className="desk-item-main" onClick={() => selectEstimate(r)}>
                   <span className="desk-item-title">{r.title}</span>
                   <span className="desk-item-meta">
-                    <span>{r.status}</span>
+                    <span>{t(`status.${r.status}`, r.status)}</span>
                     <span>
                       TCE <Num v={r.results?.tce} digits={2} />
                     </span>
@@ -1199,13 +1199,13 @@ function EstimatesPage() {
               </div>
               {results.address_commission !== undefined ? (
                 <div className="kv-box">
-                  <span>{t("page.estimates.address_comm", "Address comm")}</span>
+                  <span>{t("page.estimates.address_comm_amt", "Address comm")}</span>
                   <strong>{fmt(results.address_commission)}</strong>
                 </div>
               ) : null}
               {results.brokerage !== undefined ? (
                 <div className="kv-box">
-                  <span>{t("page.estimates.brokerage", "Brokerage")}</span>
+                  <span>{t("page.estimates.brokerage_amt", "Brokerage")}</span>
                   <strong>{fmt(results.brokerage)}</strong>
                 </div>
               ) : null}
@@ -1299,8 +1299,8 @@ function EstimatesPage() {
               </div>
             ) : null}
             {selected ? (
-              <p className="muted" style={{ marginTop: "0.75rem" }}>
-                {selected.status} · v{selected.version}
+              <p className="muted">
+                {t(`status.${selected.status}`, selected.status)} · v{selected.version}
               </p>
             ) : null}
           </div>

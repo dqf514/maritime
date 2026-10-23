@@ -252,6 +252,9 @@ class Voyage(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    # attribution (创建人/修改人) — enables row-level data scope + record metadata
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -579,6 +582,10 @@ class Invoice(Base):
     bill_by: Mapped[str | None] = mapped_column(String(16))  # cp_qty | bl_qty
     commission_basis: Mapped[str | None] = mapped_column(String(16))  # net | gross
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    # attribution (创建人/修改人/时间) — enables row-level data scope + record metadata
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # optimistic-lock stamp (D4/D8): nullable — legacy rows stay NULL until first UPDATE
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True

@@ -669,6 +669,43 @@ def list_models(provider: LLMProviderConfig, *, limit: int = 50) -> list[str]:
     return ids
 
 
+def _friendly_probe_message(exc: Exception) -> str:
+    """把底层异常翻译成可执行的排查提示（原始错误放 ``detail`` 字段）。
+
+    用户在 AI 设置里点「Test」时看到的不应是 WinError/traceback，
+    而是「下一步该检查什么」。
+    """
+    raw = str(exc).lower()
+    if isinstance(exc, LLMNotConfigured):
+        return "No AI model configured — add an API key or provider on this page to enable AI."
+    if any(k in raw for k in ("401", "403", "unauthorized", "invalid api key", "authentication", "forbidden")):
+        return "Authentication failed — check the API key and try again."
+    if any(k in raw for k in ("404", "not found", "models endpoint", "model/endpoint")):
+        return "Endpoint or model not found — check the base URL and default model name."
+    if any(k in raw for k in ("429", "rate limit", "rate limited", "quota", "billing")):
+        return "Rate limit or quota exceeded at the provider — check your plan/billing."
+    if any(
+        k in raw
+        for k in (
+            "connection error",
+            "connect",
+            "timeout",
+            "timed out",
+            "10060",
+            "10061",
+            "10054",
+            "getaddrinfo",
+            "name or service",
+            "dns",
+            "ssl",
+            "certificate",
+            "proxy",
+        )
+    ):
+        return "Cannot reach the model endpoint — check the base URL, network/proxy access and firewall."
+    return "Model connection test failed — see technical detail below."
+
+
 def test_provider(provider: LLMProviderConfig) -> dict:
     """Live connectivity probe: model list + actual latency. Never raises."""
     start = time.time()
@@ -683,14 +720,15 @@ def test_provider(provider: LLMProviderConfig) -> dict:
         }
     try:
         models = list_models(provider)
-    except LLMError as exc:
+    except (LLMNotConfigured, LLMError) as exc:
         return {
             "ok": False,
             "provider_type": provider.provider_type,
             "model": provider.model,
             "latency_ms": int((time.time() - start) * 1000),
             "models": [],
-            "message": str(exc),
+            "message": _friendly_probe_message(exc),
+            "detail": str(exc),
         }
     except Exception as exc:  # noqa: BLE001
         log.exception("llm_client: provider probe failed")
@@ -700,7 +738,8 @@ def test_provider(provider: LLMProviderConfig) -> dict:
             "model": provider.model,
             "latency_ms": int((time.time() - start) * 1000),
             "models": [],
-            "message": f"probe failed: {exc}",
+            "message": _friendly_probe_message(exc),
+            "detail": f"probe failed: {exc}",
         }
     return {
         "ok": True,

@@ -190,13 +190,32 @@ export default function ConnectorsPage() {
       ),
     },
     { key: "connector_type", title: t("common.type", "Type"), width: 140, value: (r) => r.connector_type },
-    { key: "status", title: t("common.status", "Status"), width: 100, value: (r) => r.status },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 100,
+      value: (r) => r.status,
+      render: (v) => <span className={`badge badge-${v === "active" ? "ok" : "warn"}`}>{t(`status.${v}`, String(v))}</span>,
+    },
     {
       key: "last_health",
       title: t("page.connectors.last_health", "Last health"),
       minWidth: 180,
-      value: (r) => JSON.stringify(r.last_health),
-      render: (v) => <code style={{ fontSize: "0.75rem" }}>{String(v)}</code>,
+      value: (r) => r.last_health,
+      // 健康探针结果 → 可读状态（原为原始 JSON dump）
+      render: (v) => {
+        const h = (v || {}) as Record<string, unknown>;
+        if (!Object.keys(h).length) return <span className="muted">—</span>;
+        const ok = h.ok === true;
+        const msg = typeof h.message === "string" ? h.message : "";
+        return (
+          <span className={ok ? "" : "text-danger"}>
+            {ok ? "✓ " : "✗ "}
+            {ok ? t("page.connectors.ok", "OK") : t("page.connectors.fail", "FAIL")}
+            {msg ? ` · ${msg}` : ""}
+          </span>
+        );
+      },
     },
   ];
 
@@ -207,7 +226,12 @@ export default function ConnectorsPage() {
       key: "description",
       title: t("page.connectors.description", "Description"),
       minWidth: 220,
-      value: (r) => `${r.category || ""} — ${r.description || "—"}`,
+      value: (r) => r,
+      render: (_v, r) => {
+        const cat = r.category ? t(`page.connectors.cat_${r.category.replace(/[^a-z0-9]+/gi, "_")}`, r.category) : "";
+        const desc = r.description || "—";
+        return <span>{cat ? `${cat} — ${desc}` : desc}</span>;
+      },
     },
   ];
 

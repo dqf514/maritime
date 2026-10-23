@@ -97,9 +97,18 @@
   background: var(--accent-bg);
 }
 .dt-th-inner {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+/* 表头文案截断省略（配合 th 的 overflow:hidden，避免右侧表头被硬裁半个字） */
+.dt-th-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .dt-sort-icon {
   font-size: 8px;

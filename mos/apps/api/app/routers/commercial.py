@@ -183,6 +183,7 @@ class CharterOut(BaseModel):
     vessel_id: UUID | None
     counterparty_id: UUID | None
     estimate_id: UUID | None
+    estimate_title: str | None = None  # 附加：Estimate.title 供列表展示（charters 走查：估算列原裸 ID）
     laycan_from: date | None
     laycan_to: date | None
     commission_pct: float | None = None
@@ -829,10 +830,19 @@ def estimate_to_charter(estimate_id: UUID, auth: AuthContext = Depends(require_m
     est.status = "converted"
     db.commit()
     db.refresh(charter)
-    return _charter_out(charter)
+    return _charter_out(charter, estimate_title=est.title)
 
 
-def _charter_out(c: Charter) -> CharterOut:
+def _estimate_title(db: Session, tenant_id, estimate_id) -> str | None:
+    """Estimate.title for CharterOut.estimate_title（列表/详情/创建统一入口）。"""
+    if not estimate_id:
+        return None
+    return db.scalar(
+        select(Estimate.title).where(Estimate.id == estimate_id, Estimate.tenant_id == tenant_id)
+    )
+
+
+def _charter_out(c: Charter, estimate_title: str | None = None) -> CharterOut:
     return CharterOut(
         id=c.id,
         charter_no=c.charter_no,
@@ -841,6 +851,7 @@ def _charter_out(c: Charter) -> CharterOut:
         vessel_id=c.vessel_id,
         counterparty_id=c.counterparty_id,
         estimate_id=c.estimate_id,
+        estimate_title=estimate_title,
         laycan_from=c.laycan_from,
         laycan_to=c.laycan_to,
         commission_pct=float(c.commission_pct) if c.commission_pct is not None else None,
@@ -910,7 +921,18 @@ def list_charters(
         .offset(offset)
         .limit(limit)
     ).all()
-    return [_charter_out(r) for r in rows]
+    # 批量取 Estimate.title，供估算列展示人读标题
+    est_ids = {r.estimate_id for r in rows if r.estimate_id}
+    titles: dict[UUID, str] = {}
+    if est_ids:
+        titles = dict(
+            db.execute(
+                select(Estimate.id, Estimate.title).where(
+                    Estimate.id.in_(est_ids), Estimate.tenant_id == auth.tenant_id
+                )
+            ).all()
+        )
+    return [_charter_out(r, estimate_title=titles.get(r.estimate_id) if r.estimate_id else None) for r in rows]
 
 
 @router.get("/charters/{charter_id}", response_model=CharterOut)
@@ -929,7 +951,7 @@ def get_charter(
     )
     if row is None:
         raise HTTPException(404, "Charter not found")
-    return _charter_out(row)
+    return _charter_out(row, estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id))
 
 
 # —— 主合同（Master Contract） ——
@@ -1110,7 +1132,17 @@ def list_master_contract_charters(
         .where(Charter.tenant_id == auth.tenant_id, Charter.master_contract_id == master_id, Charter.status != "deleted")
         .order_by(Charter.created_at.desc())
     ).all()
-    return [_charter_out(r) for r in rows]
+    est_ids = {r.estimate_id for r in rows if r.estimate_id}
+    titles: dict[UUID, str] = {}
+    if est_ids:
+        titles = dict(
+            db.execute(
+                select(Estimate.id, Estimate.title).where(
+                    Estimate.id.in_(est_ids), Estimate.tenant_id == auth.tenant_id
+                )
+            ).all()
+        )
+    return [_charter_out(r, estimate_title=titles.get(r.estimate_id) if r.estimate_id else None) for r in rows]
 
 
 # —— Cargo broker rules ——
@@ -1781,7 +1813,7 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
     db.add(row)
     db.commit()
     db.refresh(row)
-    return _charter_out(row)
+    return _charter_out(row, estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id))
 
 
 class CharterUpdate(_CharterTermsMixin):
@@ -1872,7 +1904,7 @@ def update_charter(
     )
     db.commit()
     db.refresh(row)
-    return _charter_out(row)
+    return _charter_out(row, estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id))
 
 
 @router.delete("/charters/{charter_id}")
@@ -1996,7 +2028,7 @@ def charter_transition(
         )
     db.commit()
     db.refresh(row)
-    return _charter_out(row)
+    return _charter_out(row, estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id))
 
 
 @router.post("/charters/{charter_id}/liftings")

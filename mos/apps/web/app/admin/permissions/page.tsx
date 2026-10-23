@@ -11,7 +11,7 @@ import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
-type FeatureRow = { code: string; name: string; module: string };
+type FeatureRow = { code: string; name: string; name_zh?: string; module: string };
 type MatrixRow = { role_code: string; feature_code: string; allowed: boolean };
 
 type EntityRegistryItem = { entity: string; fields: string[] };
@@ -24,12 +24,14 @@ type FieldRule = {
   active: boolean;
 };
 
-type TabKey = "features" | "fields";
+type TabKey = "features" | "fields" | "scope";
+
+type ScopeItem = { role_code: string; module: string; scope: string };
 
 const MODES = ["read", "write", "hidden"] as const;
 
 export default function PermissionsPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const [tab, setTab] = useState<TabKey>("features");
 
@@ -47,6 +49,10 @@ export default function PermissionsPage() {
   const [saving, setSaving] = useState(false);
   const [edit, setEdit] = useState({ entity: "", field: "", role: "", mode: "read" });
 
+  // ── Data scope (tab 3) ──
+  const [scopes, setScopes] = useState<ScopeItem[]>([]);
+  const [scopeModules, setScopeModules] = useState<string[]>([]);
+
   async function load() {
     const [c, m, r] = await Promise.all([
       apiGet("/api/v1/admin/features/catalog"),
@@ -56,6 +62,16 @@ export default function PermissionsPage() {
     setCatalog(c);
     setMatrix(m);
     setRoles(r);
+  }
+
+  async function loadScopes() {
+    try {
+      const s = (await apiGet("/api/v1/admin/data-scopes")) as { modules: string[]; items: ScopeItem[] };
+      setScopeModules(s.modules || []);
+      setScopes(s.items || []);
+    } catch {
+      /* ignore */
+    }
   }
 
   async function loadFieldPerms() {
@@ -71,6 +87,7 @@ export default function PermissionsPage() {
   useEffect(() => {
     load().catch(() => toast.error(t("page.perm.admin_required", "需要租户管理员")));
     loadFieldPerms().catch(() => toast.error(t("fp.load_fail", "Failed to load field permissions")));
+    loadScopes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
@@ -88,6 +105,22 @@ export default function PermissionsPage() {
     return hit ? hit.allowed : true;
   }
 
+  function scopeFor(role: string, module: string): string {
+    if (role === "tenant_admin" || role === "management") return "all";
+    const hit = scopes.find((s) => s.role_code === role && s.module === module);
+    return hit ? hit.scope : "all";
+  }
+
+  async function setScope(role_code: string, module: string, scope: string) {
+    try {
+      await apiPut("/api/v1/admin/data-scopes", { role_code, module, scope });
+      toast.success(`${role_code} · ${module} → ${scope === "own" ? t("page.perm.scope_own", "仅本人") : t("page.perm.scope_all", "全租户")}`);
+      await loadScopes();
+    } catch {
+      toast.error(t("common.failed", "Failed"));
+    }
+  }
+
   const columns: ColumnDef<FeatureRow>[] = [
     {
       key: "feature",
@@ -96,7 +129,7 @@ export default function PermissionsPage() {
       value: (r) => r.name,
       render: (_v, r) => (
         <span>
-          <b>{r.name}</b>
+          <b>{locale.startsWith("zh") ? r.name_zh || r.name : r.name}</b>
           <div className="muted">
             {r.code} · {r.module}
           </div>
@@ -106,7 +139,8 @@ export default function PermissionsPage() {
     ...roleCodes.map(
       (role): ColumnDef<FeatureRow> => ({
         key: role,
-        title: role,
+        // 角色列头走 role.* 词表（未知角色回退原始 code）
+        title: t(`role.${role}`, role),
         width: 110,
         align: "center",
         value: (r) => allowedFor(role, r.code),
@@ -247,6 +281,7 @@ export default function PermissionsPage() {
   const tabs: TabItem[] = [
     { key: "features", label: t("page.perm.tab.features", "Feature matrix") },
     { key: "fields", label: t("fp.tab", "Field permissions") },
+    { key: "scope", label: t("page.perm.tab.scope", "Data scope") },
   ];
 
   return (
@@ -270,6 +305,53 @@ export default function PermissionsPage() {
             emptyText={t("common.none", "无")}
             showFooter={false}
           />
+        </div>
+      ) : tab === "scope" ? (
+        <div className="panel" style={{ overflowX: "auto", marginTop: "1rem" }}>
+          <p className="muted" style={{ marginBottom: "0.75rem" }}>
+            {t(
+              "page.perm.scope_desc",
+              "行级数据范围：own = 仅本人创建的数据；all = 全租户。主管（management / tenant_admin）恒为 all。未配置默认 all（不收窄）。",
+            )}
+          </p>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>{t("page.perm.col_module", "模块")}</th>
+                {roleCodes
+                  .filter((rc) => rc !== "viewer")
+                  .map((rc) => (
+                    <th key={rc}>{t(`role.${rc}`, rc)}</th>
+                  ))}
+              </tr>
+            </thead>
+            <tbody>
+              {scopeModules.map((mod) => (
+                <tr key={mod}>
+                  <td>
+                    <b>{mod}</b>
+                  </td>
+                  {roleCodes
+                    .filter((rc) => rc !== "viewer")
+                    .map((rc) => (
+                      <td key={rc}>
+                        {rc === "tenant_admin" || rc === "management" ? (
+                          <span className="muted">{t("page.perm.scope_all", "全租户")}</span>
+                        ) : (
+                          <select
+                            value={scopeFor(rc, mod)}
+                            onChange={(e) => setScope(rc, mod, e.target.value)}
+                          >
+                            <option value="all">{t("page.perm.scope_all", "全租户")}</option>
+                            <option value="own">{t("page.perm.scope_own", "仅本人")}</option>
+                          </select>
+                        )}
+                      </td>
+                    ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         <div style={{ marginTop: "1rem", display: "grid", gap: "1rem" }}>

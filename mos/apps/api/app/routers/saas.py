@@ -29,12 +29,14 @@ from app.models_saas import (
     WorkflowDefinition,
     WorkflowInstance,
     FeaturePermission,
+    RoleDataScope,
     UserOrgMembership,
 )
 from app.models import User
 from app.routers.admin_platform import require_roles
 from app.security import AuthContext, get_current_auth
 from app.services.recycle import soft_delete
+from app.services.upload_policy import get_upload_policy
 from app.services.saas_engine import (
     FEATURE_CATALOG,
     advance_workflow,
@@ -153,12 +155,14 @@ async def upload_platform_branding_asset(
     raw = await file.read()
     if not raw:
         raise HTTPException(400, detail={"code": "EMPTY_FILE"})
-    if len(raw) > 2_500_000:
-        raise HTTPException(400, detail={"code": "FILE_TOO_LARGE", "max_bytes": 2500000})
+    policy = get_upload_policy(db, "image")
+    if len(raw) > policy["max_bytes"]:
+        raise HTTPException(400, detail={"code": "FILE_TOO_LARGE", "max_bytes": policy["max_bytes"]})
     name = (file.filename or "asset").lower()
     ext = Path(name).suffix.lower()
-    # Raster formats only — SVG is scriptable markup and must never be served as an image
-    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+    # Raster formats only — SVG is scriptable markup and must never be served as an image.
+    # Must also be allowed by the platform image policy.
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"} or ext not in set(policy["exts"]):
         raise HTTPException(400, detail={"code": "UNSUPPORTED_TYPE", "ext": ext})
     sniffed = _sniff_image_type(raw)
     expected = "jpg" if ext == ".jpeg" else ext.lstrip(".")
@@ -1178,6 +1182,48 @@ def set_feature(body: FeatureSetIn, auth: AuthContext = Depends(require_roles("t
         db.add(row)
     else:
         row.allowed = body.allowed
+    db.commit()
+    return {"ok": True}
+
+
+# ───────── Row-level data scope (行级数据权限) ─────────
+# Modules a role's data scope can be tightened on. "own" = only rows the user
+# created; "all" (default) = whole tenant. Supervisors always see all.
+DATA_SCOPE_MODULES = ["operations", "finance", "chartering", "commercial", "bunker", "masterdata", "ship"]
+
+
+@router.get("/admin/data-scopes")
+def list_data_scopes(auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
+    rows = db.scalars(select(RoleDataScope).where(RoleDataScope.tenant_id == auth.tenant_id)).all()
+    return {
+        "modules": DATA_SCOPE_MODULES,
+        "items": [{"role_code": r.role_code, "module": r.module, "scope": r.scope} for r in rows],
+    }
+
+
+class DataScopeIn(BaseModel):
+    role_code: str
+    module: str
+    scope: str = "all"  # own | all
+
+
+@router.put("/admin/data-scopes")
+def set_data_scope(body: DataScopeIn, auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
+    if body.scope not in {"own", "all"}:
+        raise HTTPException(400, detail={"code": "INVALID_SCOPE", "allowed": ["own", "all"]})
+    if body.module not in DATA_SCOPE_MODULES:
+        raise HTTPException(400, detail={"code": "INVALID_MODULE", "allowed": DATA_SCOPE_MODULES})
+    row = db.scalar(
+        select(RoleDataScope).where(
+            RoleDataScope.tenant_id == auth.tenant_id,
+            RoleDataScope.role_code == body.role_code,
+            RoleDataScope.module == body.module,
+        )
+    )
+    if not row:
+        db.add(RoleDataScope(tenant_id=auth.tenant_id, role_code=body.role_code, module=body.module, scope=body.scope))
+    else:
+        row.scope = body.scope
     db.commit()
     return {"ok": True}
 

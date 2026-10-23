@@ -20,13 +20,19 @@ export default function LicensesPage() {
 
   const columns: ColumnDef<Lic>[] = [
     { key: "module_code", title: t("page.licenses.module", "Module"), minWidth: 160, value: (r) => r.module_code },
-    { key: "status", title: t("common.status", "Status"), width: 120, value: (r) => r.status },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 120,
+      value: (r) => r.status,
+      render: (v) => <span className={`badge badge-${v === "active" ? "ok" : "warn"}`}>{t(`status.${v}`, String(v))}</span>,
+    },
     {
       key: "is_core",
       title: t("page.licenses.core", "Core"),
       width: 90,
       value: (r) => r.is_core,
-      render: (v) => (v ? t("page.licenses.yes", "yes") : t("page.licenses.no", "no")),
+      render: (v) => (v ? t("common.yes", "Yes") : t("common.no", "No")),
     },
   ];
 

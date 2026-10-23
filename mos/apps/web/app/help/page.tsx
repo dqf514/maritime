@@ -97,6 +97,13 @@ function HelpHomePage() {
           placeholder={t("help.search_ph", "Search estimates, laytime, Teams, API…")}
           aria-label={t("help.search_ph", "Search")}
         />
+        <Link className="help-feature" href="/help/video-demos">
+          <span className="help-feature-badge">{t("help.video.badge", "Video")}</span>
+          <span className="help-feature-title">{t("help.video.title", "Video walkthrough")}</span>
+          <span className="help-feature-sub">
+            {t("help.video.featured_sub", "Narrated product videos with click-to-seek transcripts — business flow & administrator operations.")}
+          </span>
+        </Link>
       </div>
 
       {err ? <p className="flash-err">{err}</p> : null}

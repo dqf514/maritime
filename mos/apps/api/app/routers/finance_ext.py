@@ -274,11 +274,28 @@ def create_emission(
 @router.get("/emissions")
 def list_emissions(auth: AuthContext = Depends(require_module("emissions")), db: Session = Depends(get_db)):
     rows = db.scalars(select(EmissionRecord).where(EmissionRecord.tenant_id == auth.tenant_id)).all()
+    # 附加人读名称（走查：emissions 表裸十六进制 ID）
+    voyage_ids = {r.voyage_id for r in rows if r.voyage_id}
+    vessel_ids = {r.vessel_id for r in rows if r.vessel_id}
+    voyage_nos: dict = {}
+    vessel_names: dict = {}
+    if voyage_ids:
+        voyage_nos = {
+            str(i): n
+            for i, n in db.execute(select(Voyage.id, Voyage.voyage_no).where(Voyage.id.in_(voyage_ids))).all()
+        }
+    if vessel_ids:
+        vessel_names = {
+            str(i): n
+            for i, n in db.execute(select(Vessel.id, Vessel.name).where(Vessel.id.in_(vessel_ids))).all()
+        }
     return [
         {
             "id": str(r.id),
             "voyage_id": str(r.voyage_id) if r.voyage_id else None,
+            "voyage_no": voyage_nos.get(str(r.voyage_id)) if r.voyage_id else None,
             "vessel_id": str(r.vessel_id) if r.vessel_id else None,
+            "vessel_name": vessel_names.get(str(r.vessel_id)) if r.vessel_id else None,
             "fo_mt": float(r.fo_mt or 0),
             "do_mt": float(r.do_mt or 0),
             "co2_mt": float(r.co2_mt or 0),

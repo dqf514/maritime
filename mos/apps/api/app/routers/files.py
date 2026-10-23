@@ -21,10 +21,12 @@ from app.models_ship import ShipCertificate
 from app.models_wave1 import Attachment
 from app.security import AuthContext, get_current_auth, require_module
 from app.services.audit import audit
+from app.services.upload_policy import get_upload_policy
 
 router = APIRouter(tags=["Files"])
 
-MAX_CERT_FILE_BYTES = 10 * 1024 * 1024
+# Domain-allowed certificate types (raster/PDF only). The platform upload policy
+# (document kind) is the outer ceiling — an extension must be allowed by BOTH.
 ALLOWED_EXTS = {".pdf": "pdf", ".png": "png", ".jpg": "jpg", ".jpeg": "jpg", ".webp": "webp"}
 
 _UPLOAD_ROOT = Path(__file__).resolve().parent.parent.parent / "uploads" / "certificates"
@@ -117,11 +119,13 @@ async def upload_certificate_file(
     raw = await file.read()
     if not raw:
         raise HTTPException(400, detail={"code": "EMPTY_FILE"})
-    if len(raw) > MAX_CERT_FILE_BYTES:
-        raise HTTPException(400, detail={"code": "FILE_TOO_LARGE", "max_bytes": MAX_CERT_FILE_BYTES})
+    policy = get_upload_policy(db, "document")
+    if len(raw) > policy["max_bytes"]:
+        raise HTTPException(400, detail={"code": "FILE_TOO_LARGE", "max_bytes": policy["max_bytes"]})
     name = (file.filename or "file").lower()
     ext = Path(name).suffix.lower()
-    if ext not in ALLOWED_EXTS:
+    # Must be allowed by both the domain rule (raster/PDF) and the platform policy.
+    if ext not in ALLOWED_EXTS or ext not in set(policy["exts"]):
         raise HTTPException(400, detail={"code": "UNSUPPORTED_TYPE", "ext": ext})
     if _sniff_cert_file(raw) != ALLOWED_EXTS[ext]:
         raise HTTPException(

@@ -363,7 +363,15 @@ export type HomeSummary = {
   tasks: { open: number; overdue: number; due_today: number; items: TaskOut[] };
   notifications: { unread: number; items: unknown[] };
   approvals: { count: number; items: { title?: string; href?: string }[] };
-  alerts: { kind: string; title: string; detail: string; href: string; severity: string; due_in_days: number | null }[];
+  alerts: {
+    kind: string;
+    title: string;
+    title_i18n?: { en?: string; zh?: string } | null;
+    detail: string;
+    href: string;
+    severity: string;
+    due_in_days: number | null;
+  }[];
   schedule: { kind: string; title: string; subtitle: string; start: string; href: string }[];
   kpis: { key: string; label: { en: string; zh?: string }; value: string; hint?: string; href?: string }[];
   exceptions?: { critical: number; warning: number };
@@ -413,6 +421,7 @@ export type VoyageLifecycleStep = {
   state: "done" | "current" | "todo";
   href?: string | null;
   detail?: string | null;
+  detail_i18n?: { en?: string | null; zh?: string | null } | null;
 };
 
 export type VoyagePnlLine = {

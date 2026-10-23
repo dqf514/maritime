@@ -147,24 +147,30 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
     await run(() => apiPost(`/api/v1/laytimes/${laytimeId}/time-bar-task`, {}));
   }
 
+  // 领域词表：根因/延误/责任方/状态（走查 laytime-detail.png 裸枚举）
+  const causeLabel = (v: unknown) => t(`laytime.cause.${v}`, String(v ?? "").replace(/_/g, " "));
+  const delayLabel = (v: unknown) => t(`laytime.delay.${v}`, String(v ?? "").replace(/_/g, " "));
+  const partyLabel = (v: unknown) => t(`laytime.party.${v}`, String(v ?? "").replace(/_/g, " "));
+  const statusLabel = (v: unknown) => t(`status.${v}`, String(v ?? "").replace(/_/g, " "));
+
   const oaCols: ColumnDef<OnAccountRow>[] = [
     { key: "amount", title: t("common.amount", "Amount"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
     { key: "currency", title: t("page.finance.currency", "Currency") },
     { key: "payment_date", title: t("common.date", "Date") },
-    { key: "status", title: t("common.status", "Status") },
+    { key: "status", title: t("common.status", "Status"), render: (v) => statusLabel(v) },
     { key: "notes", title: t("common.notes", "Notes") },
   ];
 
   const rcCols: ColumnDef<RootCauseRow>[] = [
-    { key: "cause", title: t("page.finance.lt_cause", "Cause") },
-    { key: "responsible_party", title: t("page.finance.lt_party", "Responsible") },
+    { key: "cause", title: t("page.finance.lt_cause", "Cause"), render: (v) => causeLabel(v) },
+    { key: "responsible_party", title: t("page.finance.lt_party", "Responsible"), render: (v) => partyLabel(v) },
     { key: "delay_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
     { key: "share_pct", title: t("page.finance.lt_share", "Share %"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
     { key: "allocated_amount", title: t("page.finance.lt_allocated", "Allocated"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
   ];
 
   const dCols: ColumnDef<DelayRow>[] = [
-    { key: "delay_type", title: t("common.type", "Type") },
+    { key: "delay_type", title: t("common.type", "Type"), render: (v) => delayLabel(v) },
     {
       key: "start_at",
       title: t("common.start", "Start"),
@@ -225,14 +231,16 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
           <label>
             {t("common.status", "Status")}
             <select value={oaStatus} onChange={(e) => setOaStatus(e.target.value)}>
-              <option value="pending">pending</option>
-              <option value="paid">paid</option>
-              <option value="applied">applied</option>
+              <option value="pending">{statusLabel("pending")}</option>
+              <option value="paid">{statusLabel("paid")}</option>
+              <option value="applied">{statusLabel("applied")}</option>
             </select>
           </label>
-          <button className="btn btn-primary" type="submit" disabled={busy}>
-            {t("common.create", "Create")}
-          </button>
+          <div className="form-actions">
+            <button className="btn btn-primary" type="submit" disabled={busy}>
+              {t("common.create", "Create")}
+            </button>
+          </div>
         </form>
         <DataTable data={onAcc?.items || []} columns={oaCols} emptyText={t("common.empty", "No records")} />
       </div>
@@ -243,11 +251,11 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
           <label>
             {t("page.finance.lt_cause", "Cause")}
             <select value={rcCause} onChange={(e) => setRcCause(e.target.value)}>
-              <option value="port_congestion">port_congestion</option>
-              <option value="weather">weather</option>
-              <option value="cargo_delay">cargo_delay</option>
-              <option value="documentation">documentation</option>
-              <option value="other">other</option>
+              <option value="port_congestion">{causeLabel("port_congestion")}</option>
+              <option value="weather">{causeLabel("weather")}</option>
+              <option value="cargo_delay">{causeLabel("cargo_delay")}</option>
+              <option value="documentation">{causeLabel("documentation")}</option>
+              <option value="other">{causeLabel("other")}</option>
             </select>
           </label>
           <label>
@@ -257,16 +265,18 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
           <label>
             {t("page.finance.lt_party", "Responsible")}
             <select value={rcParty} onChange={(e) => setRcParty(e.target.value)}>
-              <option value="owner">owner</option>
-              <option value="charterer">charterer</option>
-              <option value="port">port</option>
-              <option value="agent">agent</option>
-              <option value="other">other</option>
+              <option value="owner">{partyLabel("owner")}</option>
+              <option value="charterer">{partyLabel("charterer")}</option>
+              <option value="port">{partyLabel("port")}</option>
+              <option value="agent">{partyLabel("agent")}</option>
+              <option value="other">{partyLabel("other")}</option>
             </select>
           </label>
-          <button className="btn btn-primary" type="submit" disabled={busy}>
-            {t("common.create", "Create")}
-          </button>
+          <div className="form-actions">
+            <button className="btn btn-primary" type="submit" disabled={busy}>
+              {t("common.create", "Create")}
+            </button>
+          </div>
         </form>
         <DataTable data={causes?.items || []} columns={rcCols} emptyText={t("common.empty", "No records")} />
         {causes ? (
@@ -283,12 +293,12 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
           <label>
             {t("common.type", "Type")}
             <select value={dType} onChange={(e) => setDType(e.target.value)}>
-              <option value="weather">weather</option>
-              <option value="port_congestion">port_congestion</option>
-              <option value="cargo">cargo</option>
-              <option value="documentation">documentation</option>
-              <option value="breakdown">breakdown</option>
-              <option value="other">other</option>
+              <option value="weather">{delayLabel("weather")}</option>
+              <option value="port_congestion">{delayLabel("port_congestion")}</option>
+              <option value="cargo">{delayLabel("cargo")}</option>
+              <option value="documentation">{delayLabel("documentation")}</option>
+              <option value="breakdown">{delayLabel("breakdown")}</option>
+              <option value="other">{delayLabel("other")}</option>
             </select>
           </label>
           <label>
@@ -303,9 +313,11 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
             {t("page.finance.ev_excluded", "Excluded from laytime")}
             <input type="checkbox" checked={dExcluded} onChange={(e) => setDExcluded(e.target.checked)} />
           </label>
-          <button className="btn btn-primary" type="submit" disabled={busy}>
-            {t("common.create", "Create")}
-          </button>
+          <div className="form-actions">
+            <button className="btn btn-primary" type="submit" disabled={busy}>
+              {t("common.create", "Create")}
+            </button>
+          </div>
         </form>
         <DataTable data={delays?.items || []} columns={dCols} emptyText={t("common.empty", "No records")} />
         {delays?.summary ? (

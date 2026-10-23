@@ -9,6 +9,7 @@ import { useCellSelection } from "./useCellSelection";
 import { useGridKeyboard } from "./useGridKeyboard";
 import { GridFooter } from "./GridFooter";
 import { copyToClipboard, readFromClipboard, coerceValue, fillSeries } from "./clipboard";
+import { useI18n } from "@/lib/i18n";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getCellValue(col: ColumnDef<any>, row: Record<string, unknown>): unknown {
@@ -28,12 +29,26 @@ function toInputValue(col: ColumnDef, row: Record<string, unknown>): string {
   return String(val);
 }
 
+// status/state 类列的裸值走 status.* 词表翻译（seed_i18n_extra.py）；其余列原样显示
+function isStatusKey(key: string): boolean {
+  return key === "status" || key === "state" || key.endsWith("_status") || key.endsWith("_state");
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function formatDisplay(col: ColumnDef<any>, row: Record<string, unknown>, index: number): React.ReactNode {
+function formatDisplay(
+  col: ColumnDef<any>,
+  row: Record<string, unknown>,
+  index: number,
+  tr?: (key: string, fallback?: string) => string,
+): React.ReactNode {
   const val = getCellValue(col, row);
   if (col.render) return col.render(val, row as any, index);
   if (val === null || val === undefined) return "";
-  return String(val);
+  const s = String(val);
+  if (tr && isStatusKey(col.key) && /^[a-z][a-z0-9_]*$/i.test(s)) {
+    return tr(`status.${s}`, s.replace(/_/g, " "));
+  }
+  return s;
 }
 
 export function DataGrid<T extends Record<string, any>>({
@@ -59,6 +74,8 @@ export function DataGrid<T extends Record<string, any>>({
   storageKey,
   className = "",
 }: DataGridProps<T>) {
+  // status/state 类裸值的中文化翻译函数（无 provider 时 useI18n 返回直通实现）
+  const { t: tr } = useI18n();
   // 列可见性（支持 storageKey 持久化）
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(() => {
     if (!storageKey) return new Set();
@@ -385,11 +402,11 @@ export function DataGrid<T extends Record<string, any>>({
             if (editable && col.editor) sel.startEdit({ row: rowIdx, col: colIdx });
           }}
         >
-          {formatDisplay(col, row, rowIdx)}
+          {formatDisplay(col, row, rowIdx, tr)}
         </td>
       );
     },
-    [sel, editable, commitEdit, columns],
+    [sel, editable, commitEdit, columns, tr],
   );
 
   // 空状态
@@ -433,11 +450,11 @@ export function DataGrid<T extends Record<string, any>>({
                 <th
                   key={col.key}
                   className={`dt-sort-th${col.align === "right" ? " dt-align-right" : ""}${col.sticky ? " dt-sticky-col" : ""}`}
-                  style={col.width ? { width: col.width, minWidth: col.width } : undefined}
+                  style={col.width ?? col.minWidth ? { width: col.width ?? col.minWidth, minWidth: col.minWidth ?? col.width } : undefined}
                   onClick={() => handleSort(col.key)}
                 >
                   <span className="dt-th-inner">
-                    {col.title}
+                    <span className="dt-th-title">{col.title}</span>
                     {sortKey === col.key && <span className="dt-sort-icon">{sortDir === "asc" ? "↑" : "↓"}</span>}
                   </span>
                 </th>

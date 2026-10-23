@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models import User
 from app.models_domain import (
     Charter,
     Claim,
@@ -25,12 +27,14 @@ from app.models_domain import (
     TwinAlert,
     Voyage,
 )
+from app.models_voyage_ext import VoyageInstruction, VoyageNote
 from app.models_wave1 import Counterparty, Port, Vessel
 from app.security import AuthContext, require_module
 from app.services.pnl import PNL_LINE_KEYS, voyage_pnl_row
 from app.services.port_functions import normalize_function_code
 from app.services.alert_engine import assert_no_blocking_alerts
 from app.services.audit import audit
+from app.services.notifications import notify_once, role_recipients
 from app.services.recycle import soft_delete
 from app.services.report_sequence import assert_report_sequence, derive_report_stage
 from app.services.tenant_guard import scoped_get
@@ -188,11 +192,11 @@ class SofEventUpdate(BaseModel):
 
 @router.get("/voyages", response_model=list[VoyageOut])
 def list_voyages(auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
-    rows = db.scalars(
-        select(Voyage)
-        .where(Voyage.tenant_id == auth.tenant_id, Voyage.status != "deleted")
-        .order_by(Voyage.created_at.desc())
-    ).all()
+    from app.services.data_scope import apply_data_scope, effective_scope
+
+    stmt = select(Voyage).where(Voyage.tenant_id == auth.tenant_id, Voyage.status != "deleted")
+    stmt = apply_data_scope(stmt, Voyage, auth.user_id, effective_scope(db, auth.tenant_id, auth.roles, "operations"))
+    rows = db.scalars(stmt.order_by(Voyage.created_at.desc())).all()
     return [VoyageOut.model_validate(r) for r in rows]
 
 
@@ -209,6 +213,8 @@ def create_voyage(body: VoyageIn, auth: AuthContext = Depends(require_module("op
         charter_id=body.charter_id,
         cargo=body.cargo,
         status="planned",
+        created_by=auth.user_id,
+        updated_by=auth.user_id,
     )
     # Tasks & Alerts 可阻断保存：命中 blocking 高优先级规则 → 409 ALERT_BLOCKED
     assert_no_blocking_alerts(db, auth.tenant_id, "voyage", _voyage_alert_context(row))
@@ -248,6 +254,7 @@ def update_voyage(
         row.vessel_id = body.vessel_id
     # Tasks & Alerts 可阻断保存：字段落地后、提交前评估 blocking 规则
     assert_no_blocking_alerts(db, auth.tenant_id, "voyage", _voyage_alert_context(row))
+    row.updated_by = auth.user_id
     audit(
         db,
         action="voyage.update",
@@ -592,8 +599,16 @@ def _lifecycle(
     invoices: list[Invoice],
     claims: list[Claim],
 ) -> list[dict]:
-    def _step(key: str, en: str, zh: str, state: str, href: str, detail: str) -> dict:
-        return {"key": key, "label": {"en": en, "zh": zh}, "state": state, "href": href, "detail": detail}
+    def _step(key: str, en: str, zh: str, state: str, href: str, d_en: str, d_zh: str | None = None) -> dict:
+        return {
+            "key": key,
+            "label": {"en": en, "zh": zh},
+            "state": state,
+            "href": href,
+            # detail 双语（旧前端读字符串时兼容 str，新前端按 locale 选 en/zh）
+            "detail": d_en,
+            "detail_i18n": {"en": d_en, "zh": d_zh if d_zh is not None else d_en},
+        }
 
     vid = voyage.id
     finalized = [lt for lt in laytimes if lt.status == "finalized"]
@@ -608,24 +623,28 @@ def _lifecycle(
             "done" if estimate else "todo",
             "/estimates",
             f"{estimate.title} · {estimate.status}" if estimate else "No estimate linked",
+            f"{estimate.title} · {estimate.status}" if estimate else "未关联估算",
         ),
         _step(
             "charter", "Charter", "租约",
             ("done" if charter and charter.status in ("active", "completed") else "current") if charter else "todo",
             "/charters",
             f"{charter.charter_no} · {charter.status}" if charter else "No charter linked",
+            f"{charter.charter_no} · {charter.status}" if charter else "未关联租约",
         ),
         _step(
             "execution", "Execution", "执行",
             "done" if completed else ("current" if voyage.status == "in_progress" else "todo"),
             f"/operations/voyages/{vid}",
             f"{voyage.status}" + (f" · started {voyage.started_at.date().isoformat()}" if voyage.started_at else ""),
+            f"{voyage.status}" + (f" · 开始于 {voyage.started_at.date().isoformat()}" if voyage.started_at else ""),
         ),
         _step(
             "laytime", "Laytime", "滞期费",
             "done" if finalized else ("current" if laytimes else "todo"),
             "/finance",
             f"{len(laytimes)} calc{'s' if len(laytimes) != 1 else ''} · {len(finalized)} finalized" if laytimes else "No laytime calc",
+            f"{len(laytimes)} 份计算 · {len(finalized)} 份定稿" if laytimes else "无滞期费计算",
         ),
         _step(
             "invoicing", "Invoicing", "开票",
@@ -634,18 +653,23 @@ def _lifecycle(
             f"{len(payable)} invoice{'s' if len(payable) != 1 else ''} · {sum(1 for i in payable if i.status == 'paid')} paid"
             if payable
             else "No invoices",
+            f"{len(payable)} 张发票 · {sum(1 for i in payable if i.status == 'paid')} 张已付"
+            if payable
+            else "无发票",
         ),
         _step(
             "settlement", "Settlement", "结算",
             "done" if payable and all_paid and not open_claims else ("current" if payable or claims else "todo"),
             "/finance",
             f"{len(open_claims)} open claim{'s' if len(open_claims) != 1 else ''}" if open_claims else "Nothing outstanding",
+            f"{len(open_claims)} 项未决索赔" if open_claims else "无未结事项",
         ),
         _step(
             "closed", "Closed", "关闭",
             ("done" if payable and all_paid and not open_claims else "current") if completed else "todo",
             f"/operations/voyages/{vid}",
             f"completed {voyage.completed_at.date().isoformat()}" if voyage.completed_at else "Voyage not completed",
+            f"完成于 {voyage.completed_at.date().isoformat()}" if voyage.completed_at else "航次未完成",
         ),
     ]
     return steps
@@ -801,6 +825,387 @@ def voyage_overview(
         ],
         "pnl": _pnl_block(db, auth.tenant_id, v, estimate),
     }
+
+
+# ── 航次备注 / 指示 / 活动流（voyage workspace Notes·Instructions·Activity 标签） ──
+
+
+class VoyageNoteIn(BaseModel):
+    """前端同时发 content 与 body，二者等价；content 优先。"""
+
+    content: str | None = None
+    body: str | None = None
+    note_date: date | None = None
+    kind: str | None = None  # instructions only: general|owner|charterer|agent
+    ack: bool | None = None  # instructions only
+
+
+class VoyageNoteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    voyage_id: UUID
+    content: str
+    body: str  # content 的别名镜像，前端 noteText() 两个字段都读
+    note: str  # 同上，第三个别名
+    note_date: date | None = None
+    author_name: str | None = None
+    created_by_name: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    kind: str | None = None  # instructions
+    ack: bool | None = None  # instructions
+
+
+def _get_alive_voyage(db: Session, tenant_id: UUID, voyage_id: UUID) -> Voyage:
+    v = db.get(Voyage, voyage_id)
+    if not v or v.tenant_id != tenant_id or not _alive(v.status):
+        raise HTTPException(404, "Voyage not found")
+    return v
+
+
+def _note_text(body: VoyageNoteIn, *, required: bool) -> str | None:
+    """content/body 等价（content 优先）。新建必填；PATCH 时缺省表示不改文本。"""
+    if body.content is None and body.body is None:
+        if required:
+            raise HTTPException(422, "Note content is required")
+        return None
+    text = body.content if body.content is not None else body.body
+    text = text or ""
+    if not text.strip():
+        raise HTTPException(422, "Note content is required")
+    return text
+
+
+def _note_out(row: VoyageNote | VoyageInstruction, author: User | None) -> VoyageNoteOut:
+    text = row.content or ""
+    out = VoyageNoteOut(
+        id=row.id,
+        voyage_id=row.voyage_id,
+        content=text,
+        body=text,
+        note=text,
+        note_date=row.note_date,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+    name = (author.full_name or author.email) if author else None
+    out.author_name = name
+    out.created_by_name = name
+    if isinstance(row, VoyageInstruction):
+        out.kind = row.kind
+        out.ack = row.ack
+    return out
+
+
+def _list_notes(db: Session, model: type[VoyageNote] | type[VoyageInstruction], tenant_id: UUID, voyage_id: UUID) -> list:
+    rows = db.scalars(
+        select(model)
+        .where(
+            model.tenant_id == tenant_id,
+            model.voyage_id == voyage_id,
+            model.deleted_at.is_(None),
+        )
+        .order_by(model.created_at.desc())
+    ).all()
+    if not rows:
+        return []
+    user_ids = {r.created_by for r in rows if r.created_by}
+    users = (
+        {u.id: u for u in db.scalars(select(User).where(User.id.in_(user_ids))).all()} if user_ids else {}
+    )
+    return [_note_out(r, users.get(r.created_by)) for r in rows]
+
+
+def _write_note(
+    db: Session,
+    *,
+    model: type[VoyageNote] | type[VoyageInstruction],
+    auth: AuthContext,
+    voyage_id: UUID,
+    body: VoyageNoteIn,
+    note_id: UUID | None = None,
+) -> VoyageNoteOut:
+    _get_alive_voyage(db, auth.tenant_id, voyage_id)
+    text = _note_text(body, required=note_id is None)
+    if note_id is not None:
+        row = db.get(model, note_id)
+        if not row or row.tenant_id != auth.tenant_id or row.voyage_id != voyage_id or row.deleted_at:
+            raise HTTPException(404, "Note not found")
+        if text is not None:
+            row.content = text
+        if body.note_date is not None:
+            row.note_date = body.note_date
+        if isinstance(row, VoyageInstruction):
+            if body.kind:
+                row.kind = body.kind
+            if body.ack is not None:
+                row.ack = body.ack
+        audit(
+            db,
+            action="update",
+            tenant_id=auth.tenant_id,
+            actor_user_id=auth.user_id,
+            entity_type=model.__tablename__,
+            entity_id=row.id,
+        )
+    else:
+        row = model(
+            tenant_id=auth.tenant_id,
+            voyage_id=voyage_id,
+            content=text,
+            note_date=body.note_date,
+            created_by=auth.user_id,
+        )
+        if isinstance(row, VoyageInstruction):
+            if body.kind:
+                row.kind = body.kind
+            if body.ack is not None:
+                row.ack = body.ack
+        db.add(row)
+        db.flush()  # row.id 就绪 —— audit / notify 用得到
+        audit(
+            db,
+            action="create",
+            tenant_id=auth.tenant_id,
+            actor_user_id=auth.user_id,
+            entity_type=model.__tablename__,
+            entity_id=row.id,
+            detail={"voyage_id": str(voyage_id)},
+        )
+        # 通知运营/管理人员：新备注直达工作台对应 tab（notify_once 按日去重防轰炸）
+        tab = "instructions" if isinstance(row, VoyageInstruction) else "notes"
+        kind_label = "instruction" if tab == "instructions" else "note"
+        voyage = db.get(Voyage, voyage_id)
+        recipients = [u for u in role_recipients(db, auth.tenant_id, ("operations", "management")) if u.id != auth.user_id]
+        notify_once(
+            db,
+            auth.tenant_id,
+            recipients,
+            title=f"New voyage {kind_label}",
+            body=f"{voyage.voyage_no if voyage else ''}: {(text or '')[:180]}",
+            href=f"/operations/voyages/{voyage_id}/workspace?tab={tab}",
+            level="info",
+        )
+    db.commit()
+    db.refresh(row)
+    author = db.get(User, row.created_by) if row.created_by else None
+    return _note_out(row, author)
+
+
+def _delete_note(
+    db: Session,
+    *,
+    model: type[VoyageNote] | type[VoyageInstruction],
+    auth: AuthContext,
+    voyage_id: UUID,
+    note_id: UUID,
+) -> dict:
+    row = db.get(model, note_id)
+    if not row or row.tenant_id != auth.tenant_id or row.voyage_id != voyage_id or row.deleted_at:
+        raise HTTPException(404, "Note not found")
+    soft_delete(
+        db,
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        entity_type=model.__tablename__,
+        row=row,
+        title=(row.content or "")[:80],
+    )
+    audit(
+        db,
+        action="delete",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type=model.__tablename__,
+        entity_id=row.id,
+    )
+    db.commit()
+    return {"id": str(note_id), "deleted": True}
+
+
+@router.get("/voyages/{voyage_id}/notes", response_model=list[VoyageNoteOut])
+def list_voyage_notes(
+    voyage_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_alive_voyage(db, auth.tenant_id, voyage_id)
+    return _list_notes(db, VoyageNote, auth.tenant_id, voyage_id)
+
+
+@router.post("/voyages/{voyage_id}/notes", response_model=VoyageNoteOut)
+def create_voyage_note(
+    voyage_id: UUID,
+    body: VoyageNoteIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    return _write_note(db, model=VoyageNote, auth=auth, voyage_id=voyage_id, body=body)
+
+
+@router.patch("/voyages/{voyage_id}/notes/{note_id}", response_model=VoyageNoteOut)
+def update_voyage_note(
+    voyage_id: UUID,
+    note_id: UUID,
+    body: VoyageNoteIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    return _write_note(db, model=VoyageNote, auth=auth, voyage_id=voyage_id, body=body, note_id=note_id)
+
+
+@router.delete("/voyages/{voyage_id}/notes/{note_id}")
+def remove_voyage_note(
+    voyage_id: UUID,
+    note_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    return _delete_note(db, model=VoyageNote, auth=auth, voyage_id=voyage_id, note_id=note_id)
+
+
+@router.get("/voyages/{voyage_id}/instructions", response_model=list[VoyageNoteOut])
+def list_voyage_instructions(
+    voyage_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    _get_alive_voyage(db, auth.tenant_id, voyage_id)
+    return _list_notes(db, VoyageInstruction, auth.tenant_id, voyage_id)
+
+
+@router.post("/voyages/{voyage_id}/instructions", response_model=VoyageNoteOut)
+def create_voyage_instruction(
+    voyage_id: UUID,
+    body: VoyageNoteIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    return _write_note(db, model=VoyageInstruction, auth=auth, voyage_id=voyage_id, body=body)
+
+
+@router.patch("/voyages/{voyage_id}/instructions/{note_id}", response_model=VoyageNoteOut)
+def update_voyage_instruction(
+    voyage_id: UUID,
+    note_id: UUID,
+    body: VoyageNoteIn,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    return _write_note(db, model=VoyageInstruction, auth=auth, voyage_id=voyage_id, body=body, note_id=note_id)
+
+
+@router.delete("/voyages/{voyage_id}/instructions/{note_id}")
+def remove_voyage_instruction(
+    voyage_id: UUID,
+    note_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    return _delete_note(db, model=VoyageInstruction, auth=auth, voyage_id=voyage_id, note_id=note_id)
+
+
+@router.get("/voyages/{voyage_id}/activity")
+def voyage_activity(
+    voyage_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """派生活动流：靠离泊（ATA/ATD）+ SOF 事件 + 停租 + 备注/指示增改，按时间倒序。"""
+    _get_alive_voyage(db, auth.tenant_id, voyage_id)
+    items: list[dict] = []
+
+    port_calls = db.scalars(
+        select(PortCall)
+        .where(
+            PortCall.tenant_id == auth.tenant_id,
+            PortCall.voyage_id == voyage_id,
+            PortCall.deleted_at.is_(None),
+        )
+        .order_by(PortCall.seq)
+    ).all()
+    port_names = {}
+    port_ids = {p.port_id for p in port_calls if p.port_id}
+    if port_ids:
+        port_names = {
+            p.id: p.name for p in db.scalars(select(Port).where(Port.id.in_(port_ids))).all()
+        }
+    for pc in port_calls:
+        pname = port_names.get(pc.port_id, "") or ""
+        if pc.ata:
+            items.append(
+                {
+                    "id": f"{pc.id}-ata",
+                    "at": pc.ata.isoformat(),
+                    "kind": "port",
+                    "title": f"ATA · {pname}",
+                    "message": f"Arrived at {pname}" if pname else "Arrived",
+                }
+            )
+        if pc.atd:
+            items.append(
+                {
+                    "id": f"{pc.id}-atd",
+                    "at": pc.atd.isoformat(),
+                    "kind": "port",
+                    "title": f"ATD · {pname}",
+                    "message": f"Departed {pname}" if pname else "Departed",
+                }
+            )
+
+    sof_events = db.scalars(
+        select(SofEvent)
+        .join(PortCall, SofEvent.port_call_id == PortCall.id)
+        .where(
+            SofEvent.tenant_id == auth.tenant_id,
+            PortCall.voyage_id == voyage_id,
+            SofEvent.deleted_at.is_(None),
+        )
+        .order_by(SofEvent.event_at)
+    ).all()
+    for ev in sof_events:
+        items.append(
+            {
+                "id": str(ev.id),
+                "at": ev.event_at.isoformat(),
+                "kind": "sof",
+                "title": ev.event_code,
+                "message": ev.remarks or SOF_EVENT_CODES.get(ev.event_code, ev.event_code),
+            }
+        )
+
+    off_hire = db.scalars(
+        select(OffHireEvent).where(
+            OffHireEvent.tenant_id == auth.tenant_id,
+            OffHireEvent.voyage_id == voyage_id,
+        )
+    ).all()
+    for oh in off_hire:
+        items.append(
+            {
+                "id": str(oh.id),
+                "at": oh.start_at.isoformat(),
+                "kind": "off_hire",
+                "title": "Off-hire",
+                "message": oh.reason or (oh.event_type or "off-hire"),
+            }
+        )
+
+    for model, kind in ((VoyageNote, "note"), (VoyageInstruction, "instruction")):
+        for n in _list_notes(db, model, auth.tenant_id, voyage_id):
+            items.append(
+                {
+                    "id": str(n.id),
+                    "at": (n.updated_at or n.created_at).isoformat() if (n.updated_at or n.created_at) else None,
+                    "kind": kind,
+                    "title": kind.title(),
+                    "message": (n.content or "")[:160],
+                }
+            )
+
+    items.sort(key=lambda x: x.get("at") or "", reverse=True)
+    return items
 
 
 @router.post("/port-calls", response_model=PortCallOut)
@@ -1476,13 +1881,79 @@ def twin_voyage(voyage_id: UUID, auth: AuthContext = Depends(require_module("twi
     }
 
 
+# 句式里的可枚举词（原因/证书名）小词表 —— 未命中回落英文原词
+_TWIN_REASON_ZH = {
+    "weather routing": "气象绕航",
+    "weather": "天气",
+    "port congestion": "港口拥堵",
+    "crew change": "换员",
+}
+_TWIN_CERT_ZH = {
+    "Class Annual Survey": "船级社年度检验",
+    "Annual Survey": "年度检验",
+    "SMC": "安全管理证书",
+    "ISSC": "ISPS 证书",
+    "IOPP": "防污证书",
+    "Class Certificate": "船级社证书",
+}
+
+
+def _twin_alert_i18n(title: str, body: str | None) -> tuple[dict, dict | None]:
+    """TwinAlert.title/body 是自由文本 —— 按已知句式补 {en, zh}（home._ship_alerts 的 title_i18n 先例）。
+
+    未知句式回落原文；演示种子与午报 ETA 偏差告警的句式均已覆盖。
+    """
+    t_zh = title
+    b_zh = body
+    m = re.match(r"ETA slip (\S+) on (\S+) — (.+)$", title)
+    if m:
+        slip, voy, reason = m.groups()
+        t_zh = f"{voy} 预计抵港延误 {slip} — {_TWIN_REASON_ZH.get(reason, reason)}"
+    else:
+        m = re.match(r"ETA deviation ([-+\d.]+h)$", title)
+        if m:
+            t_zh = f"预计抵港偏差 {m.group(1)}"
+        else:
+            m = re.match(r"NOR window approaching (\S+)$", title)
+            if m:
+                t_zh = f"{m.group(1)} NOR 窗口临近"
+            else:
+                m = re.match(r"Certificate (.+) due (\d+)d — (.+)$", title)
+                if m:
+                    cert, days, vessel = m.groups()
+                    t_zh = f"{vessel} {_TWIN_CERT_ZH.get(cert, cert)} {days} 天后到期"
+    if body:
+        if body == "North Atlantic gale delay":
+            b_zh = "北大西洋大风延误"
+        else:
+            m = re.match(r"Voyage (\S+) noon ETA drift$", body)
+            if m:
+                b_zh = f"航次 {m.group(1)} 午报 ETA 偏移"
+    return (
+        {"en": title, "zh": t_zh},
+        {"en": body, "zh": b_zh} if body else None,
+    )
+
+
 @router.get("/twin/alerts")
 def twin_alerts(auth: AuthContext = Depends(require_module("twin")), db: Session = Depends(get_db)):
     rows = db.scalars(select(TwinAlert).where(TwinAlert.tenant_id == auth.tenant_id).order_by(TwinAlert.created_at.desc()).limit(50)).all()
-    return [
-        {"id": str(r.id), "level": r.level, "title": r.title, "body": r.body, "href": r.href, "voyage_id": str(r.voyage_id) if r.voyage_id else None}
-        for r in rows
-    ]
+    items = []
+    for r in rows:
+        title_i18n, body_i18n = _twin_alert_i18n(r.title, r.body)
+        items.append(
+            {
+                "id": str(r.id),
+                "level": r.level,
+                "title": r.title,
+                "title_i18n": title_i18n,
+                "body": r.body,
+                "body_i18n": body_i18n,
+                "href": r.href,
+                "voyage_id": str(r.voyage_id) if r.voyage_id else None,
+            }
+        )
+    return items
 
 
 @router.post("/twin/what-if")

@@ -152,6 +152,14 @@
   border-radius: var(--radius-sm);
   margin-bottom: var(--gap-sm);
 }
+/* 面板内的 <h2> 降为区块小标题（走查：语言/术语库等标题过大） */
+.panel > h2 {
+  margin: 0 0 var(--gap-sm);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+/* 面板首标题不留上边距（替代各页内联 style marginTop:0） */
+.panel > h3:first-child { margin-top: 0; }
 .panel-header {
   display: flex;
   align-items: center;
@@ -216,6 +224,19 @@
 .mail-aside { margin-top: 1rem; }
 /* ── 解析字段 chips（邮件复核页结构化预览） ── */
 .chips { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; align-items: baseline; }
+/* 解析字段键值表（邮件复核页）— 标签 | 值 两列 dl */
+.parse-fields { display: flex; flex-direction: column; gap: 0.35rem; align-items: flex-start; }
+.parse-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--gap-sm);
+  margin: 0;
+  font-size: var(--font-ui);
+  width: 100%;
+}
+.parse-kv > div { display: contents; }
+.parse-kv dt { color: var(--muted); white-space: nowrap; }
+.parse-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .mail-aside > summary {
   cursor: pointer;
   display: flex;

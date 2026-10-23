@@ -13,6 +13,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { RecordAttribution } from "@/components/RecordAttribution";
 import { StatusBadge, type StatusTone } from "@/components/StatusBadge";
 import { useStateActions } from "@/components/useTransitions";
 import { StateView } from "@/components/StateView";
@@ -25,6 +26,7 @@ import { PanelTabs } from "@/components/workspace/PanelTabs";
 import { PortTime } from "@/components/PortTime";
 import { VoyageTimeline, type TimelineEvent, type TimelinePortCall } from "@/components/workspace/VoyageTimeline";
 import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
+import { useTodoAdd } from "@/components/TodoQuickAdd";
 import { apiDelete, apiGet, apiPatch, apiPost, type VoyageOverview, type VoyagePnlLine } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -199,6 +201,10 @@ export default function VoyageWorkspacePage() {
   const [notes, setNotes] = useState<VoyageNote[]>([]);
   const [instructions, setInstructions] = useState<VoyageNote[]>([]);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
+  // tab 数字上标：{tab: {count, unread}}（未读=他人创建且晚于本人 last-seen）
+  const [tabBadges, setTabBadges] = useState<Record<string, { count: number; unread: number }>>({});
+  const [activeTab, setActiveTab] = useState("summary");
+  const todo = useTodoAdd();
   const [noteModal, setNoteModal] = useState<{ open: boolean; kind: "note" | "instruction"; id: string | null }>({
     open: false,
     kind: "note",
@@ -262,7 +268,7 @@ export default function VoyageWorkspacePage() {
     try {
       const [overview, portRows, sof, twin, fnRows] = await Promise.all([
         apiGet(`/api/v1/voyages/${id}/overview`),
-        fetchList<PortRef>("/api/v1/ports").catch(() => [] as PortRef[]),
+        fetchList<PortRef>("/api/v1/masterdata/ports").catch(() => [] as PortRef[]),
         fetchList<{ id: string; event_code: string; event_at: string | null }>(`/api/v1/sof-events?voyage_id=${id}`).catch(
           () => [],
         ),
@@ -429,20 +435,52 @@ export default function VoyageWorkspacePage() {
 
   const loadAux = useCallback(async () => {
     if (!id) return;
-    const [n, ins, act] = await Promise.all([
+    const [n, ins, act, badges] = await Promise.all([
       fetchList<VoyageNote>(`/api/v1/voyages/${id}/notes`).catch(() => [] as VoyageNote[]),
       fetchList<VoyageNote>(`/api/v1/voyages/${id}/instructions`).catch(() => [] as VoyageNote[]),
       fetchList<ActivityItem>(`/api/v1/voyages/${id}/activity`).catch(() => [] as ActivityItem[]),
+      apiGet(`/api/v1/me/unread?entity_type=voyage&entity_id=${id}`).catch(
+        () => ({}) as Record<string, { count: number; unread: number }>,
+      ),
     ]);
     setNotes(n);
     setInstructions(ins);
     setActivity(act);
+    if (badges && typeof badges === "object") setTabBadges(badges);
   }, [id]);
+
+  // 打开 tab 即视为已读：上报 last-seen 并本地清零未读
+  const onTabChange = useCallback(
+    (tabId: string) => {
+      setActiveTab(tabId);
+      if (!id) return;
+      setTabBadges((prev) => {
+        const b = prev[tabId];
+        if (!b || !b.unread) return prev;
+        return { ...prev, [tabId]: { ...b, unread: 0 } };
+      });
+      apiPost("/api/v1/me/viewed", { entity_type: "voyage", entity_id: id, tab: tabId }).catch(() => undefined);
+    },
+    [id],
+  );
 
   useEffect(() => {
     load();
     loadAux();
   }, [load, loadAux]);
+
+  // 通知直达：/workspace?tab=notes 直接切到对应 tab，并视为已读
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get("tab");
+    if (!wanted || !id) return;
+    setActiveTab(wanted);
+    setTabBadges((prev) => {
+      const b = prev[wanted];
+      if (!b || !b.unread) return prev;
+      return { ...prev, [wanted]: { ...b, unread: 0 } };
+    });
+    apiPost("/api/v1/me/viewed", { entity_type: "voyage", entity_id: id, tab: wanted }).catch(() => undefined);
+  }, [id]);
 
   const voyage = data?.voyage;
   const pnl = data?.pnl;
@@ -712,7 +750,11 @@ export default function VoyageWorkspacePage() {
         {data?.lifecycle?.length ? (
           <ol className="lc-stepper" style={{ flexWrap: "wrap" }}>
             {data.lifecycle.map((step, i) => {
-              const label = locale.startsWith("zh") ? step.label.zh || step.label.en : step.label.en;
+              const zh = locale.startsWith("zh");
+              const label = zh ? step.label.zh || step.label.en : step.label.en;
+              const detail = zh
+                ? (step.detail_i18n?.zh || step.detail)
+                : (step.detail_i18n?.en || step.detail);
               const inner = (
                 <span className="lc-step-link">
                   <span className="lc-dot" aria-hidden>
@@ -726,7 +768,7 @@ export default function VoyageWorkspacePage() {
                   </span>
                   <span className="lc-text">
                     <strong>{label}</strong>
-                    {step.detail ? <small>{step.detail}</small> : null}
+                    {detail ? <small>{detail}</small> : null}
                   </span>
                 </span>
               );
@@ -1177,6 +1219,25 @@ export default function VoyageWorkspacePage() {
     </Panel>
   );
 
+  // tab 数字上标：有数据显数字；有未读（他人新写的）转为醒目红标
+  const tabBadge = (tabId: string) => {
+    const b = tabBadges[tabId];
+    if (!b || !b.count) return null;
+    const unread = b.unread > 0;
+    return (
+      <span
+        className={`ws-tab-badge${unread ? " unread" : ""}`}
+        title={
+          unread
+            ? t("ws.badge_unread", "{n} unread", { n: b.unread })
+            : t("ws.badge_count", "{n} items", { n: b.count })
+        }
+      >
+        {unread ? b.unread : b.count}
+      </span>
+    );
+  };
+
   const renderNoteList = (kind: "note" | "instruction", rows: VoyageNote[]) => (
     <Panel
       title={kind === "note" ? t("ws.notes", "Voyage notes") : t("ws.instructions", "Voyage instructions")}
@@ -1254,6 +1315,12 @@ export default function VoyageWorkspacePage() {
                   : t("ws.sub", "Full lifecycle voyage workspace")}
                 {data?.charter?.charter_no ? ` · ${data.charter.charter_no}` : ""}
                 {data?.charter?.counterparty_name ? ` · ${data.charter.counterparty_name}` : ""}
+                {id ? (
+                  <>
+                    {" · "}
+                    <RecordAttribution entityType="voyage" entityId={id} />
+                  </>
+                ) : null}
               </>
             }
             actions={
@@ -1270,6 +1337,15 @@ export default function VoyageWorkspacePage() {
                 <Link href="/finance" className="btn btn-ghost btn-sm">
                   {t("ws.goto_finance", "Finance")}
                 </Link>
+                {id ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => todo.openFor({ entityType: "voyage", entityId: id, title })}
+                  >
+                    {t("ctx.add_todo", "Add to my todos")}
+                  </button>
+                ) : null}
               </>
             }
           />
@@ -1280,17 +1356,25 @@ export default function VoyageWorkspacePage() {
       >
         <StateView loading={loading && !data} error={error} empty={false} onRetry={load}>
           <PanelTabs
+            activeId={activeTab}
+            onChange={onTabChange}
             tabs={[
               { id: "summary", label: t("ws.tab_summary", "Summary"), content: summaryTab },
               { id: "pnl", label: t("ws.tab_pnl", "P&L"), content: pnlTab },
               { id: "ports", label: t("ws.tab_ports", "Port activity"), content: portCallsTab },
               { id: "finance", label: t("ws.tab_finance", "Finance"), content: financeTab },
               { id: "map", label: t("ws.tab_map", "Map"), content: mapTab },
-              { id: "notes", label: t("ws.tab_notes", "Notes"), content: renderNoteList("note", notes) },
+              {
+                id: "notes",
+                label: t("ws.tab_notes", "Notes"),
+                content: renderNoteList("note", notes),
+                badge: tabBadge("notes"),
+              },
               {
                 id: "instructions",
                 label: t("ws.tab_instructions", "Instructions"),
                 content: renderNoteList("instruction", instructions),
+                badge: tabBadge("instructions"),
               },
               {
                 id: "mail",
@@ -1417,6 +1501,8 @@ export default function VoyageWorkspacePage() {
           />
         </label>
       </RecordModal>
+
+      {todo.element}
     </AppShell>
   );
 }

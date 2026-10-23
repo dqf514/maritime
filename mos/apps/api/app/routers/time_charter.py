@@ -454,6 +454,14 @@ class ChildTCIn(BaseModel):
 def _get_tc(db: Session, auth: AuthContext, contract_id: UUID) -> TimeCharterContract:
     c = scoped_get(db, TimeCharterContract, contract_id, auth.tenant_id)
     if not c:
+        # 兼容父租约 id：/charters/tc/{charter_id} 也应能打开对应 TC 合同
+        c = db.scalar(
+            select(TimeCharterContract).where(
+                TimeCharterContract.tenant_id == auth.tenant_id,
+                TimeCharterContract.charter_id == contract_id,
+            )
+        )
+    if not c:
         raise HTTPException(404, "TC contract not found")
     return c
 

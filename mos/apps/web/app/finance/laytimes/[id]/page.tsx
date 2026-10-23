@@ -266,7 +266,7 @@ export default function LaytimeDetailPage() {
               </div>
               <div className="kv-box">
                 <span>{t("common.result", "Result")}</span>
-                <strong>{st.result_type || "—"}</strong>
+                <strong>{st.result_type ? t(`status.${st.result_type}`, st.result_type.replace(/_/g, " ")) : "—"}</strong>
               </div>
             </div>
           </div>

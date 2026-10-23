@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { StateView } from "@/components/StateView";
+import { StatusBadge, type StatusTone } from "@/components/StatusBadge";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost } from "@/lib/api";
@@ -11,10 +12,28 @@ import { useI18n } from "@/lib/i18n";
 
 type FleetVessel = { name: string; status: string; lat: number | null; lon: number | null };
 
+/** 孪生告警 — title_i18n/body_i18n 由后端按句式补双语（home._ship_alerts 先例） */
+type TwinAlertItem = {
+  title: string;
+  title_i18n?: { en?: string; zh?: string } | null;
+  body?: string | null;
+  body_i18n?: { en?: string; zh?: string } | null;
+  level: string;
+};
+
+const LEVEL_TONE: Record<string, StatusTone> = {
+  critical: "danger",
+  high: "danger",
+  warn: "warn",
+  warning: "warn",
+  info: "info",
+};
+
 export default function TwinPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const zh = locale.startsWith("zh");
   const [fleet, setFleet] = useState<{ vessels: FleetVessel[] } | null>(null);
-  const [alerts, setAlerts] = useState<Array<{ title: string; level: string }>>([]);
+  const [alerts, setAlerts] = useState<TwinAlertItem[]>([]);
   const [whatif, setWhatif] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
@@ -53,13 +72,22 @@ export default function TwinPage() {
     );
   }
 
+  /** title/body 双语择取 —— 无 i18n 结构时回落原文 */
+  function alertTitle(a: TwinAlertItem): string {
+    return (zh ? a.title_i18n?.zh : a.title_i18n?.en) || a.title;
+  }
+  function alertBody(a: TwinAlertItem): string | null {
+    if (!a.body && !a.body_i18n) return null;
+    return (zh ? a.body_i18n?.zh : a.body_i18n?.en) || a.body || null;
+  }
+
   const fleetColumns: ColumnDef<FleetVessel>[] = useMemo(
     () => [
       { key: "name", title: t("page.twin.vessel", "Vessel"), minWidth: 140, value: (r) => r.name },
       { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
       {
         key: "lat",
-        title: "Lat",
+        title: t("page.twin.lat", "LAT"),
         width: 90,
         align: "right",
         value: (r) => r.lat,
@@ -67,7 +95,7 @@ export default function TwinPage() {
       },
       {
         key: "lon",
-        title: "Lon",
+        title: t("page.twin.lon", "LON"),
         width: 90,
         align: "right",
         value: (r) => r.lon,
@@ -90,8 +118,8 @@ export default function TwinPage() {
         }
       />
       {whatif ? <p>{whatif}</p> : null}
-      <div className="panel" style={{ marginTop: "1rem" }}>
-        <h3 style={{ marginTop: 0 }}>{t("page.twin.fleet", "Fleet (L1)")}</h3>
+      <div className="panel">
+        <h3>{t("page.twin.fleet", "Fleet (L1)")}</h3>
         <StateView loading={loading} error={loadErr} empty={!(fleet?.vessels || []).length} onRetry={load}>
           <DataGrid<FleetVessel>
             columns={fleetColumns}
@@ -103,15 +131,20 @@ export default function TwinPage() {
           />
         </StateView>
       </div>
-      <div className="panel" style={{ marginTop: "1rem" }}>
-        <h3 style={{ marginTop: 0 }}>{t("page.twin.alerts", "Alerts")}</h3>
+      <div className="panel">
+        <h3>{t("page.twin.alerts", "Alerts")}</h3>
         <StateView loading={loading} error={loadErr} empty={!alerts.length} emptyText={t("page.twin.no_alerts", "No alerts")} onRetry={load}>
-          <ul>
-            {alerts.map((a, i) => (
-              <li key={i}>
-                [{a.level}] {a.title}
-              </li>
-            ))}
+          <ul className="twin-alerts">
+            {alerts.map((a, i) => {
+              const detail = alertBody(a);
+              return (
+                <li key={i}>
+                  <StatusBadge status={a.level} tone={LEVEL_TONE[a.level] || "info"} />
+                  <span className="twin-alert-title">{alertTitle(a)}</span>
+                  {detail ? <span className="muted twin-alert-body">{detail}</span> : null}
+                </li>
+              );
+            })}
           </ul>
         </StateView>
       </div>

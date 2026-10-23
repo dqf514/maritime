@@ -118,19 +118,21 @@ export default function PlatformIdentityPage() {
       <div className="kpi-row">
         <div className="kpi-card">
           <span>Microsoft</span>
-          <strong>{rt.microsoft?.mode || "—"}</strong>
+          <strong>
+            {rt.microsoft?.mode ? t(`page.identity.mode_${rt.microsoft.mode}`, rt.microsoft.mode) : "—"}
+          </strong>
         </div>
         <div className="kpi-card">
           <span>Google</span>
-          <strong>{rt.google?.mode || "—"}</strong>
+          <strong>{rt.google?.mode ? t(`page.identity.mode_${rt.google.mode}`, rt.google.mode) : "—"}</strong>
         </div>
         <div className="kpi-card">
           <span>{t("page.identity.email_ch", "Email channel")}</span>
-          <strong>{form.email_channel}</strong>
+          <strong>{t(`page.identity.ch_${form.email_channel}`, form.email_channel)}</strong>
         </div>
         <div className="kpi-card">
           <span>{t("page.identity.stub_oauth", "Stub OAuth")}</span>
-          <strong>{rt.oauth_allow_stub ? "ON" : "OFF"}</strong>
+          <strong>{rt.oauth_allow_stub ? t("page.identity.on", "ON") : t("page.identity.off", "OFF")}</strong>
         </div>
       </div>
 

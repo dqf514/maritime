@@ -224,6 +224,34 @@
 }
 .ws-tab-body { padding: 0.65rem 0 0; min-width: 0; }
 
+/* —— tab 数字上标（有数据=中性计数；未读=醒目红标） —— */
+.ws-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 0.4rem;
+  padding: 0 0.32rem;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  background: var(--row-selected);
+  color: var(--sea-mid);
+  vertical-align: 1px;
+}
+.ws-tab-badge.unread {
+  background: var(--danger, #d64545);
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.ws-tab.active .ws-tab-badge:not(.unread) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--sea-deep);
+}
+
 /* —— summary / kv helpers —— */
 .ws-kv-grid {
   display: grid;

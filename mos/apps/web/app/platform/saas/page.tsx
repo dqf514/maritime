@@ -54,6 +54,27 @@ type SubRow = {
   plan: { code: string; name: string } | null;
 };
 
+/** 金额千分位 + 币种（套餐目录以 USD 计价）；无法解析时原样返回 */
+function money(v: unknown): string {
+  const n = typeof v === "number" ? v : Number(v);
+  if (v == null || v === "") return "—";
+  if (!Number.isFinite(n)) return String(v);
+  return `${n.toLocaleString("en-US", { maximumFractionDigits: 2 })} USD`;
+}
+
+/** 500000 → "500k"、5000000 → "5M"（配额紧凑显示；其余原样） */
+function compactNum(v: unknown): string {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return String(v ?? "");
+  if (Math.abs(n) >= 1_000_000_000) return `${trim(n / 1_000_000_000)}B`;
+  if (Math.abs(n) >= 1_000_000) return `${trim(n / 1_000_000)}M`;
+  if (Math.abs(n) >= 1_000) return `${trim(n / 1_000)}k`;
+  return String(n);
+  function trim(x: number): string {
+    return String(Math.round(x * 10) / 10);
+  }
+}
+
 function PlatformSaasPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -273,7 +294,13 @@ function PlatformSaasPage() {
       minWidth: 160,
       value: (r) => (r.plan ? `${r.plan.name} (${r.plan.code})` : "—"),
     },
-    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => r.status,
+      render: (v) => <span className={`badge badge-${v === "active" ? "ok" : "warn"}`}>{t(`status.${v}`, String(v))}</span>,
+    },
     {
       key: "current_period_end",
       title: t("page.billing.renews", "Renews"),
@@ -296,9 +323,13 @@ function PlatformSaasPage() {
       title: t("page.saas.billing_period", "Billing period"),
       width: 120,
       value: (r) => r.billing_period,
+      render: (v) => (v ? t(`page.saas.period_${v}`, String(v)) : ""),
       editor: {
         type: "select",
-        options: ["monthly", "quarterly", "annual", "one_time"].map((p) => ({ value: p, label: p })),
+        options: ["monthly", "quarterly", "annual", "one_time"].map((p) => ({
+          value: p,
+          label: t(`page.saas.period_${p}`, p),
+        })),
       },
     },
     {
@@ -329,8 +360,15 @@ function PlatformSaasPage() {
       key: "included_quotas",
       title: t("page.saas.quotas", "Quotas"),
       minWidth: 160,
-      value: (r) => JSON.stringify(r.included_quotas || {}),
-      render: (v) => <code>{String(v)}</code>,
+      value: (r) => r.included_quotas || {},
+      // 配额 JSON → 紧凑可读形式（ai.tokens 500k · api.calls 50k）
+      render: (v) => {
+        const q = (v || {}) as Record<string, unknown>;
+        const entries = Object.entries(q);
+        if (!entries.length) return <span className="muted">—</span>;
+        const parts = entries.map(([k, val]) => `${k} ${compactNum(val)}`);
+        return <span>{parts.join(" · ")}</span>;
+      },
     },
     {
       key: "_actions",
@@ -447,7 +485,13 @@ function PlatformSaasPage() {
   const providerColumns: ColumnDef<ProviderRow>[] = [
     { key: "code", title: t("common.code", "Code"), width: 130, value: (r) => String(r.code) },
     { key: "name", title: t("common.name", "Name"), minWidth: 150, value: (r) => String(r.name) },
-    { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => String(r.status) },
+    {
+      key: "status",
+      title: t("common.status", "Status"),
+      width: 110,
+      value: (r) => String(r.status),
+      render: (v) => <span className={`badge badge-${v === "active" ? "ok" : "warn"}`}>{t(`status.${v}`, String(v))}</span>,
+    },
   ];
 
   return (
@@ -488,11 +532,11 @@ function PlatformSaasPage() {
         </div>
         <div className="wb-tile">
           <h3>{t("page.saas.mrr", "MRR estimate")}</h3>
-          <div className="metric">{String(overview?.mrr_estimate ?? "—")}</div>
+          <div className="metric">{money(overview?.mrr_estimate)}</div>
         </div>
         <div className="wb-tile">
           <h3>{t("page.saas.paid_vol", "Paid volume")}</h3>
-          <div className="metric">{String(overview?.paid_volume ?? "—")}</div>
+          <div className="metric">{money(overview?.paid_volume)}</div>
         </div>
       </div>
 

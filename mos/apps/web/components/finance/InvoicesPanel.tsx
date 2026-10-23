@@ -12,6 +12,7 @@ import { PartyPicker } from "@/components/DataPicker";
 import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
 import { Num } from "@/components/Num";
+import { useTodoAdd } from "@/components/TodoQuickAdd";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiList, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
@@ -59,6 +60,7 @@ export function InvoicesPanel() {
   const [hsStart, setHsStart] = useState("");
   const [hsEnd, setHsEnd] = useState("");
   const invCtx = useContextMenu<Invoice>();
+  const todo = useTodoAdd();
 
   const loadRefs = useCallback(async () => {
     const [v, p, ch] = await Promise.all([
@@ -178,10 +180,12 @@ export function InvoicesPanel() {
 
   const invMenuItems = (row: Invoice): ContextMenuItem[] => [
     { key: "open", label: t("common.open", "Open"), onClick: () => router.push(`/finance/invoices/${row.id}`) },
+    { key: "divider", divider: true },
+    todo.menuItem({ entityType: "invoice", entityId: row.id, title: row.invoice_no }),
     { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(row.id) },
     {
       key: "export",
-      label: t("page.finance.export_selected", "导出所选 CSV"),
+      label: t("page.finance.export_selected", "Export selected CSV"),
       onClick: () => exportRows(sel.has(row.id) ? rows.filter((r) => sel.has(r.id)) : [row]),
     },
   ];
@@ -196,7 +200,7 @@ export function InvoicesPanel() {
             <select value={invType} onChange={(e) => setInvType(e.target.value)}>
               {INVOICE_TYPES.map((it) => (
                 <option key={it} value={it}>
-                  {it}
+                  {t(`invoice.type.${it}`, it)}
                 </option>
               ))}
             </select>
@@ -261,7 +265,7 @@ export function InvoicesPanel() {
         </div>
         <div className="desk-toolbar">
           <button className="btn btn-primary" type="submit" disabled={busy}>
-            {t("page.finance.hs_generate", "生成 hire 发票")}
+            {t("page.finance.hs_action", "Generate hire invoice")}
           </button>
         </div>
       </form>
@@ -274,7 +278,7 @@ export function InvoicesPanel() {
             disabled={!sel.size}
             onClick={() => exportRows(rows.filter((r) => sel.has(r.id)))}
           >
-            {t("page.finance.export_selected", "导出所选 CSV")} {sel.size ? `(${sel.size})` : ""}
+            {t("page.finance.export_selected", "Export selected CSV")} {sel.size ? `(${sel.size})` : ""}
           </button>
           <ExportButton entity="invoices" />
           <button
@@ -308,6 +312,7 @@ export function InvoicesPanel() {
         />
       </div>
       <ContextMenu controller={invCtx} items={invMenuItems} />
+      {todo.element}
     </>
   );
 }

@@ -40,6 +40,8 @@ export function AiAssistant() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
+  // 已配置模型但本轮回落到规则引擎 → 给一条友好说明
+  const [replyFallback, setReplyFallback] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMounted(true), []);
@@ -93,6 +95,7 @@ export function AiAssistant() {
         message: q,
         context: contextPayload(),
       })) as { response: string; source?: string };
+      if (res.source && res.source !== "llm" && status?.available !== false) setReplyFallback(true);
       setMsgs((m) => [...m, { role: "assistant", text: res.response || "—", source: res.source }]);
     } catch (ex: any) {
       const quota = ex?.status === 402 || ex?.code === "QUOTA_EXCEEDED";
@@ -118,6 +121,7 @@ export function AiAssistant() {
         task,
         context: contextPayload(),
       })) as { narrative: string; source?: string };
+      if (res.source && res.source !== "llm" && status?.available !== false) setReplyFallback(true);
       setMsgs((m) => [
         ...m,
         { role: "user", text: t(`ai.assist.${task}`, task.replace("_", " ")) },
@@ -167,6 +171,23 @@ export function AiAssistant() {
               : t("ai.assist.ctx_screen", "当前页面：{page}", { page: shortPage(ctx?.page) })}
           </div>
 
+          {status !== null && !status.available ? (
+            <div className="ai-dock-fallback-note" role="status">
+              {t(
+                "ai.assist.no_model_hint",
+                "尚未配置 AI 模型 — 回复由内置规则生成。可在 设置 → AI 中配置模型以启用完整智能问答。",
+              )}
+            </div>
+          ) : null}
+          {status?.available && replyFallback ? (
+            <div className="ai-dock-fallback-note" role="status">
+              {t(
+                "ai.assist.fallback_reply_hint",
+                "模型本轮未响应 — 该回复由内置规则生成。可在 设置 → AI 检查模型连接。",
+              )}
+            </div>
+          ) : null}
+
           <div className="ai-dock-list" ref={listRef}>
             {msgs.length === 0 ? (
               <p className="ai-dock-empty">
@@ -179,7 +200,18 @@ export function AiAssistant() {
               msgs.map((m, i) => (
                 <div key={i} className={`ai-msg ai-msg-${m.role}`}>
                   <div className="ai-msg-body">{m.text}</div>
-                  {m.source ? <div className="ai-msg-src">{m.source === "llm" ? "AI" : "rules"}</div> : null}
+                  {m.source ? (
+                    <div
+                      className="ai-msg-src"
+                      title={
+                        m.source === "llm"
+                          ? t("ai.assist.llm_hint", "由已配置的 AI 模型生成")
+                          : t("ai.assist.rules_hint", "内置规则应答（模型未配置或暂不可用）")
+                      }
+                    >
+                      {m.source === "llm" ? "AI" : t("ai.assist.rules_badge", "rules")}
+                    </div>
+                  ) : null}
                 </div>
               ))
             )}

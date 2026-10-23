@@ -87,7 +87,8 @@ export function TcListPanel() {
   // P11: ?dir=in|out 让导航两项（TC In / TC Out）直达分列视图
   const { query } = useListQuery();
   const dirParam = query.dir === "in" ? "tci" : query.dir === "out" ? "tco" : "";
-  const [typeFilter, setTypeFilter] = useState("");
+  // 首帧就按 dir 初始化（lastDir 若也初始化为 dirParam，同步块永远不会触发）
+  const [typeFilter, setTypeFilter] = useState(dirParam);
   const [statusFilter, setStatusFilter] = useState("");
 
   // URL dir 变化时同步本地筛选（用户手动改下拉后以本地为准，直到 dir 再变）
@@ -237,13 +238,13 @@ export function TcListPanel() {
       {
         key: "redelivery_date",
         title: t("page.tc.col.redelivery", "Redelivery"),
-        width: 105,
+        width: 125,
         value: (r) => r.redelivery_date || "",
       },
       {
         key: "redelivery_port",
         title: t("page.tc.col.redelivery_port", "Redel. port"),
-        width: 120,
+        width: 140,
         value: (r) => r.redelivery_port || "",
       },
       {
@@ -261,14 +262,14 @@ export function TcListPanel() {
       {
         key: "min_redel",
         title: t("page.tc.col.min_redelivery", "Min redel."),
-        width: 105,
+        width: 125,
         value: (r) => shiftDays(r.delivery_date, r.duration_min_days) || "",
         render: (v) => (v ? String(v) : "—"),
       },
       {
         key: "max_redel",
         title: t("page.tc.col.max_redelivery", "Max redel."),
-        width: 105,
+        width: 125,
         value: (r) => shiftDays(r.delivery_date, r.duration_max_days) || "",
         render: (v) => (v ? String(v) : "—"),
       },
@@ -286,7 +287,9 @@ export function TcListPanel() {
         title: t("common.status", "Status"),
         width: 90,
         value: (r) => r.status,
-        render: (v) => <span className={`badge tc-status-${String(v)}`}>{String(v)}</span>,
+        render: (v) => (
+          <span className={`badge tc-status-${String(v)}`}>{t(`status.${v}`, String(v).replace(/_/g, " "))}</span>
+        ),
       },
       {
         key: "updated_at",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -462,25 +463,7 @@ def seed_full_demo_flow(db: Session) -> None:
             ),
         ]
     )
-    for i, (sym, val) in enumerate([("BDI", 1680), ("BCI", 2450), ("VLSFO_SG", 545), ("HSFO_RTM", 480), ("EUA", 73.5)]):
-        qdate = today - timedelta(days=i)
-        exists = db.scalar(
-            select(MarketQuote).where(
-                MarketQuote.tenant_id == tenant.id,
-                MarketQuote.symbol == sym,
-                MarketQuote.quote_date == qdate,
-            )
-        )
-        if not exists:
-            db.add(
-                MarketQuote(
-                    tenant_id=tenant.id,
-                    symbol=sym,
-                    quote_date=qdate,
-                    value=Decimal(str(val)),
-                    source="seed",
-                )
-            )
+    _seed_market_history(db, tenant)
 
     # —— Ship management ——
     tech_defs = [
@@ -650,6 +633,63 @@ def seed_full_demo_flow(db: Session) -> None:
     _seed_demo_flow_extra(db, tenant)
 
 
+def _seed_market_history(db: Session, tenant) -> None:
+    """行情单点 + 60 天指数历史（行情页瓦片 + 走势图）。主流程与二次补种共用，幂等。
+
+    注意：测试夹具 session 是 autoflush=False，单点行情必须先 flush，
+    否则 60 天序列的幂等 SELECT 看不到 pending 行，BDI@today / BCI@yesterday
+    会重复插入 → UNIQUE(tenant,symbol,quote_date) 冲突。
+    """
+    from app.models_domain import MarketQuote
+
+    today = date.today()
+    for i, (sym, val) in enumerate([("BDI", 1680), ("BCI", 2450), ("VLSFO_SG", 545), ("HSFO_RTM", 480), ("EUA", 73.5)]):
+        qdate = today - timedelta(days=i)
+        exists = db.scalar(
+            select(MarketQuote).where(
+                MarketQuote.tenant_id == tenant.id,
+                MarketQuote.symbol == sym,
+                MarketQuote.quote_date == qdate,
+            )
+        )
+        if not exists:
+            db.add(
+                MarketQuote(
+                    tenant_id=tenant.id,
+                    symbol=sym,
+                    quote_date=qdate,
+                    value=Decimal(str(val)),
+                    source="seed",
+                )
+            )
+    db.flush()
+    # 30 天走势图需要历史序列 —— demo 库常只落单点。幂等补 ~60 天 BDI/BCI/BPI
+    # （行情页指数瓦片 + history 曲线读取的序列；锚点贴近近期真实区间，0 日=锚点值）。
+    for day_offset in range(60):
+        qdate = today - timedelta(days=day_offset)
+        for sym, base in (("BDI", 1680.0), ("BCI", 2450.0), ("BPI", 1520.0)):
+            exists = db.scalar(
+                select(MarketQuote).where(
+                    MarketQuote.tenant_id == tenant.id,
+                    MarketQuote.symbol == sym,
+                    MarketQuote.quote_date == qdate,
+                )
+            )
+            if exists:
+                continue
+            # 确定性正弦叠加（9 日短波 + 23 日长波，合计约 ±6%）—— 非随机，图表可复现
+            wave = math.sin(day_offset / 9.0) * 0.05 + math.sin(day_offset / 23.0) * 0.03
+            db.add(
+                MarketQuote(
+                    tenant_id=tenant.id,
+                    symbol=sym,
+                    quote_date=qdate,
+                    value=Decimal(str(round(base * (1.0 + wave), 2))),
+                    source="seed",
+                )
+            )
+
+
 def _seed_demo_flow_extra(db: Session, tenant) -> None:
     """二次补种：付款批次 / GL / 应计 / COA / 期租 / 费率表 / 排期块 / MariLink / 排放。
 
@@ -659,6 +699,9 @@ def _seed_demo_flow_extra(db: Session, tenant) -> None:
     的固定键（2026-09 期间、科目 1000/4000、租约列表精确断言）冲突。
     """
     import os
+
+    # 行情历史：老 demo 库（主流程当年尚未包含 60 天序列）每次启动幂等补齐
+    _seed_market_history(db, tenant)
 
     if os.environ.get("SEED_DEMO_EXTRA", "1") == "0":
         return

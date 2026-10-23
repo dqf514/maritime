@@ -314,8 +314,16 @@ function GlPage() {
   const accountCols = useMemo<ColumnDef<Account>[]>(
     () => [
       { key: "account_code", title: t("page.gl.code", "Code"), sticky: true },
-      { key: "account_name", title: t("common.name", "Name") },
-      { key: "account_type", title: t("common.type", "Type") },
+      {
+        key: "account_name",
+        title: t("common.name", "Name"),
+        render: (v, r) => t(`coa.${r.account_code}`, String(v ?? "")),
+      },
+      {
+        key: "account_type",
+        title: t("common.type", "Type"),
+        render: (v) => t(`coa.type.${v}`, String(v ?? "")),
+      },
       { key: "parent_code", title: t("page.gl.parent", "Parent"), render: (v) => (v ? String(v) : "—") },
       { key: "currency", title: t("common.currency", "Currency") },
       { key: "is_active", title: t("common.active", "Active"), render: (v) => (v ? "✓" : "—") },
@@ -336,7 +344,7 @@ function GlPage() {
       {
         key: "journal_type",
         title: t("common.type", "Type"),
-        editor: { type: "select", options: JOURNAL_TYPES.map((jt) => ({ value: jt, label: jt })) },
+        editor: { type: "select", options: JOURNAL_TYPES.map((jt) => ({ value: jt, label: t(`gl.journal_type.${jt}`, jt) })) },
       },
       { key: "description", title: t("common.description", "Description"), render: (v) => (v ? String(v) : "—"), editor: { type: "text" } },
       {
@@ -391,7 +399,11 @@ function GlPage() {
   const stmtCols = useMemo<ColumnDef<StmtRow>[]>(
     () => [
       { key: "account_code", title: t("page.gl.code", "Code"), sticky: true },
-      { key: "account_name", title: t("common.name", "Name") },
+      {
+        key: "account_name",
+        title: t("common.name", "Name"),
+        render: (v, r) => t(`coa.${r.account_code}`, String(v ?? "")),
+      },
       {
         key: "balance",
         title: t("page.gl.balance", "Balance"),
@@ -407,7 +419,11 @@ function GlPage() {
   const trialCols = useMemo<ColumnDef<StmtRow>[]>(
     () => [
       { key: "account_code", title: t("page.gl.code", "Code"), sticky: true },
-      { key: "account_name", title: t("common.name", "Name") },
+      {
+        key: "account_name",
+        title: t("common.name", "Name"),
+        render: (v, r) => t(`coa.${r.account_code}`, String(v ?? "")),
+      },
       {
         key: "debit",
         title: t("page.gl.debit", "Debit"),
@@ -716,7 +732,7 @@ function GlPage() {
             <select value={accForm.account_type} onChange={(e) => setAccForm({ ...accForm, account_type: e.target.value })}>
               {ACCOUNT_TYPES.map((at) => (
                 <option key={at} value={at}>
-                  {at}
+                  {t(`coa.type.${at}`, at)}
                 </option>
               ))}
             </select>
@@ -754,7 +770,7 @@ function GlPage() {
             <select value={jrForm.journal_type} onChange={(e) => setJrForm({ ...jrForm, journal_type: e.target.value })}>
               {JOURNAL_TYPES.map((jt) => (
                 <option key={jt} value={jt}>
-                  {jt}
+                  {t(`gl.journal_type.${jt}`, jt)}
                 </option>
               ))}
             </select>

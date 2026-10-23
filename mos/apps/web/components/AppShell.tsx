@@ -36,8 +36,8 @@ export type ShellBootstrap = {
   navigation: NavSection[];
   workspaces: { id: string; label: string }[];
   active_workspace: string;
-  home_widgets: { id: string; title: string; href: string; hint: string; icon?: string }[];
-  quick_actions: { label: string; href: string }[];
+  home_widgets: { id: string; title: string; title_zh?: string; href: string; hint: string; icon?: string }[];
+  quick_actions: { label: string; label_zh?: string; href: string }[];
   allowed_paths?: string[];
 };
 

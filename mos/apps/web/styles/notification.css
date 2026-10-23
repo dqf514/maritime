@@ -92,4 +92,5 @@
 .notify-item-title { font-size: 0.86rem; font-weight: 600; word-break: break-all; }
 .notify-item-text { font-size: 0.8rem; color: var(--muted); word-break: break-all; }
 .notify-item-time { font-size: 0.74rem; color: var(--muted); }
+.notify-go { color: var(--accent); font-weight: 700; }
 .notify-empty { margin: 0; padding: 1rem 0.65rem; font-size: 0.86rem; }

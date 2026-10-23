@@ -331,10 +331,11 @@ export default function TcWorkspacePage() {
     });
   }, []);
 
-  const reloadSummary = useCallback(async () => {
-    const s = await apiGet(`/api/v1/tc/contracts/${contractId}/hire-summary`);
+  const reloadSummary = useCallback(async (explicitId?: string) => {
+    const s = await apiGet(`/api/v1/tc/contracts/${explicitId ?? contract?.id ?? contractId}/hire-summary`);
     setSummary(s);
-  }, [contractId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractId, contract?.id]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -349,7 +350,7 @@ export default function TcWorkspacePage() {
       toDraft(c);
       setVessels(v || []);
       setParties(p || []);
-      await reloadSummary();
+      await reloadSummary(c.id);
     } catch (ex) {
       setErr(String(ex));
     } finally {
@@ -363,6 +364,8 @@ export default function TcWorkspacePage() {
   }, [load]);
 
   const charterId = contract?.charter_id ?? null;
+  // URL 可能是父租约 id（/charters/tc/{charter_id}）；子资源接口只认合同 id，统一用解析后的真实 id
+  const cid = contract?.id ?? contractId;
 
   const loadTab = useCallback(
     async (which: TabId) => {
@@ -370,22 +373,22 @@ export default function TcWorkspacePage() {
       setErr("");
       try {
         if (which === "billing") {
-          setBilling(await apiGet(`/api/v1/tc/contracts/${contractId}/billing-schedule`));
+          setBilling(await apiGet(`/api/v1/tc/contracts/${cid}/billing-schedule`));
         } else if (which === "profit_share") {
-          const rows: PsRow[] = await apiGet(`/api/v1/tc/contracts/${contractId}/profit-share`);
+          const rows: PsRow[] = await apiGet(`/api/v1/tc/contracts/${cid}/profit-share`);
           setPsRows(rows.map((r) => ({ ...r, isNew: false })));
         } else if (which === "broker") {
-          setBrokerRows(await apiGet(`/api/v1/tc/contracts/${contractId}/broker-rules`));
+          setBrokerRows(await apiGet(`/api/v1/tc/contracts/${cid}/broker-rules`));
         } else if (which === "lay_events") {
-          setLayRows(await apiGet(`/api/v1/tc/contracts/${contractId}/lay-events`));
+          setLayRows(await apiGet(`/api/v1/tc/contracts/${cid}/lay-events`));
         } else if (which === "pricing") {
-          setPricingRows(await apiGet(`/api/v1/tc/contracts/${contractId}/pricing-rows`));
+          setPricingRows(await apiGet(`/api/v1/tc/contracts/${cid}/pricing-rows`));
         } else if (which === "other_items") {
-          setOtherRows(await apiGet(`/api/v1/tc/contracts/${contractId}/other-items`));
+          setOtherRows(await apiGet(`/api/v1/tc/contracts/${cid}/other-items`));
         } else if (which === "hire") {
           const [st, voyages] = await Promise.all([
-            apiGet(`/api/v1/tc-contracts/${contractId}/statements`).catch(() => []),
-            apiGet(`/api/v1/tc/contracts/${contractId}/hire-summary`),
+            apiGet(`/api/v1/tc-contracts/${cid}/statements`).catch(() => []),
+            apiGet(`/api/v1/tc/contracts/${cid}/hire-summary`),
           ]);
           setStatements(Array.isArray(st) ? st : []);
           const vids: { id: string; voyage_no: string | null }[] = voyages?.voyages || [];
@@ -411,7 +414,7 @@ export default function TcWorkspacePage() {
             setSurveys(Array.isArray(res) ? res : res?.items || []);
           }
         } else if (which === "children") {
-          setChildren(await apiGet(`/api/v1/tc/contracts/${contractId}/children`));
+          setChildren(await apiGet(`/api/v1/tc/contracts/${cid}/children`));
         }
       } catch (ex) {
         setErr(String(ex));
@@ -419,7 +422,7 @@ export default function TcWorkspacePage() {
         setTabBusy(false);
       }
     },
-    [contractId, charterId],
+    [cid, charterId],
   );
 
   useEffect(() => {
@@ -462,7 +465,7 @@ export default function TcWorkspacePage() {
       if (draft.el_redel_max) payload.el_redel_max = draft.el_redel_max;
       payload.use_local_time = draft.use_local_time === "1";
       payload.intercompany = draft.intercompany === "1";
-      const updated = await apiPatch(`/api/v1/tc/contracts/${contractId}`, payload);
+      const updated = await apiPatch(`/api/v1/tc/contracts/${cid}`, payload);
       setContract(updated);
       toast.success(t("common.saved", "Saved"));
       await reloadSummary();
@@ -476,7 +479,7 @@ export default function TcWorkspacePage() {
   async function removeContract() {
     setSaving(true);
     try {
-      await apiDelete(`/api/v1/tc/contracts/${contractId}`);
+      await apiDelete(`/api/v1/tc/contracts/${cid}`);
       toast.success(t("page.tc.deleted", "TC contract deleted"));
       router.push("/charters?type=tc");
     } catch (ex: any) {
@@ -487,7 +490,7 @@ export default function TcWorkspacePage() {
 
   async function transitionTo(target: string) {
     try {
-      const updated = await apiPost(`/api/v1/tc/contracts/${contractId}/transition?target=${target}`);
+      const updated = await apiPost(`/api/v1/tc/contracts/${cid}/transition?target=${target}`);
       setContract(updated);
       toast.success(t("page.tc.transitioned", "Status → {s}", { s: updated.status }));
       await reloadSummary();
@@ -499,7 +502,7 @@ export default function TcWorkspacePage() {
   async function generateBilling() {
     setTabBusy(true);
     try {
-      await apiPost(`/api/v1/tc/contracts/${contractId}/billing-schedule/generate`, {});
+      await apiPost(`/api/v1/tc/contracts/${cid}/billing-schedule/generate`, {});
       toast.success(t("page.tc.billing.generated", "Billing schedule generated"));
       await loadTab("billing");
       await reloadSummary();
@@ -512,7 +515,7 @@ export default function TcWorkspacePage() {
   async function generateStatements() {
     setTabBusy(true);
     try {
-      await apiPost(`/api/v1/tc-contracts/${contractId}/generate-statements`, {});
+      await apiPost(`/api/v1/tc-contracts/${cid}/generate-statements`, {});
       toast.success(t("page.tc.statements.generated", "Hire statements generated"));
       await loadTab("hire");
       await reloadSummary();
@@ -533,7 +536,7 @@ export default function TcWorkspacePage() {
           basis: r.basis || "tce",
         };
         if (r.tier_to != null) body.tier_to = Number(r.tier_to);
-        await apiPost(`/api/v1/tc/contracts/${contractId}/profit-share`, body);
+        await apiPost(`/api/v1/tc/contracts/${cid}/profit-share`, body);
       }
       toast.success(t("common.saved", "Saved"));
       await loadTab("profit_share");
@@ -546,7 +549,7 @@ export default function TcWorkspacePage() {
 
   async function addBrokerRule() {
     try {
-      await apiPost(`/api/v1/tc/contracts/${contractId}/broker-rules`, {
+      await apiPost(`/api/v1/tc/contracts/${cid}/broker-rules`, {
         broker_party_id: brokerForm.broker_party_id,
         commission_type: brokerForm.commission_type,
         commission_pct: Number(brokerForm.commission_pct),
@@ -565,7 +568,7 @@ export default function TcWorkspacePage() {
 
   async function delBrokerRule(id: string) {
     try {
-      await apiDelete(`/api/v1/tc/contracts/${contractId}/broker-rules/${id}`);
+      await apiDelete(`/api/v1/tc/contracts/${cid}/broker-rules/${id}`);
       await loadTab("broker");
     } catch (ex) {
       toast.error(String(ex));
@@ -575,7 +578,7 @@ export default function TcWorkspacePage() {
   // ── P11: lay events (Delivery/Redelivery) ──
   async function addLayEvent() {
     try {
-      await apiPost(`/api/v1/tc/contracts/${contractId}/lay-events`, {
+      await apiPost(`/api/v1/tc/contracts/${cid}/lay-events`, {
         kind: layForm.kind,
         port: layForm.port || null,
         est_gmt: layForm.est_gmt || null,
@@ -592,7 +595,7 @@ export default function TcWorkspacePage() {
 
   async function delLayEvent(id: string) {
     try {
-      await apiDelete(`/api/v1/tc/contracts/${contractId}/lay-events/${id}`);
+      await apiDelete(`/api/v1/tc/contracts/${cid}/lay-events/${id}`);
       await loadTab("lay_events");
     } catch (ex) {
       toast.error(String(ex));
@@ -602,7 +605,7 @@ export default function TcWorkspacePage() {
   // ── P11: pricing ladder ──
   async function addPricingRow() {
     try {
-      await apiPost(`/api/v1/tc/contracts/${contractId}/pricing-rows`, {
+      await apiPost(`/api/v1/tc/contracts/${cid}/pricing-rows`, {
         hire_rate: Number(pricingForm.hire_rate),
         rate_type: pricingForm.rate_type,
         from_gmt: pricingForm.from_gmt || null,
@@ -621,7 +624,7 @@ export default function TcWorkspacePage() {
 
   async function delPricingRow(id: string) {
     try {
-      await apiDelete(`/api/v1/tc/contracts/${contractId}/pricing-rows/${id}`);
+      await apiDelete(`/api/v1/tc/contracts/${cid}/pricing-rows/${id}`);
       await loadTab("pricing");
     } catch (ex) {
       toast.error(String(ex));
@@ -631,7 +634,7 @@ export default function TcWorkspacePage() {
   // ── P11: other items (BALLA/CABLE/VICTU/…) ──
   async function addOtherItem() {
     try {
-      await apiPost(`/api/v1/tc/contracts/${contractId}/other-items`, {
+      await apiPost(`/api/v1/tc/contracts/${cid}/other-items`, {
         code: otherForm.code,
         description: otherForm.description || null,
         rate_type: otherForm.rate_type,
@@ -648,7 +651,7 @@ export default function TcWorkspacePage() {
 
   async function delOtherItem(id: string) {
     try {
-      await apiDelete(`/api/v1/tc/contracts/${contractId}/other-items/${id}`);
+      await apiDelete(`/api/v1/tc/contracts/${cid}/other-items/${id}`);
       await loadTab("other_items");
     } catch (ex) {
       toast.error(String(ex));
@@ -680,7 +683,7 @@ export default function TcWorkspacePage() {
       };
       if (childForm.delivery_date) body.delivery_date = childForm.delivery_date;
       if (childForm.redelivery_date) body.redelivery_date = childForm.redelivery_date;
-      await apiPost(`/api/v1/tc/contracts/${contractId}/children`, body);
+      await apiPost(`/api/v1/tc/contracts/${cid}/children`, body);
       setChildForm((f) => ({ ...f, hire_rate: "", delivery_date: "", redelivery_date: "" }));
       toast.success(t("page.tc.child.created", "Child TC created"));
       await loadTab("children");
@@ -1147,7 +1150,7 @@ export default function TcWorkspacePage() {
           <DetailHeader
             breadcrumb={[
               { label: t("page.tc.title", "Time charter"), href: "/charters?type=tc" },
-              { label: contract.id ? `#${contract.id}` : `#${contractId}` },
+              { label: contract.id ? `#${contract.id}` : `#${cid}` },
             ]}
             title={typeLabel}
             status={contract.status}

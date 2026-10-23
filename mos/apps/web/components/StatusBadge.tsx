@@ -4,6 +4,7 @@
 // 状态字符串 → 语义色：绿=正常完成 / 黄=进行中待办 / 红=异常阻断 / 蓝=预测未实现 / 灰=终止归档。
 
 import { ReactNode } from "react";
+import { useI18n } from "@/lib/i18n";
 
 /** 语义色调 */
 export type StatusTone = "ok" | "warn" | "danger" | "info" | "muted";
@@ -86,11 +87,13 @@ type Props = {
 };
 
 export function StatusBadge({ status, tone, label, dot, title, className }: Props) {
-  const t = tone || deriveTone(status);
-  const text = label ?? status.replace(/_/g, " ");
+  const { t } = useI18n();
+  const toneClass = tone || deriveTone(status);
+  // 状态码统一走 status.* 词表（seed_i18n_extra.py），zh 界面显示中文
+  const text = label ?? t(`status.${status}`, status.replace(/_/g, " "));
   return (
     <span
-      className={`status-badge status-badge--${t}${dot ? " status-badge--dot" : ""}${className ? ` ${className}` : ""}`}
+      className={`status-badge status-badge--${toneClass}${dot ? " status-badge--dot" : ""}${className ? ` ${className}` : ""}`}
       title={title ?? status}
       data-status={status}
     >

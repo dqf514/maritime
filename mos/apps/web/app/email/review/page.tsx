@@ -402,14 +402,21 @@ export default function EmailReviewPage() {
       render: (_v, r) => {
         const { etype, pairs } = parseFields(r);
         return (
-          <span className="chips">
-            {etype ? <span className="badge badge-info">{etype}</span> : null}
-            {pairs.map(([k, val]) => (
-              <span className="badge" key={k}>
-                {k}: {String(val)}
-              </span>
-            ))}
-            {!pairs.length ? <code>{JSON.stringify(r.parse_result).slice(0, 120)}</code> : null}
+          <span className="parse-fields">
+            {etype ? <span className="badge badge-info">{t(`email.type.${etype}`, etype)}</span> : null}
+            {pairs.length ? (
+              // 两列 dl：标签走 email.parse.* 词表，未知键回落原键；值原样展示
+              <dl className="parse-kv">
+                {pairs.map(([k, val]) => (
+                  <div key={k}>
+                    <dt>{t(`email.parse.${k}`, k)}</dt>
+                    <dd>{String(val)}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <code>{JSON.stringify(r.parse_result).slice(0, 120)}</code>
+            )}
           </span>
         );
       },
@@ -549,6 +556,14 @@ export default function EmailReviewPage() {
               </span>
             </div>
             <p>{rec.reason}</p>
+            {rec.source && rec.source !== "llm" ? (
+              <p className="ai-rec-note">
+                {t(
+                  "page.email.rec_rules_hint",
+                  "AI 模型未配置或暂不可用 — 本推荐由内置规则生成。",
+                )}
+              </p>
+            ) : null}
             <p className="muted">
               {t("page.email.rec_type", "识别类型")}：{rec.email_type || "—"}
               {rec.reply_template ? ` · ${t("page.email.rec_tpl", "回复模板")}：${rec.reply_template}` : ""}

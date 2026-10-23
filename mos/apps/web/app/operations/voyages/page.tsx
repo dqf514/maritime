@@ -2,7 +2,9 @@
 
 import { FormEvent, MouseEvent as ReactMouseEvent, Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DateTimeInput } from "@/components/DateInput";
 import { DeskSection } from "@/components/DeskSection";
 import { ExportButton } from "@/components/ExportButton";
@@ -10,10 +12,12 @@ import { PageGuide } from "@/components/PageGuide";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { useListHotkeys } from "@/components/useListHotkeys";
+import { useTodoAdd } from "@/components/TodoQuickAdd";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -159,6 +163,24 @@ function VoyagesPageInner() {
   const [creating, setCreating] = useState(false);
 
   useListHotkeys(() => setCreating(true));
+
+  // 行右键菜单：打开 / 工作台 / 添加到个人待办 / 复制 id
+  const router = useRouter();
+  const rowCtx = useContextMenu<Voyage>();
+  const todo = useTodoAdd();
+  function voyageMenuItems(row: Voyage): ContextMenuItem[] {
+    return [
+      { key: "open", label: t("common.open", "Open"), onClick: () => selectVoyage(row.id) },
+      {
+        key: "workspace",
+        label: t("page.voyages.open_ws", "Open workspace"),
+        onClick: () => router.push(`/operations/voyages/${row.id}/workspace`),
+      },
+      { key: "divider", divider: true },
+      todo.menuItem({ entityType: "voyage", entityId: row.id, title: row.voyage_no }),
+      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(row.id) },
+    ];
+  }
 
   const [pcPurpose, setPcPurpose] = useState("load");
   const [pcSeq, setPcSeq] = useState("1");
@@ -798,9 +820,13 @@ function VoyagesPageInner() {
       title: t("page.voyages.purpose", "Purpose"),
       width: 90,
       value: (r) => r.purpose,
+      render: (v) => t(`page.voyages.purpose_${v}`, String(v ?? "")),
       editor: {
         type: "select",
-        options: ["load", "discharge", "bunker", "transit"].map((p) => ({ value: p, label: p })),
+        options: ["load", "discharge", "bunker", "transit"].map((p) => ({
+          value: p,
+          label: t(`page.voyages.purpose_${p}`, p),
+        })),
       },
     },
     {
@@ -1049,7 +1075,13 @@ function VoyagesPageInner() {
 
   const scheduleColumns: ColumnDef<Schedule>[] = [
     { key: "title", title: t("common.title", "Title"), minWidth: 150, value: (r) => r.title },
-    { key: "block_type", title: t("page.voyages.block_type", "Type"), width: 100, value: (r) => r.block_type },
+    {
+      key: "block_type",
+      title: t("page.voyages.block_type", "Type"),
+      width: 100,
+      value: (r) => r.block_type,
+      render: (v) => t(`page.voyages.block_${v}`, String(v ?? "")),
+    },
     {
       key: "start_at",
       title: t("page.voyages.start_at", "Start"),
@@ -1172,6 +1204,7 @@ function VoyagesPageInner() {
             showFooter={false}
             emptyText={t("common.empty", "No records")}
             onRowClick={(r) => selectVoyage(r.id)}
+            onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
           />
         </div>
 
@@ -1189,7 +1222,7 @@ function VoyagesPageInner() {
               <div className="page-header" style={{ marginBottom: "0.5rem" }}>
                 <div>
                   <h3 style={{ margin: 0 }}>
-                    {selected.voyage_no} · {selected.status}
+                    {selected.voyage_no} <StatusBadge status={selected.status} />
                   </h3>
                   <label style={{ display: "block", marginTop: "0.5rem" }}>
                     {t("page.voyages.cargo", "Cargo")}
@@ -1238,10 +1271,10 @@ function VoyagesPageInner() {
                   <label>
                     {t("page.voyages.purpose", "Purpose")}
                     <select value={pcPurpose} onChange={(e) => setPcPurpose(e.target.value)}>
-                      <option value="load">load</option>
-                      <option value="discharge">discharge</option>
-                      <option value="bunker">bunker</option>
-                      <option value="transit">transit</option>
+                      <option value="load">{t("page.voyages.purpose_load", "Load")}</option>
+                      <option value="discharge">{t("page.voyages.purpose_discharge", "Discharge")}</option>
+                      <option value="bunker">{t("page.voyages.purpose_bunker", "Bunker")}</option>
+                      <option value="transit">{t("page.voyages.purpose_transit", "Transit")}</option>
                     </select>
                   </label>
                   <label>
@@ -1293,7 +1326,7 @@ function VoyagesPageInner() {
                       <option value="">{t("common.select", "Select…")}</option>
                       {portCalls.map((pc) => (
                         <option key={pc.id} value={pc.id}>
-                          #{pc.seq} {pc.purpose} · {portLabel(pc.port_id)}
+                          #{pc.seq} {t(`page.voyages.purpose_${pc.purpose}`, pc.purpose)} · {portLabel(pc.port_id)}
                         </option>
                       ))}
                     </select>
@@ -1577,6 +1610,9 @@ function VoyagesPageInner() {
           {t("page.voyages.batch_reassign_hint", "{n} voyages will be reassigned.", { n: picked.size })}
         </p>
       </RecordModal>
+
+      <ContextMenu controller={rowCtx} items={voyageMenuItems} />
+      {todo.element}
     </AppShell>
   );
 }

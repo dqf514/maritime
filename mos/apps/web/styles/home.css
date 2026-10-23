@@ -477,6 +477,9 @@
 .wb-alert-info{color:#1d4ed8}
 .wb-alert-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wb-alert-detail{font-size:9px;color:var(--muted)}
+.wb-activity-action{color:var(--accent);font-weight:600}
+.wb-activity-time{font-size:9px;color:var(--muted);flex-shrink:0}
+.record-attribution{font-size:11px;white-space:nowrap}
 .wb-alert-badges{display:flex;gap:2px}
 .wb-sched-list{max-height:160px;overflow-y:auto}
 .wb-sched-row{display:flex;align-items:center;gap:var(--gap-sm);padding:var(--gap-xs) var(--gap-sm);border-bottom:1px solid var(--border-light);text-decoration:none;color:var(--ink);font-size:var(--font-ui)}

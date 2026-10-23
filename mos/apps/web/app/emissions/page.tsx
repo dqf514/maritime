@@ -18,7 +18,9 @@ import { useToast } from "@/components/ToastProvider";
 type Row = {
   id: string;
   voyage_id: string | null;
+  voyage_no?: string | null;
   vessel_id: string | null;
+  vessel_name?: string | null;
   fo_mt: number;
   do_mt: number;
   co2_mt: number;
@@ -148,37 +150,52 @@ export default function EmissionsPage() {
   const columns: ColumnDef<Row>[] = [
     {
       key: "id",
-      title: "ID",
+      title: t("common.id", "ID"),
       width: 110,
       value: (r) => r.id.slice(0, 8),
-      render: (v) => String(v),
+      render: (v, r) => <span title={r.id}>{String(v ?? "")}</span>,
     },
     {
       key: "voyage_id",
       title: t("page.voyages.list", "Voyages"),
       width: 130,
-      value: (r) => r.voyage_id || "",
+      value: (r) => r.voyage_no || r.voyage_id || "",
       editor: {
         type: "select",
         options: [{ value: "", label: "—" }, ...voyages.map((v) => ({ value: v.id, label: v.voyage_no || v.id.slice(0, 8) }))],
       },
       render: (_v, r) => {
-        const v = voyages.find((x) => x.id === r.voyage_id);
-        return v ? v.voyage_no || v.id.slice(0, 8) : r.voyage_id ? r.voyage_id.slice(0, 8) : "—";
+        // 优先序列化器附加的 voyage_no，再回落本地表，最后短 ID
+        const local = voyages.find((x) => x.id === r.voyage_id);
+        const label = r.voyage_no || local?.voyage_no;
+        return label ? (
+          <span title={r.voyage_id || undefined}>{label}</span>
+        ) : r.voyage_id ? (
+          <span title={r.voyage_id}>{r.voyage_id.slice(0, 8)}</span>
+        ) : (
+          "—"
+        );
       },
     },
     {
       key: "vessel_id",
       title: t("page.estimates.vessel", "Vessel"),
       width: 130,
-      value: (r) => r.vessel_id || "",
+      value: (r) => r.vessel_name || r.vessel_id || "",
       editor: {
         type: "select",
         options: [{ value: "", label: "—" }, ...vessels.map((v) => ({ value: v.id, label: v.name || v.id.slice(0, 8) }))],
       },
       render: (_v, r) => {
-        const v = vessels.find((x) => x.id === r.vessel_id);
-        return v ? v.name || v.id.slice(0, 8) : r.vessel_id ? r.vessel_id.slice(0, 8) : "—";
+        const local = vessels.find((x) => x.id === r.vessel_id);
+        const label = r.vessel_name || local?.name;
+        return label ? (
+          <span title={r.vessel_id || undefined}>{label}</span>
+        ) : r.vessel_id ? (
+          <span title={r.vessel_id}>{r.vessel_id.slice(0, 8)}</span>
+        ) : (
+          "—"
+        );
       },
     },
     {

@@ -202,6 +202,26 @@ class FeaturePermission(Base):
     allowed: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class RoleDataScope(Base):
+    """Row-level data-ownership scope per role & module (tenant scoped).
+
+    scope: "own" (only rows the user created) | "all" (whole tenant). Absence of a
+    row means "all" — additive & non-breaking, so existing tenants keep full
+    visibility until an admin tightens a role. Effective scope across a user's
+    roles is the *most permissive* (all wins), so a supervisor who also holds a
+    narrower role still sees everything — matching「主管权限更大一点」.
+    """
+
+    __tablename__ = "role_data_scopes"
+    __table_args__ = (UniqueConstraint("tenant_id", "role_code", "module"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    role_code: Mapped[str] = mapped_column(Text, nullable=False)
+    module: Mapped[str] = mapped_column(Text, nullable=False)  # operations | finance | chartering | ...
+    scope: Mapped[str] = mapped_column(Text, default="all")  # own | all
+
+
 class UserOrgMembership(Base):
     __tablename__ = "user_org_memberships"
     __table_args__ = (UniqueConstraint("user_id", "org_unit_id"),)

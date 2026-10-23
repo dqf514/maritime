@@ -98,6 +98,8 @@ function TenantI18nPage() {
         title: t("common.category", "Category"),
         width: 140,
         value: (r) => r.category,
+        render: (v) =>
+          v ? t(`page.i18n.cat_${String(v).toLowerCase()}`, String(v)) : "",
       },
       {
         key: "actions",
@@ -147,7 +149,11 @@ function TenantI18nPage() {
             >
               {(settings.allowed_locales || ["en", "zh-CN"]).map((c: string) => (
                 <option key={c} value={c}>
-                  {c}
+                  {c === "en"
+                    ? `${c} — ${t("i18n.locale_en", "English")}`
+                    : c === "zh-CN"
+                      ? `${c} — ${t("i18n.locale_zh", "Simplified Chinese")}`
+                      : c}
                 </option>
               ))}
             </select>

@@ -135,7 +135,7 @@ export default function SchedulePage() {
       )}`;
       const [b, v, c, bw, pos, fns] = await Promise.all([
         fetchRows<ScheduleBlockRow>(`/api/v1/scheduling/blocks?${qs}&limit=500`),
-        fetchRows<VesselRow>("/api/v1/vessels"),
+        fetchRows<VesselRow>("/api/v1/masterdata/vessels"),
         fetchRows<CargoRow>("/api/v1/scheduling/cargo-book"),
         fetchRows<BerthRow>("/api/v1/scheduling/berth-windows"),
         fetchRows<OpenPositionRow>(`/api/v1/scheduling/open-positions?${qs}`),

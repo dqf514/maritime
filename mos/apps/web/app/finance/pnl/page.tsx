@@ -185,7 +185,8 @@ export default function PnlOverviewPage() {
         width: 100,
         sortable: true,
         value: (r) => r.status,
-        render: (v, r) => (isFleet(r) ? "" : String(v ?? "")),
+        // 不写 render：让 DataGrid status.* 自动翻译（走查：raw planned/completed）
+        render: (v, r) => (isFleet(r) ? "" : v ? t(`status.${v}`, String(v).replace(/_/g, " ")) : ""),
       },
       {
         key: "totals.estimate.revenue",

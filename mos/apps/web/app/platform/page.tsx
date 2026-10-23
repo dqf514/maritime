@@ -31,7 +31,11 @@ export default function PlatformHomePage() {
           icon="plat_tenants"
           title={t("page.platform.tenants", "租户与许可证")}
           description={t("page.platform.tenants_d", "开通/暂停、编辑档位，按模块开关许可证")}
-          meta={<div className="metric">{health?.tenant_count ?? "—"}</div>}
+          meta={
+            <div className="metric">
+              {t("page.platform.tenant_count", "租户数")} {health?.tenant_count ?? "—"}
+            </div>
+          }
         />
         <HubTile
           href="/platform/branding"

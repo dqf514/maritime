@@ -9,6 +9,8 @@ export type PanelTab = {
   id: string;
   label: ReactNode;
   content: ReactNode;
+  /** 数字上标（如未读数）；渲染在 label 右侧 */
+  badge?: ReactNode;
 };
 
 export type PanelTabsProps = {
@@ -41,6 +43,7 @@ export function PanelTabs({ tabs, activeId, onChange }: PanelTabsProps) {
             onClick={() => select(tab.id)}
           >
             {tab.label}
+            {tab.badge}
           </button>
         ))}
       </div>

@@ -147,25 +147,23 @@ function MarketDataPageInner() {
           </button>
         ) : null}
       </Toolbar>
-      <div className="space-y-6">
-
+      <div className="market-page">
         {/* Freight Indices */}
         {indexQuotes.length > 0 && (
-          <div className="rounded-lg border bg-white p-4">
-            <h3 className="mb-3 font-semibold">{t("market.indices", "Freight Indices")}</h3>
-            <div className="grid grid-cols-5 gap-3">
+          <div className="panel">
+            <div className="panel-header">{t("market.indices", "Freight Indices")}</div>
+            <div className="panel-body market-tiles">
               {indexQuotes.map((q) => (
                 <button
                   key={q.symbol}
+                  type="button"
                   onClick={() => setSelectedSymbol(q.symbol)}
                   onContextMenu={quoteCtx.open(q)}
-                  className={`rounded-lg border p-3 text-center transition ${
-                    selectedSymbol === q.symbol ? "border-blue-500 bg-blue-50" : "hover:bg-gray-50"
-                  }`}
+                  className={`market-tile${selectedSymbol === q.symbol ? " active" : ""}`}
                 >
-                  <div className="text-xs text-gray-500">{q.label}</div>
-                  <div className="text-xl font-bold"><Num v={q.value} digits={2} /></div>
-                  <div className="text-[10px] text-gray-400">{q.date}</div>
+                  <span className="market-tile-label">{q.label}</span>
+                  <span className="market-tile-value"><Num v={q.value} digits={2} /></span>
+                  <span className="market-tile-date">{q.date}</span>
                 </button>
               ))}
             </div>
@@ -174,22 +172,20 @@ function MarketDataPageInner() {
 
         {/* Bunker prices */}
         {bunkerComp.length > 0 && (
-          <div className="rounded-lg border bg-white p-4">
-            <h3 className="mb-3 font-semibold">{t("market.bunker", "Bunker Prices (USD/MT)")}</h3>
-            <div className="space-y-2">
+          <div className="panel">
+            <div className="panel-header">{t("market.bunker", "Bunker Prices (USD/MT)")}</div>
+            <div className="panel-body market-bars">
               {bunkerComp.map((b) => (
-                <div key={b.symbol} className="flex items-center gap-3" onContextMenu={bunkerCtx.open(b)}>
-                  <div className="w-24 text-sm font-medium">{b.port}</div>
-                  <div className="text-xs text-gray-500 w-12">{b.fuel_type}</div>
-                  <div className="flex-1">
-                    <div className="h-6 rounded bg-gray-100 overflow-hidden">
-                      <div
-                        className={`h-full rounded ${b.fuel_type === "VLSFO" ? "bg-blue-500" : "bg-green-500"}`}
-                        style={{ width: `${(b.price_usd / maxBunker) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                  <div className="w-20 text-right text-sm font-semibold"><Num v={b.price_usd} digits={0} /></div>
+                <div key={b.symbol} className="market-bar-row" onContextMenu={bunkerCtx.open(b)}>
+                  <span className="market-bar-port">{b.port}</span>
+                  <span className="market-bar-fuel">{b.fuel_type}</span>
+                  <span className="market-bar-track">
+                    <span
+                      className={`market-bar-fill${b.fuel_type === "VLSFO" ? " vlsfo" : " other"}`}
+                      style={{ width: `${(b.price_usd / maxBunker) * 100}%` }}
+                    />
+                  </span>
+                  <span className="market-bar-val"><Num v={b.price_usd} digits={0} /></span>
                 </div>
               ))}
             </div>
@@ -198,21 +194,20 @@ function MarketDataPageInner() {
 
         {/* TCE rates */}
         {tceQuotes.length > 0 && (
-          <div className="rounded-lg border bg-white p-4">
-            <h3 className="mb-3 font-semibold">{t("market.tce", "TCE Rates (USD/day)")}</h3>
-            <div className="grid grid-cols-3 gap-3">
+          <div className="panel">
+            <div className="panel-header">{t("market.tce", "TCE Rates (USD/day)")}</div>
+            <div className="panel-body market-tiles market-tiles-3">
               {tceQuotes.map((q) => (
                 <button
                   key={q.symbol}
+                  type="button"
                   onClick={() => setSelectedSymbol(q.symbol)}
                   onContextMenu={quoteCtx.open(q)}
-                  className={`rounded-lg border p-3 text-center transition ${
-                    selectedSymbol === q.symbol ? "border-blue-500 bg-blue-50" : "hover:bg-gray-50"
-                  }`}
+                  className={`market-tile${selectedSymbol === q.symbol ? " active" : ""}`}
                 >
-                  <div className="text-xs text-gray-500">{q.label}</div>
-                  <div className="text-xl font-bold">$<Num v={q.value} digits={0} /></div>
-                  <div className="text-[10px] text-gray-400">{q.date}</div>
+                  <span className="market-tile-label">{q.label}</span>
+                  <span className="market-tile-value">$<Num v={q.value} digits={0} /></span>
+                  <span className="market-tile-date">{q.date}</span>
                 </button>
               ))}
             </div>
@@ -221,34 +216,36 @@ function MarketDataPageInner() {
 
         {/* History chart (simple sparkline) */}
         {history.length > 0 && (
-          <div className="rounded-lg border bg-white p-4">
-            <h3 className="mb-3 font-semibold">
+          <div className="panel">
+            <div className="panel-header">
               {t("market.history", "30-day trend")} — {selectedSymbol}
-            </h3>
-            <div className="flex h-40 items-end gap-1">
-              {history.map((h, i) => {
-                const max = Math.max(...history.map((p) => p.value));
-                const min = Math.min(...history.map((p) => p.value));
-                const range = max - min || 1;
-                const pct = ((h.value - min) / range) * 100;
-                return (
-                  <div
-                    key={i}
-                    className="flex-1 rounded-t bg-blue-400 hover:bg-blue-600 transition"
-                    style={{ height: `${Math.max(pct, 5)}%` }}
-                    title={`${h.date}: ${h.value.toLocaleString()}`}
-                  />
-                );
-              })}
             </div>
-            <div className="mt-2 flex justify-between text-[10px] text-gray-400">
-              <span>{history[0]?.date}</span>
-              <span>
-                {t("market.range", "Range")} <Num v={Math.min(...history.map((p) => p.value))} digits={2} /> –{" "}
-                <Num v={Math.max(...history.map((p) => p.value))} digits={2} /> · {t("market.last", "Last")}{" "}
-                <Num v={history[history.length - 1]?.value ?? null} digits={2} />
-              </span>
-              <span>{history[history.length - 1]?.date}</span>
+            <div className="panel-body">
+              <div className="market-spark">
+                {history.map((h, i) => {
+                  const max = Math.max(...history.map((p) => p.value));
+                  const min = Math.min(...history.map((p) => p.value));
+                  const range = max - min || 1;
+                  const pct = ((h.value - min) / range) * 100;
+                  return (
+                    <div
+                      key={i}
+                      className="market-spark-bar"
+                      style={{ height: `${Math.max(pct, 5)}%` }}
+                      title={`${h.date}: ${h.value.toLocaleString()}`}
+                    />
+                  );
+                })}
+              </div>
+              <div className="market-spark-foot">
+                <span>{history[0]?.date}</span>
+                <span>
+                  {t("market.range", "Range")} <Num v={Math.min(...history.map((p) => p.value))} digits={2} /> –{" "}
+                  <Num v={Math.max(...history.map((p) => p.value))} digits={2} /> · {t("market.last", "Last")}{" "}
+                  <Num v={history[history.length - 1]?.value ?? null} digits={2} />
+                </span>
+                <span>{history[history.length - 1]?.date}</span>
+              </div>
             </div>
           </div>
         )}

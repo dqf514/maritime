@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Toolbar } from "@/components/Toolbar";
@@ -17,8 +17,9 @@ export default function SelfCheckPage() {
   const [score, setScore] = useState<number | null>(null);
   const [results, setResults] = useState<Result[]>([]);
   const [error, setError] = useState("");
+  const [ran, setRan] = useState(false);
 
-  async function run() {
+  const run = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
@@ -29,8 +30,15 @@ export default function SelfCheckPage() {
       setError(t("page.selfcheck.error", "Failed to run SelfCheck. Is the API up?"));
     } finally {
       setLoading(false);
+      setRan(true);
     }
-  }
+  }, [t]);
+
+  // 进页自动执行一次，避免空白页（走查问题：页面只有标题+按钮）
+  useEffect(() => {
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const columns: ColumnDef<Result>[] = [
     { key: "check_id", title: t("page.selfcheck.check", "Check"), minWidth: 180, value: (r) => r.check_id },
@@ -52,6 +60,10 @@ export default function SelfCheckPage() {
     },
   ];
 
+  const passCount = results.filter((r) => r.status === "pass").length;
+  const warnCount = results.filter((r) => r.status === "warn").length;
+  const failCount = results.filter((r) => r.status === "fail").length;
+
   return (
     <AppShell>
       <PageHeader
@@ -60,27 +72,50 @@ export default function SelfCheckPage() {
           { label: t("page.selfcheck.title", "SelfCheck") },
         ]}
         title={t("page.selfcheck.title", "SelfCheck")}
-        subtitle={t("page.selfcheck.sub", "Install & runtime diagnostics.")}
+        subtitle={t("page.selfcheck.hint", "Runs install & runtime gold checks against the live API.")}
       />
       <Toolbar>
         <button className="btn btn-primary" type="button" onClick={run} disabled={loading}>
           {loading ? t("page.selfcheck.running", "Running…") : t("page.selfcheck.run", "Run SelfCheck")}
         </button>
       </Toolbar>
-      {error ? <p style={{ color: "var(--danger)" }}>{error}</p> : null}
-      {score !== null ? (
+      {error ? <p className="text-danger">{error}</p> : null}
+      {!ran && !error ? <p className="muted">{t("common.loading", "加载中…")}</p> : null}
+      {ran && score === null && !error ? (
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>
-            {t("common.score", "Score")}: {score}
-          </h3>
-          <DataGrid<Result>
-            columns={columns}
-            data={results}
-            rowKey={(r) => r.check_id}
-            storageKey="settings_selfcheck_grid"
-            emptyText={t("common.no_data", "No data")}
-          />
+          <p className="muted">{t("page.selfcheck.empty", "No results yet — run SelfCheck to see checks.")}</p>
         </div>
+      ) : null}
+      {score !== null ? (
+        <>
+          <div className="wb-kpi-strip">
+            <div className="wb-kpi-item">
+              <span className="wb-kpi-val">{score}</span>
+              <span className="wb-kpi-label">{t("page.selfcheck.score", "Score")}</span>
+            </div>
+            <div className="wb-kpi-item">
+              <span className="wb-kpi-val">{passCount}</span>
+              <span className="wb-kpi-label">{t("status.success", "Passed")}</span>
+            </div>
+            <div className="wb-kpi-item">
+              <span className="wb-kpi-val">{warnCount}</span>
+              <span className="wb-kpi-label">{t("status.pending", "Warnings")}</span>
+            </div>
+            <div className="wb-kpi-item">
+              <span className="wb-kpi-val">{failCount}</span>
+              <span className="wb-kpi-label">{t("status.failed", "Failed")}</span>
+            </div>
+          </div>
+          <div className="panel">
+            <DataGrid<Result>
+              columns={columns}
+              data={results}
+              rowKey={(r) => r.check_id}
+              storageKey="settings_selfcheck_grid"
+              emptyText={t("common.no_data", "No data")}
+            />
+          </div>
+        </>
       ) : null}
     </AppShell>
   );

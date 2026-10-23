@@ -157,7 +157,10 @@ export function NotificationBell() {
                 <span className="notify-item-body">
                   <span className="notify-item-title">{n.title}</span>
                   {n.body ? <span className="notify-item-text">{n.body}</span> : null}
-                  <span className="notify-item-time">{fmtTime(n.created_at)}</span>
+                  <span className="notify-item-time">
+                    {fmtTime(n.created_at)}
+                    {n.href ? <span className="notify-go" title={t("notify.go", "Open")}> →</span> : null}
+                  </span>
                 </span>
               </button>
             ))

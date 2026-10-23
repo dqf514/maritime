@@ -47,6 +47,7 @@ import app.models_reference_ext  # noqa: F401
 import app.models_interface  # noqa: F401
 import app.models_field_perms  # noqa: F401
 import app.models_doc  # noqa: F401
+import app.models_voyage_ext  # noqa: F401
 from app.routers.admin_platform import router as admin_router
 from app.routers.ai_chat import router as ai_chat_router
 from app.routers.ai_actions import router as ai_actions_router
@@ -101,6 +102,7 @@ from app.routers.saas import router as saas_router
 from app.routers.ship_mgmt import router as ship_router
 from app.routers.vessel_detail import router as vessel_detail_router
 from app.routers.tasks import router as tasks_router
+from app.routers.user_state import router as user_state_router
 from app.routers.cargo import router as cargo_router
 from app.routers.scheduling import router as scheduling_router
 from app.routers.coa import router as coa_router
@@ -114,6 +116,7 @@ from app.routers.udf import router as udf_router
 from app.routers.docs import router as docs_router
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo
 from app.seed_demo_flow import seed_full_demo_flow
+from app.seed_masterdata_gaps import seed_masterdata_gaps
 from app.seed_i18n import seed_i18n
 from app.services.platform_ops import bootstrap_ops_catalog
 from app.services.reference_data import seed_reference_catalog
@@ -342,6 +345,7 @@ async def lifespan(_app: FastAPI):
                 seed_if_empty(db)
                 seed_wave1_demo(db)
                 seed_full_demo_flow(db)
+                seed_masterdata_gaps(db)
             db.commit()
     except Exception:
         log.exception("Startup seed failed")
@@ -441,6 +445,7 @@ app.include_router(ship_router, prefix="/api/v1")
 app.include_router(vessel_detail_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
+app.include_router(user_state_router, prefix="/api/v1")
 app.include_router(home_router, prefix="/api/v1")
 app.include_router(exceptions_router, prefix="/api/v1")
 app.include_router(dashboards_router, prefix="/api/v1")

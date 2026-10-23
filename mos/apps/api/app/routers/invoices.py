@@ -218,6 +218,8 @@ def create_invoice(body: InvoiceIn, auth: AuthContext = Depends(require_module("
         due_date=body.due_date,
         bill_by=body.bill_by,
         commission_basis=body.commission_basis,
+        created_by=auth.user_id,
+        updated_by=auth.user_id,
     )
     if fx_rate is not None:
         row.fx_rate = fx_rate
@@ -522,6 +524,8 @@ def hire_schedule(body: HireScheduleIn, auth: AuthContext = Depends(require_modu
         tax_amount=Decimal("0"),
         currency="USD",
         meta=meta,
+        created_by=auth.user_id,
+        updated_by=auth.user_id,
     )
     db.add(row)
     db.commit()
@@ -682,9 +686,12 @@ def list_invoices(
     auth: AuthContext = Depends(require_module("finance")),
     db: Session = Depends(get_db),
 ):
+    from app.services.data_scope import apply_data_scope, effective_scope
+
     q = select(Invoice).where(Invoice.tenant_id == auth.tenant_id, Invoice.status != "deleted")
     if voyage_id is not None:
         q = q.where(Invoice.voyage_id == voyage_id)
+    q = apply_data_scope(q, Invoice, auth.user_id, effective_scope(db, auth.tenant_id, auth.roles, "finance"))
     rows, total = paginate(db, q.order_by(Invoice.invoice_no), limit, offset)
     return envelope(
         [
@@ -703,6 +710,8 @@ def list_invoices(
                 "mirror_of_id": str(r.mirror_of_id) if r.mirror_of_id else None,
                 "bill_by": r.bill_by,
                 "commission_basis": r.commission_basis,
+                "created_by": str(r.created_by) if r.created_by else None,
+                "updated_by": str(r.updated_by) if r.updated_by else None,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }
             for r in rows
