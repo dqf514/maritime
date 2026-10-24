@@ -922,6 +922,7 @@ def inbound_pms_sync(
     elif vessel and body.entity_type == "certificate":
         cert = ShipCertificate(
             tenant_id=auth.tenant_id,
+            created_by=auth.user_id,
             vessel_id=vessel.id,
             cert_code=body.data.get("cert_code") or body.external_ref,
             cert_name=body.data.get("cert_name") or "External certificate",

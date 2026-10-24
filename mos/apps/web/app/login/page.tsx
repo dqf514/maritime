@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
@@ -74,6 +74,9 @@ export default function LoginPage() {
   const [brand, setBrand] = useState<Branding | null>(null);
   const [methods, setMethods] = useState<AuthMethods | null>(null);
   const [magicSent, setMagicSent] = useState("");
+  // 登录失败后清空密码框并把焦点移回 —— 明文残留会被误读为「已提交成功」，
+  // 也有肩窥/录屏泄露风险（P1-21）。
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/v1/public/branding`)
@@ -177,6 +180,8 @@ export default function LoginPage() {
       await apiLogin(email, passwordVal, tenant);
       router.replace(tenant === "sys" ? "/platform" : "/home");
     } catch (err: any) {
+      // 失败即清空密码 + 焦点回密码框（成功路径不变，仍直接跳转）。
+      setPassword("");
       const detail = err?.detail || err?.message;
       if (String(detail).includes("EMAIL_NOT_VERIFIED") || err?.code === "EMAIL_NOT_VERIFIED") {
         setError(t("login.error_unverified", "Email not verified. Check your inbox or ask tenant admin to resend."));
@@ -189,6 +194,8 @@ export default function LoginPage() {
             : t("login.error_generic", "Sign-in failed. Check tenant / credentials (or verification / method policy)."),
         );
       }
+      // 焦点回密码框：用户改完密码可直接再次回车提交。
+      window.requestAnimationFrame(() => passwordRef.current?.focus());
     } finally {
       setLoading(false);
     }
@@ -350,6 +357,7 @@ export default function LoginPage() {
                 id="password"
                 name="password"
                 type="password"
+                ref={passwordRef}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"

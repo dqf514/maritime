@@ -132,7 +132,8 @@ def test_direct_write_cross_tenant_blocked_and_data_untouched(client, auth_heade
 
     charters = client.get(f"{API}/charters", headers=hb).json()
     assert any(c["id"] == b["charter_id"] and c["status"] == "draft" for c in charters)
-    voyages = client.get(f"{API}/voyages", headers=hb).json()
+    _vp = client.get(f"{API}/voyages", headers=hb).json()
+    voyages = _vp["items"] if isinstance(_vp, dict) else _vp
     assert any(v["id"] == b["voyage_id"] and v["status"] == "planned" and v["cargo"] is None for v in voyages)
     laytimes = client.get(f"{API}/laytimes", headers=hb).json()["items"]
     assert any(l["id"] == b["laytime_id"] and l["status"] == "draft" for l in laytimes)

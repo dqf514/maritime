@@ -13,6 +13,9 @@ type Props = {
   onCancel: () => void;
 };
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+
 /**
  * Controlled confirm dialog — replaces window.confirm.
  *
@@ -33,15 +36,41 @@ type Props = {
 export function ConfirmDialog({ open, title, message, confirmLabel, danger, onConfirm, onCancel }: Props) {
   const { t } = useI18n();
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    // 焦点陷阱 + 焦点归还（WCAG 2.4.3 / 2.4.7）：打开时把焦点收进对话框，
+    // 关闭时还给触发它的那个按钮。
+    triggerRef.current = document.activeElement as HTMLElement | null;
     confirmRef.current?.focus();
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape") {
+        onCancel();
+        return;
+      }
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+        (el) => el.offsetParent !== null || el === document.activeElement,
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      triggerRef.current?.focus?.();
+      triggerRef.current = null;
+    };
   }, [open, onCancel]);
 
   if (!open) return null;
@@ -56,6 +85,7 @@ export function ConfirmDialog({ open, title, message, confirmLabel, danger, onCo
       }}
     >
       <div
+        ref={dialogRef}
         className="record-modal confirm-dialog"
         role="alertdialog"
         aria-modal="true"

@@ -17,7 +17,8 @@ const eslintConfig = defineConfig([
       "@next/next/no-location-assign-relative-destination": "warn",
     },
   },
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts"]),
+  // 构建产物目录一律不参与 lint（.next-a11y-check 是 a11y 自检脚本的临时产物）
+  globalIgnores([".next/**", ".next-*/**", "out/**", "build/**", "next-env.d.ts"]),
 ]);
 
 export default eslintConfig;

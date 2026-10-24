@@ -12,6 +12,10 @@ from app.models_wave1 import EmailAccount, EmailMessage, EmailThread, Notificati
 from app.schemas_wave1 import EmailAccountIn, EmailAccountOut, EmailMessageOut, NotificationOut
 from app.security import AuthContext, get_current_auth, require_module
 from app.services.identity import as_aware
+from app.services.integration_adapters import (
+    encrypt_email_config,
+    mask_email_config,
+)
 from app.services.recycle import soft_delete
 
 router = APIRouter(tags=["Email & Notify"])
@@ -27,7 +31,13 @@ def list_accounts(
             EmailAccount.tenant_id == auth.tenant_id, EmailAccount.status != "deleted"
         )
     ).all()
-    return [EmailAccountOut.model_validate(r, from_attributes=True) for r in rows]
+    # P0-19：config 里的密钥（SMTP 口令等）**不回吐**
+    return [
+        EmailAccountOut.model_validate(r, from_attributes=True).model_copy(
+            update={"config": mask_email_config(r.config)}
+        )
+        for r in rows
+    ]
 
 
 @router.post("/email/accounts", response_model=EmailAccountOut)
@@ -57,11 +67,16 @@ def create_account(
     )
     if dup and dup.status != "deleted":
         raise HTTPException(409, detail={"code": "ACCOUNT_EXISTS"})
+    # P0-19：密钥字段**加密落库**（不再明文存 SMTP 口令）
+    data["config"] = encrypt_email_config(data.get("config") or {})
     row = EmailAccount(tenant_id=auth.tenant_id, status="active", **{**data, "email": email})
     db.add(row)
     db.commit()
     db.refresh(row)
-    return EmailAccountOut.model_validate(row, from_attributes=True)
+    # P0-19：密钥不回吐
+    return EmailAccountOut.model_validate(row, from_attributes=True).model_copy(
+        update={"config": mask_email_config(row.config)}
+    )
 
 
 class EmailAccountUpdate(BaseModel):
@@ -108,14 +123,18 @@ def update_account(
         row.display_name = body.display_name
     if "config" in fields and body.config is not None:
         # explicit config payload replaces config (secrets included only if sent)
-        row.config = body.config
+        # P0-19：密钥字段加密落库
+        row.config = encrypt_email_config(body.config)
     if "status" in fields and body.status is not None:
         if body.status not in ("active", "paused", "deleted"):
             raise HTTPException(422, "status must be active|paused")
         row.status = body.status
     db.commit()
     db.refresh(row)
-    return EmailAccountOut.model_validate(row, from_attributes=True)
+    # P0-19：密钥不回吐（PATCH 同样要遮 —— 改配置时最容易被顺手回显）
+    return EmailAccountOut.model_validate(row, from_attributes=True).model_copy(
+        update={"config": mask_email_config(row.config)}
+    )
 
 
 @router.delete("/email/accounts/{account_id}")

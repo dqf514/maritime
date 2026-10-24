@@ -44,9 +44,11 @@ from app.security import (
     AuthContext,
     create_access_token,
     get_current_auth,
-    require_module,
+    redact_sensitive_fields,
+    require_module_role,
+    require_roles,
     set_session_cookie,
-    verify_password,
+    verify_password_or_dummy,
 )
 from app.services.audit import audit
 from app.services.ratelimit import rate_limit
@@ -85,7 +87,9 @@ def login(
     if not policy.password_enabled:
         raise HTTPException(status_code=403, detail={"code": "PASSWORD_DISABLED", "message": "Password login disabled"})
     user = db.scalar(select(User).where(User.tenant_id == tenant.id, User.email == body.email))
-    if not user or not user.password_hash or not verify_password(body.password, user.password_hash):
+    # 时序等价：用户不存在时也跑一次 bcrypt（哑元哈希）—— 否则
+    # 「邮箱不存在」比「密码错」快 ~390ms，可据此枚举账号（P2）。
+    if not verify_password_or_dummy(body.password, user.password_hash if user else None):
         audit(
             db,
             tenant_id=tenant.id,
@@ -129,10 +133,22 @@ def login(
         ip=ip,
     )
     db.commit()
-    token = create_access_token(user_id=user.id, tenant_id=tenant.id, email=user.email, pwv=user.password_version or 1)
+    # 租户级会话时长（TenantAuthPolicy.session_hours）—— 以前是死配置。
+    session_hours = (
+        int(policy.session_hours)
+        if policy and policy.session_hours and int(policy.session_hours) > 0
+        else None
+    )
+    token = create_access_token(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        email=user.email,
+        pwv=user.password_version or 1,
+        session_hours=session_hours,
+    )
     # Browser session: token is also planted as an HttpOnly cookie; the JSON
     # body keeps access_token for backward compatibility with header clients.
-    set_session_cookie(response, token)
+    set_session_cookie(response, token, session_hours)
     return TokenOut(access_token=token)
 
 
@@ -263,7 +279,7 @@ def _entity_hits(db: Session, auth: AuthContext, q: str, limit: int = 5) -> list
 
 @router.post("/settings/selfcheck/run", response_model=SelfCheckRunOut, tags=["SelfCheck"])
 def run_selfcheck(
-    auth: AuthContext = Depends(require_module("selfcheck")),
+    auth: AuthContext = Depends(require_module_role("selfcheck")),
     db: Session = Depends(get_db),
 ):
     run = SelfCheckRun(tenant_id=auth.tenant_id, triggered_by=auth.user_id, status="running")
@@ -301,19 +317,48 @@ def run_selfcheck(
     )
 
 
+#: 能触发**整库 dump** 的角色（P0-21）。``dataops`` 是 core 模块（每租户自动
+#: 授权），所以光有模块许可不够 —— 必须再叠加**角色**闸门。
+BACKUP_PRIVILEGED_ROLES = ("tenant_admin", "platform_admin")
+
+
+def _assert_backup_privileged(auth: AuthContext) -> None:
+    """整库 dump 的角色闸门（P0-21）—— 默认拒绝，显式放行。"""
+    if not any(r in (auth.roles or []) for r in BACKUP_PRIVILEGED_ROLES):
+        raise HTTPException(
+            403,
+            detail={
+                "code": "ROLE_REQUIRED",
+                "roles": list(BACKUP_PRIVILEGED_ROLES),
+                "message": "Full-tenant dumps are restricted to tenant administrators",
+            },
+        )
+
+
 @router.post("/settings/dataops/backups", response_model=BackupJobOut, tags=["DataOps"])
 def create_backup(
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     """全量租户数据备份（所有业务表行级 JSON dump）。
 
     Wave-0 的配置摘要备份已由全量 dump 取代；文件仍写
     ``data/backups/<tenant>/<job>.json``（不在 /uploads 静态挂载下）。
+
+    **P0-21**：
+    - 触发者必须是**管理员角色**（``tenant_admin`` / ``platform_admin``）——
+      原来只挂 ``require_module("dataops")``，而 ``dataops`` 是 core 模块
+      （每个租户都自动授权），于是**任何登录用户**（含 viewer）都能把
+      整库数据落盘；
+    - dump 内容**剔除** ``password_hash`` / ``key_hash`` / 明文密钥等敏感列
+      （见 ``security.redact_sensitive_fields``）—— 备份文件一旦被读走，
+      就是「全量口令哈希 + 明文 API Key」。
     """
     from app.services.tenant_backup import dump_tenant, write_backup_file
 
+    _assert_backup_privileged(auth)
     payload = dump_tenant(db, auth.tenant_id, created_by=auth.user_id, trigger="manual")
+    redact_sensitive_fields(payload)
     job = write_backup_file(db, auth.tenant_id, payload, created_by=auth.user_id)
     return BackupJobOut(
         id=job.id,
@@ -329,7 +374,7 @@ def create_backup(
 
 @router.get("/settings/dataops/backups", response_model=list[BackupJobOut], tags=["DataOps"])
 def list_backups(
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     rows = db.scalars(
@@ -362,7 +407,7 @@ class BackupJobPatchIn(BaseModel):
 def patch_backup(
     job_id: UUID,
     body: BackupJobPatchIn,
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     """Annotate a backup job record (status / error note). BackupJob has no enabled/schedule fields."""
@@ -390,7 +435,7 @@ def patch_backup(
 @router.delete("/settings/dataops/backups/{job_id}", tags=["DataOps"])
 def delete_backup(
     job_id: UUID,
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     """Delete a backup job and its file — same purge path as backup_scheduler prune."""
@@ -432,7 +477,7 @@ def _schedule_out(s) -> dict:
 
 @router.get("/settings/dataops/backup-schedule", tags=["DataOps"])
 def get_backup_schedule(
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     from app.models import BackupSchedule
@@ -463,7 +508,7 @@ class BackupScheduleIn(BaseModel):
 @router.put("/settings/dataops/backup-schedule", tags=["DataOps"])
 def put_backup_schedule(
     body: BackupScheduleIn,
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     from app.models import BackupSchedule
@@ -489,7 +534,7 @@ def put_backup_schedule(
 @router.post("/settings/dataops/migrations", response_model=MigrationJobOut, tags=["DataOps"])
 def create_migration(
     body: MigrationJobCreate,
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     job = MigrationJob(
@@ -508,7 +553,7 @@ def create_migration(
 def add_migration_source(
     job_id: UUID,
     body: MigrationSourceIn,
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     job = db.get(MigrationJob, job_id)
@@ -523,7 +568,7 @@ def add_migration_source(
 @router.post("/settings/dataops/migrations/{job_id}/run-analyze", tags=["DataOps"])
 def run_analyze(
     job_id: UUID,
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     job = db.get(MigrationJob, job_id)
@@ -560,7 +605,7 @@ def run_analyze(
 async def upload_excel(
     job_id: UUID,
     file: UploadFile = File(...),
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     from openpyxl import load_workbook
@@ -662,7 +707,7 @@ class MigrationCommitIn(BaseModel):
 def commit_proposals(
     job_id: UUID,
     body: MigrationCommitIn,
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     from app.models_wave1 import Counterparty, Port, Vessel
@@ -744,7 +789,7 @@ def commit_proposals(
 )
 def list_proposals(
     job_id: UUID,
-    auth: AuthContext = Depends(require_module("dataops")),
+    auth: AuthContext = Depends(require_module_role("dataops")),
     db: Session = Depends(get_db),
 ):
     job = db.get(MigrationJob, job_id)
@@ -764,12 +809,51 @@ def list_proposals(
     ]
 
 
+#: 能签发 API Key 的角色（P1-15）。``apim`` 是 core 模块 → 每租户自动授权 →
+#: 任何登录用户都能自助签发（自助提权）。这里叠一层**角色**闸门。
+API_KEY_ISSUER_ROLES = ("tenant_admin", "platform_admin")
+
+
 @router.post("/settings/api-keys", response_model=ApiKeyOut, tags=["API Management"])
 def create_api_key(
     body: ApiKeyCreate,
-    auth: AuthContext = Depends(require_module("apim")),
+    auth: AuthContext = Depends(require_module_role("apim")),
     db: Session = Depends(get_db),
 ):
+    """签发 API Key —— **限管理员角色**（P1-15）。
+
+    审计 P1-3：``apim`` 是 core 模块（每租户自动授权），于是**任何登录用户**
+    （含 viewer）都能给自己签一把 API Key —— 而 API Key 能带着签发者的角色
+    调 API，等于「自助提权」。现在额外要求 ``tenant_admin`` / ``platform_admin``。
+
+    为什么不是「只留 platform_admin」：API Key 是**租户级**资源
+    （``tenant_id = auth.tenant_id``），而 ``platform_admin`` 角色只存在于
+    平台租户（``sys``）—— 只让 platform_admin 签发的话，租户就再也拿不到
+    自己租户的 key（Office 插件 / 伙伴集成全靠它，见 docs/office-ecosystem.md）。
+    所以闸门取「租户管理员或平台管理员」：**默认拒绝、显式放行**，普通角色
+    （viewer / finance / management …）一律 403。
+
+    同时**拒绝空 scope** —— 没有 scope 的 key 等于一把万能钥匙。
+    """
+    if not any(r in (auth.roles or []) for r in API_KEY_ISSUER_ROLES):
+        raise HTTPException(
+            403,
+            detail={
+                "code": "ROLE_REQUIRED",
+                "roles": list(API_KEY_ISSUER_ROLES),
+                "message": "Only tenant administrators may issue API keys",
+            },
+        )
+    scopes = [str(s).strip() for s in (body.scopes or []) if str(s).strip()]
+    if not scopes:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "SCOPE_REQUIRED",
+                "message": "An API key must declare at least one scope",
+            },
+        )
+    body = body.model_copy(update={"scopes": scopes})
     raw = f"vos_{secrets.token_urlsafe(24)}"
     prefix = raw[:10]
     key_hash = hashlib.sha256(raw.encode()).hexdigest()
@@ -797,7 +881,7 @@ def create_api_key(
 
 @router.get("/settings/api-keys", response_model=list[ApiKeyOut], tags=["API Management"])
 def list_api_keys(
-    auth: AuthContext = Depends(require_module("apim")),
+    auth: AuthContext = Depends(require_module_role("apim")),
     db: Session = Depends(get_db),
 ):
     rows = db.scalars(
@@ -825,7 +909,7 @@ class ApiKeyUpdate(BaseModel):
 def update_api_key(
     key_id: UUID,
     body: ApiKeyUpdate,
-    auth: AuthContext = Depends(require_module("apim")),
+    auth: AuthContext = Depends(require_module_role("apim")),
     db: Session = Depends(get_db),
 ):
     row = db.get(ApiKey, key_id)
@@ -851,7 +935,7 @@ def update_api_key(
 @router.delete("/settings/api-keys/{key_id}", tags=["API Management"])
 def delete_api_key(
     key_id: UUID,
-    auth: AuthContext = Depends(require_module("apim")),
+    auth: AuthContext = Depends(require_module_role("apim")),
     db: Session = Depends(get_db),
 ):
     row = db.get(ApiKey, key_id)

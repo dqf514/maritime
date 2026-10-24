@@ -245,15 +245,29 @@ def test_requires_login(client):
     assert client.get(f"{API}/00000000-0000-0000-0000-000000000001").status_code == 401
 
 
-def test_module_gate_403(client, auth_headers, monkeypatch):
-    from app.config import get_settings
+def test_role_gate_403(client):
+    """管理面端点必须**同时**要角色（许可轴不能单独当授权用）。
 
-    monkeypatch.setattr(get_settings(), "license_dev_unlock", "none")
-    blocked = client.get(API, headers=auth_headers)
+    以前这里挂的是 ``require_module("admin")`` —— 而 ``admin`` **根本不是
+    模块目录里的模块码**（app/seed.py:CORE_MODULES 没有它）：生产环境
+    这三个端点对**所有人** 403（连 tenant_admin 都进不去），开发环境
+    ``LICENSE_DEV_UNLOCK=all`` 又让它们对**任何登录用户**敞开。
+    现在改成角色闸门（P1-14）。
+    """
+    from tests.isolation_helpers import login
+
+    headers = login(client, "charterer@demo.marios")
+    blocked = client.get(API, headers=headers)
     assert blocked.status_code == 403, blocked.text
-    assert blocked.json()["detail"]["code"] == "MODULE_NOT_LICENSED"
-    assert client.get(f"{API}/stats", headers=auth_headers).status_code == 403
+    assert blocked.json()["detail"]["code"] == "ROLE_REQUIRED"
+    assert client.get(f"{API}/stats", headers=headers).status_code == 403
     assert (
-        client.post(f"{API}/00000000-0000-0000-0000-000000000001/retry", headers=auth_headers).status_code
+        client.post(f"{API}/00000000-0000-0000-0000-000000000001/retry", headers=headers).status_code
         == 403
     )
+
+
+def test_admin_reaches_endpoints(client, auth_headers):
+    """租户管理员**必须**能打开（生产环境不再被那个假模块码挡在门外）。"""
+    r = client.get(f"{API}/stats", headers=auth_headers)
+    assert r.status_code == 200, r.text

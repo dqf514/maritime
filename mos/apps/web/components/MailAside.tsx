@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { formatInTz } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
+import { msgOf } from "@/lib/errors";
 
 type RelatedMail = {
   id: string;
@@ -36,7 +37,11 @@ export function MailAside({
 }) {
   const { t, locale } = useI18n();
   const [items, setItems] = useState<RelatedMail[]>([]);
+  // P1-4：相关邮件取不到时不能显示"暂无匹配邮件" —— 那是**没取到**，
+  // 不是"真的没有"。错误按关键词打标，换关键词时旧错误自动失效。
+  const [err, setErr] = useState<{ key: string; msg: string } | null>(null);
   const q = keywords.filter(Boolean).join(",");
+  const loadError = err && err.key === q ? err.msg : "";
 
   useEffect(() => {
     if (!q) {
@@ -46,15 +51,19 @@ export function MailAside({
     let alive = true;
     apiGet(`/api/v1/email/related?q=${encodeURIComponent(q)}&top=${top}`)
       .then((rows) => {
-        if (alive) setItems(rows);
+        if (!alive) return;
+        setItems(rows);
+        setErr(null);
       })
-      .catch(() => {
-        if (alive) setItems([]);
+      .catch((ex) => {
+        if (!alive) return;
+        setItems([]);
+        setErr({ key: q, msg: msgOf(ex, t("mailaside.load_fail", "Could not load related mail.")) });
       });
     return () => {
       alive = false;
     };
-  }, [q, top]);
+  }, [q, top, t]);
 
   return (
     <details className="panel mail-aside" open={defaultOpen}>
@@ -86,6 +95,10 @@ export function MailAside({
             </li>
           ))}
         </ul>
+      ) : loadError ? (
+        <p className="mail-aside-empty field-error" role="alert">
+          {loadError}
+        </p>
       ) : (
         <p className="mail-aside-empty">
           {q ? t("mailaside.empty", "收件箱里暂无匹配邮件。") : t("mailaside.no_keywords", "无可用匹配关键词。")}

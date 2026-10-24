@@ -1,3 +1,4 @@
+from decimal import Decimal
 import uuid
 from datetime import datetime
 
@@ -189,6 +190,6 @@ class MigrationProposal(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("migration_jobs.id"), nullable=False)
     entity_type: Mapped[str] = mapped_column(Text, nullable=False)
     action: Mapped[str] = mapped_column(Text, default="create")
-    confidence: Mapped[float] = mapped_column(Numeric(5, 4), default=0)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), default=0)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(Text, default="proposed")

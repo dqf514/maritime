@@ -4,18 +4,20 @@
 // Tabs: Details · Properties。
 // Details = 品名标识 / 危险品（IMSBC + IMDG）/ 积载与 API / 商务条款 四组。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordAttribution } from "@/components/RecordAttribution";
+import { StateView } from "@/components/StateView";
 import { Tabs } from "@/components/Tabs";
 import { FormSection } from "@/components/form/FormPanel";
-import { VesselCrudGrid } from "@/components/ship/VesselCrudGrid";
+import { VesselCrudGrid, type ColumnDef, type FieldDef } from "@/components/ship/VesselCrudGrid";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 
 type Tab = "details" | "properties";
 
@@ -76,8 +78,12 @@ export default function CargoNameDetailPage() {
   const [boolInit, setBoolInit] = useState<Record<string, boolean>>({});
   const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
+  const [groupsErr, setGroupsErr] = useState("");
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       const data = await apiGet(`/api/v1/masterdata/cargo-names/${cargoId}`);
       setCargo(data);
@@ -92,10 +98,15 @@ export default function CargoNameDetailPage() {
       for (const f of BOOL_FIELDS) b[f.key] = Boolean(data?.[f.key]);
       setBools(b);
       setBoolInit({ ...b });
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+      setLoadErr("");
+    } catch (ex) {
+      // 取数失败必须显性报错，不能静默留空表单
+      setCargo(null);
+      setLoadErr(msgOf(ex, t("common.failed", "Failed")));
+    } finally {
+      setLoading(false);
     }
-  }, [cargoId, t, toast]);
+  }, [cargoId, t]);
 
   useEffect(() => {
     void load();
@@ -103,8 +114,15 @@ export default function CargoNameDetailPage() {
 
   useEffect(() => {
     apiGet("/api/v1/masterdata/cargo-groups")
-      .then((d: any) => setGroups(Array.isArray(d) ? d : []))
-      .catch(() => setGroups([]));
+      .then((d: any) => {
+        setGroups(Array.isArray(d) ? d : []);
+        setGroupsErr("");
+      })
+      // 参考数据失败：不让整页报错，但必须可见（分组下拉会空）
+      .catch((ex) => {
+        setGroups([]);
+        setGroupsErr(msgOf(ex));
+      });
   }, []);
 
   // PATCH 走 exclude_unset：只提交改动的键，未提交字段不动。
@@ -120,7 +138,18 @@ export default function CargoNameDetailPage() {
       }
       for (const f of NUM_FIELDS) {
         if (form[f.key] === init[f.key]) continue;
-        payload[f.key] = form[f.key] === "" ? null : Number(form[f.key]);
+        if (form[f.key] === "") {
+          payload[f.key] = null;
+          continue;
+        }
+        // P1-24：非法数字必须中止提交（不能静默变成 NaN）
+        const n = Number(form[f.key]);
+        if (!Number.isFinite(n)) {
+          toast.error(t("page.cargo.err_numeric", "{field} must be a valid number", { field: f.label }));
+          setBusy(false);
+          return;
+        }
+        payload[f.key] = n;
       }
       for (const f of BOOL_FIELDS) {
         if (bools[f.key] === boolInit[f.key]) continue;
@@ -134,8 +163,8 @@ export default function CargoNameDetailPage() {
       await apiPatch(`/api/v1/masterdata/cargo-names/${cargoId}`, payload);
       toast.success(t("common.saved", "Saved"));
       await load();
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setBusy(false);
     }
@@ -147,6 +176,23 @@ export default function CargoNameDetailPage() {
     { key: "stowage", labelKey: "page.cargo.grp_stowage", label: "Stowage & API" },
     { key: "commercial", labelKey: "page.cargo.grp_commercial", label: "Commercial" },
   ];
+
+  const propertyColumns = useMemo<ColumnDef[]>(
+    () => [
+      { key: "title", label: t("common.title", "Title"), width: 220 },
+      { key: "value", label: t("common.value", "Value") },
+    ],
+    [t],
+  );
+
+  // CRUD 弹窗字段定义：每次渲染都换身份会让 VesselCrudGrid 的列模型缓存失效
+  const propertyFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "title", label: t("common.title", "Title"), type: "text", required: true },
+      { key: "value", label: t("common.value", "Value"), type: "text", span: true },
+    ],
+    [t],
+  );
 
   return (
     <AppShell>
@@ -184,6 +230,13 @@ export default function CargoNameDetailPage() {
 
       {tab === "details" ? (
         <div className="panel">
+          {groupsErr ? (
+            <p className="flash-warn">
+              {t("page.cargo_names.groups_load_failed", "Cargo groups could not be loaded — the group picker may be incomplete.")}{" "}
+              {groupsErr}
+            </p>
+          ) : null}
+          <StateView loading={loading} error={loadErr || undefined} empty={false} onRetry={() => void load()}>
           {secGroups.map((g) => (
             <FormSection key={g.key} title={t(g.labelKey, g.label)}>
               {g.key === "identity" ? (
@@ -256,6 +309,7 @@ export default function CargoNameDetailPage() {
               ))}
             </FormSection>
           ))}
+          </StateView>
         </div>
       ) : null}
 
@@ -267,14 +321,8 @@ export default function CargoNameDetailPage() {
           title={t("page.cargo.tab_properties", "Properties")}
           addLabel={t("page.cargo.add_property", "Add property")}
           emptyText={t("page.cargo.no_properties", "No properties yet")}
-          columns={[
-            { key: "title", label: t("common.title", "Title"), width: 220 },
-            { key: "value", label: t("common.value", "Value") },
-          ]}
-          fields={[
-            { key: "title", label: t("common.title", "Title"), type: "text", required: true },
-            { key: "value", label: t("common.value", "Value"), type: "text", span: true },
-          ]}
+          columns={propertyColumns}
+          fields={propertyFields}
         />
       ) : null}
     </AppShell>

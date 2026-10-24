@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.security import AuthContext, require_module
+from app.security import AuthContext, require_roles
 from app.services import webhook_service as wh_svc
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
@@ -54,7 +54,7 @@ class DispatchIn(BaseModel):
 
 @router.get("/subscriptions", response_model=list[SubscriptionOut])
 def list_subscriptions(
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     subs = wh_svc.list_subscriptions(db, auth.tenant_id)
@@ -74,7 +74,7 @@ def list_subscriptions(
 @router.post("/subscriptions", response_model=SubscriptionOut, status_code=201)
 def create_subscription(
     body: SubscriptionIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     sub = wh_svc.create_subscription(
@@ -93,7 +93,7 @@ def create_subscription(
 @router.get("/subscriptions/{sub_id}", response_model=SubscriptionOut)
 def get_subscription(
     sub_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     sub = wh_svc.get_subscription(db, sub_id, auth.tenant_id)
@@ -113,7 +113,7 @@ def get_subscription(
 def update_subscription(
     sub_id: UUID,
     body: SubscriptionUpdate,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     sub = wh_svc.get_subscription(db, sub_id, auth.tenant_id)
@@ -139,7 +139,7 @@ def update_subscription(
 @router.delete("/subscriptions/{sub_id}", status_code=204)
 def delete_subscription(
     sub_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     sub = wh_svc.get_subscription(db, sub_id, auth.tenant_id)
@@ -151,7 +151,7 @@ def delete_subscription(
 @router.post("/subscriptions/{sub_id}/rotate-secret")
 def rotate_secret(
     sub_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     sub = wh_svc.get_subscription(db, sub_id, auth.tenant_id)
@@ -164,7 +164,7 @@ def rotate_secret(
 @router.post("/dispatch")
 def dispatch_event(
     body: DispatchIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     deliveries = wh_svc.dispatch_event(db, auth.tenant_id, body.event, body.payload)
@@ -180,7 +180,7 @@ def dispatch_event(
 @router.get("/deliveries", response_model=list[DeliveryOut])
 def list_deliveries(
     endpoint_id: UUID | None = Query(None),
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     deliveries = wh_svc.list_deliveries(db, auth.tenant_id, endpoint_id)

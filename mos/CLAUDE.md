@@ -50,7 +50,7 @@ Gold fixtures live in `fixtures/calc/tce` and `fixtures/calc/laytime` — shared
 
 ### Deploy
 
-`deploy/compose/docker-compose.yml` (Postgres + Redis + MinIO + API + Web). The API build context **must be `mos/` root** (fixtures are at `mos/fixtures`, SelfCheck depends on this layout). Do not mount `docs/ddl.sql` for DB init — it has drifted from the models; empty DBs are created by `create_all` at API startup.
+`deploy/compose/docker-compose.yml` (Postgres + migrate + API + Web + backup; **no Redis / no MinIO** — both were dead services, removed). The API build context **must be `mos/` root** (fixtures are at `mos/fixtures`, SelfCheck depends on this layout). Do not mount `docs/internal/legacy_ddl.sql` for DB init — it has drifted from the models (and was moved out of the customer-visible `docs/` root); schema is created by the `migrate` service (`alembic upgrade head`), and empty DBs self-bootstrap via `alembic/env.py`.
 
 ## Architecture
 
@@ -60,13 +60,19 @@ Gold fixtures live in `fixtures/calc/tce` and `fixtures/calc/laytime` — shared
 - `apps/web` — Next.js frontend
 - `fixtures/calc` — calculation gold fixtures (TCE, laytime)
 - `deploy/compose` — Docker Compose deployment
-- `docs/` — customer-facing docs; `docs/README.md` points to the dev SSOT ("DDS V2.1", referenced but not present in the tree). Keep internal planning out of customer-visible docs.
+- `docs/` — customer-facing docs; `docs/README.md` is the index (the old "DDS V2.1" dev-SSOT link was removed — that file is not in the tree). Internal planning lives in `docs/internal/`. Keep internal planning out of customer-visible docs.
 
 ### Backend (`apps/api/app`)
 
 Layering: **routers** (`routers/*.py`, all mounted under `/api/v1`) → **services** (`services/*.py`, domain engines and platform infrastructure) → **models** (`models*.py`, split by domain: `models_domain`, `models_ops`, `models_gl`, `models_identity`, `models_saas`, `models_office`, …) + Pydantic schemas (`schemas*.py`).
 
-Adding a new `models_*.py` module requires importing it in **both** `app/main.py` and `tests/conftest.py` (metadata registration is import-driven).
+Adding a new `models_*.py` module requires importing it in **three** places (metadata registration is import-driven):
+
+- `app/main.py` — the running app
+- `tests/conftest.py` — the test DB is built by `Base.metadata.create_all`, so a missing import means the table does not exist in tests
+- `apps/api/alembic/env.py` — the migration chain, or the new table is never created in production
+
+`tests/test_deploy_contract.py::test_alembic_env_py_registers_all_model_modules` asserts the three lists stay in sync.
 
 Key cross-cutting pieces:
 
@@ -74,6 +80,8 @@ Key cross-cutting pieces:
 - **State machines**: `services/state_machine.py` — `transition()` raises 409 `INVALID_STATE` for illegal moves; per-entity tables (`CHARTER_TRANSITIONS`, `VOYAGE_TRANSITIONS`, `INVOICE_TRANSITIONS`, …). Finance workflows (e.g. credit-note/red-flush 红冲) are implemented at the router layer alongside these transitions.
 - **Calculation engines**: `services/estimate_engine.py` (TCE), `services/laytime_engine.py`, `services/gl_engine.py`, `services/pnl_engine.py`, `services/hire_engine.py`, `services/carbon_calculator.py`, `services/cii.py`. Decimal-based, deterministic — validate against `fixtures/calc`.
 - **Auth** (`app/security.py`): dual-track sessions — JWT returned in the body *and* set as HttpOnly cookie `marios_token` (legacy `voyageos_token` still accepted). Bearer/API-key auth also supported. CSRF posture is SameSite=Lax + strict CORS allow_credentials (documented in `security.py` — keep that reasoning intact if you change cookies/CORS). Module licensing via `require_module()` → 403 `MODULE_NOT_LICENSED`; `LICENSE_DEV_UNLOCK=all` bypasses in dev.
+- **Two-axis authorization**: the *license* axis (`require_module(code)`) answers "did this tenant buy the module"; the *authorization* axis answers "may this role act on it". Use `require_module_role(code, *extra)` for **write** endpoints and `require_module_read(code)` for **read/export** endpoints — the read gate admits `viewer` and is **never** bypassed by `LICENSE_DEV_UNLOCK=all` (the dev unlock only bypasses licensing, never roles). `Role.permissions` (`{"finance": true}`) is honoured by both gates. Use `require_roles(...)` only for endpoints that are not module-scoped.
+- **Row-level data scope** (`app/services/data_scope.py`): `apply_module_scope(db, stmt, Model, auth, module)` narrows a list query to rows the user created when the role's effective scope is `"own"`. It is **fail-closed**: a tenant table with no owner column yields an *empty* set (plus a warning log) rather than leaking the whole tenant; global reference tables (no `tenant_id`) are left untouched. New scoped models need a `created_by` column (see `OWNER_COLUMNS`) plus an Alembic revision.
 - **Startup seeding** (`main.py` lifespan): catalogs always seed (SaaS catalog, i18n, ops catalog, reference catalog); demo tenants/users only when `SEED_DEMO=true`.
 - **Schema management**: `Base.metadata.create_all` runs at startup, plus legacy guarded `ALTER TABLE` patches in `main.py` for old SQLite dev DBs. **New schema changes go through Alembic** (`alembic revision --autogenerate`), never new entries in the ALTER patch list. For existing databases run `alembic stamp head` before `alembic upgrade head` (see `alembic/README.md`).
 - **Navigation**: role-based, server-driven nav defined in `services/shell_nav.py` (modular modules: Workbench → Chartering → Operations → Finance → Technical → Analytics → Master data → Administration → Platform), consumed by search ACL and the web AppShell.

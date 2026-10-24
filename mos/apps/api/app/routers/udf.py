@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models_config import UdfDefinition, UdfValue
-from app.security import AuthContext, require_module
+from app.security import AuthContext, require_roles
 from app.services.tenant_guard import scoped_get, scoped_query
 
 router = APIRouter(prefix="/udf", tags=["udf"])
@@ -161,7 +161,7 @@ def _to_out(d: UdfDefinition) -> UdfDefinitionOut:
 
 
 @router.get("/entities")
-def list_entities(auth: AuthContext = Depends(require_module("admin"))):
+def list_entities(auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin"))):
     """Entity registry (数据字典支持的业务对象)."""
     _ = auth
     return [{"entity": name, "label": label} for name, label in UDF_ENTITIES.items()]
@@ -171,7 +171,7 @@ def list_entities(auth: AuthContext = Depends(require_module("admin"))):
 def list_definitions(
     entity: str | None = Query(None),
     include_inactive: bool = Query(False),
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """List UDF definitions for the current tenant.
@@ -195,7 +195,7 @@ def list_definitions(
 @router.post("", response_model=UdfDefinitionOut, status_code=201)
 def create_definition(
     body: UdfDefinitionIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Create a UDF definition. Duplicate entity+field_key → 409."""
@@ -250,7 +250,7 @@ def create_definition(
 def update_definition(
     definition_id: UUID,
     body: UdfDefinitionPatch,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Update a UDF definition (labels / type / options / required / active / sort)."""
@@ -286,7 +286,7 @@ def update_definition(
 @router.delete("/{definition_id}")
 def delete_definition(
     definition_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Hard-delete a UDF definition and its stored values.

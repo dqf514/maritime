@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { HelpFrame } from "@/components/HelpFrame";
 import { PageHeader } from "@/components/PageHeader";
+import { StateView } from "@/components/StateView";
 import { VideoDemos } from "@/components/help/VideoDemos";
 import { useI18n } from "@/lib/i18n";
 
-import { API_BASE } from "@/lib/api";
+import { apiGet } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 
 /** 视频演示讲解页 —— 内嵌播放器与讲解稿，数据自带，无需拉取文章正文。 */
 function VideoDemoArticle() {
@@ -56,18 +58,30 @@ function HelpArticle({ slug }: { slug: string }) {
   const { t, locale } = useI18n();
   const [art, setArt] = useState<Article | null>(null);
   const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
   const loc = locale?.startsWith("zh") ? "zh-CN" : "en";
 
-  useEffect(() => {
+  // 统一走 apiGet（带会话），失败要能区分「文章不存在」与「取数失败」（P1-33 / P1-4）。
+  const load = useCallback(() => {
     if (!slug) return;
-    fetch(`${API_BASE}/api/v1/help/articles/${encodeURIComponent(slug)}?locale=${encodeURIComponent(loc)}`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error("not found");
-        return r.json();
+    setLoading(true);
+    setErr("");
+    apiGet(`/api/v1/help/articles/${encodeURIComponent(slug)}?locale=${encodeURIComponent(loc)}`)
+      .then((data: any) => setArt(data as Article))
+      .catch((e: any) => {
+        setArt(null);
+        setErr(
+          e?.status === 404
+            ? t("help.article_missing", "Article not found.")
+            : msgOf(e, t("help.load_fail", "Unable to load knowledge catalogue.")),
+        );
       })
-      .then(setArt)
-      .catch(() => setErr(t("help.article_missing", "Article not found.")));
+      .finally(() => setLoading(false));
   }, [slug, loc, t]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   return (
     <HelpFrame>
@@ -78,34 +92,38 @@ function HelpArticle({ slug }: { slug: string }) {
         ]}
         title={art?.title || slug}
       />
-      {err ? <p className="flash-err">{err}</p> : null}
-      {art ? (
-        <article className="help-article">
-          <p className="help-summary">{art.summary}</p>
-          <div className="help-tags">
-            {art.tags.map((tag) => (
-              <span key={tag}>{tag}</span>
-            ))}
-          </div>
-          <div className="help-body">
-            {art.body.split(/\n\n+/).map((para, i) => (
-              <p key={i} style={{ whiteSpace: "pre-wrap" }}>
-                {para}
-              </p>
-            ))}
-          </div>
-          <div className="help-article-actions">
-            <Link className="btn" href="/help">
-              {t("help.back_list", "All articles")}
-            </Link>
-            <Link className="btn btn-primary" href="/help?ask=1">
-              {t("help.ask_more", "Ask another question")}
-            </Link>
-          </div>
-        </article>
-      ) : !err ? (
-        <p>{t("common.loading", "Loading…")}</p>
-      ) : null}
+      <StateView
+        loading={loading}
+        error={err || undefined}
+        empty={false}
+        onRetry={load}
+      >
+        {art ? (
+          <article className="help-article">
+            <p className="help-summary">{art.summary}</p>
+            <div className="help-tags">
+              {art.tags.map((tag) => (
+                <span key={tag}>{tag}</span>
+              ))}
+            </div>
+            <div className="help-body">
+              {art.body.split(/\n\n+/).map((para, i) => (
+                <p key={i} style={{ whiteSpace: "pre-wrap" }}>
+                  {para}
+                </p>
+              ))}
+            </div>
+            <div className="help-article-actions">
+              <Link className="btn" href="/help">
+                {t("help.back_list", "All articles")}
+              </Link>
+              <Link className="btn btn-primary" href="/help?ask=1">
+                {t("help.ask_more", "Ask another question")}
+              </Link>
+            </div>
+          </article>
+        ) : null}
+      </StateView>
     </HelpFrame>
   );
 }

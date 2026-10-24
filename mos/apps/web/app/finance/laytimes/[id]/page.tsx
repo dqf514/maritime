@@ -2,6 +2,7 @@
 
 // U2/U4 单据详情：laytime 计算书（可深链 + 打印/PDF + 对账）。
 
+import { msgOf } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -11,6 +12,7 @@ import { RecordAttribution } from "@/components/RecordAttribution";
 import { Num } from "@/components/Num";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
 import { SkeletonCard } from "@/components/Skeleton";
+import { StateView } from "@/components/StateView";
 import { PrintDoc } from "@/components/PrintDoc";
 import { LaytimeDemurragePanel } from "@/components/finance/LaytimeDemurragePanel";
 import { DataGrid } from "@/components/grid";
@@ -63,26 +65,48 @@ export default function LaytimeDetailPage() {
   const [st, setSt] = useState<LaytimeStatement | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
+  const [sectionErr, setSectionErr] = useState<{ mail?: string }>({});
   const [cmprJson, setCmprJson] = useState("");
   const [mailOpts, setMailOpts] = useState<{ message_id: string; subject: string; parsed: unknown }[]>([]);
   const [cmpr, setCmpr] = useState<CompareResult | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    const data = await apiGet(`/api/v1/laytimes/${id}/export`);
-    setSt(data);
+    setLoading(true);
+    try {
+      const data = await apiGet(`/api/v1/laytimes/${id}/export`);
+      setSt(data);
+      setLoadErr("");
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
 
   useEffect(() => {
     refresh().catch((ex) => {
       if (ex?.status === 404) setNotFound(true);
-      else setErr(String(ex));
+      else setLoadErr(msgOf(ex));
     });
-    // D12 对账直连：拉取已解析的 laytime 邮件供一键导入
+    // D12 对账直连：拉取已解析的 laytime 邮件供一键导入（失败不拖垮整页，但要可见）
     apiGet("/api/v1/email-intelligence/laytime-parsed")
       .then((r: { items: { message_id: string; subject: string; parsed: unknown }[] }) => setMailOpts(r.items || []))
-      .catch(() => setMailOpts([]));
+      .catch((ex) => {
+        setMailOpts([]);
+        setSectionErr((prev) => ({ ...prev, mail: msgOf(ex) }));
+      });
   }, [refresh]);
+
+  /** 重新加载（错误态重试） */
+  function reload() {
+    setLoadErr("");
+    setNotFound(false);
+    refresh().catch((ex) => {
+      if (ex?.status === 404) setNotFound(true);
+      else setLoadErr(msgOf(ex));
+    });
+  }
 
   async function runCompare() {
     if (!st) return;
@@ -91,8 +115,12 @@ export default function LaytimeDetailPage() {
     try {
       const their = JSON.parse(cmprJson);
       setCmpr(await apiPost("/api/v1/laytimes/compare", { my: st, their }));
-    } catch {
-      setErr(t("page.finance.lt_compare_bad", "对手方 JSON 解析失败或对账请求出错"));
+    } catch (ex) {
+      const msg =
+        ex instanceof SyntaxError
+          ? t("page.finance.lt_compare_bad", "对手方 JSON 解析失败或对账请求出错")
+          : msgOf(ex);
+      setErr(msg);
       setCmpr(null);
     } finally {
       setBusy(false);
@@ -239,9 +267,28 @@ export default function LaytimeDetailPage() {
       />
 
       {err ? <p className="err-text">{err}</p> : null}
+      {loadErr ? (
+        <p className="state-view-text state-view-error">
+          {t("page.finance.load_failed", "数据加载失败：{msg}", { msg: loadErr })}
+        </p>
+      ) : null}
+      {sectionErr.mail ? (
+        <p className="state-view-text state-view-error">
+          {t("page.finance.laytime_mail_failed", "已解析的滞期费邮件加载失败：{msg}", { msg: sectionErr.mail })}
+        </p>
+      ) : null}
 
       {!st ? (
-        <SkeletonCard />
+        // P1-5：loading / error / content 三态互斥 —— 错误不被骨架屏吞掉
+        <StateView
+          loading={loading}
+          error={loadErr || undefined}
+          empty={!loading && !loadErr}
+          emptyText={t("common.empty", "No records")}
+          onRetry={reload}
+        >
+          <SkeletonCard />
+        </StateView>
       ) : (
         <PrintDoc
           title={t("page.finance.lt_statement", "LAYTIME STATEMENT")}
@@ -303,6 +350,7 @@ export default function LaytimeDetailPage() {
               style={{ width: "100%", minHeight: 72, fontFamily: "monospace", fontSize: 12 }}
               value={cmprJson}
               onChange={(e) => setCmprJson(e.target.value)}
+              aria-label={t("page.finance.lt_compare_json", "Counterparty calculation JSON")}
               placeholder='{"allowed_hours": 72, "used_hours": 84, "amount": 12000, "events": [...]}'
             />
             <div className="desk-toolbar" style={{ margin: "0.5rem 0 0" }}>

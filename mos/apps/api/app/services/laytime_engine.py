@@ -32,6 +32,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from zoneinfo import ZoneInfo
+from app.services.observability import traced
 
 # term -> (excluded weekday indexes, holidays_excluded); weekday: Mon=0..Sun=6
 _TERM_RULES: dict[str, tuple[frozenset[int], bool]] = {
@@ -139,10 +140,13 @@ def _allowed_hours(inputs: dict[str, Any]) -> Decimal:
     if fixed is not None:
         allowed = Decimal(str(fixed))
     elif load_rate > 0:
-        allowed = (qty / load_rate * Decimal("24")).quantize(Decimal("0.01"))
+        allowed = qty / load_rate * Decimal("24")
     else:
         allowed = Decimal("0")
-    return allowed + Decimal(str(inputs.get("turn_time_hours") or 0))
+    # turn time 是允许时间的一部分，必须在量化**之前**加上 —— 先量化再加会
+    # 出现 3 位小数的 allowed_hours（6.125），金额也就按非 2dp 的允许时间算（P2-B14）
+    allowed = allowed + Decimal(str(inputs.get("turn_time_hours") or 0))
+    return allowed.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _rates(inputs: dict[str, Any]) -> tuple[Decimal, Decimal]:
@@ -218,10 +222,10 @@ def _compute_single(inputs: dict[str, Any], warnings: list[str], include_events:
                         "end": e.isoformat(),
                         "kind": ev.get("kind") or "working",
                         "caller_excluded": True,
-                        "gross_hours": float(_delta_hours(s, e).quantize(Decimal("0.01"))) if e >= s else 0.0,
+                        "gross_hours": float(_delta_hours(s, e).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if e >= s else 0.0,
                         "term_excluded_hours": 0.0,
                         "counted_hours": 0.0,
-                        "cumulative_hours": float(used.quantize(Decimal("0.01"))),
+                        "cumulative_hours": float(used.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                         "note": "excluded by caller (interruption not counting)",
                     }
                 )
@@ -261,10 +265,10 @@ def _compute_single(inputs: dict[str, Any], warnings: list[str], include_events:
                         "end": e.isoformat(),
                         "kind": ev.get("kind") or "working",
                         "caller_excluded": False,
-                        "gross_hours": float(span.quantize(Decimal("0.01"))),
-                        "term_excluded_hours": float(auto.quantize(Decimal("0.01"))),
-                        "counted_hours": float(counted.quantize(Decimal("0.01"))),
-                        "cumulative_hours": float(used.quantize(Decimal("0.01"))),
+                        "gross_hours": float(span.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                        "term_excluded_hours": float(auto.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                        "counted_hours": float(counted.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                        "cumulative_hours": float(used.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                         "note": "once on demurrage — time counts in full" if on_dem else "",
                     }
                 )
@@ -279,10 +283,10 @@ def _compute_single(inputs: dict[str, Any], warnings: list[str], include_events:
                     "end": e.isoformat(),
                     "kind": ev.get("kind") or "working",
                     "caller_excluded": False,
-                    "gross_hours": float(span.quantize(Decimal("0.01"))),
-                    "term_excluded_hours": float(auto.quantize(Decimal("0.01"))),
-                    "counted_hours": float(counted.quantize(Decimal("0.01"))),
-                    "cumulative_hours": float(used.quantize(Decimal("0.01"))),
+                    "gross_hours": float(span.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                    "term_excluded_hours": float(auto.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                    "counted_hours": float(counted.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+                    "cumulative_hours": float(used.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
                     "note": "counts in full (even if used)" if skip_days and (excl_weekdays or hol_excl) else "",
                 }
             )
@@ -293,9 +297,9 @@ def _compute_single(inputs: dict[str, Any], warnings: list[str], include_events:
     result: dict[str, Any] = {
         "terms": terms,
         "allowed_hours": float(allowed),
-        "used_hours": float(used.quantize(Decimal("0.01"))),
-        "excluded_hours": float(auto_excluded_total.quantize(Decimal("0.01"))),
-        "balance_hours": float(balance.quantize(Decimal("0.01"))),
+        "used_hours": float(used.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "excluded_hours": float(auto_excluded_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "balance_hours": float(balance.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
         "result_type": kind,
         "amount": float(amount),
         "currency": inputs.get("currency") or "USD",
@@ -330,8 +334,13 @@ def _port_entries(inputs: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _merge_port_inputs(inputs: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
-    """Top-level values act as defaults; the port entry overrides them."""
-    merged = {k: v for k, v in inputs.items() if k not in _MULTI_ONLY_KEYS and k not in _ALLOWED_KEYS}
+    """Top-level values act as defaults; the port entry overrides them.
+
+    顶层 allowed_hours / cargo_qty / load_rate_per_day / turn_time_hours 是各港口
+    的**缺省值**：以前多港口模式把它们整个丢掉（只认港口条目里自己带的值），
+    于是凭空多出滞期费（P1-B21）。
+    """
+    merged = {k: v for k, v in inputs.items() if k not in _MULTI_ONLY_KEYS}
     merged.update({k: v for k, v in entry.items() if v is not None})
     return merged
 
@@ -401,10 +410,10 @@ def _compute_multi(inputs: dict[str, Any], warnings: list[str], include_events: 
     result: dict[str, Any] = {
         "terms": top_terms,
         "method": method,
-        "allowed_hours": float(allowed_out.quantize(Decimal("0.01"))),
-        "used_hours": float(used_out.quantize(Decimal("0.01"))),
-        "excluded_hours": float(total_excluded.quantize(Decimal("0.01"))),
-        "balance_hours": float(balance.quantize(Decimal("0.01"))),
+        "allowed_hours": float(allowed_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "used_hours": float(used_out.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "excluded_hours": float(total_excluded.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "balance_hours": float(balance.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
         "result_type": kind,
         "amount": float(amount),
         "currency": inputs.get("currency") or "USD",
@@ -423,6 +432,7 @@ def _is_multi(inputs: dict[str, Any]) -> bool:
     return str(inputs.get("method") or "").lower() in {"reversible", "average"}
 
 
+@traced("laytime")
 def compute_laytime(inputs: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
     if _is_multi(inputs):
@@ -454,11 +464,11 @@ def settle_with_on_account(
     anything beyond the final amount is reported as overpaid (to be refunded or
     offset elsewhere).
     """
-    dem = Decimal(str(demurrage_amount or 0)).quantize(Decimal("0.01"))
+    dem = Decimal(str(demurrage_amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if dem < 0:
         # despatch / negative balances have no demurrage to credit against
         dem = Decimal("0.00")
-    total = sum((Decimal(str(a or 0)) for a in on_account_amounts), Decimal("0")).quantize(Decimal("0.01"))
+    total = sum((Decimal(str(a or 0)) for a in on_account_amounts), Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     outstanding = max(dem - total, Decimal("0.00"))
     overpaid = max(total - dem, Decimal("0.00"))
     return {

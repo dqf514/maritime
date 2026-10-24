@@ -2,9 +2,11 @@
 
 // 付款批次工作台：批次列表 + 新建批次（勾选应付发票）+ 审批/冲正 + 导出银行 XML。
 
+import { msgOf, handled } from "@/lib/errors";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
@@ -91,6 +93,9 @@ function PaymentsPage() {
   // R4 行右键菜单
   const batchCtx = useContextMenu<Batch>();
 
+  // P1-8：破坏性操作统一走 ConfirmDialog（pending 存待执行函数）
+  const [pending, setPending] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
+
   // B6 列表热键：按 N 新建付款批次
   useListHotkeys(() => {
     void openCreate();
@@ -108,14 +113,14 @@ function PaymentsPage() {
       const pg = await apiGet("/api/v1/payments/batches");
       setRows(Array.isArray(pg) ? pg : pg.items || []);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadBatches().catch(() => undefined);
+    loadBatches().catch(handled);
   }, [loadBatches]);
 
   async function openCreate() {
@@ -125,7 +130,7 @@ function PaymentsPage() {
       setPicked(new Set());
       setCreateOpen(true);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -154,7 +159,7 @@ function PaymentsPage() {
       setCreateOpen(false);
       await loadBatches();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -167,7 +172,7 @@ function PaymentsPage() {
       setDetailDate(batch.batch_date || "");
       setDetailCharge(batch.bank_charge_mode || "shared");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -183,7 +188,7 @@ function PaymentsPage() {
       await loadBatches();
       await openDetail(detail.id);
     } catch (ex) {
-      toast.error((ex as { message?: string })?.message || String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -197,7 +202,7 @@ function PaymentsPage() {
       await loadBatches();
       await openDetail(id);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -211,7 +216,7 @@ function PaymentsPage() {
       await loadBatches();
       await openDetail(id);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -232,7 +237,7 @@ function PaymentsPage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -254,7 +259,7 @@ function PaymentsPage() {
         toast.success(t("common.saved", "Saved"));
         await loadBatches();
       } catch (ex) {
-        toast.error((ex as { message?: string })?.message || String(ex));
+        toast.error(msgOf(ex));
       }
       return;
     }
@@ -264,7 +269,7 @@ function PaymentsPage() {
       toast.success(t("common.saved", "Saved"));
       await loadBatches();
     } catch (ex) {
-      toast.error((ex as { message?: string })?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -275,8 +280,33 @@ function PaymentsPage() {
       setDetail(null);
       await loadBatches();
     } catch (ex) {
-      toast.error((ex as { message?: string })?.message || String(ex));
+      toast.error(msgOf(ex));
     }
+  }
+
+  // —— P1-8：二次确认入口（确认文案指名批次） ——
+  function askApprove(batch: Batch) {
+    setPending({
+      message: t("page.payments.approve_confirm", "审批付款批次 {no}？审批后批次锁定，不可再编辑。", { no: batch.batch_number }),
+      danger: false,
+      action: () => void approve(batch.id),
+    });
+  }
+
+  function askReverse(batch: Batch) {
+    setPending({
+      message: t("page.payments.reverse_confirm", "反转付款批次 {no}？将生成反向付款，操作不可撤销。", { no: batch.batch_number }),
+      danger: true,
+      action: () => void reverse(batch.id),
+    });
+  }
+
+  function askDelete(batch: Batch) {
+    setPending({
+      message: t("page.payments.delete_confirm", "删除付款批次 {no}？记录将移入回收站，可恢复。", { no: batch.batch_number }),
+      danger: true,
+      action: () => void deleteBatch(batch.id),
+    });
   }
 
   const cols = useMemo<ColumnDef<Batch>[]>(
@@ -409,10 +439,10 @@ function PaymentsPage() {
     { key: "export", label: t("page.finance.export_selected", "导出所选 CSV"), onClick: () => exportBatches([row]) },
     { key: "div", divider: true, label: "" },
     ...(row.status === "draft"
-      ? [{ key: "approve", label: t("page.payments.approve", "Approve"), onClick: () => approve(row.id) } as ContextMenuItem]
+      ? [{ key: "approve", label: t("page.payments.approve", "Approve"), onClick: () => askApprove(row) } as ContextMenuItem]
       : []),
     ...(row.status === "completed" || row.status === "processing"
-      ? [{ key: "reverse", label: t("page.payments.reverse", "Reverse"), onClick: () => reverse(row.id) } as ContextMenuItem]
+      ? [{ key: "reverse", label: t("page.payments.reverse", "Reverse"), onClick: () => askReverse(row) } as ContextMenuItem]
       : []),
     { key: "xml", label: t("page.payments.export_xml", "Export XML"), onClick: () => exportXml(row.id) },
   ];
@@ -510,8 +540,7 @@ function PaymentsPage() {
         onClose={() => setDetail(null)}
         onSave={detail && detail.status === "draft" ? saveDetail : undefined}
         canEdit={detail?.status === "draft"}
-        canDelete={detail?.status === "draft"}
-        onDelete={detail ? () => deleteBatch(detail.id) : undefined}
+        canDelete={false}
         saving={busy}
         size="lg"
       >
@@ -557,24 +586,43 @@ function PaymentsPage() {
             />
             <div className="desk-toolbar">
               {detail.status === "draft" ? (
-                <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => approve(detail.id)}>
+                <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => askApprove(detail)}>
                   {t("page.payments.approve", "Approve")}
                 </button>
               ) : null}
               {detail.status === "completed" || detail.status === "processing" ? (
-                <button className="btn btn-sm btn-ghost" type="button" disabled={busy} onClick={() => reverse(detail.id)}>
+                <button className="btn btn-sm btn-ghost" type="button" disabled={busy} onClick={() => askReverse(detail)}>
                   {t("page.payments.reverse", "Reverse")}
                 </button>
               ) : null}
               <button className="btn btn-sm" type="button" onClick={() => exportXml(detail.id)}>
                 {t("page.payments.export_xml", "Export XML")}
               </button>
+              {detail.status === "draft" ? (
+                // P1-8：删除批次走指名对象的二次确认
+                <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => askDelete(detail)}>
+                  {t("common.delete", "删除")}
+                </button>
+              ) : null}
             </div>
           </>
         ) : null}
       </RecordModal>
 
       <ContextMenu controller={batchCtx} items={batchMenuItems} />
+
+      <ConfirmDialog
+        open={Boolean(pending)}
+        title={t("common.confirm", "确认操作")}
+        message={pending?.message || ""}
+        danger={pending?.danger}
+        onConfirm={() => {
+          const fn = pending?.action;
+          setPending(null);
+          fn?.();
+        }}
+        onCancel={() => setPending(null)}
+      />
     </AppShell>
   );
 }

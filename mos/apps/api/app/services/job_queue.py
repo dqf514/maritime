@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -34,6 +35,21 @@ HANDLERS: dict[str, Handler] = {}
 
 # running 超过该时长视为 worker 崩溃遗留，回收重跑
 STALE_RUNNING = timedelta(minutes=15)
+
+#: worker 心跳时间戳（monotonic）—— 供 /readyz 探"后台任务线程还活着吗"。
+_last_tick: float = 0.0
+
+
+def worker_alive(max_stale_seconds: float = 60.0) -> bool:
+    """worker 线程是否还在正常心跳。
+
+    审计 P3-12「jobs/healthz 只探进程不探依赖」：worker 线程死了
+    （异常退出 / 被 OOM kill）时进程还活着，容器照样 healthy，
+    但 webhook 投递、备份调度**全停**了 —— 没有任何告警。
+    """
+    if _last_tick <= 0:
+        return False
+    return (time.monotonic() - _last_tick) < max_stale_seconds
 
 
 def job_handler(kind: str) -> Callable[[Handler], Handler]:
@@ -145,9 +161,14 @@ def run_worker(stop: threading.Event, *, interval: float = 2.0, max_jobs: int = 
     """worker 线程主循环（lifespan 启动；测试默认关闭 job_worker_enabled）。"""
     from app.db import SessionLocal
 
+    global _last_tick
     reclaim_every = timedelta(minutes=5)
     last_reclaim = datetime.min.replace(tzinfo=timezone.utc)
+    # 刚进循环就记一次心跳 —— 否则启动后的头几秒 worker_alive() 为假，
+    # /readyz 会误报 503。
+    _last_tick = time.monotonic()
     while not stop.is_set():
+        _last_tick = time.monotonic()
         try:
             with SessionLocal() as db:
                 if datetime.now(timezone.utc) - last_reclaim > reclaim_every:

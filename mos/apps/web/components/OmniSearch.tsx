@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiCreateBackup, apiRunSelfCheck, apiSearch, type SearchHit } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 export function OmniSearch() {
@@ -11,6 +12,8 @@ export function OmniSearch() {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [active, setActive] = useState(0);
   const [flash, setFlash] = useState("");
+  /** 搜索取数失败 —— 不能与「没有匹配项」混淆 */
+  const [searchErr, setSearchErr] = useState<string | null>(null);
   const router = useRouter();
   const { t } = useI18n();
 
@@ -87,9 +90,14 @@ export function OmniSearch() {
           if (!cancelled) {
             setHits(data);
             setActive(0);
+            setSearchErr(null);
           }
         })
-        .catch(() => setHits([]));
+        .catch((ex) => {
+          if (cancelled) return;
+          setHits([]);
+          setSearchErr(msgOf(ex));
+        });
     }, 200);
     return () => {
       cancelled = true;
@@ -121,7 +129,7 @@ export function OmniSearch() {
       }
       if (hit.href) router.push(hit.href);
     } catch (e: any) {
-      setFlash(e?.message || t("common.failed", "Failed"));
+      setFlash(msgOf(e, t("common.failed", "Failed")));
     }
   };
 
@@ -143,6 +151,7 @@ export function OmniSearch() {
           <div className="palette" onClick={(e) => e.stopPropagation()}>
             <input
               autoFocus
+              aria-label={t("omni.placeholder", "Type a command, page, or keyword…")}
               placeholder={t("omni.placeholder", "Type a command, page, or keyword…")}
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -155,7 +164,7 @@ export function OmniSearch() {
                   e.preventDefault();
                   setActive((i) => Math.max(i - 1, 0));
                 }
-                if (e.key === "Enter" && hits[active]) go(hits[active]).catch(() => undefined);
+                if (e.key === "Enter" && hits[active]) void go(hits[active]);
               }}
             />
             <ul>
@@ -164,13 +173,18 @@ export function OmniSearch() {
                   key={hit.id}
                   className={idx === active ? "active" : ""}
                   onMouseEnter={() => setActive(idx)}
-                  onClick={() => go(hit).catch(() => undefined)}
+                  onClick={() => void go(hit)}
                 >
                   <span>{hit.title}</span>
                   <span className="meta">{hit.module}{hit.action ? ` · ${hit.action}` : ""}</span>
                 </li>
               ))}
-              {!hits.length ? <li className="meta">{t("omni.empty", "No matches")}</li> : null}
+              {searchErr ? (
+                <li className="meta" role="alert">
+                  {t("omni.search_failed", "Search failed: {err}", { err: searchErr })}
+                </li>
+              ) : null}
+              {!hits.length && !searchErr ? <li className="meta">{t("omni.empty", "No matches")}</li> : null}
             </ul>
           </div>
         </div>

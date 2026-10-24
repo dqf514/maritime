@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { msgOf, handled } from "@/lib/errors";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Toolbar } from "@/components/Toolbar";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { RowActions } from "@/components/RowActions";
@@ -56,21 +59,58 @@ export default function OfficeEcosystemPage() {
   const [hookName, setHookName] = useState("Power Automate");
   const [hookUrl, setHookUrl] = useState("stub://power-automate");
   const [notifyText, setNotifyText] = useState("MariOS alert: voyage DEMO-001 ETA updated.");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  // 钩子签名密钥：默认脱敏，明文不常驻 DOM
+  const [hookSecret, setHookSecret] = useState("");
+  const [revealHookSecret, setRevealHookSecret] = useState(false);
 
-  async function load() {
-    const [st, j, wh] = await Promise.all([
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    const [st, j, wh] = await Promise.allSettled([
       apiGet("/api/v1/office/status"),
       apiGet("/api/v1/office/sync/jobs"),
       apiGet("/api/v1/office/webhooks"),
     ]);
-    setStatus(st);
-    setJobs(Array.isArray(j) ? j : []);
-    setHooks(Array.isArray(wh) ? wh : []);
-  }
+    if (st.status === "fulfilled") setStatus(st.value);
+    else {
+      setErr(msgOf(st.reason));
+      setStatus(null);
+    }
+    if (j.status === "fulfilled") setJobs(Array.isArray(j.value) ? j.value : []);
+    else {
+      setErr(msgOf(j.reason));
+      setJobs([]);
+    }
+    if (wh.status === "fulfilled") setHooks(Array.isArray(wh.value) ? wh.value : []);
+    else {
+      setErr(msgOf(wh.reason));
+      setHooks([]);
+    }
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    load().catch((e) => toast.error(String(e?.message || e)));
-  }, []);
+    load();
+  }, [load]);
+
+  /** 脱敏显示：仅首尾片段可见 */
+  function maskSecret(secret: string): string {
+    if (!secret) return "";
+    if (secret.length <= 8) return secret.slice(0, 2) + "…";
+    return `${secret.slice(0, 4)}…${secret.slice(-4)}`;
+  }
+
+  async function copyHookSecret() {
+    if (!hookSecret) return;
+    try {
+      await navigator.clipboard.writeText(hookSecret);
+      toast.success(t("common.copied", "已复制"));
+    } catch {
+      toast.error(t("page.office.copy_secret_fail", "复制失败，请显示密钥后手动复制。"));
+    }
+  }
 
   async function connect() {
     const res = await apiGet("/api/v1/office/connect");
@@ -126,15 +166,18 @@ export default function OfficeEcosystemPage() {
       target_url: hookUrl,
       events: ["charter.activated", "voyage.started", "invoice.issued", "office.sync.done", "*"],
     });
-    toast.success(t("page.office.hook_created", "Webhook created. Secret: {secret}", { secret: res.secret }));
+    // 密钥不回显到 toast / 常态 DOM：仅脱敏 + 剪贴板复制
+    setHookSecret(String(res.secret || ""));
+    setRevealHookSecret(false);
+    toast.success(t("page.office.hook_created", "Webhook created — copy the secret to a safe place now."));
     await load();
   }
 
-  async function testHook(id: string) {
+  const testHook = useCallback(async (id: string) => {
     const res = await apiPost(`/api/v1/office/webhooks/${id}/test`);
     toast.success(t("page.office.hook_test", "Delivery {status}", { status: res.status }));
     await load();
-  }
+  }, [load, t, toast]);
 
   async function onHookCellSave(rowId: string, colKey: string, value: unknown, row: Webhook) {
     const src = row as unknown as Record<string, unknown>;
@@ -143,25 +186,25 @@ export default function OfficeEcosystemPage() {
       await apiPatch(`/api/v1/office/webhooks/${rowId}`, { [colKey]: value === "" ? null : value });
       toast.success(t("common.saved", "Saved"));
       await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+    } catch (ex) {
+      toast.error(msgOf(ex));
     }
   }
 
-  async function deleteHook(id: string) {
+  const deleteHook = useCallback(async (id: string) => {
     try {
       await apiDelete(`/api/v1/office/webhooks/${id}`);
       toast.success(t("common.recycled", "Moved to recycle bin"));
       await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+    } catch (ex) {
+      toast.error(msgOf(ex));
     }
-  }
+  }, [load, t, toast]);
 
-  async function markAddon(id: string, st: string) {
+  const markAddon = useCallback(async (id: string, st: string) => {
     await apiPost(`/api/v1/office/addons/${id}`, { status: st });
     await load();
-  }
+  }, [load]);
 
   function configSourceBadge(src?: string) {
     const map: Record<string, [string, string]> = {
@@ -174,7 +217,7 @@ export default function OfficeEcosystemPage() {
     return <span className={cls}>{label}</span>;
   }
 
-  const jobColumns: ColumnDef<SyncJob>[] = [
+  const jobColumns = useMemo<ColumnDef<SyncJob>[]>(() => [
     { key: "channel", title: t("page.office.channel", "Channel"), width: 120, value: (r) => r.channel },
     { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
     {
@@ -184,9 +227,9 @@ export default function OfficeEcosystemPage() {
       value: (r) => JSON.stringify(r.stats || r.error || {}),
       render: (v) => <code>{String(v)}</code>,
     },
-  ];
+  ], [t]);
 
-  const hookColumns: ColumnDef<Webhook>[] = [
+  const hookColumns = useMemo<ColumnDef<Webhook>[]>(() => [
     {
       key: "name",
       title: t("common.name", "Name"),
@@ -222,18 +265,18 @@ export default function OfficeEcosystemPage() {
       align: "right",
       render: (_v, h) => (
         <span className="row-actions">
-          <button className="btn btn-sm" type="button" onClick={() => testHook(h.id).catch((e) => toast.error(String(e)))}>
+          <button className="btn btn-sm" type="button" onClick={() => testHook(h.id).catch((e) => toast.error(msgOf(e)))}>
             {t("common.test", "Test")}
           </button>
           <RowActions label={h.name} onDelete={() => deleteHook(h.id)} />
         </span>
       ),
     },
-  ];
+  ], [t, testHook, deleteHook, toast]);
 
   type AddonRow = Record<string, unknown>;
 
-  const addonColumns: ColumnDef<AddonRow>[] = [
+  const addonColumns = useMemo<ColumnDef<AddonRow>[]>(() => [
     {
       key: "name",
       title: t("common.name", "Name"),
@@ -270,13 +313,13 @@ export default function OfficeEcosystemPage() {
         <button
           className="btn"
           type="button"
-          onClick={() => markAddon(String(a.id), "installed").catch((e) => toast.error(String(e)))}
+          onClick={() => markAddon(String(a.id), "installed").catch((e) => toast.error(msgOf(e)))}
         >
           {t("page.office.mark_installed", "Mark installed")}
         </button>
       ),
     },
-  ];
+  ], [t, markAddon, toast]);
 
   return (
     <AppShell>
@@ -292,18 +335,16 @@ export default function OfficeEcosystemPage() {
         )}
       />
       <Toolbar>
-        <button className="btn btn-primary" type="button" onClick={() => connect().catch((e) => toast.error(String(e)))}>
+        <button className="btn btn-primary" type="button" onClick={() => connect().catch((e) => toast.error(msgOf(e)))}>
           {t("page.office.connect", "Connect Microsoft 365")}
         </button>
-        <button className="btn" type="button" onClick={() => refreshHealth().catch((e) => toast.error(String(e)))}>
+        <button className="btn" type="button" onClick={() => refreshHealth().catch((e) => toast.error(msgOf(e)))}>
           {t("page.office.health", "Health check")}
         </button>
-        <button className="btn" type="button" onClick={() => disconnect().catch((e) => toast.error(String(e)))}>
+        <button className="btn" type="button" onClick={() => disconnect().catch((e) => toast.error(msgOf(e)))}>
           {t("page.office.disconnect", "Disconnect")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load()} />
       </Toolbar>
 
 
@@ -327,7 +368,7 @@ export default function OfficeEcosystemPage() {
         </p>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           {(["mail", "onedrive", "sharepoint", "teams"] as const).map((ch) => (
-            <button key={ch} className="btn" type="button" onClick={() => sync(ch).catch((e) => toast.error(String(e)))}>
+            <button key={ch} className="btn" type="button" onClick={() => sync(ch).catch((e) => toast.error(msgOf(e)))}>
               {t("page.office.sync_ch", "Sync {channel}", { channel: ch })}
             </button>
           ))}
@@ -337,7 +378,7 @@ export default function OfficeEcosystemPage() {
       <div className="stack-panels">
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.mail", "Mail")}</h3>
-          <button className="btn" type="button" onClick={() => loadMail().catch((e) => toast.error(String(e)))}>
+          <button className="btn" type="button" onClick={() => loadMail().catch((e) => toast.error(msgOf(e)))}>
             {t("page.office.load_mail", "Load inbox sample")}
           </button>
           <ul className="panel-list">
@@ -354,7 +395,7 @@ export default function OfficeEcosystemPage() {
         </div>
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.files", "OneDrive / SharePoint")}</h3>
-          <button className="btn" type="button" onClick={() => loadDrives().catch((e) => toast.error(String(e)))}>
+          <button className="btn" type="button" onClick={() => loadDrives().catch((e) => toast.error(msgOf(e)))}>
             {t("page.office.load_drives", "List drives")}
           </button>
           <ul className="panel-list">
@@ -367,7 +408,7 @@ export default function OfficeEcosystemPage() {
         </div>
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.office.teams", "Teams")}</h3>
-          <button className="btn" type="button" onClick={() => loadTeams().catch((e) => toast.error(String(e)))}>
+          <button className="btn" type="button" onClick={() => loadTeams().catch((e) => toast.error(msgOf(e)))}>
             {t("page.office.load_teams", "List teams")}
           </button>
           <ul className="panel-list">
@@ -381,7 +422,7 @@ export default function OfficeEcosystemPage() {
             rows={3}
             style={{ width: "100%", marginTop: "0.5rem" }}
           />
-          <button className="btn btn-primary" type="button" onClick={() => sendTeams().catch((e) => toast.error(String(e)))}>
+          <button className="btn btn-primary" type="button" onClick={() => sendTeams().catch((e) => toast.error(msgOf(e)))}>
             {t("page.office.notify", "Post channel message")}
           </button>
         </div>
@@ -389,13 +430,21 @@ export default function OfficeEcosystemPage() {
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <h3 style={{ marginTop: 0 }}>{t("page.office.jobs", "Sync jobs")}</h3>
-        <DataGrid<SyncJob>
-          columns={jobColumns}
-          data={jobs}
-          rowKey={(r) => r.id}
-          storageKey="settings_office_jobs_grid"
+        <StateView
+          loading={loading}
+          error={err ?? undefined}
+          empty={!jobs.length}
+          onRetry={() => load()}
           emptyText={t("common.no_data", "No data")}
-        />
+        >
+          <DataGrid<SyncJob>
+            columns={jobColumns}
+            data={jobs}
+            rowKey={(r) => r.id}
+            storageKey="settings_office_jobs_grid"
+            emptyText={t("common.no_data", "No data")}
+          />
+        </StateView>
       </div>
 
       <div className="panel" style={{ marginTop: "1rem" }}>
@@ -404,37 +453,84 @@ export default function OfficeEcosystemPage() {
           {t("page.office.webhooks_sub", "Power Automate / Teams Workflows / partner systems.")}
         </p>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-          <input value={hookName} onChange={(e) => setHookName(e.target.value)} placeholder="Name" />
+          <input value={hookName} onChange={(e) => setHookName(e.target.value)} placeholder="Name" aria-label="Name" />
           <input
             value={hookUrl}
             onChange={(e) => setHookUrl(e.target.value)}
+            aria-label="URL"
             placeholder="https://..."
             style={{ minWidth: "280px" }}
           />
-          <button className="btn" type="button" onClick={() => createHook().catch((e) => toast.error(String(e)))}>
+          <button className="btn" type="button" onClick={() => createHook().catch((e) => toast.error(msgOf(e)))}>
             {t("common.create", "Create")}
           </button>
         </div>
-        <DataGrid<Webhook>
-          columns={hookColumns}
-          data={hooks}
-          rowKey={(r) => r.id}
-          editable
-          onCellSave={onHookCellSave}
-          storageKey="settings_office_hooks_grid"
+        {hookSecret ? (
+          <div className="flash">
+            <span>
+              {t("page.office.hook_created", "Webhook created — copy the secret to a safe place now.")}{" "}
+              <code>{revealHookSecret ? hookSecret : maskSecret(hookSecret)}</code>
+            </span>{" "}
+            <button type="button" className="btn btn-ghost" onClick={() => copyHookSecret().catch(handled)}>
+              {t("page.office.copy_secret", "复制密钥")}
+            </button>{" "}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              aria-expanded={revealHookSecret}
+              aria-label={t("page.office.reveal_secret", "显示密钥")}
+              onClick={() => setRevealHookSecret((v) => !v)}
+            >
+              {revealHookSecret ? t("page.office.hide_secret", "隐藏密钥") : t("page.office.reveal_secret", "显示密钥")}
+            </button>{" "}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setHookSecret("");
+                setRevealHookSecret(false);
+              }}
+            >
+              {t("common.close", "关闭")}
+            </button>
+          </div>
+        ) : null}
+        <StateView
+          loading={loading}
+          error={err ?? undefined}
+          empty={!hooks.length}
+          onRetry={() => load()}
           emptyText={t("common.no_data", "No data")}
-        />
+        >
+          <DataGrid<Webhook>
+            columns={hookColumns}
+            data={hooks}
+            rowKey={(r) => r.id}
+            editable
+            onCellSave={onHookCellSave}
+            storageKey="settings_office_hooks_grid"
+            emptyText={t("common.no_data", "No data")}
+          />
+        </StateView>
       </div>
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <h3 style={{ marginTop: 0 }}>{t("page.office.addons", "Office / Teams add-ins")}</h3>
-        <DataGrid<AddonRow>
-          columns={addonColumns}
-          data={status?.addons || []}
-          rowKey={(r) => String(r.id)}
-          storageKey="settings_office_addons_grid"
+        <StateView
+          loading={loading}
+          error={err ?? undefined}
+          empty={!(status?.addons || []).length}
+          onRetry={() => load()}
           emptyText={t("common.no_data", "No data")}
-        />
+        >
+          <DataGrid<AddonRow>
+            columns={addonColumns}
+            data={status?.addons || []}
+            rowKey={(r) => String(r.id)}
+            storageKey="settings_office_addons_grid"
+            emptyText={t("common.no_data", "No data")}
+          />
+        </StateView>
       </div>
     </AppShell>
   );

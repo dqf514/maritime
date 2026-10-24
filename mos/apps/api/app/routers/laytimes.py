@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -35,12 +35,14 @@ from app.models_task import Task
 from app.services.laytime_engine import compute_laytime, compute_laytime_statement, settle_with_on_account
 from app.services.clause_library import materialize_params
 from app.services.doc_numbering import next_doc_number
+from app.services.money import FX_RATE_NOT_FOUND, FxRateUnavailable, money, require_fx_rate, to_base_amount
 from app.services.recycle import soft_delete
 from app.services.sanctions import assert_not_sanctioned
 from app.services.state_machine import LAYTIME_TRANSITIONS, transition
 from app.services.tenant_guard import scoped_get
 
-from app.routers._finance_common import _alive, TIMEBAR_DAYS_AFTER_BL
+from app.routers._finance_common import _alive, _base_currency, _resolve_fx_rate, TIMEBAR_DAYS_AFTER_BL
+from app.services.data_scope import apply_module_scope
 
 router = APIRouter()
 
@@ -140,6 +142,7 @@ def create_laytime(body: LaytimeIn, auth: AuthContext = Depends(require_module("
         raise HTTPException(404, "Port call not found")
     row = LaytimeCalc(
         tenant_id=auth.tenant_id,
+     created_by=auth.user_id,
         voyage_id=body.voyage_id,
         port_call_id=body.port_call_id,
         booking_reference=body.booking_reference,
@@ -200,6 +203,8 @@ def list_laytimes(
     q = select(LaytimeCalc).where(LaytimeCalc.tenant_id == auth.tenant_id, LaytimeCalc.status != "deleted")
     if voyage_id is not None:
         q = q.where(LaytimeCalc.voyage_id == voyage_id)
+    # 行级数据权限：scope 收窄到 "own" 时只看自己建的滞期费计算
+    q = apply_module_scope(db, q, LaytimeCalc, auth, "laytime")
     rows, total = paginate(db, q.order_by(LaytimeCalc.id), limit, offset)
     return envelope([_laytime_out(r) for r in rows], total, limit, offset)
 
@@ -297,7 +302,7 @@ def _allowed_from_charter(charter: Charter | None, purpose: str) -> Decimal | No
     rate = charter.load_rate_pd if purpose == "load" else charter.disch_rate_pd
     if not rate or Decimal(str(rate)) <= 0:
         return None
-    return (Decimal(str(charter.cargo_qty)) / Decimal(str(rate)) * Decimal("24")).quantize(Decimal("0.01"))
+    return (Decimal(str(charter.cargo_qty)) / Decimal(str(rate)) * Decimal("24")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 @router.post("/laytimes/from-sof")
@@ -388,6 +393,7 @@ def laytime_from_sof(body: LaytimeFromSofIn, auth: AuthContext = Depends(require
 
     row = LaytimeCalc(
         tenant_id=auth.tenant_id,
+     created_by=auth.user_id,
         voyage_id=pc.voyage_id,
         port_call_id=pc.id,
         status="draft",
@@ -444,6 +450,36 @@ def _get_laytime(auth: AuthContext, db: Session, laytime_id: UUID) -> LaytimeCal
     return row
 
 
+def _convert_amounts_to_base(
+    db: Session,
+    tenant_id,
+    base_ccy: str,
+    items: list[tuple[Decimal, str]],
+) -> tuple[Decimal, dict[str, Decimal]]:
+    """把 (金额, 币种) 列表折成本位币并求和。
+
+    P1-B4：不同币种的金额**不能直接相加**（EUR 1000 + USD 1000 ≠ 2000）。
+    每一笔先按汇率折成本位币再求和。
+
+    折不动的币种（没有汇率）**不进合计**，而是按币种列在第二个返回值里 ——
+    宁可少算也不能拿没折的钱去冲抵（fail closed against false positives：
+    没折成功的预付款绝不能把「未结」算成「已结清」）。
+    """
+    total = Decimal("0")
+    unconverted: dict[str, Decimal] = {}
+    for amt, ccy in items:
+        cur = (ccy or base_ccy).upper()
+        if cur == (base_ccy or "").upper():
+            total += money(amt)
+            continue
+        rate = _resolve_fx_rate(db, tenant_id, cur, base_ccy)
+        if rate is None:
+            unconverted[cur] = unconverted.get(cur, Decimal("0")) + money(amt)
+            continue
+        total += to_base_amount(amt, rate)
+    return money(total), unconverted
+
+
 def _demurrage_amount(row: LaytimeCalc) -> Decimal:
     """Settled demurrage for a laytime (0 for despatch/on-time)."""
     results = row.results or {}
@@ -454,7 +490,7 @@ def _demurrage_amount(row: LaytimeCalc) -> Decimal:
     if str(result_type or "") != "demurrage":
         return Decimal("0.00")
     amount = results["amount"] if "amount" in results else 0
-    return Decimal(str(amount or 0)).quantize(Decimal("0.01"))
+    return Decimal(str(amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 class DemurrageOnAccountIn(BaseModel):
@@ -480,7 +516,7 @@ def create_demurrage_on_account(
     rec = DemurrageOnAccount(
         tenant_id=auth.tenant_id,
         laytime_id=row.id,
-        amount=Decimal(str(body.amount)).quantize(Decimal("0.01")),
+        amount=Decimal(str(body.amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         currency=body.currency,
         payment_date=body.payment_date,
         status=body.status,
@@ -508,17 +544,36 @@ def list_demurrage_on_account(
         .order_by(DemurrageOnAccount.id)
     )
     rows, total = paginate(db, q, limit, offset)
-    # 汇总口径覆盖全部分页（SQL sum，而非当前页）
-    paid = db.scalar(
-        select(func.coalesce(func.sum(DemurrageOnAccount.amount), 0)).where(
+    # 币种维度：不同币种的预付款不能直接相加成一个「已付」数（P1-B4）——
+    # 每一笔先折本币再求和；折不动的币种单列，不混进合计。
+    by_ccy_rows = db.execute(
+        select(DemurrageOnAccount.currency, func.coalesce(func.sum(DemurrageOnAccount.amount), 0))
+        .where(
             DemurrageOnAccount.tenant_id == auth.tenant_id,
             DemurrageOnAccount.laytime_id == row.id,
             DemurrageOnAccount.status.in_(("paid", "applied")),
         )
+        .group_by(DemurrageOnAccount.currency)
+    ).all()
+    by_ccy = {str(ccy or "USD"): Decimal(str(amount or 0)) for ccy, amount in by_ccy_rows}
+    base_ccy = _base_currency(db, auth.tenant_id)
+    paid_base, unconverted = _convert_amounts_to_base(
+        db,
+        auth.tenant_id,
+        base_ccy,
+        [(amount, ccy) for ccy, amount in by_ccy.items()],
     )
     return {
         **envelope([_on_account_payload(r) for r in rows], total, limit, offset),
-        "on_account_paid": float(Decimal(str(paid or 0)).quantize(Decimal("0.01"))),
+        # 本位币口径的「已付」总额（折算后的数）；折不动时给 null 而不是假数
+        "on_account_paid": float(paid_base) if not unconverted else None,
+        "on_account_paid_currency": base_ccy,
+        "on_account_paid_status": "ok" if not unconverted else "cannot_evaluate",
+        "on_account_paid_unconverted": {ccy: float(amount) for ccy, amount in unconverted.items()},
+        "on_account_paid_by_currency": {
+            ccy: float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) for ccy, amount in by_ccy.items()
+        },
+        **({"currencies": sorted(by_ccy)} if len(by_ccy) > 1 else {}),
     }
 
 
@@ -563,7 +618,7 @@ def create_root_cause(
         tenant_id=auth.tenant_id,
         laytime_id=row.id,
         cause=body.cause,
-        delay_hours=Decimal(str(body.delay_hours)).quantize(Decimal("0.01")),
+        delay_hours=Decimal(str(body.delay_hours)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         responsible_party=body.responsible_party,
         notes=body.notes,
     )
@@ -571,6 +626,30 @@ def create_root_cause(
     db.commit()
     db.refresh(rec)
     return _root_cause_payload(rec)
+
+
+def _allocate_amount(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
+    """按权重把 ``total`` 分摊到各行，**合计恒等于 total**（最大余数法）。
+
+    逐行四舍五入再相加会差半分（滞期 100.00 分 3 个原因 → 报 100.00，
+    Σ 实为 99.99）（P2-B2）。这里先按精确比例算，再把余下的分按最大余数
+    补给余数最大的行。
+    """
+    if not weights:
+        return []
+    wsum = sum(weights, Decimal("0"))
+    if wsum <= 0 or total == 0:
+        return [Decimal("0.00") for _ in weights]
+    raw = [total * w / wsum for w in weights]
+    out = [r.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) for r in raw]
+    residual = total - sum(out, Decimal("0"))
+    step = Decimal("0.01")
+    pennies = int(abs(residual) / step)
+    if pennies:
+        order = sorted(range(len(raw)), key=lambda i: raw[i] - out[i], reverse=residual > 0)
+        for j in range(pennies):
+            out[order[j % len(order)]] += step if residual > 0 else -step
+    return out
 
 
 @router.get("/laytimes/{laytime_id}/root-causes")
@@ -602,17 +681,22 @@ def list_root_causes(
         )
     )
     demurrage = _demurrage_amount(row)
+    # 分摊按**全量**根因算（否则分页时合计对不上）
+    all_rows = db.scalars(q).all()
+    weights = [Decimal(str(r.delay_hours or 0)) for r in all_rows]
+    allocations = _allocate_amount(demurrage, weights) if total_hours > 0 else [Decimal("0.00")] * len(all_rows)
+    alloc_by_id = {str(r.id): a for r, a in zip(all_rows, allocations)}
     items = []
     for r in rows:
         share = (Decimal(str(r.delay_hours or 0)) / total_hours) if total_hours > 0 else Decimal("0")
-        allocated = (demurrage * share).quantize(Decimal("0.01")) if total_hours > 0 else Decimal("0.00")
-        items.append({**_root_cause_payload(r), "share_pct": float((share * 100).quantize(Decimal("0.01"))), "allocated_amount": float(allocated)})
+        allocated = alloc_by_id.get(str(r.id), Decimal("0.00"))
+        items.append({**_root_cause_payload(r), "share_pct": float((share * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), "allocated_amount": float(allocated)})
     return {
         **envelope(items, total, limit, offset),
-        "total_delay_hours": float(total_hours.quantize(Decimal("0.01"))),
+        "total_delay_hours": float(total_hours.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
         "demurrage_amount": float(demurrage),
-        # 全量根因按小时占比分摊滞期；占比合计 100%，故分摊合计=滞期额
-        "allocated_total": float(demurrage) if total_hours > 0 else 0.0,
+        # 全量根因按小时占比分摊滞期：Σ allocated_amount == allocated_total == 滞期额
+        "allocated_total": float(sum(allocations, Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if total_hours > 0 else 0.0,
     }
 
 
@@ -661,9 +745,9 @@ def create_laytime_delay(
         delay_type=body.delay_type,
         start_at=body.start_at,
         end_at=body.end_at,
-        duration_hours=Decimal(str(duration)).quantize(Decimal("0.01")) if duration is not None else None,
+        duration_hours=Decimal(str(duration)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if duration is not None else None,
         excluded_from_laytime=body.excluded_from_laytime,
-        cost_impact=Decimal(str(body.cost_impact)).quantize(Decimal("0.01")) if body.cost_impact is not None else None,
+        cost_impact=Decimal(str(body.cost_impact)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if body.cost_impact is not None else None,
         notes=body.notes,
     )
     db.add(rec)
@@ -709,10 +793,10 @@ def list_laytime_delays(
     return {
         **envelope([_delay_payload(r) for r in rows], total, limit, offset),
         "summary": {
-            "total_delay_hours": float(total_hours.quantize(Decimal("0.01"))),
-            "excluded_hours": float(excluded_hours.quantize(Decimal("0.01"))),
-            "counted_hours": float(counted_hours.quantize(Decimal("0.01"))),
-            "total_cost_impact": float(cost.quantize(Decimal("0.01"))),
+            "total_delay_hours": float(total_hours.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "excluded_hours": float(excluded_hours.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "counted_hours": float(counted_hours.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "total_cost_impact": float(cost.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
         },
     }
 
@@ -737,7 +821,13 @@ def estimated_demurrage(
     auth: AuthContext = Depends(require_module("laytime")),
     db: Session = Depends(get_db),
 ):
-    """Estimated demurrage settlement: computed demurrage less on-account payments."""
+    """Estimated demurrage settlement: computed demurrage less on-account payments.
+
+    币种口径（P1-B4）：滞期费金额本身没有币种（计算书引擎只算数字），按**本位币**
+    理解；预付款带币种，必须**先折本币再冲抵**。折不动的预付款不参与冲抵，
+    并在 ``on_account_status`` 里说明 —— 宁可少冲抵也不能拿没折的钱把
+    「未结」算成「已结清」。
+    """
     row = _get_laytime(auth, db, laytime_id)
     results = row.results or (compute_laytime(row.inputs or {}) if row.inputs else {})
     demurrage = _demurrage_amount(row)
@@ -747,9 +837,29 @@ def estimated_demurrage(
             DemurrageOnAccount.laytime_id == row.id,
         )
     ).all()
-    paid_amounts = [r.amount for r in on_account_rows if r.status in ("paid", "applied")]
-    pending_total = sum((r.amount for r in on_account_rows if r.status == "pending"), Decimal("0"))
-    settle = settle_with_on_account(demurrage, paid_amounts)
+    base_ccy = _base_currency(db, auth.tenant_id)
+    paid_base, paid_unconverted = _convert_amounts_to_base(
+        db,
+        auth.tenant_id,
+        base_ccy,
+        [
+            (Decimal(str(r.amount or 0)), r.currency)
+            for r in on_account_rows
+            if r.status in ("paid", "applied")
+        ],
+    )
+    pending_base, pending_unconverted = _convert_amounts_to_base(
+        db,
+        auth.tenant_id,
+        base_ccy,
+        [
+            (Decimal(str(r.amount or 0)), r.currency)
+            for r in on_account_rows
+            if r.status == "pending"
+        ],
+    )
+    unconverted = {**paid_unconverted, **pending_unconverted}
+    settle = settle_with_on_account(demurrage, [paid_base])
     return {
         "laytime_id": str(row.id),
         "status": row.status,
@@ -759,10 +869,12 @@ def estimated_demurrage(
         "balance_hours": results.get("balance_hours"),
         "demurrage_amount": settle["demurrage_amount"],
         "on_account_total": settle["on_account_total"],
-        "on_account_pending": float(pending_total.quantize(Decimal("0.01"))),
+        "on_account_pending": float(pending_base),
         "outstanding": settle["outstanding"],
         "overpaid": settle["overpaid"],
-        "currency": "USD",
+        "currency": base_ccy,
+        "on_account_status": "ok" if not unconverted else "partial",
+        "on_account_unconverted": {ccy: float(amount) for ccy, amount in unconverted.items()},
     }
 
 
@@ -930,6 +1042,7 @@ def laytime_from_booking(
 
     row = LaytimeCalc(
         tenant_id=auth.tenant_id,
+     created_by=auth.user_id,
         voyage_id=voyage_id,
         port_call_id=port_call_id,
         booking_reference=body.booking_reference.strip(),
@@ -1034,13 +1147,44 @@ def include_in_freight(
     payload = body or IncludeInFreightIn()
     results = row.results or (compute_laytime(row.inputs or {}) if row.inputs else {})
     result_type = str(results.get("result_type") or "")
-    settlement = Decimal(str(results.get("amount") or 0)).quantize(Decimal("0.01"))
+    # 结算额是**本币**金额（计算书引擎没有币种概念，费率按本币理解）
+    settlement = Decimal(str(results.get("amount") or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if result_type == "despatch":
         settlement = -settlement
     else:
         settlement = settlement if result_type == "demurrage" else Decimal("0.00")
-    freight = Decimal(str(payload.freight_amount or 0)).quantize(Decimal("0.01"))
-    if freight + settlement <= 0:
+    freight = Decimal(str(payload.freight_amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    # 外币发票必须带汇率（P1-B10）：没有汇率就按 1:1 入账是**错的钱**。
+    # 取不到汇率 → fail closed（422），不许静默落库。
+    currency = payload.currency or "USD"
+    base_ccy = _base_currency(db, auth.tenant_id)
+    try:
+        fx_rate = require_fx_rate(
+            db,
+            auth.tenant_id,
+            currency,
+            base_ccy,
+            invoice_type="freight",
+            context_date=date.today(),
+        )
+    except FxRateUnavailable as exc:
+        raise HTTPException(
+            422,
+            detail={
+                "code": FX_RATE_NOT_FOUND,
+                "message": str(exc),
+                "currency": currency,
+                "base_currency": base_ccy,
+            },
+        )
+    # 结算额是本币金额、运费是发票币种金额 —— 混币不能直接相加（P1-B4）：
+    # 结算额先折成发票币种（1/rate = 本币 → 发票币种），再与运费相加。
+    settlement_in_ccy = (
+        settlement
+        if (currency or "").upper() == (base_ccy or "").upper()
+        else money(settlement / fx_rate)
+    )
+    if freight + settlement_in_ccy <= 0:
         raise HTTPException(
             422,
             detail={"code": "NOTHING_TO_BILL", "message": "freight_amount + demurrage settlement must be > 0"},
@@ -1062,14 +1206,17 @@ def include_in_freight(
         invoice_type="freight",
         counterparty_id=counterparty_id,
         voyage_id=row.voyage_id,
-        amount=(freight + settlement),
+        amount=(freight + settlement_in_ccy),
         tax_amount=Decimal("0"),
-        currency=payload.currency or "USD",
+        currency=currency,
+        fx_rate=fx_rate,
+        base_amount=to_base_amount(freight + settlement_in_ccy, fx_rate),
         meta={
             "laytime_id": str(row.id),
             "booking_reference": row.booking_reference,
             "freight_amount": float(freight),
-            "settlement_amount": float(settlement),
+            "settlement_amount": float(settlement_in_ccy),
+            "settlement_amount_base": float(settlement),
             "result_type": result_type,
             "include_in_freight": True,
         },
@@ -1084,9 +1231,12 @@ def include_in_freight(
         "status": inv.status,
         "amount": float(inv.amount),
         "freight_amount": float(freight),
-        "settlement_amount": float(settlement),
+        "settlement_amount": float(settlement_in_ccy),
+        "settlement_amount_base": float(settlement),
         "laytime_id": str(row.id),
         "currency": inv.currency,
+        "fx_rate": float(fx_rate),
+        "base_amount": float(inv.base_amount),
     }
 
 

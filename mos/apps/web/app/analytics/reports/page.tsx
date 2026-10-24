@@ -11,11 +11,14 @@ import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
 import { NavIcon } from "@/components/NavIcon";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
+import { downloadCsvText } from "@/lib/csv";
+import { msgOf } from "@/lib/errors";
 import { useI18n, type TFallback } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -296,6 +299,36 @@ function shortTs(v: string | null | undefined): string {
   return v.slice(0, 16).replace("T", " ");
 }
 
+/** report_type 的可读标签（后端枚举 → 英文文案；i18n key 缺失时回落到这里）。 */
+const REPORT_TYPE_LABELS: Record<string, string> = {
+  voyage_pnl: "Voyage P&L",
+  bunker: "Bunker",
+  tce_analysis: "TCE analysis",
+  fleet_performance: "Fleet performance",
+  counterparty: "Counterparty",
+  age_days: "Ageing (days)",
+  speed: "Speed",
+  port_details: "Port details",
+  emissions: "Emissions",
+  custom: "Custom",
+};
+
+/** data_source 的可读标签。 */
+const DATA_SOURCE_LABELS: Record<string, string> = {
+  preset: "Preset dataset",
+  sql: "SQL query",
+  api: "API endpoint",
+  spec: "Query spec",
+};
+
+function reportTypeLabel(v: string): string {
+  return REPORT_TYPE_LABELS[v] || v.replace(/_/g, " ");
+}
+
+function dataSourceLabel(v: string): string {
+  return DATA_SOURCE_LABELS[v] || v.replace(/_/g, " ");
+}
+
 export default function ReportsPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -303,6 +336,10 @@ export default function ReportsPage() {
   const [reports, setReports] = useState<Report[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
+  /** 主列表（我的报表）加载失败 */
+  const [err, setErr] = useState<string | null>(null);
+  /** 调度计划列表加载失败 */
+  const [schedErr, setSchedErr] = useState<string | null>(null);
 
   const [catFilter, setCatFilter] = useState<CatKey | "all">("all");
   const [result, setResult] = useState<(ReportResult & { title: string }) | null>(null);
@@ -325,14 +362,18 @@ export default function ReportsPage() {
     try {
       const data = await apiGet("/api/v1/reports");
       setReports(Array.isArray(data) ? data : []);
-    } catch {
+      setErr(null);
+    } catch (ex) {
       setReports([]);
+      setErr(msgOf(ex));
     }
     try {
       const data = await apiGet("/api/v1/reports/schedules/list");
       setSchedules(Array.isArray(data) ? data : []);
-    } catch {
+      setSchedErr(null);
+    } catch (ex) {
       setSchedules([]);
+      setSchedErr(msgOf(ex));
     }
     setLoading(false);
   }, []);
@@ -355,7 +396,7 @@ export default function ReportsPage() {
         columns: [],
         rows: [],
         total_rows: 0,
-        error: err instanceof Error ? err.message : String(err),
+        error: msgOf(err),
       });
     }
     setRunningKey(null);
@@ -400,16 +441,12 @@ export default function ReportsPage() {
   async function exportCsv(rep: Report) {
     try {
       const res = await apiGet(`/api/v1/reports/${rep.id}/export/csv`);
-      const blob = new Blob([res.csv], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${rep.report_name.replace(/\s+/g, "_")}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      // P0-16/17：统一走 lib/csv —— 自造 Blob 会漏掉 BOM（Excel 中文表头乱码）
+      // 与公式注入防护（船名/对手方名以 = + - 开头时 Excel 当公式执行）。
+      downloadCsvText(`report_${rep.report_name.replace(/\s+/g, "_")}`, res.csv ?? "");
       toast.success(t("rg.exported", { en: "CSV exported", zh: "CSV 已导出" }));
-    } catch {
-      toast.error(t("rg.export_fail", { en: "Export failed", zh: "导出失败" }));
+    } catch (err) {
+      toast.error(msgOf(err, t("rg.export_fail", { en: "Export failed", zh: "导出失败" })));
     }
   }
 
@@ -473,7 +510,7 @@ export default function ReportsPage() {
     } catch (err) {
       toast.error(
         t("rg.sched.save_fail", { en: "Save failed: {msg}", zh: "保存失败：{msg}" }, {
-          msg: err instanceof Error ? err.message : String(err),
+          msg: msgOf(err),
         }),
       );
     }
@@ -512,8 +549,20 @@ export default function ReportsPage() {
           </span>
         ),
       },
-      { key: "report_type", title: t("common.type", "Type"), width: 130, value: (r) => r.report_type },
-      { key: "data_source", title: t("rg.col.source", "Source"), width: 90, value: (r) => r.data_source },
+      {
+        key: "report_type",
+        title: t("common.type", "Type"),
+        width: 130,
+        value: (r) => r.report_type,
+        render: (v) => t(`rg.type.${String(v ?? "")}`, reportTypeLabel(String(v ?? ""))),
+      },
+      {
+        key: "data_source",
+        title: t("rg.col.source", "Source"),
+        width: 90,
+        value: (r) => r.data_source,
+        render: (v) => t(`rg.source.${String(v ?? "")}`, dataSourceLabel(String(v ?? ""))),
+      },
       {
         key: "created_at",
         title: t("common.created", "Created"),
@@ -823,19 +872,29 @@ export default function ReportsPage() {
               </Link>
             </div>
           </div>
-          <DataGrid<Report>
-            columns={myReportCols}
-            data={reports}
-            rowKey={(r) => r.id}
+          <StateView
             loading={loading}
+            error={err ?? undefined}
+            empty={!loading && !err && reports.length === 0}
             emptyText={t(
               "rg.my_empty",
               "No reports yet — seed the system set or create one in the designer.",
             )}
-            onRowDoubleClick={(r) => executeReport(r, `rep:${r.id}`)}
-            showFooter={false}
-            storageKey="rg_my_reports"
-          />
+            onRetry={() => void loadAll()}
+          >
+            <DataGrid<Report>
+              columns={myReportCols}
+              data={reports}
+              rowKey={(r) => r.id}
+              emptyText={t(
+                "rg.my_empty",
+                "No reports yet — seed the system set or create one in the designer.",
+              )}
+              onRowDoubleClick={(r) => executeReport(r, `rep:${r.id}`)}
+              showFooter={false}
+              storageKey="rg_my_reports"
+            />
+          </StateView>
         </section>
 
         {/* ——————— Section 3: Schedules ——————— */}
@@ -854,16 +913,23 @@ export default function ReportsPage() {
               {t("rg.add_schedule", { en: "Add schedule", zh: "新增调度" })}
             </button>
           </div>
-          <DataGrid<Schedule & { report_name: string }>
-            columns={scheduleCols}
-            data={scheduleRows}
-            rowKey={(r) => r.id}
+          <StateView
             loading={loading}
+            error={schedErr ?? undefined}
+            empty={!loading && !schedErr && scheduleRows.length === 0}
             emptyText={t("rg.sched_empty", "No report schedules yet.")}
-            onRowDoubleClick={(r) => openScheduleEdit(r)}
-            showFooter={false}
-            storageKey="rg_schedules"
-          />
+            onRetry={() => void loadAll()}
+          >
+            <DataGrid<Schedule & { report_name: string }>
+              columns={scheduleCols}
+              data={scheduleRows}
+              rowKey={(r) => r.id}
+              emptyText={t("rg.sched_empty", "No report schedules yet.")}
+              onRowDoubleClick={(r) => openScheduleEdit(r)}
+              showFooter={false}
+              storageKey="rg_schedules"
+            />
+          </StateView>
         </section>
       </div>
 

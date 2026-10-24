@@ -6,8 +6,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,13 +18,19 @@ from app.db import get_db
 from app.models import Role, Tenant, User, UserRole
 from app.models_identity import OutboundMailLog, PlatformIdentitySettings, TenantAuthPolicy, UserIdentity
 from app.security import (
+    LEGACY_SESSION_COOKIE_NAME,
+    SESSION_COOKIE_NAME,
     AuthContext,
+    bearer,
     clear_session_cookie,
     create_access_token,
     get_current_auth,
     get_current_auth_optional,
     hash_password,
+    SetPassword,
     require_auth,
+    require_roles,
+    revoke_token,
     set_session_cookie,
     verify_password,
 )
@@ -50,15 +57,6 @@ from app.services.ms_config import resolve_ms_config
 from app.services.ratelimit import rate_limit
 
 router = APIRouter(tags=["Identity"])
-
-
-def require_roles(*codes: str):
-    def _dep(auth: AuthContext = Depends(get_current_auth)) -> AuthContext:
-        if not any(c in auth.roles for c in codes):
-            raise HTTPException(status_code=403, detail={"code": "ROLE_REQUIRED", "roles": list(codes)})
-        return auth
-
-    return _dep
 
 
 # —— Schemas ——
@@ -134,7 +132,8 @@ class InvitePatchIn(BaseModel):
 
 class InviteAcceptIn(BaseModel):
     token: str
-    password: str = Field(min_length=8)
+    # 设置口令 —— 超 72 字节（bcrypt 上限）直接 422，别让 bcrypt 抛 500
+    password: SetPassword = Field(min_length=8)
     full_name: str | None = None
 
 
@@ -172,7 +171,8 @@ class StubOAuthCompleteIn(BaseModel):
 
 class PasswordChangeIn(BaseModel):
     current_password: str | None = None
-    new_password: str = Field(min_length=8)
+    # 设置口令 —— 超 72 字节（bcrypt 上限）直接 422
+    new_password: SetPassword = Field(min_length=8)
 
 
 def _policy_out(p: TenantAuthPolicy) -> dict:
@@ -192,10 +192,22 @@ def _policy_out(p: TenantAuthPolicy) -> dict:
     }
 
 
+def _tenant_session_hours(db: Session, tenant_id: UUID) -> int | None:
+    """租户级会话时长（``TenantAuthPolicy.session_hours``）—— 为 None 表示用全局配置。"""
+    policy = db.scalar(select(TenantAuthPolicy).where(TenantAuthPolicy.tenant_id == tenant_id))
+    if policy is not None and policy.session_hours and int(policy.session_hours) > 0:
+        return int(policy.session_hours)
+    return None
+
+
 def _issue_token(user: User, response: Response, db: Session, via: str) -> dict:
     user.last_login_at = now_utc_naive()
     token = create_access_token(
-        user_id=user.id, tenant_id=user.tenant_id, email=user.email, pwv=user.password_version or 1
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        email=user.email,
+        pwv=user.password_version or 1,
+        session_hours=_tenant_session_hours(db, user.tenant_id),
     )
     # Callers commit before invoking us, so persist the audit row (and the
     # last_login_at touch above) in its own transaction.
@@ -210,7 +222,7 @@ def _issue_token(user: User, response: Response, db: Session, via: str) -> dict:
         commit=True,
     )
     # Token goes out both ways: JSON body (backward compatible) + HttpOnly cookie
-    set_session_cookie(response, token)
+    set_session_cookie(response, token, _tenant_session_hours(db, user.tenant_id))
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -258,11 +270,25 @@ def _platform_identity_row_out(row: PlatformIdentitySettings) -> dict[str, Any]:
             notes=row.notes,
             runtime=provider_runtime(),
         ).model_dump(),
+        # 引导文案是**双语**的：以前这里只写死中文，英文界面上也显示中文。
+        # 现在返回 {en, zh}，由前端按当前 locale 选取。
         "secret_guidance": {
-            "microsoft": "设置环境变量 MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET / MICROSOFT_TENANT",
-            "google": "设置环境变量 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET",
-            "email": "发件人、通道与 SMTP 参数均可在本页保存；SMTP 密码加密存储，不会下发到浏览器",
-            "smtp": "通道选 SMTP 时生效：host / port / 加密方式（STARTTLS / SSL / 明文）/ 用户名 / 密码",
+            "microsoft": {
+                "en": "Set the MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET / MICROSOFT_TENANT environment variables",
+                "zh": "设置环境变量 MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET / MICROSOFT_TENANT",
+            },
+            "google": {
+                "en": "Set the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET environment variables",
+                "zh": "设置环境变量 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET",
+            },
+            "email": {
+                "en": "Sender, channel and SMTP parameters can all be saved on this page; the SMTP password is stored encrypted and never sent to the browser",
+                "zh": "发件人、通道与 SMTP 参数均可在本页保存；SMTP 密码加密存储，不会下发到浏览器",
+            },
+            "smtp": {
+                "en": "Applies when the channel is SMTP: host / port / encryption (STARTTLS / SSL / plain) / username / password",
+                "zh": "通道选 SMTP 时生效：host / port / 加密方式（STARTTLS / SSL / 明文）/ 用户名 / 密码",
+            },
         },
     }
 
@@ -612,10 +638,28 @@ def list_audit_logs(
                 "detail": r.detail or {},
                 "ip": r.ip,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
+                "prev_hash": r.prev_hash,
+                "row_hash": r.row_hash,
             }
             for r in rows
         ],
     }
+
+
+@router.get("/admin/security/audit-logs/verify")
+def verify_audit_chain(
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    """校验本租户审计链的完整性（防篡改自检）。
+
+    - ``tampered``  —— 内容被改过的行（确证的篡改）；
+    - ``broken_links`` —— 链不连续（中间行被删/被换序；并发写同一租户时
+      出现的分叉也会落在这里，属警告而非确证篡改）。
+    """
+    from app.services.audit import verify_chain
+
+    return verify_chain(db, auth.tenant_id)
 
 
 # —— Auth: accept invite / verify / magic / oauth ——
@@ -808,7 +852,17 @@ def oauth_callback(
     stub_email: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Live IdP returns here with ?code=. Stub flow uses /auth/oauth/stub/complete instead."""
+    """Live IdP returns here with ?code=. Stub flow uses /auth/oauth/stub/complete instead.
+
+    **``stub_email`` 查询参数是一扇认证后门**（P0-3）：审计复现的路径是
+    ``GET /auth/oauth/microsoft/callback?state=<state>&stub_email=admin@demo.marios``
+    → 无需任何 IdP 凭据即可拿到该租户任意账号（含 ``tenant_admin``）的会话；
+    而且老代码会把 ``user.status = "active"`` 写回去 —— **停用账号被复活**。
+
+    现在：
+    - ``stub_email`` **只在** ``settings.oauth_allow_stub`` 为真时可用，否则 400；
+    - 已有账号若处于停用状态（``status != "active"``）→ 直接拒绝，**绝不**改写状态。
+    """
     from app.models_identity import AuthChallenge
     from app.services.identity import hash_token
 
@@ -816,6 +870,16 @@ def oauth_callback(
     web = settings.web_public_base.rstrip("/")
     if error:
         return RedirectResponse(f"{web}/login?oauth_error={error}")
+
+    # ── stub_email 是后门：只在显式打开 stub 模式时可用 ──
+    if stub_email and not settings.oauth_allow_stub:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "OAUTH_STUB_DISABLED",
+                "message": "stub_email is only available when OAUTH_ALLOW_STUB is enabled",
+            },
+        )
 
     pending = db.scalar(
         select(AuthChallenge).where(
@@ -874,8 +938,11 @@ def oauth_callback(
         if role:
             db.add(UserRole(user_id=user.id, role_id=role.id))
     else:
+        # 已有账号：**绝不**把停用/删除的账号改回 active（P0-3 —— 老代码
+        # 无条件 `user.status = "active"`，等于「停用账号被 SSO 复活」）。
+        if user.status != "active":
+            return RedirectResponse(f"{web}/login?oauth_error=user_inactive")
         mark_email_verified(user)
-        user.status = "active"
 
     sub = subject or f"{provider}:{email}"
     ident = db.scalar(select(UserIdentity).where(UserIdentity.user_id == user.id, UserIdentity.provider == provider))
@@ -910,13 +977,17 @@ def oauth_callback(
         commit=True,
     )
     token = create_access_token(
-        user_id=user.id, tenant_id=user.tenant_id, email=user.email, pwv=user.password_version or 1
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        email=user.email,
+        pwv=user.password_version or 1,
+        session_hours=_tenant_session_hours(db, user.tenant_id),
     )
     # Cookie is set on the redirect itself (top-level navigation, stored natively).
     # The ?token= query is kept for backward compatibility but is deprecated —
     # the frontend no longer persists it.
     redirect = RedirectResponse(f"{web}/login/oauth-done?token={token}")
-    set_session_cookie(redirect, token)
+    set_session_cookie(redirect, token, _tenant_session_hours(db, user.tenant_id))
     return redirect
 
 
@@ -948,8 +1019,11 @@ def oauth_stub_complete(body: StubOAuthCompleteIn, response: Response, db: Sessi
         role = db.scalar(select(Role).where(Role.tenant_id == ch.tenant_id, Role.code == "viewer"))
         if role:
             db.add(UserRole(user_id=user.id, role_id=role.id))
+    else:
+        # 停用账号不被桩登录复活（P0-3 同款问题）
+        if user.status != "active":
+            raise HTTPException(403, detail={"code": "USER_INACTIVE"})
     mark_email_verified(user)
-    user.status = "active"
     sub = body.subject or f"stub:{provider}:{email}"
     ident = db.scalar(
         select(UserIdentity).where(UserIdentity.user_id == user.id, UserIdentity.provider == provider)
@@ -973,11 +1047,32 @@ def oauth_stub_complete(body: StubOAuthCompleteIn, response: Response, db: Sessi
 
 # —— Sign-out ——
 @router.post("/auth/logout")
-def logout(response: Response):
-    # No server-side revocation needed here: token invalidation after password
-    # change / admin action is already enforced via the password_version (pwv)
-    # claim checked on every request. Logout just drops the browser cookie;
-    # the (unreadable to JS) cookie is the only thing being discarded.
+def logout(
+    response: Response,
+    request: Request,
+    creds: HTTPAuthorizationCredentials | None = Depends(bearer),
+    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    legacy_session_cookie: str | None = Cookie(default=None, alias=LEGACY_SESSION_COOKIE_NAME),
+):
+    """登出 —— **token 立即作废 + 清掉新旧两个 cookie**（P1-16）。
+
+    老实现只清了浏览器 cookie（且只清新名 ``marios_token``）：
+
+    - 旧名 ``voyageos_token`` 仍被 ``get_current_auth`` 接受 → 登出后**照样能访问**；
+    - JWT 本身无状态 → 光清 cookie 不作废 token，拿到 token 的人（XSS / 日志
+      泄露 / 抓包）**在 12 小时内依旧有效**。
+
+    现在把本次登出的 token 加入服务端黑名单（见 ``security.revoke_token``），
+    并清掉两个 cookie。
+    """
+    tokens: list[str] = []
+    if creds is not None and creds.credentials:
+        tokens.append(creds.credentials)
+    for cookie_value in (session_cookie, legacy_session_cookie):
+        if cookie_value:
+            tokens.append(cookie_value)
+    for token in tokens:
+        revoke_token(token)
     clear_session_cookie(response)
     return {"ok": True}
 

@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models_domain import BunkerOrder, EmissionRecord, Voyage
+from app.services.observability import traced
 
 
 FUEL_FACTORS = {
@@ -37,6 +38,28 @@ CII_THRESHOLDS = {
 }
 
 
+def _dec(value: Any) -> Decimal:
+    """float → Decimal（走 ``str``，避免二进制尾数）。"""
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, bool):
+        return Decimal("0")
+    return Decimal(str(value))
+
+
+def _q(value: Decimal, places: str) -> float:
+    """Decimal → float，显式 ROUND_HALF_UP。
+
+    Python 内建 ``round()`` 用的是**银行家舍入**（.5 往偶数靠），与本系统
+    统一的「四舍五入」口径不一致 —— 金额上就是 1 分钱的差。这里所有
+    碳排/能耗/成本出口都显式走 ROUND_HALF_UP。
+    """
+    return float(value.quantize(Decimal(places), rounding=ROUND_HALF_UP))
+
+
+@traced("carbon")
 def calculate_voyage_emissions(
     fuel_consumption_mt: float,
     fuel_type: str = "VLSFO",
@@ -48,16 +71,17 @@ def calculate_voyage_emissions(
     Returns total CO2 tonnes, per-cargo intensity, and energy efficiency.
     """
     factor = FUEL_FACTORS.get(fuel_type, FUEL_FACTORS["VLSFO"])
-    co2_tonnes = fuel_consumption_mt * factor["co2_factor"]
-    energy_mj = fuel_consumption_mt * 1000 * factor["energy_density"]
-    co2_per_cargo = co2_tonnes / max(cargo_mt, 1)
-    co2_per_distance = co2_tonnes / max(distance_nm, 1) * 1000
+    fuel = _dec(fuel_consumption_mt)
+    co2_tonnes = fuel * _dec(factor["co2_factor"])
+    energy_mj = fuel * 1000 * _dec(factor["energy_density"])
+    co2_per_cargo = co2_tonnes / max(_dec(cargo_mt), Decimal("1"))
+    co2_per_distance = co2_tonnes / max(_dec(distance_nm), Decimal("1")) * 1000
 
     return {
-        "co2_tonnes": round(co2_tonnes, 2),
-        "co2_per_cargo_mt": round(co2_per_cargo, 4),
-        "co2_per_distance_nm": round(co2_per_distance, 4),
-        "energy_mj": round(energy_mj, 2),
+        "co2_tonnes": _q(co2_tonnes, "0.01"),
+        "co2_per_cargo_mt": _q(co2_per_cargo, "0.0001"),
+        "co2_per_distance_nm": _q(co2_per_distance, "0.0001"),
+        "energy_mj": _q(energy_mj, "0.01"),
         "fuel_type": fuel_type,
         "fuel_consumed_mt": fuel_consumption_mt,
     }
@@ -73,21 +97,22 @@ def calculate_eu_ets_cost(
 
     2024: 40% of emissions, 2025: 70%, 2026+: 100%
     """
-    phase_in = {2024: 0.40, 2025: 0.70}
-    coverage = phase_in.get(voyage_year, 1.0)
+    phase_in = {2024: Decimal("0.40"), 2025: Decimal("0.70")}
+    coverage = phase_in.get(voyage_year, Decimal("1"))
     if not is_eu_voyage:
-        coverage = 0.0
+        coverage = Decimal("0")
 
-    liable_tonnes = co2_tonnes * coverage * (ets_responsibility_pct / 100.0)
-    cost_eur = liable_tonnes * EU_ETS_CO2_PRICE
+    co2 = _dec(co2_tonnes)
+    liable_tonnes = co2 * coverage * (_dec(ets_responsibility_pct) / 100)
+    cost_eur = liable_tonnes * _dec(EU_ETS_CO2_PRICE)
 
     return {
-        "total_co2_tonnes": round(co2_tonnes, 2),
-        "coverage_pct": round(coverage * 100, 1),
-        "liable_tonnes": round(liable_tonnes, 2),
+        "total_co2_tonnes": _q(co2, "0.01"),
+        "coverage_pct": _q(coverage * 100, "0.1"),
+        "liable_tonnes": _q(liable_tonnes, "0.01"),
         "co2_price_eur": EU_ETS_CO2_PRICE,
-        "cost_eur": round(cost_eur, 2),
-        "cost_usd": round(cost_eur * 1.08, 2),
+        "cost_eur": _q(cost_eur, "0.01"),
+        "cost_usd": _q(cost_eur * _dec("1.08"), "0.01"),
     }
 
 
@@ -102,33 +127,71 @@ def calculate_fueleu_compliance(
 
     Energy Efficiency = (fuel_mt * energy_density_MJ/kg * 1000) / (cargo_mt * distance_nm)
     Compared against annual GHG intensity limit.
+
+    罚金只在**确实存在缺口**（intensity > limit）且运输功可测（cargo_mt ×
+    distance_nm > 0）时产生。零输入以前会造出九位数罚款
+    （calculate_fueleu_compliance(100,"VLSFO",0,0) → 285,623,192.44 USD），
+    现在无缺口一律 0，并带上 assessable 标记说明结论是否可评估（P1-B15）。
     """
+    if fuel_consumption_mt is None or float(fuel_consumption_mt) < 0:
+        raise ValueError("fuel_consumption_mt must be >= 0")
+    if distance_nm is None or float(distance_nm) < 0:
+        raise ValueError("distance_nm must be >= 0")
+    if cargo_mt is None or float(cargo_mt) < 0:
+        raise ValueError("cargo_mt must be >= 0")
+
     factor = FUEL_FACTORS.get(fuel_type, FUEL_FACTORS["VLSFO"])
-    energy_mj = fuel_consumption_mt * 1000 * factor["energy_density"]
-    transport_work = max(cargo_mt * distance_nm, 1)
-    intensity = energy_mj / transport_work
+    fuel = _dec(fuel_consumption_mt)
+    energy_mj = fuel * 1000 * _dec(factor["energy_density"])
+    transport_work = _dec(cargo_mt) * _dec(distance_nm)
 
-    limit = FUELEU_LIMIT_2025
+    limit = _dec(FUELEU_LIMIT_2025)
     if year == 2026:
-        limit = 87.5
+        limit = _dec("87.5")
     elif year == 2027:
-        limit = 85.0
+        limit = _dec("85.0")
     elif year >= 2028:
-        limit = 82.0
+        limit = _dec("82.0")
 
-    compliant = intensity <= limit
-    penalty_factor = max(0, (intensity - limit) / limit)
-    penalty_usd = penalty_factor * 2500 * fuel_consumption_mt
+    assessable = transport_work > 0 and fuel > 0
+    penalty_usd = Decimal("0.00")
+    if assessable:
+        intensity = energy_mj / transport_work
+        compliant = intensity <= limit
+        margin_pct = (1 - intensity / limit) * 100
+        if not compliant:
+            penalty_usd = (
+                (intensity - limit)
+                / limit
+                * Decimal("2500")
+                * fuel
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    else:
+        # 无运输功 / 无油耗 → 没有可评估的缺口：罚金 0，不编造数字
+        intensity = Decimal("0")
+        compliant = True
+        margin_pct = Decimal("100")
 
     return {
-        "intensity_gco2_mj": round(intensity, 2),
-        "limit_gco2_mj": limit,
+        "intensity_gco2_mj": _q(intensity, "0.01"),
+        "limit_gco2_mj": float(limit),
         "compliant": compliant,
-        "margin_pct": round((1 - intensity / limit) * 100, 1),
-        "penalty_usd": round(penalty_usd, 2) if not compliant else 0,
+        "margin_pct": _q(margin_pct, "0.1"),
+        "penalty_usd": penalty_usd,
         "fuel_type": fuel_type,
-        "energy_mj": round(energy_mj, 2),
-        "transport_work": round(transport_work, 2),
+        "energy_mj": _q(energy_mj, "0.01"),
+        "transport_work": _q(transport_work, "0.01"),
+        "assessable": assessable,
+        **(
+            {}
+            if assessable
+            else {
+                "message": (
+                    "no transport work (cargo_mt × distance_nm = 0) or no fuel burnt — "
+                    "no FuelEU gap is assessable, penalty is 0"
+                )
+            }
+        ),
     }
 
 
@@ -145,7 +208,7 @@ def calculate_cii_rating(
     if distance_nm <= 0 or dwt <= 0:
         return {"rating": "N/A", "cii_value": 0, "message": "Insufficient data"}
 
-    cii_value = (co2_tonnes * 1_000_000) / (dwt * distance_nm)
+    cii_value = (_dec(co2_tonnes) * 1_000_000) / (_dec(dwt) * _dec(distance_nm))
 
     rating = "E"
     for grade, threshold in sorted(CII_THRESHOLDS.items(), key=lambda x: x[1]):
@@ -154,11 +217,11 @@ def calculate_cii_rating(
             break
 
     return {
-        "cii_value": round(cii_value, 2),
+        "cii_value": _q(cii_value, "0.01"),
         "rating": rating,
         "dwt": dwt,
         "distance_nm": distance_nm,
-        "co2_tonnes": round(co2_tonnes, 2),
+        "co2_tonnes": _q(_dec(co2_tonnes), "0.01"),
         "vessel_type": vessel_type,
     }
 

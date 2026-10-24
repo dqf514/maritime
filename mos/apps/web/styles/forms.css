@@ -13,7 +13,7 @@
   min-width: 0;
   padding: 0 var(--gap-sm);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--chrome-border);
+  border: 1px solid var(--input-border);
   background: var(--surface);
   color: var(--ink);
   font-size: var(--font-ui);
@@ -21,8 +21,13 @@
 .panel input:focus,
 .panel select:focus {
   border-color: var(--accent);
-  outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+/* 键盘焦点环不能被上面的 border/box-shadow 吃掉（WCAG 2.4.7） */
+.panel input:focus-visible,
+.panel select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 /* KV grid — dense label/input grid used by admin & settings forms */
@@ -142,7 +147,7 @@ dl.kv-grid > div { min-width: 0; }
 .field-row textarea {
   height: var(--input-h);
   padding: 0 var(--gap-xs);
-  border: 1px solid var(--chrome-border);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
@@ -223,7 +228,7 @@ dl.kv-grid > div { min-width: 0; }
   min-width: 0;
   height: var(--input-h);
   padding: 0 1.4rem 0 var(--gap-sm);
-  border: 1px solid var(--chrome-border);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
@@ -316,4 +321,12 @@ dl.kv-grid > div { min-width: 0; }
   font-size: 9px;
   color: var(--muted);
   background: transparent;
+}
+
+/* P1-4：取数失败的字段级提示 —— 参照表/下拉取不到时明确说"没取到"，
+   而不是留一个空下拉框让用户以为"没有可选值"。 */
+.field-error {
+  display: block;
+  font-size: var(--font-label);
+  color: var(--danger);
 }

@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { API_BASE as API, readStorage, TOKEN_STORAGE_KEY } from "./api";
+import { handled } from "./errors";
 const STORAGE_KEY = "marios_locale";
 
 type Term = {
@@ -122,7 +123,7 @@ export function I18nProvider({ children, tenantCode }: { children: ReactNode; te
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ locale: next }),
-      }).catch(() => undefined);
+      }).catch(handled);
       await reload();
     },
     [reload],
@@ -209,8 +210,9 @@ export function LanguageSwitcher({ className }: { className?: string }) {
         type="button"
         className={isZh ? "active" : ""}
         aria-pressed={isZh}
+        aria-label={t("shell.language_zh", "中文")}
         onClick={() => {
-          setLocale("zh-CN").catch(() => undefined);
+          setLocale("zh-CN").catch(handled);
         }}
       >
         中文
@@ -223,7 +225,7 @@ export function LanguageSwitcher({ className }: { className?: string }) {
         className={!isZh ? "active" : ""}
         aria-pressed={!isZh}
         onClick={() => {
-          setLocale("en").catch(() => undefined);
+          setLocale("en").catch(handled);
         }}
       >
         EN

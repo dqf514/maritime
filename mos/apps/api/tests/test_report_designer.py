@@ -164,7 +164,8 @@ def test_declarative_query_join_two_datasets(client, auth_headers):
 def test_expression_evaluation(client, auth_headers):
     # create a bunker order with exact numbers
     vessels = client.get(f"{API}/masterdata/vessels", headers=auth_headers).json()
-    voyages = client.get(f"{API}/voyages", headers=auth_headers).json()
+    _vp = client.get(f"{API}/voyages", headers=auth_headers).json()
+    voyages = _vp["items"] if isinstance(_vp, dict) else _vp
     r = client.post(
         f"{API}/bunker-orders",
         headers=auth_headers,

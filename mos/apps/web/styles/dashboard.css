@@ -30,7 +30,7 @@
   text-transform: uppercase;
   letter-spacing: 0.14em;
   font-size: 0.7rem;
-  color: var(--accent);
+  color: var(--accent-text-on-dark);
   font-weight: 700;
 }
 .dash-top h1 { margin: 0.2rem 0; font-size: clamp(1.4rem, 2.4vw, 2rem); }

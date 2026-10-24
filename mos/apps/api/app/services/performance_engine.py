@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from app.services.money import CENT
 
-TWOPLACES = Decimal("0.01")
 
 _GOOD_SEA_STATES = {"smooth", "slight", "moderate", ""}
 
@@ -50,8 +50,8 @@ def compute_performance(inputs: dict[str, Any]) -> dict[str, Any]:
         hours = _d(day.get("hours_underway"), "24")
         row: dict[str, Any] = {
             "date": day.get("date"),
-            "speed_kn": float(_d(day.get("speed_kn")).quantize(TWOPLACES)),
-            "cons_mt_day": float(_d(day.get("cons_mt_day")).quantize(TWOPLACES)),
+            "speed_kn": float(_d(day.get("speed_kn")).quantize(CENT, rounding=ROUND_HALF_UP)),
+            "cons_mt_day": float(_d(day.get("cons_mt_day")).quantize(CENT, rounding=ROUND_HALF_UP)),
             "wind_bf": float(_d(wind)) if wind is not None else None,
             "sea_state": day.get("sea_state"),
             "good_weather": good_weather,
@@ -66,26 +66,26 @@ def compute_performance(inputs: dict[str, Any]) -> dict[str, Any]:
         speed = _d(day.get("speed_kn"))
         if speed > 0 and speed + about_kn < warranty_speed:
             shortfall_kn = warranty_speed - about_kn - speed
-            day_lost_h = (shortfall_kn / warranty_speed * hours).quantize(TWOPLACES)
+            day_lost_h = (shortfall_kn / warranty_speed * hours).quantize(CENT, rounding=ROUND_HALF_UP)
             lost_hours += day_lost_h
-            row["speed_shortfall_kn"] = float(shortfall_kn.quantize(TWOPLACES))
+            row["speed_shortfall_kn"] = float(shortfall_kn.quantize(CENT, rounding=ROUND_HALF_UP))
             row["lost_hours"] = float(day_lost_h)
         cons = _d(day.get("cons_mt_day"))
         if warranty_cons > 0 and cons > warranty_cons * (Decimal("1") + cons_tol_pct):
-            excess = (cons - warranty_cons).quantize(TWOPLACES)
+            excess = (cons - warranty_cons).quantize(CENT, rounding=ROUND_HALF_UP)
             excess_mt += excess
             row["cons_excess_mt"] = float(excess)
         rows_out.append(row)
 
-    lost_days = (lost_hours / Decimal("24")).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
-    amount = (lost_days * claim_rate + excess_mt * fuel_price).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+    lost_days = (lost_hours / Decimal("24")).quantize(CENT, rounding=ROUND_HALF_UP)
+    amount = (lost_days * claim_rate + excess_mt * fuel_price).quantize(CENT, rounding=ROUND_HALF_UP)
     return {
         "days": rows_out,
         "total_days": len(rows_out),
         "good_weather_days": good_days,
-        "lost_time_hours": float(lost_hours.quantize(TWOPLACES)),
+        "lost_time_hours": float(lost_hours.quantize(CENT, rounding=ROUND_HALF_UP)),
         "lost_time_days": float(lost_days),
-        "excess_consumption_mt": float(excess_mt.quantize(TWOPLACES)),
+        "excess_consumption_mt": float(excess_mt.quantize(CENT, rounding=ROUND_HALF_UP)),
         "amount": float(amount),
         "currency": inputs.get("currency") or "USD",
     }

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
 import { PageGuide } from "@/components/PageGuide";
@@ -60,6 +61,10 @@ function TasksPageInner() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState("");
+  const [refWarn, setRefWarn] = useState("");
+  // 破坏性操作二次确认（删除任务）：存待执行的删除动作（P1-8）。
+  const [deletePending, setDeletePending] = useState<(() => void) | null>(null);
+  const [deleteLabel, setDeleteLabel] = useState("");
 
   useListHotkeys(() => setDraft({ ...EMPTY_DRAFT }));
 
@@ -110,7 +115,15 @@ function TasksPageInner() {
         : [{ key: "complete", label: t("page.tasks.complete", "Complete"), onClick: () => transition(target, "complete") } as ContextMenuItem]),
       { key: "edit", label: t("common.edit", "Edit"), onClick: () => openEdit(target) },
       { key: "d2", divider: true, label: "" },
-      { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => void deleteTask(target.id) },
+      {
+        key: "delete",
+        label: t("common.delete", "Delete"),
+        danger: true,
+        onClick: () => {
+          setDeleteLabel(target.title);
+          setDeletePending(() => () => deleteTask(target.id));
+        },
+      },
     ];
   }
 
@@ -133,10 +146,13 @@ function TasksPageInner() {
   }, [load]);
 
   useEffect(() => {
+    // 参考数据（可选受理人列表）失败不阻断整页，但必须可见，不能静默（P1-4）。
     apiGet("/api/v1/tasks/assignees")
       .then((rows) => setAssignees(Array.isArray(rows) ? rows : []))
-      .catch(() => undefined);
-  }, []);
+      .catch(() =>
+        setRefWarn(t("page.tasks.assignees_fail", "Could not load the assignee list — the field may be empty.")),
+      );
+  }, [t]);
 
   function dueLabel(task: TaskOut) {
     if (!task.due_at) return null;
@@ -152,7 +168,8 @@ function TasksPageInner() {
   async function saveDraft() {
     if (!draft) return;
     if (!draft.title.trim()) {
-      toast.success(t("page.tasks.need_title", "Enter a task title"));
+      // 校验失败不是成功 —— 必须报错并中止提交（P1-26）。
+      toast.error(t("page.tasks.need_title", "Enter a task title"));
       return;
     }
     setSaving(true);
@@ -236,6 +253,8 @@ function TasksPageInner() {
 
       <StatusLegend statuses={["todo", "in_progress", "done", "cancelled"]} />
 
+      {refWarn ? <p className="flash-err">{refWarn}</p> : null}
+
       <div className="panel">
         <StateView
           loading={loading}
@@ -312,6 +331,20 @@ function TasksPageInner() {
       </div>
 
       <ContextMenu controller={rowCtx} items={rowMenuItems} />
+
+      <ConfirmDialog
+        open={Boolean(deletePending)}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: deleteLabel })}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = deletePending;
+          setDeletePending(null);
+          fn?.();
+        }}
+        onCancel={() => setDeletePending(null)}
+      />
 
       <RecordModal
         open={Boolean(draft)}

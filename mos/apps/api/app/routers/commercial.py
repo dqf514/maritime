@@ -34,7 +34,7 @@ from app.services.doc_numbering import next_doc_number
 from app.services.optimistic_lock import assert_fresh
 from app.models_clause import ClauseTemplate
 from app.services.clause_library import list_clauses, materialize_params
-from app.services.estimate_engine import compute_estimate, sensitivity
+from app.services.estimate_engine import compute_estimate, sensitivity, validate_estimate_inputs
 from app.services.audit import audit
 from app.services.recycle import soft_delete
 from app.services.tenant_guard import scoped_get
@@ -48,6 +48,7 @@ from app.services.state_machine import (
 )
 from app.models_time_charter import HireStatement, TimeCharterContract
 from app.services import hire_engine
+from app.services.data_scope import apply_module_scope
 from app.services.cargo_terms import freight_with_overage
 from app.services.pricing_engine import AdvancedPricingEngine, WorldscaleCalculator
 from app.services.distance_service import get_distance, get_route
@@ -83,6 +84,25 @@ class EstimateIn(BaseModel):
     counterparty_id: UUID | None = None
     inputs: dict = Field(default_factory=dict)
 
+    @field_validator("inputs")
+    @classmethod
+    def _check_inputs(cls, v: dict) -> dict:
+        """P1-B28：自由 dict 挂不上 ``ge/le``，改用引擎同一套区间规则。
+
+        越界的百分数/负的收入在**存稿**时就被拒（422），
+        不用等到点「计算」才报错。
+        """
+        try:
+            validate_estimate_inputs(v or {})
+        except ValueError as exc:
+            # HTTPException 在 Pydantic v2 的校验器里会原样抛出去（不会被包成 ValidationError），因此错误码与「计算」路径保持一致。
+            # 包成 ValidationError），因此错误码与「计算」路径保持一致。
+            raise HTTPException(
+                422,
+                detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)},
+            ) from exc
+        return v
+
 
 class EstimateOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -115,8 +135,8 @@ class _CharterTermsMixin(BaseModel):
     overage_pct: Decimal | None = Field(default=None, ge=0, le=100)
     load_rate_pd: float | None = None
     disch_rate_pd: float | None = None
-    address_comm_pct: float | None = None
-    brokerage_pct: float | None = None
+    address_comm_pct: float | None = Field(default=None, ge=0, le=100)
+    brokerage_pct: float | None = Field(default=None, ge=0, le=100)
     hire_per_day: float | None = None
     hire_cycle_days: int | None = None
     delivery_port_id: UUID | None = None
@@ -168,7 +188,7 @@ class CharterIn(_CharterTermsMixin):
     estimate_id: UUID | None = None
     laycan_from: date | None = None
     laycan_to: date | None = None
-    commission_pct: float | None = None
+    commission_pct: float | None = Field(default=None, ge=0, le=100)
     freight_terms: dict = Field(default_factory=dict)
     clauses: dict = Field(default_factory=dict)
     # Fixture No. 为系统编号（YYYYNNNN）；显式传入时沿用
@@ -268,11 +288,16 @@ class ScheduleOut(BaseModel):
 
 @router.get("/estimates", response_model=list[EstimateOut])
 def list_estimates(auth: AuthContext = Depends(require_module("estimate")), db: Session = Depends(get_db)):
-    rows = db.scalars(
+    from app.services.data_scope import apply_data_scope, effective_scope
+
+    stmt = (
         select(Estimate)
         .where(Estimate.tenant_id == auth.tenant_id, Estimate.status != "deleted")
         .order_by(Estimate.created_at.desc())
-    ).all()
+    )
+    # 行级数据权限：角色被收紧到 "own" 时只看自己建的估价（此前只有发票 / 航次落地）
+    stmt = apply_data_scope(stmt, Estimate, auth.user_id, effective_scope(db, auth.tenant_id, auth.roles, "chartering"))
+    rows = db.scalars(stmt).all()
     return [EstimateOut.model_validate(r) for r in rows]
 
 
@@ -317,6 +342,19 @@ class EstimateTemplateIn(BaseModel):
     route_name: str | None = None
     inputs: dict = Field(default_factory=dict)
     is_system: bool = False
+
+    @field_validator("inputs")
+    @classmethod
+    def _check_inputs(cls, v: dict) -> dict:
+        """模板会原样变成估算的 inputs —— 越界值在存模板时就该被拒。"""
+        try:
+            validate_estimate_inputs(v or {})
+        except ValueError as exc:
+            raise HTTPException(
+                422,
+                detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)},
+            ) from exc
+        return v
 
 
 class EstimateTemplateOut(BaseModel):
@@ -643,6 +681,21 @@ class EstimateUpdate(BaseModel):
     clear_vessel: bool = False
     clear_counterparty: bool = False
 
+    @field_validator("inputs")
+    @classmethod
+    def _check_inputs(cls, v: dict | None) -> dict | None:
+        """同 :class:`EstimateIn` —— 改稿也不能写进越界的百分数。"""
+        if v is None:
+            return v
+        try:
+            validate_estimate_inputs(v)
+        except ValueError as exc:
+            raise HTTPException(
+                422,
+                detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)},
+            ) from exc
+        return v
+
 
 @router.put("/estimates/{estimate_id}", response_model=EstimateOut)
 def update_estimate(
@@ -810,6 +863,7 @@ def estimate_to_charter(estimate_id: UUID, auth: AuthContext = Depends(require_m
     results = est.results or {}
     charter = Charter(
         tenant_id=auth.tenant_id,
+        created_by=auth.user_id,
         charter_no=next_doc_number(db, auth.tenant_id, Charter, Charter.charter_no, "CP"),
         charter_type="voyage" if est.mode == "voyage" else "tct",
         vessel_id=est.vessel_id,
@@ -825,7 +879,13 @@ def estimate_to_charter(estimate_id: UUID, auth: AuthContext = Depends(require_m
         bill_by=inputs.get("bill_by"),
         tolerance_pct=inputs.get("cargo_tolerance_pct", inputs.get("tolerance_pct")),
         overage_pct=inputs.get("overage_pct"),
-        address_comm_pct=inputs.get("address_comm_pct") or inputs.get("commission_pct"),
+        # P1-B16：显式写 0（不要地址佣金）不能回落到 commission_pct ——
+        # `or` 把 0 当成「没填」。只有**真的没给** address_comm_pct 才回落。
+        address_comm_pct=(
+            inputs["address_comm_pct"]
+            if inputs.get("address_comm_pct") is not None
+            else inputs.get("commission_pct")
+        ),
         brokerage_pct=inputs.get("brokerage_pct"),
         hire_per_day=inputs.get("hire_per_day"),
         demurrage_rate=inputs.get("demurrage_rate"),
@@ -952,8 +1012,13 @@ def list_charters(
     db: Session = Depends(get_db),
 ):
     rows = db.scalars(
-        select(Charter)
-        .where(Charter.tenant_id == auth.tenant_id, Charter.status != "deleted")
+        apply_module_scope(
+            db,
+            select(Charter).where(Charter.tenant_id == auth.tenant_id, Charter.status != "deleted"),
+            Charter,
+            auth,
+            "chartering",
+        )
         .order_by(Charter.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -1852,6 +1917,7 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
     }
     row = Charter(
         tenant_id=auth.tenant_id,
+        created_by=auth.user_id,
         charter_no=next_doc_number(db, auth.tenant_id, Charter, Charter.charter_no, "CP"),
         fixture_no=body.fixture_no or _next_fixture_no(db, auth.tenant_id),
         charter_type=body.charter_type,
@@ -1883,7 +1949,9 @@ class CharterUpdate(_CharterTermsMixin):
     counterparty_id: Optional[UUID] = None
     laycan_from: date | None = None
     laycan_to: date | None = None
-    commission_pct: float | None = None
+    # PATCH 也必须限幅 —— 建约路径有 ge=0/le=100，更新路径以前没有，
+    # 结果 PATCH 能把 500% 的佣金百分数写进库（审计 P1-B27）。
+    commission_pct: float | None = Field(default=None, ge=0, le=100)
     freight_terms: dict | None = None
     clauses: dict | None = None
     clear_vessel: bool = False
@@ -3046,7 +3114,7 @@ class PricingIn(BaseModel):
 @router.post("/pricing/calculate")
 def calculate_price(
     body: PricingIn,
-    auth: AuthContext = Depends(require_module("commercial")),
+    auth: AuthContext = Depends(require_module("chartering")),
     db: Session = Depends(get_db),
 ):
     return AdvancedPricingEngine.price_voyage(
@@ -3066,7 +3134,7 @@ def lookup_worldscale(
     from_port: str = Query(...),
     to_port: str = Query(...),
     year: int = Query(2026),
-    auth: AuthContext = Depends(require_module("commercial")),
+    auth: AuthContext = Depends(require_module("chartering")),
     db: Session = Depends(get_db),
 ):
     ws = WorldscaleCalculator.lookup(db, from_port.upper(), to_port.upper(), year)
@@ -3297,7 +3365,7 @@ def delete_distance(
 def estimate_sensitivity(
     estimate_id: UUID,
     pct: float = Query(10.0, gt=0, le=50, description="Perturbation percentage"),
-    auth: AuthContext = Depends(require_module("commercial")),
+    auth: AuthContext = Depends(require_module("estimate")),
     db: Session = Depends(get_db),
 ):
     from app.services.sensitivity import sensitivity_analysis
@@ -3310,7 +3378,7 @@ def estimate_sensitivity(
 @router.get("/estimates/{estimate_id}/bep")
 def estimate_bep(
     estimate_id: UUID,
-    auth: AuthContext = Depends(require_module("commercial")),
+    auth: AuthContext = Depends(require_module("estimate")),
     db: Session = Depends(get_db),
 ):
     from app.services.sensitivity import calculate_bep
@@ -3567,6 +3635,7 @@ def offer_transition(
     if target == "fixed":
         charter = Charter(
             tenant_id=auth.tenant_id,
+            created_by=auth.user_id,
             charter_no=f"CP-{uuid4().hex[:8].upper()}",
             charter_type="voyage",
             status="draft",

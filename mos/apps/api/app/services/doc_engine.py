@@ -20,8 +20,10 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+import os
 import re
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -451,7 +453,13 @@ def _fmt_pct(v: Any, dp: int = 2) -> str:
 def _env() -> SandboxedEnvironment:
     env = SandboxedEnvironment(
         undefined=StrictUndefined,   # 模板写错字段名要立刻暴露，而不是静默印空白
-        autoescape=False,            # 上下文全是自己构造的纯数据；模板作者即租户本人
+        # P0-4：**必须转义**。上下文里全是「租户/用户可编辑」的字段
+        # （对手方名、备注、货名、地址…）—— 老代码 autoescape=False 意味着
+        # 对手方名写成 `<img src=x onerror="fetch('/api/v1/settings/api-keys')">`
+        # 就会在财务/管理员打开单据时执行（存储型 XSS → 会话接管）。
+        # 模板**正文**是租户自己写的 HTML（模板作者即租户本人），不受影响；
+        # 只有 {{ }} 插值被转义 —— 这正是我们要的行为。
+        autoescape=True,
         trim_blocks=True,
         lstrip_blocks=True,
     )
@@ -627,12 +635,78 @@ _FOOTER = """
 """
 
 
-def pdf_available() -> bool:
+_chromium_probe_cache: tuple[bool, float] | None = None
+
+
+def _chromium_installed() -> bool:
+    """Chromium 二进制是否真的在盘上。
+
+    P1-10：旧实现只 ``import playwright.sync_api`` —— **Python 包在，浏览器没下**
+    时它照样返回 True，界面显示「PDF 可用」，用户一点导出就炸。镜像里如果
+    没跑 ``playwright install chromium`` 就是这个状态。
+
+    这里做一次真实的文件系统探测（``INSTALLATION_COMPLETE`` 标记 / chrome 可执行
+    文件），结果缓存 60 秒 —— 探测要进文件系统，而 ``/docs/capabilities`` 会被
+    前端频繁调用。
+    """
+    global _chromium_probe_cache
+    now = time.time()
+    if _chromium_probe_cache and now - _chromium_probe_cache[1] < 60:
+        return _chromium_probe_cache[0]
+
+    result = False
     try:
         import playwright.sync_api  # noqa: F401
-        return True
+
+        roots: list[Path] = []
+        env = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+        if env:
+            roots.append(Path(env))
+        home = Path.home()
+        roots.extend(
+            [
+                home / ".cache" / "ms-playwright",
+                home / "Library" / "Caches" / "ms-playwright",
+                home / "AppData" / "Local" / "ms-playwright",
+                Path("/ms-playwright"),
+            ]
+        )
+        for root in roots:
+            try:
+                if not root.is_dir():
+                    continue
+                for entry in root.iterdir():
+                    if not entry.is_dir() or not entry.name.startswith("chromium"):
+                        continue
+                    # playwright 装完会在浏览器目录里放 INSTALLATION_COMPLETE
+                    if (entry / "INSTALLATION_COMPLETE").exists():
+                        result = True
+                        break
+                    # 兜底：目录里有 chrome 可执行文件
+                    for exe in entry.rglob("chrome*"):
+                        if exe.is_file() and exe.suffix in ("", ".exe"):
+                            result = True
+                            break
+                    if result:
+                        break
+            except Exception:  # noqa: BLE001 - 探测失败按「没有」算
+                continue
+            if result:
+                break
+    except Exception:  # noqa: BLE001
+        result = False
+
+    _chromium_probe_cache = (result, now)
+    return result
+
+
+def pdf_available() -> bool:
+    """PDF 渲染是否**真的**可用（Python 包 + Chromium 二进制都要在）。"""
+    try:
+        import playwright.sync_api  # noqa: F401
     except Exception:  # noqa: BLE001
         return False
+    return _chromium_installed()
 
 
 def _get_browser():
@@ -686,6 +760,12 @@ def _render_pdf(html: str, wait_ms: int) -> bytes:
             browser = _get_browser()
             page = browser.new_page()
             try:
+                # P0-4/P2：**渲染时禁止加载远程子资源**。单据正文里如果
+                # 出现 ``<img src="http://169.254.169.254/...">``，浏览器会
+                # 替服务器去打内网（元数据地址 / Redis / Postgres）—— 这是
+                # 借 PDF 渲染当 SSRF 跳板。只放行 ``data:`` / ``about:``。
+                # （测试用的假 page 没有 route → 跳过，不影响真浏览器。）
+                _install_resource_guard(page)
                 page.set_content(html, wait_until="load")
                 if wait_ms:
                     page.wait_for_timeout(wait_ms)  # 让 data: URI 图片解码完
@@ -708,6 +788,23 @@ def _render_pdf(html: str, wait_ms: int) -> bytes:
         except Exception as exc:  # noqa: BLE001 — 启动失败等
             _reset_browser()
             raise PDFEngineUnavailable(f"pdf engine unavailable: {exc}") from exc
+
+
+def _block_remote_resources(route, request) -> None:  # noqa: ANN001 — playwright 回调
+    """拦截 PDF 渲染里的**远程**子资源请求（只放行 data: / about: / blob:）。"""
+    url = (getattr(request, "url", "") or "").strip().lower()
+    if url.startswith(("data:", "about:", "blob:")):
+        route.continue_()
+        return
+    route.abort()
+
+
+def _install_resource_guard(page) -> None:  # noqa: ANN001 — playwright page
+    """给渲染页装上「只放行本地资源」的拦截器（测试假 page 无 route 时跳过）。"""
+    route = getattr(page, "route", None)
+    if route is None:
+        return
+    route("**/*", _block_remote_resources)
 
 
 def _reset_browser() -> None:

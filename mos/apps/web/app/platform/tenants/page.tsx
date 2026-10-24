@@ -1,6 +1,8 @@
 "use client";
 
-import { FormEvent, Suspense, useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { msgOf, handled } from "@/lib/errors";
+import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -10,6 +12,7 @@ import { LookupSelect } from "@/components/LookupSelect";
 import { SavedViews } from "@/components/SavedViews";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, generateTempPassword } from "@/lib/api";
@@ -101,16 +104,57 @@ function PlatformTenantsPage() {
   const [userSaving, setUserSaving] = useState(false);
   const [userPw, setUserPw] = useState(""); // 一次性临时密码 flash
   const [resetTarget, setResetTarget] = useState<PUserRow | null>(null);
+  // 三态 / 分级错误：主列表失败 → 整页 error；附属数据失败 → 局部提示
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [usersErr, setUsersErr] = useState<string | null>(null);
+  const [rolesErr, setRolesErr] = useState<string | null>(null);
+  const [backupsErr, setBackupsErr] = useState<string | null>(null);
+  // 密钥默认隐藏（不常驻明文）
+  const [revealInitialPw, setRevealInitialPw] = useState(false);
+  const [revealUserPw, setRevealUserPw] = useState(false);
+  // 恢复备份：不可逆，需输入租户代码确认
+  const [restoreTarget, setRestoreTarget] = useState<BackupRow | null>(null);
+  const [restoreConfirmText, setRestoreConfirmText] = useState("");
+  // 备份列表客户端分页（总数常显，不静默截断）
+  const [backupPage, setBackupPage] = useState(1);
 
-  async function load() {
-    setRows(await apiGet("/api/v1/platform/tenants"));
-  }
-
-  useEffect(() => {
-    load().catch(() => toast.error(t("page.tenants.admin_required", "需要平台管理员（租户 sys）")));
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      setRows(await apiGet("/api/v1/platform/tenants"));
+    } catch (ex) {
+      setErr(msgOf(ex, t("page.tenants.admin_required", "需要平台管理员（租户 sys）")));
+    } finally {
+      setLoading(false);
+    }
   }, [t]);
 
-  async function openTenant(row: Tenant) {
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t]);
+
+  const loadUsers = useCallback(async (tid?: string) => {
+    if (!tid) return;
+    setUsersErr(null);
+    setRolesErr(null);
+    try {
+      setPusers(await apiGet(`/api/v1/platform/tenants/${tid}/users`));
+    } catch (ex) {
+      setUsersErr(msgOf(ex));
+      setPusers([]);
+    }
+    try {
+      setProles(await apiGet(`/api/v1/platform/tenants/${tid}/roles`));
+    } catch (ex) {
+      setRolesErr(msgOf(ex));
+      setProles([]);
+    }
+  }, []);
+
+  const openTenant = useCallback(async (row: Tenant) => {
     setBusy(true);
     try {
       const detail = await apiGet(`/api/v1/platform/tenants/${row.id}`);
@@ -137,25 +181,21 @@ function PlatformTenantsPage() {
       setPurgeOpen(false);
       setPurgeConfirmText("");
       setPurgeIncludeUsers(false);
-      setBackups(await apiGet(`/api/v1/platform/tenants/${row.id}/backups`).catch(() => []));
+      setBackupsErr(null);
+      setBackups(
+        await apiGet(`/api/v1/platform/tenants/${row.id}/backups`).catch((ex) => {
+          setBackupsErr(msgOf(ex));
+          return [] as BackupRow[];
+        }),
+      );
       // 用户管理区
       await loadUsers(row.id);
-    } catch {
-      toast.error(t("common.failed", "加载失败"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "加载失败")));
     } finally {
       setBusy(false);
     }
-  }
-
-  async function loadUsers(tid?: string) {
-    if (!tid) return;
-    const [u, r] = await Promise.all([
-      apiGet(`/api/v1/platform/tenants/${tid}/users`),
-      apiGet(`/api/v1/platform/tenants/${tid}/roles`).catch(() => [] as RoleRow[]),
-    ]);
-    setPusers(u);
-    setProles(r);
-  }
+  }, [loadUsers, t, toast]);
 
   const assignableRoles = proles.filter((r) => r.code !== "platform_admin");
 
@@ -180,10 +220,11 @@ function PlatformTenantsPage() {
   async function copyUserPw() {
     try {
       await navigator.clipboard.writeText(userPw);
+      setUserPw("");
     } catch {
-      window.prompt(t("page.users.copy_manual", "请手动复制初始密码："), userPw);
+      // 剪贴板不可用：不把明文放进 prompt，改为按需显示由用户手动复制
+      setRevealUserPw(true);
     }
-    setUserPw("");
   }
 
   async function saveUser(e: FormEvent) {
@@ -256,8 +297,8 @@ function PlatformTenantsPage() {
           ? t("page.tenants.user_reset_mailed", "密码已重置并邮件发送；该用户现有登录会话已全部失效。")
           : t("page.tenants.user_reset", "密码已重置；临时密码请立即复制传达。"),
       );
-    } catch (err: any) {
-      toast.error(String(err?.message || t("common.failed", "失败")));
+    } catch (err) {
+      toast.error(msgOf(err, t("common.failed", "失败")));
     } finally {
       setResetTarget(null);
     }
@@ -354,7 +395,7 @@ function PlatformTenantsPage() {
       setCreating(false);
       await load();
     } catch (err) {
-      toast.error(t("page.tenants.create_fail", "创建失败: {err}", { err: String(err) }));
+      toast.error(t("page.tenants.create_fail", "创建失败: {err}", { err: msgOf(err) }));
     } finally {
       setCreateSaving(false);
     }
@@ -363,13 +404,32 @@ function PlatformTenantsPage() {
   async function copyInitialPw() {
     try {
       await navigator.clipboard.writeText(initialPw);
+      setInitialPw("");
     } catch {
-      window.prompt(t("page.tenants.copy_manual", "请手动复制初始密码："), initialPw);
+      // 剪贴板不可用：不把明文放进 prompt，改为按需显示由用户手动复制
+      setRevealInitialPw(true);
     }
-    setInitialPw("");
   }
 
-  async function setStatus(id: string, status: string) {
+  /** DELETE /platform/tenants/{id} = deactivate（status→suspended，数据保留，可再启用） */
+  const deactivateTenant = useCallback(async (id: string) => {
+    try {
+      await apiDelete(`/api/v1/platform/tenants/${id}`);
+      toast.success(t("page.tenants.deactivated", "租户已停用（数据保留）"));
+      await load();
+      if (selected?.id === id) await openTenant({ ...selected, status: "suspended" });
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "失败")));
+    }
+  }, [load, openTenant, selected, t, toast]);
+
+  const applyStatus = useCallback(async (id: string, status: string) => {
+    await apiPost(`/api/v1/platform/tenants/${id}/status`, { status });
+    await load();
+    if (selected?.id === id) await openTenant({ ...selected, status });
+  }, [load, openTenant, selected]);
+
+  const setStatus = useCallback(async (id: string, status: string) => {
     if (status === "suspended") {
       // 停用走 DELETE（后端 deactivate，数据保留）；文案强调可恢复、不丢数据
       setConfirm({
@@ -380,25 +440,7 @@ function PlatformTenantsPage() {
       return;
     }
     await applyStatus(id, status);
-  }
-
-  /** DELETE /platform/tenants/{id} = deactivate（status→suspended，数据保留，可再启用） */
-  async function deactivateTenant(id: string) {
-    try {
-      await apiDelete(`/api/v1/platform/tenants/${id}`);
-      toast.success(t("page.tenants.deactivated", "租户已停用（数据保留）"));
-      await load();
-      if (selected?.id === id) await openTenant({ ...selected, status: "suspended" });
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "失败"));
-    }
-  }
-
-  async function applyStatus(id: string, status: string) {
-    await apiPost(`/api/v1/platform/tenants/${id}/status`, { status });
-    await load();
-    if (selected?.id === id) await openTenant({ ...selected, status });
-  }
+  }, [applyStatus, deactivateTenant, t, toast]);
 
   /** 最后一个 active 租户不可停用（后端 LAST_ACTIVE_TENANT 409）；提前隐藏按钮 */
   const activeCount = rows.filter((r) => r.status === "active").length;
@@ -413,11 +455,21 @@ function PlatformTenantsPage() {
       await load();
       await openTenant(selected);
     } catch (err) {
-      toast.error(t("page.tenants.save_fail", "保存失败: {err}", { err: String(err) }));
+      toast.error(t("page.tenants.save_fail", "保存失败: {err}", { err: msgOf(err) }));
     }
   }
 
-  async function toggleLicense(mod: LicRow) {
+  const applyLicense = useCallback(async (mod: LicRow, next: string) => {
+    if (!selected) return;
+    await apiPost(`/api/v1/platform/tenants/${selected.id}/licenses`, {
+      module_code: mod.module_code,
+      status: next,
+    });
+    setLicenses(await apiGet(`/api/v1/platform/tenants/${selected.id}/licenses`));
+    await load();
+  }, [selected, load]);
+
+  const toggleLicense = useCallback(async (mod: LicRow) => {
     if (!selected || mod.is_core) return;
     const next = mod.status === "active" ? "inactive" : "active";
     if (next === "inactive") {
@@ -433,17 +485,7 @@ function PlatformTenantsPage() {
       return;
     }
     await applyLicense(mod, next);
-  }
-
-  async function applyLicense(mod: LicRow, next: string) {
-    if (!selected) return;
-    await apiPost(`/api/v1/platform/tenants/${selected.id}/licenses`, {
-      module_code: mod.module_code,
-      status: next,
-    });
-    setLicenses(await apiGet(`/api/v1/platform/tenants/${selected.id}/licenses`));
-    await load();
-  }
+  }, [selected, applyLicense, t, toast]);
 
   function officeModeBadge(mode?: string) {
     const map: Record<string, [string, string]> = {
@@ -494,7 +536,7 @@ function PlatformTenantsPage() {
           : { ok: false, text: t("platform.officecfg.test_fail", "测试失败：{msg}", { msg: res.message }) },
       );
     } catch (e) {
-      setOtest({ ok: false, text: String((e as Error)?.message || e) });
+      setOtest({ ok: false, text: msgOf(e) });
     } finally {
       setOtestBusy(false);
     }
@@ -509,14 +551,20 @@ function PlatformTenantsPage() {
     return true;
   });
 
-  const tenantColumns: ColumnDef<Tenant>[] = [
+  // 备份列表客户端分页：总数常显，不做静默 slice
+  const BACKUP_PAGE_SIZE = 8;
+  const backupPages = Math.max(1, Math.ceil(backups.length / BACKUP_PAGE_SIZE));
+  const backupPageSafe = Math.min(Math.max(1, backupPage), backupPages);
+  const backupRows = backups.slice((backupPageSafe - 1) * BACKUP_PAGE_SIZE, backupPageSafe * BACKUP_PAGE_SIZE);
+
+  const tenantColumns = useMemo<ColumnDef<Tenant>[]>(() => [
     {
       key: "code",
       title: t("common.code", "代码"),
       width: 110,
       value: (r) => r.code,
       render: (v, r) => (
-        <button type="button" className="linklike" onClick={(e) => { e.stopPropagation(); openTenant(r).catch(() => undefined); }}>
+        <button type="button" className="linklike" onClick={(e) => { e.stopPropagation(); openTenant(r).catch(handled); }}>
           {String(v)}
         </button>
       ),
@@ -560,9 +608,9 @@ function PlatformTenantsPage() {
           </button>
         ),
     },
-  ];
+  ], [t, openTenant, activeCount, setStatus, toast]);
 
-  const licColumns: ColumnDef<LicRow>[] = [
+  const licColumns = useMemo<ColumnDef<LicRow>[]>(() => [
     {
       key: "module_code",
       title: t("page.licenses.module", "模块"),
@@ -605,7 +653,7 @@ function PlatformTenantsPage() {
           </button>
         ),
     },
-  ];
+  ], [t, toggleLicense, toast]);
 
   return (
     <AppShell>
@@ -619,23 +667,41 @@ function PlatformTenantsPage() {
         actions={<SavedViews storageKey="platform_tenants" onApply={(qs) => router.replace(`${pathname}${qs}`)} />}
       />
       {initialPw ? (
-        <p className="flash">
-          {t("page.tenants.pw_ready", "Initial password generated (shown once — copy it now).")}{" "}
-          <button type="button" className="btn btn-ghost" onClick={() => copyInitialPw().catch(() => setInitialPw(""))}>
+        <div className="flash">
+          <span>{t("page.tenants.pw_ready", "Initial password generated (shown once — copy it now).")}</span>{" "}
+          <button type="button" className="btn btn-ghost" onClick={() => copyInitialPw().catch(() => toast.error(t("page.tenants.copy_fail", "Copy failed")))}>
             {t("page.tenants.copy_pw", "Copy initial password")}
+          </button>{" "}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-expanded={revealInitialPw}
+            aria-label={t("page.tenants.reveal_pw", "显示密码")}
+            onClick={() => setRevealInitialPw((v) => !v)}
+          >
+            {revealInitialPw ? t("page.tenants.hide_pw", "隐藏密码") : t("page.tenants.reveal_pw", "显示密码")}
           </button>
-        </p>
+          {revealInitialPw ? <code>{initialPw}</code> : null}
+        </div>
       ) : null}
       {userPw ? (
-        <p className="flash">
-          {t("page.tenants.user_pw_ready", "临时密码已生成（仅此一次，复制后即不再显示）。")}{" "}
-          <code>{userPw}</code>{" "}
-          <button type="button" className="btn btn-ghost" onClick={() => copyUserPw().catch(() => setUserPw(""))}>
+        <div className="flash">
+          <span>{t("page.tenants.user_pw_ready", "临时密码已生成（仅此一次，复制后即不再显示）。")}</span>{" "}
+          <button type="button" className="btn btn-ghost" onClick={() => copyUserPw().catch(() => toast.error(t("page.tenants.copy_fail", "Copy failed")))}>
             {t("page.tenants.copy_pw", "Copy initial password")}
+          </button>{" "}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-expanded={revealUserPw}
+            aria-label={t("page.tenants.reveal_pw", "显示密码")}
+            onClick={() => setRevealUserPw((v) => !v)}
+          >
+            {revealUserPw ? t("page.tenants.hide_pw", "隐藏密码") : t("page.tenants.reveal_pw", "显示密码")}
           </button>
-        </p>
+          {revealUserPw ? <code>{userPw}</code> : null}
+        </div>
       ) : null}
-
       <Toolbar
         filterCount={(filterStatus ? 1 : 0) + (filterQ ? 1 : 0)}
         onClearFilters={() => setQuery({ status: null, q: null }, { resetPage: true })}
@@ -664,9 +730,7 @@ function PlatformTenantsPage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.tenants.provision", "Provision tenant")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load().catch(handled)} />
       </Toolbar>
 
       <div className="panel">
@@ -675,11 +739,11 @@ function PlatformTenantsPage() {
           data={filtered}
           rowKey={(r) => r.id}
           storageKey="platform_tenants_grid"
-          onRowClick={(r) => openTenant(r).catch(() => undefined)}
+          onRowClick={(r) => openTenant(r).catch(handled)}
           onRowDoubleClick={(r) => {
             openTenant(r)
               .then(() => setEditOpen(true))
-              .catch(() => undefined);
+              .catch(handled);
           }}
           emptyText={t("common.no_data", "No data")}
         />
@@ -706,9 +770,7 @@ function PlatformTenantsPage() {
             <button className="btn btn-primary" type="button" onClick={openUserCreate}>
               {t("page.tenants.user_add", "新建用户")}
             </button>
-            <button className="btn btn-sm" type="button" onClick={() => loadUsers(selected.id).catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-              ↻
-            </button>
+            <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => loadUsers(selected.id).catch(handled)} />
           </div>
           <table className="table">
             <thead>
@@ -744,7 +806,7 @@ function PlatformTenantsPage() {
                         setConfirm({
                           message: t("page.tenants.user_delete_confirm", "删除用户 {email}？（软删除，可在回收站恢复）", { email: u.email }),
                           danger: true,
-                          action: () => removeUser(u).catch(() => undefined),
+                          action: () => removeUser(u).catch(handled),
                         })
                       }
                     >
@@ -785,7 +847,7 @@ function PlatformTenantsPage() {
               <p style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                 {t("platform.officecfg.redirect_uri", "回调地址（需登记到 Entra 应用）")}:{" "}
                 <code>{ocfg.redirect_uri}</code>
-                <button className="btn btn-ghost" type="button" onClick={() => copyRedirectUri().catch(() => undefined)}>
+                <button className="btn btn-ghost" type="button" onClick={() => copyRedirectUri().catch(handled)}>
                   {t("platform.officecfg.copy", "复制")}
                 </button>
               </p>
@@ -910,6 +972,7 @@ function PlatformTenantsPage() {
                 <input
                   value={purgeConfirmText}
                   onChange={(e) => setPurgeConfirmText(e.target.value)}
+                  aria-label={t("page.tenants.purge_confirm_input", "Type the tenant code to confirm")}
                   placeholder={selected.code}
                   style={{ maxWidth: 220 }}
                 />
@@ -946,7 +1009,7 @@ function PlatformTenantsPage() {
                 </tr>
               </thead>
               <tbody>
-                {backups.slice(0, 8).map((b) => (
+                {backupRows.map((b) => (
                   <tr key={b.id}>
                     <td>
                       <span className={b.trigger === "manual" ? "badge badge-info" : "badge"}>
@@ -966,7 +1029,10 @@ function PlatformTenantsPage() {
                         className="btn btn-sm"
                         type="button"
                         disabled={dbBusy || !b.storage_path}
-                        onClick={() => tenantRestore(b)}
+                        onClick={() => {
+                          setRestoreTarget(b);
+                          setRestoreConfirmText("");
+                        }}
                       >
                         {t("page.tenants.restore", "恢复")}
                       </button>
@@ -980,6 +1046,77 @@ function PlatformTenantsPage() {
               {t("page.tenants.no_backups", "暂无备份记录")}
             </p>
           )}
+          {backupsErr ? <p className="text-danger">{backupsErr}</p> : null}
+          {backups.length > 0 ? (
+            <div className="dt-pager">
+              <span className="muted">{t("common.count_total", "共 {n} 条", { n: backups.length })}</span>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                disabled={backupPageSafe <= 1}
+                aria-label={t("common.page_prev", "上一页")}
+                onClick={() => setBackupPage((p) => Math.max(1, p - 1))}
+              >
+                ←
+              </button>
+              <span className="muted">
+                {backupPageSafe} / {backupPages}
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                disabled={backupPageSafe >= backupPages}
+                aria-label={t("common.page_next", "下一页")}
+                onClick={() => setBackupPage((p) => Math.min(backupPages, p + 1))}
+              >
+                →
+              </button>
+            </div>
+          ) : null}
+          {restoreTarget && selected ? (
+            <div className="panel" style={{ marginTop: "0.75rem", borderColor: "var(--danger)" }}>
+              <p style={{ marginTop: 0 }}>
+                {t(
+                  "page.tenants.restore_confirm_hint",
+                  "恢复备份 {path} 会把该快照的数据写回租户 {code}，覆盖/合并当前线上数据且不可撤销。请输入租户代码以确认：",
+                  { path: restoreTarget.storage_path || "", code: selected.code },
+                )}
+              </p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                <input
+                  value={restoreConfirmText}
+                  onChange={(e) => setRestoreConfirmText(e.target.value)}
+                  aria-label={t("page.tenants.restore_confirm_input", "Type the tenant code to confirm")}
+                  placeholder={selected.code}
+                  style={{ maxWidth: 220 }}
+                />
+                <button
+                  className="btn btn-danger"
+                  type="button"
+                  disabled={dbBusy || restoreConfirmText !== selected.code}
+                  onClick={() => {
+                    const b = restoreTarget;
+                    setRestoreTarget(null);
+                    setRestoreConfirmText("");
+                    if (b) tenantRestore(b);
+                  }}
+                >
+                  {t("page.tenants.restore_run", "确认恢复")}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  disabled={dbBusy}
+                  onClick={() => {
+                    setRestoreTarget(null);
+                    setRestoreConfirmText("");
+                  }}
+                >
+                  {t("common.cancel", "取消")}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : (
         <p className="muted">{t("page.tenants.pick", "请选择上方租户行，以编辑资料与许可证。")}</p>
@@ -1143,7 +1280,7 @@ function PlatformTenantsPage() {
         onConfirm={() => {
           const u = resetTarget;
           setResetTarget(null);
-          if (u) resetUserPw(u).catch(() => undefined);
+          if (u) resetUserPw(u).catch(handled);
         }}
         onCancel={() => setResetTarget(null)}
       />

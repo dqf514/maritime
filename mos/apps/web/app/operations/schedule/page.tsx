@@ -24,6 +24,7 @@ import {
 import { Panel } from "@/components/workspace/Panel";
 import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
 import { apiGet, apiPost, type Page } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 // —— API row shapes ——
@@ -92,15 +93,13 @@ function dayStartFromInput(v: string, fallback: number): number {
 }
 
 async function fetchRows<T>(path: string): Promise<T[]> {
-  try {
-    const data = await apiGet(path);
-    if (Array.isArray(data)) return data as T[];
-    const page = data as Page<T> | { items?: T[] };
-    if (page && Array.isArray((page as { items?: T[] }).items)) return (page as { items: T[] }).items;
-    return [];
-  } catch {
-    return [];
-  }
+  // 不吞错：主列表失败必须冒泡到 StateView 的错误态，
+  // 不能静默变成「没有排期块」（P1-4）。
+  const data = await apiGet(path);
+  if (Array.isArray(data)) return data as T[];
+  const page = data as Page<T> | { items?: T[] };
+  if (page && Array.isArray((page as { items?: T[] }).items)) return (page as { items: T[] }).items;
+  return [];
 }
 
 export default function SchedulePage() {
@@ -122,6 +121,8 @@ export default function SchedulePage() {
   const [portFns, setPortFns] = useState<PortFunctionMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // 参考数据取数失败的可见提示（P1-4）
+  const [refWarn, setRefWarn] = useState("");
 
   const rangeStart = useMemo(() => dayStartFromInput(rangeFrom, startOfDay(todayMs) - 7 * DAY_MS), [rangeFrom, todayMs]);
   const rangeEnd = useMemo(() => dayStartFromInput(rangeTo, startOfDay(todayMs) + 45 * DAY_MS) + DAY_MS - 1, [rangeTo, todayMs]);
@@ -129,17 +130,34 @@ export default function SchedulePage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
+    const refFailures: string[] = [];
     try {
       const qs = `date_from=${encodeURIComponent(new Date(rangeStart).toISOString())}&date_to=${encodeURIComponent(
         new Date(rangeEnd).toISOString(),
       )}`;
       const [b, v, c, bw, pos, fns] = await Promise.all([
         fetchRows<ScheduleBlockRow>(`/api/v1/scheduling/blocks?${qs}&limit=500`),
-        fetchRows<VesselRow>("/api/v1/masterdata/vessels"),
-        fetchRows<CargoRow>("/api/v1/scheduling/cargo-book"),
-        fetchRows<BerthRow>("/api/v1/scheduling/berth-windows"),
-        fetchRows<OpenPositionRow>(`/api/v1/scheduling/open-positions?${qs}`),
-        fetchRows<PortFunctionMeta>("/api/v1/meta/port-functions"),
+        // 参考数据：失败不让整页报错，但要可见（P1-4）。
+        fetchRows<VesselRow>("/api/v1/masterdata/vessels").catch(() => {
+          refFailures.push(t("sched.vessels", "vessels"));
+          return [] as VesselRow[];
+        }),
+        fetchRows<CargoRow>("/api/v1/scheduling/cargo-book").catch(() => {
+          refFailures.push(t("sched.cargo", "cargo"));
+          return [] as CargoRow[];
+        }),
+        fetchRows<BerthRow>("/api/v1/scheduling/berth-windows").catch(() => {
+          refFailures.push(t("sched.berths", "berth windows"));
+          return [] as BerthRow[];
+        }),
+        fetchRows<OpenPositionRow>(`/api/v1/scheduling/open-positions?${qs}`).catch(() => {
+          refFailures.push(t("sched.positions", "open positions"));
+          return [] as OpenPositionRow[];
+        }),
+        fetchRows<PortFunctionMeta>("/api/v1/meta/port-functions").catch(() => {
+          refFailures.push(t("sched.port_fns", "port functions"));
+          return [] as PortFunctionMeta[];
+        }),
       ]);
       setBlocks(b);
       setVessels(v);
@@ -147,8 +165,15 @@ export default function SchedulePage() {
       setBerths(bw);
       setPositions(pos);
       setPortFns(fns);
+      setRefWarn(
+        refFailures.length
+          ? t("sched.ref_fail", "Some schedule reference data failed to load: {items}", {
+              items: refFailures.join(", "),
+            })
+          : "",
+      );
     } catch (e: any) {
-      setError(e?.message || t("common.failed", "Failed"));
+      setError(msgOf(e, t("common.failed", "Failed")));
     } finally {
       setLoading(false);
     }
@@ -348,6 +373,8 @@ export default function SchedulePage() {
             })}
           </div>
         ) : null}
+
+        {refWarn ? <p className="flash-err">{refWarn}</p> : null}
 
         <div className="sched-layout">
           <div>

@@ -25,6 +25,13 @@ from app.schemas_wave1 import (
 )
 from app.security import AuthContext, require_module
 from app.services import llm_client
+from app.services.integration_adapters import (
+    SECRET_MASK,
+    TOKEN_PREFIX,
+    encrypt_secret_keys,
+    mask_secret_keys,
+    mask_token_ref,
+)
 
 router = APIRouter(prefix="/settings/ai", tags=["AI Hub"])
 
@@ -131,6 +138,60 @@ def _get_provider(db: Session, tenant_id: UUID, provider_id: UUID) -> AiProvider
     return row
 
 
+# ── 凭据处理（P0-19）───────────────────────────────────────────
+#
+# 供应商的 API Key 有两个落点：``AiProvider.secret_ref``（主）与
+# ``AiProvider.config["api_key"]``（历史兼容）。两条路都必须是
+# **加密落库 + 响应掩码**，否则任何登录用户都能读到管理员配的密钥。
+
+#: 客户端把掩码原样发回来时按「保持原值不变」处理。
+_MASKED_SECRET_INPUTS = frozenset({SECRET_MASK, f"{TOKEN_PREFIX}{SECRET_MASK}"})
+
+
+def _encrypt_secret(value: str | None, current: str | None = None) -> str | None:
+    """把明文密钥加密成 ``v1:`` 版本化令牌。
+
+    - 掩码（``***`` / ``v1:***``）→ 视为「没改」，返回原值；
+    - 已是 ``v1:`` 的原样保留（幂等，重复保存不会二次加密）；
+    - 其余按明文加密（``ops_crypto.encrypt_token``）。
+    """
+    if value is None:
+        return current
+    text = str(value).strip()
+    if not text or text in _MASKED_SECRET_INPUTS:
+        return current
+    if text.startswith(TOKEN_PREFIX):
+        return text
+    from app.services.ops_crypto import encrypt_token
+
+    try:
+        return encrypt_token(text)
+    except Exception as exc:  # noqa: BLE001 — 密钥必须加密落库，宁可失败也不落明文
+        raise HTTPException(
+            503,
+            detail={
+                "code": "SECRET_ENCRYPTION_UNAVAILABLE",
+                "message": "无法加密保存密钥，请检查 OPS_DATA_KEY / JWT_SECRET 配置",
+            },
+        ) from exc
+
+
+def _provider_out(row: AiProvider) -> AiProviderOut:
+    """供应商响应 —— **不回吐密钥**（P0-19）。
+
+    ``AiProviderOut`` 继承 ``AiProviderIn``，``secret_ref``（密文/明文）与
+    ``config`` 里的 ``api_key`` 原本整块回吐。这里统一换成掩码：
+    ``secret_ref`` 只保留 ``v1:`` 版本前缀（前端据此知道「已配置密钥」），
+    密文本体与 ``config`` 里的密钥值一律遮成 ``***``。
+    """
+    return AiProviderOut.model_validate(row, from_attributes=True).model_copy(
+        update={
+            "secret_ref": mask_token_ref(row.secret_ref),
+            "config": mask_secret_keys(row.config),
+        }
+    )
+
+
 @router.get("/providers", response_model=list[AiProviderOut])
 def list_providers(
     auth: AuthContext = Depends(require_module("ai")),
@@ -142,7 +203,7 @@ def list_providers(
             AiProvider.status != "deleted",
         )
     ).all()
-    return [AiProviderOut.model_validate(r, from_attributes=True) for r in rows]
+    return [_provider_out(r) for r in rows]
 
 
 @router.post("/providers", response_model=AiProviderOut)
@@ -151,11 +212,26 @@ def create_provider(
     auth: AuthContext = Depends(require_module("ai")),
     db: Session = Depends(get_db),
 ):
-    row = AiProvider(tenant_id=auth.tenant_id, status="active", **body.model_dump())
+    data = body.model_dump()
+    config = dict(data.pop("config") or {})
+    raw_ref = data.pop("secret_ref", None)
+    # P0-19：config 里带的 api_key 提升为 secret_ref（加密落库），
+    # config 里不再留明文密钥。
+    inline_key = config.pop("api_key", None)
+    row = AiProvider(
+        tenant_id=auth.tenant_id,
+        status="active",
+        name=data.get("name") or "",
+        provider_type=data.get("provider_type") or "",
+        base_url=data.get("base_url"),
+        model_default=data.get("model_default"),
+        secret_ref=_encrypt_secret(inline_key or raw_ref),
+        config=encrypt_secret_keys(config),
+    )
     db.add(row)
     db.commit()
     db.refresh(row)
-    return AiProviderOut.model_validate(row, from_attributes=True)
+    return _provider_out(row)
 
 
 @router.patch("/providers/{provider_id}", response_model=AiProviderOut)
@@ -168,20 +244,26 @@ def update_provider(
     row = _get_provider(db, auth.tenant_id, provider_id)
     payload = body.model_dump(exclude_unset=True)
     api_key = payload.pop("api_key", None)
-    if api_key:
-        try:
-            from app.services.ops_crypto import encrypt_token
+    raw_ref = payload.pop("secret_ref", None)
+    incoming_cfg = payload.pop("config", None)
 
-            payload["secret_ref"] = encrypt_token(api_key)
-        except Exception:  # noqa: BLE001 — 加密不可用时回退明文 config（与解析侧一致）
-            cfg = dict(row.config or {})
-            cfg["api_key"] = api_key
-            payload["config"] = cfg
+    old_cfg = dict(row.config or {})
+    old_key = old_cfg.get("api_key") if isinstance(old_cfg.get("api_key"), str) else None
+
+    new_cfg = dict(incoming_cfg) if incoming_cfg is not None else dict(old_cfg)
+    inline_key = new_cfg.pop("api_key", None)
+    # 密钥来源优先级：显式 api_key > 显式 secret_ref > 本次 config 里的 api_key
+    # > 存量 config.api_key（顺带把历史明文迁进 secret_ref）
+    secret = api_key or raw_ref or inline_key or old_key
+    if secret is not None:
+        payload["secret_ref"] = _encrypt_secret(secret, current=row.secret_ref)
+    if incoming_cfg is not None or old_key:
+        payload["config"] = encrypt_secret_keys(new_cfg)
     for k, v in payload.items():
         setattr(row, k, v)
     db.commit()
     db.refresh(row)
-    return AiProviderOut.model_validate(row, from_attributes=True)
+    return _provider_out(row)
 
 
 @router.delete("/providers/{provider_id}")

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.security import AuthContext, require_module
+from app.security import AuthContext, require_module, require_roles
 from app.db import get_db
 from app.models_shipshore import ShipTerminal, ShipForm, ShipReport
 from app.services import marilink
@@ -248,7 +248,7 @@ def list_forms(
 @router.post("/forms", response_model=FormOut, status_code=201)
 def create_form(
     body: FormIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Create a new form template."""
@@ -280,7 +280,7 @@ class FormUpdateIn(BaseModel):
 def update_form(
     form_id: UUID,
     body: FormUpdateIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Partial update — only explicitly provided fields are applied (model_fields_set)."""
@@ -310,7 +310,7 @@ def update_form(
 @router.delete("/forms/{form_id}")
 def delete_form(
     form_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Delete a form template.
@@ -340,7 +340,7 @@ def delete_form(
 
 @router.post("/forms/seed-presets", status_code=201)
 def seed_preset_forms(
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Seed preset form templates."""

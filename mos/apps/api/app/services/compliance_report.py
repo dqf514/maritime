@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.models_domain import EmissionRecord, PortCall, Voyage
 from app.models_wave1 import Port
+from app.services.money import round_half_up
 
 # 与 fueleu_calc 同源的近似参数（LHV MJ/t、换算、2025 参考目标）
 LHV_MJ_PER_T = 42700.0
@@ -71,9 +73,9 @@ def compliance_report(db: Session, tenant_id, scheme: str, period: str | None = 
             for r in rows
         ]
         totals = {
-            "fo_mt": round(sum(x["fo_mt"] for x in out_rows), 3),
-            "do_mt": round(sum(x["do_mt"] for x in out_rows), 3),
-            "co2_mt": round(sum(x["co2_mt"] for x in out_rows), 3),
+            "fo_mt": float(round_half_up(sum(Decimal(str(x["fo_mt"])) for x in out_rows), 3)),
+            "do_mt": float(round_half_up(sum(Decimal(str(x["do_mt"])) for x in out_rows), 3)),
+            "co2_mt": float(round_half_up(sum(Decimal(str(x["co2_mt"])) for x in out_rows), 3)),
         }
         csv = _csv(
             ["voyage_id", "vessel_id", "fo_mt", "do_mt", "co2_mt", "period"],
@@ -86,16 +88,19 @@ def compliance_report(db: Session, tenant_id, scheme: str, period: str | None = 
         for r in rows:
             share = infer_eu_share(db, tenant_id, r.voyage_id) if r.voyage_id else 1.0
             share = 1.0 if share is None else share
-            co2 = float(r.co2_mt or 0)
+            co2 = Decimal(str(r.co2_mt or 0))
+            share_dec = Decimal(str(share))
             out_rows.append(
                 {
                     "voyage_id": str(r.voyage_id) if r.voyage_id else None,
-                    "co2_mt": co2,
-                    "eu_share": round(share, 4),
-                    "allowances_t": round(co2 * share, 3),
+                    "co2_mt": float(co2),
+                    "eu_share": float(round_half_up(share_dec, 4)),
+                    "allowances_t": float(round_half_up(co2 * share_dec, 3)),
                 }
             )
-        total_allowances = round(sum(x["allowances_t"] for x in out_rows), 3)
+        total_allowances = float(
+            round_half_up(sum(Decimal(str(x["allowances_t"])) for x in out_rows), 3)
+        )
         csv = _csv(
             ["voyage_id", "co2_mt", "eu_share", "allowances_t"],
             [[x["voyage_id"], x["co2_mt"], x["eu_share"], x["allowances_t"]] for x in out_rows],
@@ -103,26 +108,33 @@ def compliance_report(db: Session, tenant_id, scheme: str, period: str | None = 
         return {"scheme": "ets", "period": period, "rows": out_rows, "totals": {"allowances_t": total_allowances}, "csv": csv}
 
     # fueleu：全队强度 vs 目标（与 fueleu_calc 同公式）
-    fo = sum(float(r.fo_mt or 0) for r in rows)
-    do = sum(float(r.do_mt or 0) for r in rows)
-    energy_mj = (fo + do) * LHV_MJ_PER_T
-    co2e_t = fo * 3.114 + do * 3.206
-    intensity = (co2e_t * 1_000_000 / energy_mj) if energy_mj > 0 else 0.0
-    compliance_balance_t = max(0.0, (intensity - TARGET_2025) / 1_000_000 * energy_mj)
+    # 全部走 Decimal —— 申报数字要能跟外部系统对上，float 累加会漂。
+    fo = sum((Decimal(str(r.fo_mt or 0)) for r in rows), Decimal("0"))
+    do = sum((Decimal(str(r.do_mt or 0)) for r in rows), Decimal("0"))
+    energy_mj = (fo + do) * Decimal(str(LHV_MJ_PER_T))
+    co2e_t = fo * Decimal("3.114") + do * Decimal("3.206")
+    intensity = (co2e_t * 1_000_000 / energy_mj) if energy_mj > 0 else Decimal("0")
+    target = Decimal(str(TARGET_2025))
+    compliance_balance_t = max(
+        Decimal("0"), (intensity - target) / 1_000_000 * energy_mj
+    )
     result = {
         "scheme": "fueleu",
         "period": period,
         "rows": [
             {
-                "fo_mt": round(fo, 3),
-                "do_mt": round(do, 3),
-                "energy_mj": round(energy_mj, 1),
-                "intensity_gco2e_mj": round(intensity, 3),
+                "fo_mt": float(round_half_up(fo, 3)),
+                "do_mt": float(round_half_up(do, 3)),
+                "energy_mj": float(round_half_up(energy_mj, 1)),
+                "intensity_gco2e_mj": float(round_half_up(intensity, 3)),
                 "target_gco2e_mj": TARGET_2025,
-                "compliance_balance_t": round(compliance_balance_t, 3),
+                "compliance_balance_t": float(round_half_up(compliance_balance_t, 3)),
             }
         ],
-        "totals": {"compliance_balance_t": round(compliance_balance_t, 3), "intensity_gco2e_mj": round(intensity, 3)},
+        "totals": {
+            "compliance_balance_t": float(round_half_up(compliance_balance_t, 3)),
+            "intensity_gco2e_mj": float(round_half_up(intensity, 3)),
+        },
     }
     result["csv"] = _csv(
         ["fo_mt", "do_mt", "energy_mj", "intensity_gco2e_mj", "target_gco2e_mj", "compliance_balance_t"],

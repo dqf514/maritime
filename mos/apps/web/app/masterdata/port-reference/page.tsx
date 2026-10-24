@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, Suspense, useEffect, useState } from "react";
+import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
@@ -11,10 +12,12 @@ import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
 import { SavedViews } from "@/components/SavedViews";
+import { StateView } from "@/components/StateView";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -68,6 +71,10 @@ function PortReferencePage() {
 
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [rates, setRates] = useState<PortRate[]>([]);
+  const [holidaysErr, setHolidaysErr] = useState("");
+  const [ratesErr, setRatesErr] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [restrictionErr, setRestrictionErr] = useState("");
 
   // Holiday form (RecordModal)
   const [holidayOpen, setHolidayOpen] = useState(false);
@@ -89,6 +96,8 @@ function PortReferencePage() {
   const [rBasis, setRBasis] = useState("per_call");
 
   const [saving, setSaving] = useState(false);
+  // 破坏性操作二次确认：pending 存待执行函数 + 被指名的对象
+  const [pendingDelete, setPendingDelete] = useState<{ run: () => void; name: string } | null>(null);
 
   // Restriction lookup
   const [restriction, setRestriction] = useState<Restriction | null>(null);
@@ -97,22 +106,45 @@ function PortReferencePage() {
   const rateCtx = useContextMenu<PortRate>();
 
   async function loadHolidays() {
-    setHolidays(await apiGet("/api/v1/reference/ports/holidays"));
-  }
-
-  async function loadRates() {
-    if (resPort) {
-      setRates(await apiGet(`/api/v1/reference/ports/rates?port_unlocode=${resPort}`));
+    setLoading(true);
+    try {
+      const d = await apiGet("/api/v1/reference/ports/holidays");
+      setHolidays(Array.isArray(d) ? (d as Holiday[]) : []);
+      setHolidaysErr("");
+    } catch (ex) {
+      // 列表取数失败必须走错误态，不能静默变成「No records」
+      setHolidays([]);
+      setHolidaysErr(msgOf(ex));
+    } finally {
+      setLoading(false);
     }
   }
 
+  const loadRates = useCallback(async () => {
+    if (!resPort) {
+      setRates([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const d = await apiGet(`/api/v1/reference/ports/rates?port_unlocode=${resPort}`);
+      setRates(Array.isArray(d) ? (d as PortRate[]) : []);
+      setRatesErr("");
+    } catch (ex) {
+      setRates([]);
+      setRatesErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
+  }, [resPort]);
+
   useEffect(() => {
-    if (tab === "holidays") loadHolidays().catch(() => {});
+    if (tab === "holidays") void loadHolidays();
   }, [tab]);
 
   useEffect(() => {
-    if (tab === "rates" && resPort) loadRates().catch(() => setRates([]));
-  }, [tab, resPort]);
+    if (tab === "rates" && resPort) void loadRates();
+  }, [tab, resPort, loadRates]);
 
   function openCreate() {
     if (tab === "rates") {
@@ -179,32 +211,42 @@ function PortReferencePage() {
       }
       setHolidayOpen(false);
       await loadHolidays();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
   }
 
-  async function deleteHoliday(id: string) {
+  const deleteHoliday = useCallback(async (id: string) => {
     try {
       await apiDelete(`/api/v1/reference/ports/holidays/${id}`);
       toast.success(t("common.deleted", "Deleted"));
       if (holidayEditId === id) setHolidayOpen(false);
       await loadHolidays();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
-  }
+  }, [toast, t, holidayEditId]);
 
   async function saveRate(e: FormEvent) {
     e.preventDefault();
+    // 数值校验：非法输入必须中止提交（不能把 parseFloat 的 NaN 静默发出去）
+    const amt = Number((rAmount ?? "").trim());
+    if (!Number.isFinite(amt)) {
+      toast.error(t("page.portRef.err_amount", "Amount must be a number"));
+      return;
+    }
+    if (amt < 0) {
+      toast.error(t("page.portRef.err_amount_neg", "Amount must not be negative"));
+      return;
+    }
     setSaving(true);
     try {
       const body = {
         port_unlocode: rPort.toUpperCase(),
         rate_type: rType,
-        amount_usd: parseFloat(rAmount),
+        amount_usd: amt,
         vessel_size_band: rBand,
         basis: rBasis,
       };
@@ -217,23 +259,23 @@ function PortReferencePage() {
       }
       setRateOpen(false);
       await loadRates();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
   }
 
-  async function deleteRate(id: string) {
+  const deleteRate = useCallback(async (id: string) => {
     try {
       await apiDelete(`/api/v1/reference/ports/rates/${id}`);
       toast.success(t("common.deleted", "Deleted"));
       if (rateEditId === id) setRateOpen(false);
       await loadRates();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
-  }
+  }, [toast, t, rateEditId, loadRates]);
 
   // ── 行内编辑（值未变化不发请求，避免 blur→reload 打断输入） ──
   async function onHolidayCellSave(rowId: string, colKey: string, value: unknown, row: Holiday) {
@@ -256,8 +298,8 @@ function PortReferencePage() {
       await apiPatch(`/api/v1/reference/ports/holidays/${rowId}`, payload);
       toast.success(t("common.saved", "Saved"));
       await loadHolidays();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
   }
 
@@ -266,7 +308,13 @@ function PortReferencePage() {
     let payload: Record<string, unknown>;
     if (colKey === "amount_usd") {
       const next = value === null || value === "" ? null : Number(value);
-      if (next === null || isNaN(next) || next === row.amount_usd) return;
+      if (next === null) return;
+      if (!Number.isFinite(next)) {
+        // 非法数字不能静默丢弃 —— 明确告诉用户这一格没写进去
+        toast.error(t("page.portRef.err_amount", "Amount must be a number"));
+        return;
+      }
+      if (next === row.amount_usd) return;
       payload = { amount_usd: next };
     } else {
       if ((src[colKey] ?? "") === (value ?? "")) return;
@@ -276,15 +324,22 @@ function PortReferencePage() {
       await apiPatch(`/api/v1/reference/ports/rates/${rowId}`, payload);
       toast.success(t("common.saved", "Saved"));
       await loadRates();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
   }
 
   async function lookupRestriction() {
     if (!resPort) return;
-    const r = await apiGet(`/api/v1/reference/ports/${resPort.toUpperCase()}/restrictions`);
-    setRestriction(r);
+    setRestrictionErr("");
+    try {
+      const r = await apiGet(`/api/v1/reference/ports/${resPort.toUpperCase()}/restrictions`);
+      setRestriction(r);
+    } catch (ex) {
+      // 查询失败必须可见 —— 不能让「查不到」和「没查到」混淆
+      setRestriction(null);
+      setRestrictionErr(msgOf(ex));
+    }
   }
 
   function validateHoliday(): ValidateIssue[] {
@@ -345,7 +400,7 @@ function PortReferencePage() {
     { key: "export_all", label: t("ctx.export_all", "Export all"), onClick: () => exportRates(rates) },
   ];
 
-  const holidayColumns: ColumnDef<Holiday>[] = [
+  const holidayColumns = useMemo<ColumnDef<Holiday>[]>(() => [
     {
       key: "port_unlocode",
       title: t("page.portRef.port", "Port"),
@@ -389,9 +444,9 @@ function PortReferencePage() {
         />
       ),
     },
-  ];
+  ], [t, deleteHoliday]);
 
-  const rateColumns: ColumnDef<PortRate>[] = [
+  const rateColumns = useMemo<ColumnDef<PortRate>[]>(() => [
     {
       key: "rate_type",
       title: t("page.portRef.type", "Type"),
@@ -456,7 +511,7 @@ function PortReferencePage() {
         />
       ),
     },
-  ];
+  ], [t, deleteRate]);
 
   return (
     <AppShell>
@@ -496,17 +551,29 @@ function PortReferencePage() {
           <h3 className="muted">
             {t("page.portRef.holiday_list", "Holiday List")} ({holidays.length})
           </h3>
-          <DataGrid<Holiday>
-            columns={holidayColumns}
-            data={holidays}
-            rowKey={(h) => h.id}
-            editable
-            onCellSave={onHolidayCellSave}
-            onRowContextMenu={(h, _i, e) => holidayCtx.open(h)(e)}
-            storageKey="port_ref_holidays_grid"
-            showFooter={false}
+          <StateView
+            loading={loading}
+            error={holidaysErr || undefined}
+            empty={!holidays.length}
             emptyText={t("common.empty", "No records")}
-          />
+            onRetry={() => void loadHolidays()}
+          >
+            <DataGrid<Holiday>
+              columns={holidayColumns}
+              data={holidays}
+              rowKey={(h) => h.id}
+              editable
+              onCellSave={onHolidayCellSave}
+              onRowContextMenu={(h, _i, e) => holidayCtx.open(h)(e)}
+              storageKey="port_ref_holidays_grid"
+              showFooter={false}
+              emptyText={t("common.empty", "No records")}
+            />
+          </StateView>
+          {/* P1-28：列表总数必须可见 */}
+          {!holidaysErr && holidays.length ? (
+            <p className="muted">{t("list.count_total", "{n} records", { n: holidays.length })}</p>
+          ) : null}
           <ContextMenu controller={holidayCtx} items={holidayMenuItems} />
         </div>
       ) : null}
@@ -515,23 +582,36 @@ function PortReferencePage() {
         <div className="card">
           <div className="toolbar">
             <input
+              aria-label={t("page.portRef.filter_port", "Port UNLOCODE to filter")}
               placeholder={t("page.portRef.filter_port", "Port UNLOCODE to filter")}
               value={resPort}
               onChange={(e) => setResPort(e.target.value)}
               className="input input-sm"
             />
           </div>
-          <DataGrid<PortRate>
-            columns={rateColumns}
-            data={rates}
-            rowKey={(r) => r.id}
-            editable
-            onCellSave={onRateCellSave}
-            onRowContextMenu={(r, _i, e) => rateCtx.open(r)(e)}
-            storageKey="port_ref_rates_grid"
-            showFooter={false}
+          <StateView
+            loading={loading}
+            error={ratesErr || undefined}
+            empty={!rates.length}
             emptyText={t("common.empty", "No records")}
-          />
+            onRetry={() => void loadRates()}
+          >
+            <DataGrid<PortRate>
+              columns={rateColumns}
+              data={rates}
+              rowKey={(r) => r.id}
+              editable
+              onCellSave={onRateCellSave}
+              onRowContextMenu={(r, _i, e) => rateCtx.open(r)(e)}
+              storageKey="port_ref_rates_grid"
+              showFooter={false}
+              emptyText={t("common.empty", "No records")}
+            />
+          </StateView>
+          {/* P1-28：列表总数必须可见 */}
+          {!ratesErr && rates.length ? (
+            <p className="muted">{t("list.count_total", "{n} records", { n: rates.length })}</p>
+          ) : null}
           <ContextMenu controller={rateCtx} items={rateMenuItems} />
         </div>
       ) : null}
@@ -540,6 +620,7 @@ function PortReferencePage() {
         <div className="card">
           <div className="toolbar">
             <input
+              aria-label={t("page.portRef.port_placeholder", "Port UNLOCODE (e.g. CNSHA)")}
               placeholder={t("page.portRef.port_placeholder", "Port UNLOCODE (e.g. CNSHA)")}
               value={resPort}
               onChange={(e) => setResPort(e.target.value)}
@@ -549,7 +630,11 @@ function PortReferencePage() {
               {t("common.lookup", "Lookup")}
             </button>
           </div>
-          {restriction ? (
+          {restrictionErr ? (
+            <p className="flash-err">
+              {t("page.portRef.lookup_failed", "Restriction lookup failed.")} {restrictionErr}
+            </p>
+          ) : restriction ? (
             <div className="form-grid">
               <div>
                 <h4 className="muted">{t("page.portRef.size_limits", "Size Limits")}</h4>
@@ -585,8 +670,6 @@ function PortReferencePage() {
         title={holidayEditId ? t("page.portRef.edit_holiday", "Edit Holiday") : t("page.portRef.add_holiday", "Add Holiday")}
         onClose={() => setHolidayOpen(false)}
         onSave={saveHoliday}
-        canDelete={!!holidayEditId}
-        onDelete={holidayEditId ? () => deleteHoliday(holidayEditId) : undefined}
         saving={saving}
       >
         <label>
@@ -620,6 +703,24 @@ function PortReferencePage() {
         <div className="record-modal-validate">
           <ValidateButton onValidate={validateHoliday} />
         </div>
+        {/* P1-8：删除假日不可逆 —— 走指名对象的二次确认。 */}
+        {holidayEditId ? (
+          <div className="desk-toolbar">
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={saving}
+              onClick={() =>
+                setPendingDelete({
+                  run: () => void deleteHoliday(holidayEditId),
+                  name: `${hPort.toUpperCase()} ${hDate}`,
+                })
+              }
+            >
+              {t("common.delete", "Delete")}
+            </button>
+          </div>
+        ) : null}
       </RecordModal>
 
       <RecordModal
@@ -627,8 +728,6 @@ function PortReferencePage() {
         title={rateEditId ? t("page.portRef.edit_rate", "Edit Port Rate") : t("page.portRef.add_rate", "Add Port Rate")}
         onClose={() => setRateOpen(false)}
         onSave={saveRate}
-        canDelete={!!rateEditId}
-        onDelete={rateEditId ? () => deleteRate(rateEditId) : undefined}
         saving={saving}
       >
         <label>
@@ -670,7 +769,39 @@ function PortReferencePage() {
         <div className="record-modal-validate">
           <ValidateButton onValidate={validateRate} />
         </div>
+        {/* P1-8：删除港口费率不可逆 —— 走指名对象的二次确认。 */}
+        {rateEditId ? (
+          <div className="desk-toolbar">
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={saving}
+              onClick={() =>
+                setPendingDelete({
+                  run: () => void deleteRate(rateEditId),
+                  name: `${rPort.toUpperCase()} ${rType}`,
+                })
+              }
+            >
+              {t("common.delete", "Delete")}
+            </button>
+          </div>
+        ) : null}
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: pendingDelete?.name ?? "" })}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = pendingDelete;
+          setPendingDelete(null);
+          fn?.run();
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

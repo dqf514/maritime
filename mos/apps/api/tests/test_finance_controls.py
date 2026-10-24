@@ -252,7 +252,12 @@ def test_fx_date_rule_crud_and_default(client, auth_headers):
 
 
 def test_fx_rate_consumes_rule_with_context_date(client, auth_headers, db_session):
-    """Rule + context_date → as-of rate; no rule → unchanged latest-rate default."""
+    """context_date → as-of 汇率（P1-B9）；没有 context_date 才用最新汇率。
+
+    旧行为是「只有存在规则行时才认 context_date，否则一律用最新汇率」——
+    同一张历史发票在不同时间重算会得到不同的本币金额，报表不可复现。
+    现在 context_date **总是**被认：取 ≤ context_date 的最近一条汇率。
+    """
     from app.models_wave1 import ExchangeRate
     from app.services.fx_date_rules import resolve_fx_rate, upsert_rule
 
@@ -270,9 +275,11 @@ def test_fx_rate_consumes_rule_with_context_date(client, auth_headers, db_sessio
         )
     db_session.commit()
 
-    # No rule row → absolute latest (unchanged default), even with a context date
-    latest = resolve_fx_rate(db_session, tid, "CNY", "USD", invoice_type="FRT", context_date=date(2026, 2, 1))
-    assert latest == Decimal("0.80")
+    # 有 context_date → 取 ≤ context_date 的最近一条（0.50），不再用最新汇率
+    as_of_no_rule = resolve_fx_rate(
+        db_session, tid, "CNY", "USD", invoice_type="FRT", context_date=date(2026, 2, 1)
+    )
+    assert as_of_no_rule == Decimal("0.50")
 
     upsert_rule(db_session, tid, "FRT", "departure")
     db_session.commit()
@@ -280,7 +287,7 @@ def test_fx_rate_consumes_rule_with_context_date(client, auth_headers, db_sessio
     as_of = resolve_fx_rate(db_session, tid, "CNY", "USD", invoice_type="FRT", context_date=date(2026, 2, 1))
     assert as_of == Decimal("0.50")
 
-    # Rule alone without a context date keeps the latest-rate behaviour
+    # 没有 context_date → 最新汇率
     no_ctx = resolve_fx_rate(db_session, tid, "CNY", "USD", invoice_type="FRT")
     assert no_ctx == Decimal("0.80")
 

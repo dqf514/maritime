@@ -1,10 +1,12 @@
 "use client";
 
-import { FormEvent, MouseEvent as ReactMouseEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, MouseEvent as ReactMouseEvent, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { RefreshButton } from "@/components/RefreshButton";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateTimeInput } from "@/components/DateInput";
 import { DeskSection } from "@/components/DeskSection";
 import { ExportButton } from "@/components/ExportButton";
@@ -13,14 +15,17 @@ import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
 import { StatusBadge } from "@/components/StatusBadge";
+import { StateView } from "@/components/StateView";
 import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { useTodoAdd } from "@/components/TodoQuickAdd";
-import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiList, apiPatch, apiPost } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { formatInTz, fromUtcInput, parseUtc, toUtcInput } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
+import { toPositiveInt } from "@/lib/numbers";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
@@ -105,8 +110,12 @@ function fromLocalInput(v: string) {
 function VoyagesPageInner() {
   const { t, locale } = useI18n();
   const toast = useToast();
-  const { query, setQuery } = useListQuery();
+  const { query, setQuery, page, limit } = useListQuery();
   const [rows, setRows] = useState<Voyage[]>([]);
+  // 服务端分页的总数（信封 total）
+  const [total, setTotal] = useState(0);
+  // 跨页/深链选中的航次（当前页里没有它时按 id 补拉）
+  const [selectedRow, setSelectedRow] = useState<Voyage | null>(null);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [ports, setPorts] = useState<RefItem[]>([]);
   const [agents, setAgents] = useState<RefItem[]>([]);
@@ -121,16 +130,37 @@ function VoyagesPageInner() {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignOperator, setReassignOperator] = useState("");
+  // 破坏性操作二次确认（P1-8）
+  const [confirm, setConfirm] = useState<{ title: string; message: string; action: () => void } | null>(null);
+  // 主列表取数状态（P1-4）
+  const [listLoading, setListLoading] = useState(true);
+  const [listErr, setListErr] = useState("");
+  // 参考数据取数失败的可见提示（P1-4）
+  const [refWarn, setRefWarn] = useState("");
 
   // 列表内检索（URL 参数 q，可分享/回退）—— 与其它列表页一致：窄列表也能立刻定位航次
   const voyageQuery = typeof query.q === "string" ? query.q : "";
-  const filteredRows = useMemo(() => {
-    const needle = voyageQuery.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((r) =>
-      [r.voyage_no, r.cargo, r.status].some((v) => String(v ?? "").toLowerCase().includes(needle)),
-    );
-  }, [rows, voyageQuery]);
+  // 检索框本地草稿 + 防抖：服务端检索时，每敲一个字就发一次请求会把 API 打满；
+  // 草稿保证输入框响应即时，URL 只在停顿 300ms 后才更新。
+  const [qDraft, setQDraft] = useState(voyageQuery);
+  useEffect(() => {
+    setQDraft(voyageQuery);
+  }, [voyageQuery]);
+  useEffect(() => {
+    if (qDraft === voyageQuery) return;
+    const timer = setTimeout(() => {
+      setQuery({ q: qDraft || null }, { resetPage: true });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [qDraft, voyageQuery, setQuery]);
+
+  // 分页（P1-28）：**服务端分页** —— 后端返回 {items,total,limit,offset} 信封。
+  // 以前这里是"一次拉全表 + 前端切片"，租户航次一多就把整张表序列化一遍。
+  // 现在只取当前页，total 来自服务端，截断对用户可见（显示「共 N 条」）。
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(page, totalPages);
+  const pagedRows = rows;
+  const setPage = (p: number) => setQuery({ page: p > 1 ? p : null });
 
   // 三栏宽度（列表 | 详情 | 船期块），可拖拽并记忆
   const [leftW, setLeftW] = useState(280);
@@ -225,26 +255,46 @@ function VoyagesPageInner() {
   } | null>(null);
 
   const load = useCallback(async () => {
-    const [v, s, p, parties] = await Promise.all([
-      apiGet("/api/v1/voyages"),
-      apiGet("/api/v1/schedules"),
-      apiGet("/api/v1/masterdata/ports"),
-      apiGet("/api/v1/masterdata/counterparties").catch(() => []),
-    ]);
-    setRows(v);
-    setSchedules(s);
-    setPorts(p);
-    setAgents(
-      (parties as Array<{ id: string; name: string; type?: string }>).filter(
-        (x) => !x.type || x.type === "agent" || x.type === "other",
-      ),
-    );
-    // 用函数式更新：只在还没选港口时兜底成第一个港口。
-    // 这样回调不必读 pcPort —— React Compiler 才能保住这段 useCallback 的记忆化
-    // （直接读 pcPort 会让编译器跳过优化并报 preserve-manual-memoization）。
-    setPcPort((cur) => cur || (p[0]?.id ?? ""));
-    return v as Voyage[];
-  }, [setPcPort]);
+    setListLoading(true);
+    setListErr("");
+    try {
+      const [v, s, p, parties] = await Promise.all([
+        // 服务端分页 + 服务端检索（U1 列表信封：{items,total,limit,offset}）
+        apiList<Voyage>("/api/v1/voyages", {
+          limit,
+          offset: (page - 1) * limit,
+          q: voyageQuery,
+        }),
+        apiGet("/api/v1/schedules"),
+        apiGet("/api/v1/masterdata/ports/options"),
+        // 参考数据（对手方）失败不让整页报错，但要可见（P1-4）。
+        apiGet("/api/v1/masterdata/counterparties").catch(() => {
+          setRefWarn(t("page.voyages.cparties_fail", "Could not load counterparties — the agent list may be empty."));
+          return [];
+        }),
+      ]);
+      setRows(v.items);
+      setTotal(v.total);
+      setSchedules(s);
+      setPorts(p);
+      setAgents(
+        (parties as Array<{ id: string; name: string; type?: string }>).filter(
+          (x) => !x.type || x.type === "agent" || x.type === "other",
+        ),
+      );
+      // 用函数式更新：只在还没选港口时兜底成第一个港口。
+      // 这样回调不必读 pcPort —— React Compiler 才能保住这段 useCallback 的记忆化
+      // （直接读 pcPort 会让编译器跳过优化并报 preserve-manual-memoization）。
+      setPcPort((cur) => cur || (p[0]?.id ?? ""));
+      return v.items as Voyage[];
+    } catch (e) {
+      // 主列表失败必须走 StateView 错误态，不能静默变成空列表（P1-4）。
+      setListErr(msgOf(e, t("common.failed", "Failed")));
+      throw e;
+    } finally {
+      setListLoading(false);
+    }
+  }, [setPcPort, limit, page, voyageQuery]);
 
   const loadPortCalls = useCallback(async (voyageId: string, preferPc?: string) => {
     const pcs: PortCall[] = await apiGet(`/api/v1/port-calls?voyage_id=${voyageId}`);
@@ -292,30 +342,77 @@ function VoyagesPageInner() {
     };
   }, [selectedPc]);
 
+  // 服务端分页：翻页 / 改每页条数 / 改检索词都要重新取当前页
   useEffect(() => {
-    load()
-      .then((v) => {
-        // 深链 ?v=<id> 优先，不被列表首条覆盖；无深链才默认选中首条
-        const deep = selectedId && v.some((x: Voyage) => x.id === selectedId) ? selectedId : null;
-        const pick = deep || v[0]?.id || null;
-        if (pick) {
-          if (pick !== selectedId) setSelectedId(pick);
-          return loadPortCalls(pick);
-        }
-      })
-      .catch(() => setErr(t("common.failed", "Failed")));
+    load().catch(handled);
+  }, [load]);
+
+  // 当前页越界（例如刚删完本页最后一条）→ 回到最后一页，别停在空白页
+  useEffect(() => {
+    if (!total) return;
+    const maxPage = Math.max(1, Math.ceil(total / limit));
+    if (page > maxPage) setQuery({ page: maxPage > 1 ? maxPage : null });
+  }, [total, page, limit, setQuery]);
+
+  // 首次进入：深链 ?v=<id> 优先，不被列表首条覆盖；无深链才默认选中首条
+  const bootstrapped = useRef(false);
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    if (!rows.length) return;
+    bootstrapped.current = true;
+    if (selectedId) {
+      // 深链：右栏由下面「按 id 补拉」effect 解析，这里只把靠泊记录拉出来
+      void loadPortCalls(selectedId).catch(handled);
+      return;
+    }
+    const pick = rows[0].id;
+    setSelectedId(pick);
+    setSelectedRow(rows[0]);
+    void loadPortCalls(pick).catch(handled);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [rows, selectedId]);
+
+  // 深链 / 跨页选中：当前页里没有这条航次时按 id 补拉一次，
+  // 否则翻页后右栏会莫名其妙变成空白。
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedRow(null);
+      return;
+    }
+    const inPage = rows.find((r) => r.id === selectedId);
+    if (inPage) {
+      setSelectedRow(inPage);
+      return;
+    }
+    let cancelled = false;
+    apiGet(`/api/v1/voyages/${selectedId}`)
+      .then((v: Voyage) => {
+        if (!cancelled) setSelectedRow(v);
+      })
+      .catch((ex) => {
+        if (cancelled) return;
+        // P1-4：单条航次补拉失败不能静默把右栏清空 —— 用户会以为这条航次
+        // 没有明细。明确提示，并保留列表里的那一条。
+        setSelectedRow(null);
+        toast.warning(
+          msgOf(ex, t("page.voyages.detail_fail", "Could not load this voyage's details.")),
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, rows, t, toast]);
 
   async function selectVoyage(id: string) {
     setSelectedId(id);
+    setSelectedRow(rows.find((r) => r.id === id) ?? null);
     setTwin(null);
     setLastNoon(null);
     setErr("");
     try {
       await loadPortCalls(id);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     }
   }
 
@@ -340,7 +437,7 @@ function VoyagesPageInner() {
         setSelectedId(list[0].id);
       }
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -353,7 +450,7 @@ function VoyagesPageInner() {
       toast.success(t("page.voyages.moved", "Voyage → {target}", { target }));
       await load();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -370,7 +467,7 @@ function VoyagesPageInner() {
       toast.success(t("common.saved", "Saved"));
       await load();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -378,7 +475,6 @@ function VoyagesPageInner() {
 
   async function removeVoyage() {
     if (!selected) return;
-    if (!window.confirm(t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored."))) return;
     setBusy(true);
     try {
       await apiDelete(`/api/v1/voyages/${selected.id}`);
@@ -386,10 +482,24 @@ function VoyagesPageInner() {
       toast.success(t("common.recycled", "Moved to recycle bin"));
       await load();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
+  }
+
+  /** 删除航次不可撤销 —— 走 ConfirmDialog 并指名航次（P1-8）。 */
+  function askRemoveVoyage() {
+    if (!selected) return;
+    setConfirm({
+      title: t("common.delete", "Delete"),
+      message: t(
+        "page.voyages.delete_confirm",
+        'Delete voyage "{no}"? It will move to the recycle bin and can be restored.',
+        { no: selected.voyage_no },
+      ),
+      action: () => void removeVoyage(),
+    });
   }
 
   async function addPortCall(e: FormEvent) {
@@ -399,23 +509,33 @@ function VoyagesPageInner() {
       setErr(t("page.voyages.bad_date", "Invalid date/time format. Please reselect."));
       return;
     }
+    // P1-24：挂靠序号是 1 起始的整数 —— 填 0 / 填字母都是非法值，必须报错，
+    // 不能静默替换成 1（那会让用户以为存进去的是自己填的值）。
+    const seqNum = toPositiveInt(pcSeq);
+    if (seqNum === null) {
+      setErr(t("page.voyages.bad_seq", {
+        en: "Sequence must be a whole number of 1 or more.",
+        zh: "序号必须是大于等于 1 的整数。",
+      }));
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
       await apiPost("/api/v1/port-calls", {
         voyage_id: selectedId,
         port_id: pcPort || null,
-        seq: Number(pcSeq) || 1,
+        seq: seqNum,
         purpose: pcPurpose,
         eta: fromLocalInput(pcEta),
         etd: fromLocalInput(pcEtd),
         agent: pcAgent || null,
       });
       toast.success(t("page.voyages.pc_ok", "Port call added"));
-      setPcSeq(String((Number(pcSeq) || 1) + 1));
+      setPcSeq(String(seqNum + 1));
       await loadPortCalls(selectedId);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -441,7 +561,7 @@ function VoyagesPageInner() {
       toast.success(t("page.voyages.sof_ok", "SOF {code} recorded", { code: sofCode }));
       if (selectedId) await loadPortCalls(selectedId);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -467,13 +587,13 @@ function VoyagesPageInner() {
       setOhReason("");
       await loadPortCalls(selectedId);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  async function closeOffHire(id: string) {
+  const closeOffHire = useCallback(async (id: string) => {
     if (!selectedId) return;
     if (!ohCloseAt || !fromLocalInput(ohCloseAt)) {
       setErr(t("page.voyages.bad_date", "Invalid date/time format. Please reselect."));
@@ -487,11 +607,23 @@ function VoyagesPageInner() {
       setOhCloseAt("");
       await loadPortCalls(selectedId);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
-  }
+  }, [loadPortCalls, ohCloseAt, selectedId, setOhCloseAt, t, toast]);
+
+  /** 关闭 off-hire 期 —— 关闭后不可再改期，二次确认（P1-8）。 */
+  const askCloseOffHire = useCallback((id: string) => {
+    setConfirm({
+      title: t("common.close", "Close"),
+      message: t(
+        "page.voyages.oh_close_confirm",
+        "Close this off-hire period? Once closed the period can no longer be amended.",
+      ),
+      action: () => void closeOffHire(id),
+    });
+  }, [closeOffHire, t]);
 
   // ── 行内编辑（失焦/回车保存；值未变化不发请求，避免 blur→reload 打断输入） ──
 
@@ -499,8 +631,16 @@ function VoyagesPageInner() {
     const dtFields = ["eta", "etd", "nor_at", "eosp_at"];
     let payload: Record<string, unknown>;
     if (colKey === "seq") {
+      // P1-24：非法输入不能静默丢弃 —— 明确告诉用户这一格没写进去
       const n = value === null || value === "" ? null : Number(value);
-      if (n === null || isNaN(n) || n === row.seq) return;
+      if (n !== null && !Number.isFinite(n)) {
+        toast.error(t("page.voyages.err_numeric", {
+          en: "{field} must be a valid number",
+          zh: "{field} 必须是有效数字",
+        }, { field: colKey }));
+        return;
+      }
+      if (n === null || n === row.seq) return;
       payload = { seq: n };
     } else if (dtFields.includes(colKey)) {
       const prev = (row as Record<string, unknown>)[colKey];
@@ -518,20 +658,20 @@ function VoyagesPageInner() {
       toast.success(t("common.saved", "Saved"));
       if (selectedId) await loadPortCalls(selectedId, selectedPc);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
-  async function deletePortCall(pcId: string) {
+  const deletePortCall = useCallback(async (pcId: string) => {
     if (!selectedId) return;
     try {
       await apiDelete(`/api/v1/port-calls/${pcId}`);
       toast.success(t("common.recycled", "Moved to recycle bin"));
       await loadPortCalls(selectedId);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
-  }
+  }, [loadPortCalls, selectedId, t, toast]);
 
   async function onSofCellSave(
     rowId: string,
@@ -556,19 +696,19 @@ function VoyagesPageInner() {
       toast.success(t("common.saved", "Saved"));
       if (selectedId) await loadPortCalls(selectedId, selectedPc);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
-  async function deleteSof(eventId: string) {
+  const deleteSof = useCallback(async (eventId: string) => {
     try {
       await apiDelete(`/api/v1/sof-events/${eventId}`);
       toast.success(t("common.deleted", "Deleted"));
       if (selectedId) await loadPortCalls(selectedId, selectedPc);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
-  }
+  }, [loadPortCalls, selectedId, selectedPc, t, toast]);
 
   async function onOffHireCellSave(rowId: string, colKey: string, value: unknown, row: OffHire) {
     const src = row as Record<string, unknown>;
@@ -589,19 +729,19 @@ function VoyagesPageInner() {
       toast.success(t("common.saved", "Saved"));
       if (selectedId) await loadPortCalls(selectedId, selectedPc);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
-  async function deleteOffHire(eventId: string) {
+  const deleteOffHire = useCallback(async (eventId: string) => {
     try {
       await apiDelete(`/api/v1/off-hire/${eventId}`);
       toast.success(t("common.deleted", "Deleted"));
       if (selectedId) await loadPortCalls(selectedId, selectedPc);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
-  }
+  }, [loadPortCalls, selectedId, selectedPc, t, toast]);
 
   async function onNoonCellSave(rowId: string, colKey: string, value: unknown, row: NoonRow) {
     const src = row as Record<string, unknown>;
@@ -615,7 +755,14 @@ function VoyagesPageInner() {
       payload = { report_at: nextIso };
     } else if (colKey === "speed" || colKey === "rob_fo" || colKey === "rob_do") {
       const next = value === null || value === "" ? null : Number(value);
-      if (next !== null && isNaN(next)) return;
+      // P1-24：非法输入不能静默丢弃 —— 明确告诉用户这一格没写进去
+      if (next !== null && !Number.isFinite(next)) {
+        toast.error(t("page.voyages.err_numeric", {
+          en: "{field} must be a valid number",
+          zh: "{field} 必须是有效数字",
+        }, { field: colKey }));
+        return;
+      }
       if ((src[colKey] ?? null) === next) return;
       payload = { [colKey]: next };
     } else {
@@ -627,19 +774,19 @@ function VoyagesPageInner() {
       toast.success(t("common.saved", "Saved"));
       if (selectedId) await loadPortCalls(selectedId, selectedPc);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
-  async function deleteNoon(noonId: string) {
+  const deleteNoon = useCallback(async (noonId: string) => {
     try {
       await apiDelete(`/api/v1/noon-reports/${noonId}`);
       toast.success(t("common.deleted", "Deleted"));
       if (selectedId) await loadPortCalls(selectedId, selectedPc);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
-  }
+  }, [loadPortCalls, selectedId, selectedPc, t, toast]);
 
   async function addNoon(e: FormEvent) {
     e.preventDefault();
@@ -673,17 +820,17 @@ function VoyagesPageInner() {
       toast.success(t("page.voyages.noon_ok", "Noon report filed"));
       await loadPortCalls(selectedId);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  function portLabel(id: string | null) {
+  const portLabel = useCallback((id: string | null) => {
     if (!id) return "—";
     const p = ports.find((x) => x.id === id);
     return p ? `${p.name}${p.unlocode ? ` (${p.unlocode})` : ""}` : id.slice(0, 8);
-  }
+  }, [ports]);
 
   function togglePick(id: string) {
     setPicked((prev) => {
@@ -725,7 +872,7 @@ function VoyagesPageInner() {
       setReassignOperator("");
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -747,16 +894,17 @@ function VoyagesPageInner() {
         await loadPortCalls(created.id);
       }
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  const selected = rows.find((r) => r.id === selectedId) || null;
+  // 当前选中的航次：优先取当前页的行；跨页/深链时用补拉到的 selectedRow
+  const selected = (selectedId ? rows.find((r) => r.id === selectedId) ?? selectedRow : null) ?? null;
   const conflicts = schedules.filter((s) => s.hard_conflict);
 
-  const voyageColumns: ColumnDef<Voyage>[] = [
+  const voyageColumns = useMemo<ColumnDef<Voyage>[]>(() => [
     {
       key: "_pick",
       title: "☑",
@@ -810,9 +958,9 @@ function VoyagesPageInner() {
         </Link>
       ),
     },
-  ];
+  ], [picked, t]);
 
-  const portCallColumns: ColumnDef<PortCall>[] = [
+  const portCallColumns = useMemo<ColumnDef<PortCall>[]>(() => [
     { key: "seq", title: "#", width: 48, align: "right", value: (r) => r.seq, editor: { type: "number" } },
     {
       key: "port_id",
@@ -899,9 +1047,9 @@ function VoyagesPageInner() {
         />
       ),
     },
-  ];
+  ], [deletePortCall, portLabel, ports, t]);
 
-  const sofColumns: ColumnDef<(typeof sofEvents)[number]>[] = [
+  const sofColumns = useMemo<ColumnDef<(typeof sofEvents)[number]>[]>(() => [
     {
       key: "event_code",
       title: t("page.voyages.event", "Event"),
@@ -935,9 +1083,9 @@ function VoyagesPageInner() {
         />
       ),
     },
-  ];
+  ], [deleteSof, locale, t]);
 
-  const offHireColumns: ColumnDef<OffHire>[] = [
+  const offHireColumns = useMemo<ColumnDef<OffHire>[]>(() => [
     {
       key: "start_at",
       title: t("page.voyages.oh_start", "Start at"),
@@ -984,7 +1132,7 @@ function VoyagesPageInner() {
           {!oh.end_at ? (
             <>
               <DateTimeInput value={ohCloseAt} onChange={setOhCloseAt} />
-              <button className="btn btn-sm" type="button" disabled={busy} onClick={() => closeOffHire(oh.id)}>
+              <button className="btn btn-sm" type="button" disabled={busy} onClick={() => askCloseOffHire(oh.id)}>
                 {t("common.close", "Close")}
               </button>
             </>
@@ -996,9 +1144,9 @@ function VoyagesPageInner() {
         </span>
       ),
     },
-  ];
+  ], [askCloseOffHire, busy, deleteOffHire, ohCloseAt, setOhCloseAt, t]);
 
-  const noonColumns: ColumnDef<NoonRow>[] = [
+  const noonColumns = useMemo<ColumnDef<NoonRow>[]>(() => [
     {
       key: "report_at",
       title: t("page.voyages.at", "At"),
@@ -1054,10 +1202,10 @@ function VoyagesPageInner() {
         />
       ),
     },
-  ];
+  ], [deleteNoon, t]);
 
   type NoonPoint = { at: string; lat: number | null; lon: number | null; key: string };
-  const noonTrackColumns: ColumnDef<NoonPoint>[] = [
+  const noonTrackColumns = useMemo<ColumnDef<NoonPoint>[]>(() => [
     {
       key: "at",
       title: t("page.voyages.at", "At"),
@@ -1081,9 +1229,9 @@ function VoyagesPageInner() {
       value: (r) => r.lon,
       render: (v) => (v == null ? "—" : String(v)),
     },
-  ];
+  ], [t]);
 
-  const scheduleColumns: ColumnDef<Schedule>[] = [
+  const scheduleColumns = useMemo<ColumnDef<Schedule>[]>(() => [
     { key: "title", title: t("common.title", "Title"), minWidth: 150, value: (r) => r.title },
     {
       key: "block_type",
@@ -1118,7 +1266,7 @@ function VoyagesPageInner() {
           <span className="badge badge-pass">{t("page.voyages.ok", "ok")}</span>
         ),
     },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -1150,13 +1298,13 @@ function VoyagesPageInner() {
             <input
               className="input input-sm"
               type="search"
-              value={voyageQuery}
-              onChange={(e) => setQuery({ q: e.target.value || null })}
+              value={qDraft}
+              onChange={(e) => setQDraft(e.target.value)}
               placeholder={t("page.voyages.search", "Search no / cargo…")}
               aria-label={t("common.search", "Search")}
             />
             <span className="hint">
-              {t("page.voyages.count", "{n} voyages", { n: filteredRows.length })}
+              {t("page.voyages.count", "{n} voyages", { n: total })}
             </span>
           </>
         }
@@ -1170,6 +1318,7 @@ function VoyagesPageInner() {
           disabled={busy || !rows.length}
           onClick={togglePickAll}
           title={t("page.voyages.batch_select_all", "Select all / clear")}
+          aria-label={t("page.voyages.batch_select_all", "Select all / clear")}
         >
           ☑
         </button>
@@ -1201,12 +1350,11 @@ function VoyagesPageInner() {
         >
           {t("page.voyages.copy_itinerary", "Copy itinerary")}
         </button>
-        <button className="btn btn-sm" type="button" disabled={busy} onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" disabled={busy} onClick={() => load().catch(handled)} />
       </Toolbar>
 
       {err ? <p className="flash-err">{err}</p> : null}
+      {refWarn ? <p className="flash-err">{refWarn}</p> : null}
 
       {/* 三栏工作台：列表 | 详情 | 船期块（底部上移）；分隔条可拖拽改宽 */}
       <div
@@ -1218,16 +1366,44 @@ function VoyagesPageInner() {
           <p className="muted" style={{ padding: "0 1rem", marginTop: 0, fontSize: "0.8rem" }}>
             {t("page.voyages.create_hint", "Or activate a charter to auto-create a voyage + schedule block.")}
           </p>
-          <DataGrid<Voyage>
-            columns={voyageColumns}
-            data={filteredRows}
-            rowKey={(r) => r.id}
-            storageKey="voyages_list_grid"
-            showFooter={false}
+          <StateView
+            loading={listLoading && !rows.length}
+            error={listErr || undefined}
+            empty={!listErr && !pagedRows.length}
             emptyText={t("common.empty", "No records")}
-            onRowClick={(r) => selectVoyage(r.id)}
-            onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
-          />
+            onRetry={() => load().catch(handled)}
+          >
+            <DataGrid<Voyage>
+              columns={voyageColumns}
+              data={pagedRows}
+              rowKey={(r) => r.id}
+              storageKey="voyages_list_grid"
+              showFooter={false}
+              emptyText={t("common.empty", "No records")}
+              onRowClick={(r) => selectVoyage(r.id)}
+              onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
+            />
+          </StateView>
+          {/* 分页：截断对用户可见（P1-28） */}
+          {!listErr ? (
+            <div className="dt-pagination">
+              <span className="dt-page-info">
+                {t("page.voyages.page_of", "{from}-{to} of {n}", {
+                  from: total ? (safePage - 1) * limit + 1 : 0,
+                  to: Math.min(safePage * limit, total),
+                  n: total,
+                })}
+              </span>
+              <span className="dt-page-btns">
+                <button type="button" onClick={() => setPage(safePage - 1)} disabled={safePage <= 1} aria-label="prev">
+                  ‹
+                </button>
+                <button type="button" onClick={() => setPage(safePage + 1)} disabled={safePage >= totalPages} aria-label="next">
+                  ›
+                </button>
+              </span>
+            </div>
+          ) : null}
         </div>
 
         <div
@@ -1270,7 +1446,7 @@ function VoyagesPageInner() {
                       {t("page.voyages.complete", "Complete")}
                     </button>
                   ) : null}
-                  <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={removeVoyage}>
+                  <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={askRemoveVoyage}>
                     {t("common.delete", "Delete")}
                   </button>
                 </div>
@@ -1635,6 +1811,20 @@ function VoyagesPageInner() {
 
       <ContextMenu controller={rowCtx} items={voyageMenuItems} />
       {todo.element}
+
+      <ConfirmDialog
+        open={Boolean(confirm)}
+        title={confirm?.title || ""}
+        message={confirm?.message || ""}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = confirm?.action;
+          setConfirm(null);
+          fn?.();
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </AppShell>
   );
 }

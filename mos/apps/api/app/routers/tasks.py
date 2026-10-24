@@ -14,8 +14,9 @@ from app.db import get_db
 from app.models import User
 from app.models_task import Task
 from app.models_wave1 import Notification
-from app.security import AuthContext, get_current_auth
+from app.security import AuthContext, get_current_auth, require_roles
 from app.services.audit import audit
+from app.services.data_scope import apply_module_scope
 
 router = APIRouter(tags=["Tasks"])
 
@@ -140,14 +141,14 @@ def task_assignees(auth: AuthContext = Depends(get_current_auth), db: Session = 
 
 @router.get("/tasks")
 def list_tasks(
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_roles(*sorted(MANAGE_ROLES))),
     db: Session = Depends(get_db),
     status: str | None = None,
     assignee_user_id: UUID | None = None,
 ):
-    if not MANAGE_ROLES.intersection(auth.roles):
-        raise HTTPException(403, detail={"code": "ROLE_REQUIRED", "roles": sorted(MANAGE_ROLES)})
     q = select(Task).where(Task.tenant_id == auth.tenant_id, Task.status != "deleted")
+    # 行级数据权限：角色被收紧到 "own" 时，任务列表只看自己建的任务。
+    q = apply_module_scope(db, q, Task, auth, "operations")
     if status:
         q = q.where(Task.status == status)
     if assignee_user_id:

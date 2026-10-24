@@ -25,10 +25,12 @@ from app.pagination import envelope, paginate
 from app.security import AuthContext, require_module
 from app.services.commission import (
     calculate_commission,
+    calculate_commission_decimal,
     commission_type_catalog,
     create_commission_record,
 )
 from app.services.doc_numbering import next_doc_number
+from app.services.money import dec, money, round_half_up
 from app.services.tenant_guard import scoped_get, scoped_query
 
 router = APIRouter()
@@ -79,7 +81,7 @@ def _commission_out(row: CommissionType) -> dict[str, Any]:
 
 
 def _over_cap(amount: Decimal, cap_amount: Decimal | None) -> bool:
-    return cap_amount is not None and Decimal(str(amount)) > Decimal(str(cap_amount))
+    return cap_amount is not None and dec(amount) > dec(cap_amount)
 
 
 # —— 转开/代垫发票 ————————————————————————————————————————————
@@ -134,11 +136,12 @@ def create_rebill(
         source_invoice_id=body.source_invoice_id,
         source_expense_type=body.source_expense_type,
         counterparty_id=body.counterparty_id,
-        amount=Decimal(str(body.amount)),
+        # 金额落库前量化到分（``Numeric(18,2)`` 列）—— 未量化会让 SQLite / PG 表现分叉（审计 P1-B8）
+        amount=money(body.amount),
         currency=body.currency,
         status="draft",
-        cap_amount=Decimal(str(body.cap_amount)) if body.cap_amount is not None else None,
-        over_cap=_over_cap(Decimal(str(body.amount)), Decimal(str(body.cap_amount)) if body.cap_amount is not None else None),
+        cap_amount=money(body.cap_amount) if body.cap_amount is not None else None,
+        over_cap=_over_cap(money(body.amount), money(body.cap_amount) if body.cap_amount is not None else None),
         notes=body.notes,
     )
     db.add(row)
@@ -213,11 +216,11 @@ def patch_rebill(
     if body.counterparty_id is not None:
         row.counterparty_id = body.counterparty_id
     if body.amount is not None:
-        row.amount = Decimal(str(body.amount))
+        row.amount = money(body.amount)
     if body.currency is not None:
         row.currency = body.currency
     if body.cap_amount is not None:
-        row.cap_amount = Decimal(str(body.cap_amount))
+        row.cap_amount = money(body.cap_amount)
     if body.notes is not None:
         row.notes = body.notes
     row.over_cap = _over_cap(Decimal(str(row.amount)), Decimal(str(row.cap_amount)) if row.cap_amount is not None else None)
@@ -378,17 +381,20 @@ def patch_commission(
         if scoped_get(db, Counterparty, body.counterparty_id, auth.tenant_id) is None:
             raise HTTPException(404, detail={"code": "COUNTERPARTY_NOT_FOUND", "message": str(body.counterparty_id)})
     new_type = body.commission_type if "commission_type" in fields and body.commission_type is not None else row.commission_type
-    new_base = body.base_amount if "base_amount" in fields and body.base_amount is not None else _f(row.base_amount)
-    new_rate = body.rate_pct if "rate_pct" in fields and body.rate_pct is not None else _f(row.rate_pct)
+    new_base = body.base_amount if "base_amount" in fields and body.base_amount is not None else dec(row.base_amount)
+    new_rate = body.rate_pct if "rate_pct" in fields and body.rate_pct is not None else dec(row.rate_pct)
     if {"commission_type", "base_amount", "rate_pct"} & fields:
         try:
-            calc = calculate_commission(new_type, new_base, new_rate)
+            # Decimal 口径计算 —— 落库前不做 float 往返（P2-B23）
+            calc = calculate_commission_decimal(new_type, new_base, new_rate)
         except ValueError as exc:
             raise HTTPException(422, detail={"code": "BAD_COMMISSION_TYPE", "message": str(exc)})
         row.commission_type = calc["commission_type"]
-        row.base_amount = Decimal(str(calc["base_amount"]))
-        row.rate_pct = Decimal(str(calc["rate_pct"]))
-        row.calculated_amount = Decimal(str(calc["calculated_amount"]))
+        # 按列精度量化：base_amount → Numeric(18,2)、rate_pct → Numeric(8,4)。
+        # 以前 rate_pct 用 money() 只留 2 位 —— 列允许 4 位，精度被静默抹掉。
+        row.base_amount = round_half_up(calc["base_amount"], 2)
+        row.rate_pct = round_half_up(calc["rate_pct"], 4)
+        row.calculated_amount = round_half_up(calc["calculated_amount"], 2)
     if "currency" in fields and body.currency is not None:
         row.currency = body.currency
     if "invoice_id" in fields:

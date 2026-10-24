@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -37,6 +37,15 @@ _WILDCARDS = (None, "", "*")
 
 def _d(v: Any) -> Decimal:
     return Decimal(str(v))
+
+
+# RateTableRow.value 列是 Numeric(18,6) —— 写入前量化到列精度，
+# 否则 float 进 Numeric 会让 SQLite / Postgres 的舍入行为分叉（P1-B8）。
+_RATE_VALUE_EXP = Decimal("0.000001")
+
+
+def rate_value(v: Any) -> Decimal:
+    return _d(v).quantize(_RATE_VALUE_EXP, rounding=ROUND_HALF_UP)
 
 
 def _as_uuid(v: Any) -> uuid.UUID | None:
@@ -184,15 +193,20 @@ def surcharge_lookup(
     cargo_type: str | None,
     *,
     as_of: date | None = None,
-) -> Decimal:
-    """Route/cargo surcharge lookup — returns ``Decimal("0")`` when unresolvable."""
+) -> Decimal | None:
+    """Route/cargo surcharge lookup.
+
+    Returns ``None`` when the surcharge cannot be resolved (missing/inactive
+    table, no matching row). 以前这里静默返回 ``Decimal("0")`` —— 一条解析不
+    出来的附加费被当成「没有附加费」，几十万收入无声消失（P1-B11）。调用方
+    必须显式处理 None（报错或标记未解析）。
+    """
     dims: dict[str, Any] = {}
     if route:
         dims["route"] = route
     if cargo_type:
         dims["cargo_type"] = cargo_type
-    val = resolve_rate(db, tenant_id, table_id, dims, as_of=as_of)
-    return val if val is not None else Decimal("0")
+    return resolve_rate(db, tenant_id, table_id, dims, as_of=as_of)
 
 
 # —— row CRUD support ——
@@ -278,7 +292,7 @@ def upsert_rate_row(
             tenant_id=tenant_id,
             rate_table_id=tid,
             dims=dims_n,
-            value=_d(value),
+            value=rate_value(value),
             unit=unit,
             priority=priority,
             notes=notes,
@@ -286,7 +300,7 @@ def upsert_rate_row(
         db.add(row)
     else:
         row.dims = dims_n
-        row.value = _d(value)
+        row.value = rate_value(value)
         row.unit = unit
         row.priority = priority
         row.notes = notes
@@ -368,12 +382,12 @@ def _derive_amount(role: str, row: RateTableRow, ctx: dict) -> Decimal | None:
         qty = ctx.get("cargo_qty")
         if qty is None:
             return None
-        return (_d(row.value) * _d(qty)).quantize(Decimal("0.01"))
+        return (_d(row.value) * _d(qty)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if role in ("demurrage", "demurrage_rate") or unit == "per_day":
         days = ctx.get("demurrage_days")
         if days is None:
             return None
-        return (_d(row.value) * _d(days)).quantize(Decimal("0.01"))
+        return (_d(row.value) * _d(days)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if unit == "lumpsum":
         return _d(row.value)
     return None

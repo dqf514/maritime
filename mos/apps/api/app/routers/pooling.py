@@ -24,6 +24,7 @@ from app.models_domain import Pool, PoolPeriod, PoolVessel
 from app.models_pooling import PoolDistribution, PoolFee
 from app.models_wave1 import Company
 from app.security import AuthContext, require_module
+from app.services.money import allocate_by_weight, dec, money
 from app.services.state_machine import POOL_PERIOD_TRANSITIONS, transition
 from app.services.tenant_guard import scoped_get, scoped_query
 
@@ -133,12 +134,16 @@ def _set_pool_fee(
     return fee
 
 
-def _fee_totals(fees: list[PoolFee], total_pool_result: float) -> tuple[float, float, float]:
-    """Return (management_total, admin_total, grand_total) for the period result."""
-    mgmt = admin = 0.0
+def _fee_totals(fees: list[PoolFee], total_pool_result: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+    """Return (management_total, admin_total, grand_total) for the period result.
+
+    全程 Decimal —— 以前用 float，池期结算的总费用会出现二进制误差
+    （审计 P2-B1 / P2-B24）。
+    """
+    mgmt = admin = Decimal("0")
     for f in fees:
-        amt = float(f.amount or 0)
-        val = total_pool_result * amt / 100.0 if f.fee_basis == "pct" else amt
+        amt = dec(f.amount or 0)
+        val = total_pool_result * amt / Decimal("100") if f.fee_basis == "pct" else amt
         if f.fee_type == "management":
             mgmt += val
         else:
@@ -197,8 +202,11 @@ def calculate_fees(
     if not vessels:
         raise HTTPException(400, detail={"code": "NO_POOL_VESSELS", "message": "Pool has no active vessels"})
 
-    total_pool_result = float(period.total_pool_result or 0)
-    total_points = sum(float(v.points or 0) for v in vessels) or 1.0
+    total_pool_result = dec(period.total_pool_result or 0)
+    # 分摊：逐船四舍五入会差分（3 船平分 970,000.00 → Σ 969,999.99），
+    # 所以用「最大余数法」一次性分完 —— **分位之和恒等于总额**（P2-B1）。
+    points = [dec(v.points or 0) for v in vessels]
+    gross_shares = allocate_by_weight(total_pool_result, points)
 
     fees = db.scalars(
         scoped_query(db, PoolFee, auth.tenant_id).where(
@@ -207,6 +215,7 @@ def calculate_fees(
         )
     ).all()
     mgmt_total, admin_total, fee_total = _fee_totals(list(fees), total_pool_result)
+    fee_shares = allocate_by_weight(fee_total, points)
 
     # 重算：先清本期旧分摊
     old = db.scalars(
@@ -218,28 +227,31 @@ def calculate_fees(
         db.delete(row)
 
     dist_map: dict[str, float] = {}
-    for v in vessels:
-        share_ratio = float(v.points or 0) / total_points
-        gross = round(total_pool_result * share_ratio, 2)
-        deduction = round(fee_total * share_ratio, 2)
-        net = round(gross - deduction, 2)
+    for idx, v in enumerate(vessels):
+        gross = dec(gross_shares[idx])
+        deduction = dec(fee_shares[idx])
+        net = money(gross - deduction)
         db.add(
             PoolDistribution(
                 tenant_id=auth.tenant_id,
                 period_id=period_id,
                 vessel_id=v.vessel_id,
                 points=v.points,
-                gross_share=Decimal(str(gross)),
-                fee_deduction=Decimal(str(deduction)),
-                net_share=Decimal(str(net)),
+                gross_share=gross,
+                fee_deduction=deduction,
+                net_share=net,
                 paid_status="pending",
             )
         )
-        dist_map[str(v.vessel_id)] = gross
+        dist_map[str(v.vessel_id)] = float(gross)
 
     period.distribution = {
         **dist_map,
-        "_fees": {"management": round(mgmt_total, 2), "admin": round(admin_total, 2), "total": round(fee_total, 2)},
+        "_fees": {
+            "management": float(money(mgmt_total)),
+            "admin": float(money(admin_total)),
+            "total": float(money(fee_total)),
+        },
     }
     db.commit()
 
@@ -252,9 +264,9 @@ def calculate_fees(
         "period_id": str(period_id),
         "status": period.status,
         "total_pool_result": total_pool_result,
-        "management_fee": round(mgmt_total, 2),
-        "admin_fee": round(admin_total, 2),
-        "fee_total": round(fee_total, 2),
+        "management_fee": float(money(mgmt_total)),
+        "admin_fee": float(money(admin_total)),
+        "fee_total": float(money(fee_total)),
         "distributions": [
             {
                 "id": str(r.id),
@@ -298,18 +310,18 @@ def cash_distribution(
     elif period.status != "settled":
         transition("pool_period", period.status, "settled", POOL_PERIOD_TRANSITIONS)
 
-    paid_total = 0.0
+    paid_total = Decimal("0")
     for r in rows:
         if r.paid_status != "paid":
             r.paid_status = "paid"
-        paid_total += float(r.net_share or 0)
+        paid_total += dec(r.net_share or 0)
     db.commit()
 
     return {
         "period_id": str(period_id),
         "status": period.status,
         "paid_count": len(rows),
-        "paid_total": round(paid_total, 2),
+        "paid_total": float(money(paid_total)),
     }
 
 
@@ -336,10 +348,10 @@ def period_summary(
         .order_by(PoolDistribution.created_at)
     ).all()
 
-    total_pool_result = float(period.total_pool_result or 0)
+    total_pool_result = dec(period.total_pool_result or 0)
     mgmt_total, admin_total, fee_total = _fee_totals(list(fees), total_pool_result)
-    gross_total = sum(float(r.gross_share or 0) for r in rows)
-    net_total = sum(float(r.net_share or 0) for r in rows)
+    gross_total = sum((dec(r.gross_share or 0) for r in rows), Decimal("0"))
+    net_total = sum((dec(r.net_share or 0) for r in rows), Decimal("0"))
     paid_count = sum(1 for r in rows if r.paid_status == "paid")
     distribution = period.distribution or {}
     intercompany = distribution.get("intercompany") if isinstance(distribution, dict) else None
@@ -352,9 +364,9 @@ def period_summary(
         "status": period.status,
         "total_pool_result": total_pool_result,
         "fees": [_fee_out(f).model_dump() for f in fees],
-        "management_fee": round(mgmt_total, 2),
-        "admin_fee": round(admin_total, 2),
-        "fee_total": round(fee_total, 2),
+        "management_fee": float(money(mgmt_total)),
+        "admin_fee": float(money(admin_total)),
+        "fee_total": float(money(fee_total)),
         "distributions": [
             {
                 "id": str(r.id),
@@ -367,8 +379,8 @@ def period_summary(
             }
             for r in rows
         ],
-        "gross_total": round(gross_total, 2),
-        "net_total": round(net_total, 2),
+        "gross_total": float(money(gross_total)),
+        "net_total": float(money(net_total)),
         "paid_count": paid_count,
         "pending_count": len(rows) - paid_count,
         "intercompany": intercompany,
@@ -407,11 +419,12 @@ def intercompany_distribution(
             PoolFee.active.is_(True),
         )
     ).all()
-    total_pool_result = float(period.total_pool_result or 0)
+    total_pool_result = dec(period.total_pool_result or 0)
     _, _, fee_total = _fee_totals(list(fees), total_pool_result)
-    net_total = round(total_pool_result - fee_total, 2)
+    net_total = money(total_pool_result - fee_total)
 
-    result = []
+    # 先把公司全部校验通过，再做金额分摊 —— 免得算了一半才报 404。
+    companies = []
     for a in body.allocations:
         company = scoped_get(db, Company, a.company_id, auth.tenant_id)
         if not company:
@@ -419,12 +432,21 @@ def intercompany_distribution(
                 404,
                 detail={"code": "COMPANY_NOT_FOUND", "message": f"Company not found: {a.company_id}"},
             )
+        companies.append((a, company))
+
+    # P2-B1：逐行取整会让尾差凭空消失（100.00 分 3 家 → 33.33+33.33+33.33 =
+    # 99.99），池期结算对不上账。改用 SSOT 的「最大余数法」分摊
+    # （services.money.allocate_by_weight）—— 各家金额之和**精确等于** net_total。
+    amounts = allocate_by_weight(net_total, [dec(a.share_pct) for a, _ in companies])
+
+    result = []
+    for (a, company), amount in zip(companies, amounts):
         result.append(
             {
                 "company_id": str(company.id),
                 "company_name": company.name,
                 "share_pct": a.share_pct,
-                "amount": round(net_total * a.share_pct / 100.0, 2),
+                "amount": float(amount),
                 "note": a.note,
             }
         )
@@ -436,6 +458,6 @@ def intercompany_distribution(
 
     return {
         "period_id": str(period_id),
-        "net_total": net_total,
+        "net_total": float(money(net_total)),
         "allocations": result,
     }

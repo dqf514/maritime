@@ -42,7 +42,7 @@
   border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 .status-badge--warn {
-  color: var(--warn);
+  color: var(--warn-text, var(--warn));
   background: color-mix(in srgb, var(--warn) 12%, transparent);
   border-color: color-mix(in srgb, var(--warn) 35%, transparent);
 }
@@ -139,7 +139,7 @@
   background: color-mix(in srgb, var(--ok) 8%, transparent);
 }
 .validate-btn--warn {
-  color: var(--warn);
+  color: var(--warn-text);
   border-color: color-mix(in srgb, var(--warn) 55%, transparent);
   background: color-mix(in srgb, var(--warn) 8%, transparent);
 }
@@ -170,4 +170,4 @@
 .validate-pop--info { border-left-color: #1f6fb2; }
 .validate-line { padding: 1px 0; }
 .validate-line--error { color: var(--danger); font-weight: 600; }
-.validate-line--warn { color: var(--warn); }
+.validate-line--warn { color: var(--warn-text); }

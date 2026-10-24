@@ -68,7 +68,7 @@
 .record-modal-body select,
 .record-modal-body textarea {
   height: var(--input-h);
-  border: 1px solid var(--chrome-border);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-sm);
   padding: 0 var(--gap-sm);
   font: inherit;
@@ -119,7 +119,7 @@
 }
 .badge-pass { background: #e5f6ec; color: var(--ok); }
 .badge-fail { background: #fde8e6; color: var(--danger); }
-.badge-warn { background: #fff4d9; color: var(--warn); }
+.badge-warn { background: var(--warn-bg); color: var(--warn-text); }
 .badge-info { background: #e3effc; color: #1d4ed8; }
 
 /* Palette (Ctrl+K) */

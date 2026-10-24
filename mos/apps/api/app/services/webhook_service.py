@@ -17,6 +17,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
 from app.models_office import WebhookEndpoint, WebhookDelivery
+from app.security import assert_safe_outbound_url
 from app.services.job_queue import job_handler
 
 
@@ -42,6 +43,9 @@ def create_subscription(
     url: str,
     events: list[str],
 ) -> WebhookEndpoint:
+    # P0-18：webhook 目标地址是**用户提供的出网 URL** —— 不校验就是 SSRF
+    # （环回 / RFC1918 / 169.254.169.254 元数据）。登记时先拦一道。
+    assert_safe_outbound_url(url, purpose="webhook target URL")
     sub = WebhookEndpoint(
         tenant_id=tenant_id,
         name=name,
@@ -172,6 +176,16 @@ def _deliver_webhook(db: Session, job) -> None:
         db.commit()
         return
     body = json.dumps({"event": delivery.event, "payload": delivery.payload}, default=str).encode()
+    # 投递时再校验一次：登记时的域名可能已经被改指向内网（DNS rebinding），
+    # 地址也可能在两次投递之间被改过。失败即停，不发出请求。
+    try:
+        assert_safe_outbound_url(sub.target_url, purpose="webhook delivery")
+    except Exception as exc:  # noqa: BLE001 — 任何拦截都要记成投递失败
+        delivery.attempts += 1
+        delivery.status = "failed"
+        sub.failure_count += 1
+        db.commit()
+        raise RuntimeError(f"webhook delivery {delivery.id} blocked: {exc}") from exc
     resp = httpx.post(
         sub.target_url,
         content=body,

@@ -43,6 +43,58 @@ def _fixtures_root() -> Path:
     return Path(__file__).resolve().parents[3] / "fixtures"
 
 
+def _gold_equal(actual, expected) -> bool:
+    """黄金样例比较：**精确到分**。
+
+    以前用 ``abs(float(actual) - float(expected)) > 0.02``，一次银行家舍入
+    翻转（9953.12 vs 9953.13）就能蒙混过关 —— 引擎改坏了也不报。
+    现在数值一律 ``round(x, 2)`` 后**精确相等**；字符串必须全等。
+    """
+    if expected is None:
+        return actual is None
+    if isinstance(expected, str):
+        return str(actual) == expected
+    if actual is None:
+        return False
+    try:
+        return round(float(actual), 2) == round(float(expected), 2)
+    except (TypeError, ValueError):
+        return actual == expected
+
+
+def _warning_mismatches(path: Path, data: dict, out: dict) -> list[str]:
+    """校验 fixture 声明的 ``expect_warnings``（没有声明就不校验）。
+
+    之前 ``expect_warnings`` 从不被检查 —— 引擎多报/少报警告都没有人会发现。
+    """
+    if "expect_warnings" not in data:
+        return []
+    expected = data.get("expect_warnings") or []
+    actual = out.get("warnings") or []
+    exp_set = {_warning_key(w) for w in expected}
+    act_set = {_warning_key(w) for w in actual}
+    if exp_set == act_set:
+        return []
+    missing = sorted(exp_set - act_set)
+    extra = sorted(act_set - exp_set)
+    return [
+        f"{path.name}:warnings expected {sorted(exp_set)} got {sorted(act_set)}"
+        + (f" (missing {missing})" if missing else "")
+        + (f" (unexpected {extra})" if extra else "")
+    ]
+
+
+def _warning_key(w) -> str:
+    """把引擎的告警归一成可比对的字符串。
+
+    - estimate 引擎：``{"code": "X", "message": "..."}`` → ``"X"``
+    - laytime 引擎：``"文本"`` → ``"文本"``
+    """
+    if isinstance(w, dict):
+        return str(w.get("code") or w.get("message") or w)
+    return str(w)
+
+
 @check("infra.db_ping", "blocker")
 def check_db(db: Session) -> CheckResult:
     db.execute(text("SELECT 1"))
@@ -93,8 +145,9 @@ def check_tce_gold(_db: Session) -> CheckResult:
         out = compute_estimate(data["inputs"])
         for k, expected in data["expect"].items():
             actual = out.get(k)
-            if abs(float(actual) - float(expected)) > 0.02:
+            if not _gold_equal(actual, expected):
                 failed.append(f"{path.name}:{k} expected {expected} got {actual}")
+        failed.extend(_warning_mismatches(path, data, out))
     if failed:
         return CheckResult("calc.tce_gold", "blocker", "fail", "TCE gold mismatches", {"failed": failed})
     return CheckResult("calc.tce_gold", "blocker", "pass", "TCE gold suite passed")
@@ -112,11 +165,9 @@ def check_laytime_gold(_db: Session) -> CheckResult:
         out = compute_laytime(data["inputs"])
         for k, expected in data["expect"].items():
             actual = out.get(k)
-            if isinstance(expected, str):
-                if actual != expected:
-                    failed.append(f"{path.name}:{k} expected {expected} got {actual}")
-            elif abs(float(actual) - float(expected)) > 0.02:
+            if not _gold_equal(actual, expected):
                 failed.append(f"{path.name}:{k} expected {expected} got {actual}")
+        failed.extend(_warning_mismatches(path, data, out))
     if failed:
         return CheckResult("calc.laytime_gold", "blocker", "fail", "Laytime gold mismatches", {"failed": failed})
     return CheckResult("calc.laytime_gold", "blocker", "pass", "Laytime gold suite passed")

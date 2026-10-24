@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useContext, useRef, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, ReactNode } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type ToastKind = "success" | "error" | "warning" | "info";
 
@@ -44,36 +45,49 @@ const AUTO_MS: Record<ToastKind, number> = {
 const MAX_VISIBLE = 5;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
+  // 注意：渲染时 map 的回调参数也叫 t，这里把翻译函数改名 tr 避免遮蔽。
+  const { t: tr } = useI18n();
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
   const nextId = useRef(1);
 
-  // 交给 React Compiler 做记忆化，不再手动 useCallback（react-hooks/preserve-manual-memoization）
-  function dismiss(id: number) {
+  const dismiss = useCallback((id: number) => {
     setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, exiting: true } : t)));
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 150);
-  }
+  }, []);
 
-  function push(kind: ToastKind, msg: string, opts?: ToastOptions) {
-    const id = nextId.current++;
-    setToasts((prev) => {
-      const next = [...prev, { id, kind, msg, action: opts?.action, onAction: opts?.onAction }];
-      return next.length > MAX_VISIBLE ? next.slice(-MAX_VISIBLE) : next;
-    });
+  const push = useCallback(
+    (kind: ToastKind, msg: string, opts?: ToastOptions) => {
+      const id = nextId.current++;
+      setToasts((prev) => {
+        const next = [...prev, { id, kind, msg, action: opts?.action, onAction: opts?.onAction }];
+        if (next.length <= MAX_VISIBLE) return next;
+        // 溢出时优先丢弃最旧的**非错误**提示 —— 错误提示不自动消失，最该被留住。
+        const dropIdx = next.findIndex((t) => t.kind !== "error");
+        if (dropIdx >= 0) next.splice(dropIdx, 1);
+        else next.splice(0, next.length - MAX_VISIBLE);
+        return next;
+      });
 
-    const autoMs = AUTO_MS[kind];
-    if (autoMs > 0) {
-      setTimeout(() => dismiss(id), autoMs);
-    }
-  }
+      const autoMs = AUTO_MS[kind];
+      if (autoMs > 0) {
+        setTimeout(() => dismiss(id), autoMs);
+      }
+    },
+    [dismiss],
+  );
 
-  const ctx: ToastCtx = {
-    success: (msg, opts) => push("success", msg, opts),
-    error: (msg, opts) => push("error", msg, opts),
-    warning: (msg, opts) => push("warning", msg, opts),
-    info: (msg, opts) => push("info", msg, opts),
-  };
+  // context value 必须稳定：否则任何一次 toast 都会让所有 useToast() 的页面重渲染。
+  const ctx: ToastCtx = useMemo(
+    () => ({
+      success: (msg, opts) => push("success", msg, opts),
+      error: (msg, opts) => push("error", msg, opts),
+      warning: (msg, opts) => push("warning", msg, opts),
+      info: (msg, opts) => push("info", msg, opts),
+    }),
+    [push],
+  );
 
   return (
     <Ctx.Provider value={ctx}>
@@ -101,7 +115,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               type="button"
               className="toast-close"
               onClick={() => dismiss(t.id)}
-              aria-label="Close"
+              aria-label={tr("common.close", "Close")}
             >
               ×
             </button>

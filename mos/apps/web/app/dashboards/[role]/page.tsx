@@ -6,7 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { apiGet } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { msgOf } from "@/lib/errors";
+import { useI18n, type TFallback } from "@/lib/i18n";
+import { maxOf, minOf } from "@/lib/numbers";
 import { formatInTz } from "@/lib/datetime";
 
 type Kpi = { label: string; value: string | number; unit?: string; delta?: string | null; tone?: string; synthetic?: boolean };
@@ -37,8 +39,8 @@ function Sparkline({ series, color }: { series: SeriesPoint[]; color: string }) 
     );
   }
   const vals = series.map((s) => s.v);
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
+  const min = minOf(vals, (v) => v);
+  const max = maxOf(vals, (v) => v);
   const w = 220;
   const h = 56;
   const pts = vals
@@ -56,7 +58,7 @@ function Sparkline({ series, color }: { series: SeriesPoint[]; color: string }) 
 }
 
 function Bars({ series, color }: { series: SeriesPoint[]; color: string }) {
-  const max = Math.max(...series.map((s) => s.v), 1);
+  const max = maxOf(series, (s) => s.v, 1);
   return (
     <div className="dash-bars">
       {series.map((s, i) => (
@@ -98,6 +100,15 @@ function Donut({ series, color }: { series: SeriesPoint[]; color: string }) {
 function OceanMap({ positions }: { positions: NonNullable<Snapshot["fleet_positions"]> }) {
   return (
     <div className="dash-ocean">
+      {/* 无障碍：海图是纯位置图形 —— 补一份可读的船位清单 */}
+      <ul className="sr-only">
+        {positions.map((p, i) => (
+          <li key={`sr-ship-${p.name}-${i}`}>
+            {p.name} — {p.status} — {p.lat.toFixed(2)}, {p.lon.toFixed(2)}
+            {p.speed != null ? ` — ${p.speed} kn` : ""}
+          </li>
+        ))}
+      </ul>
       <div className="dash-ocean-grid" />
       {positions.map((p, i) => {
         const x = ((p.lon + 180) / 360) * 100;
@@ -118,6 +129,21 @@ function OceanMap({ positions }: { positions: NonNullable<Snapshot["fleet_positi
   );
 }
 
+/** 图表的文字摘要 —— 纯图表块必须可读（无障碍 + 无法看图的用户）。 */
+function chartSummary(c: Chart, t: (key: string, fallback?: TFallback, vars?: Record<string, string | number>) => string) {
+  const vals = (c.series || []).map((s) => s.v);
+  if (!vals.length) return t("page.dash.chart_empty", "No data points");
+  const min = minOf(vals, (v) => v);
+  const max = maxOf(vals, (v) => v);
+  const last = vals[vals.length - 1];
+  return t("page.dash.chart_summary", "{n} points · min {min} · max {max} · latest {last}", {
+    n: vals.length,
+    min,
+    max,
+    last,
+  });
+}
+
 export default function RoleDashboardPage() {
   const { t } = useI18n();
   const router = useRouter();
@@ -128,6 +154,8 @@ export default function RoleDashboardPage() {
   const [fullscreen, setFullscreen] = useState(false);
   const [clock, setClock] = useState("");
   const [screens, setScreens] = useState<Screen[]>([]);
+  /** 看板目录（参考数据）加载失败 */
+  const [catalogErr, setCatalogErr] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const switcherRef = useRef<HTMLDivElement>(null);
@@ -138,19 +166,46 @@ export default function RoleDashboardPage() {
         setSnap(d);
         setError("");
       })
-      .catch(() => setError(t("page.dash.error", "Unable to load dashboard (role/permission).")));
+      .catch((ex) => setError(msgOf(ex, t("page.dash.error", "Unable to load dashboard (role/permission)."))));
   }, [role, t]);
 
   useEffect(() => {
     apiGet("/api/v1/dashboards/catalog")
-      .then((c) => setScreens(c.screens || []))
-      .catch(() => setScreens([]));
+      .then((c) => {
+        setScreens(c.screens || []);
+        setCatalogErr(null);
+      })
+      // 看板目录取数失败 ≠ 没有看板：给出可见提示
+      .catch((ex) => setCatalogErr(msgOf(ex)));
   }, []);
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
+    // 轮询在标签页不可见时暂停：后台标签没必要每 5 秒打一次 API，
+    // 回到前台时立刻补一次最新数据。
+    let id: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (id !== null) return;
+      id = setInterval(load, 5000);
+    };
+    const stop = () => {
+      if (id === null) return;
+      clearInterval(id);
+      id = null;
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") stop();
+      else {
+        void load();
+        start();
+      }
+    };
+    if (document.visibilityState !== "hidden") start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [load]);
 
   useEffect(() => {
@@ -284,6 +339,11 @@ export default function RoleDashboardPage() {
       </header>
 
       {error ? <p className="dash-error">{error}</p> : null}
+      {catalogErr ? (
+        <p className="dash-error">
+          {t("page.dash.catalog_fail", "Dashboard catalogue could not be loaded: {msg}", { msg: catalogErr })}
+        </p>
+      ) : null}
 
       <section className="dash-kpis">
         {kpis.map((k) => (
@@ -303,14 +363,21 @@ export default function RoleDashboardPage() {
 
       <section className="dash-main">
         <div className="dash-col">
-          {(snap?.charts || []).map((c) => (
-            <div key={c.id} className="dash-panel">
-              <h3>{c.title}</h3>
-              {c.type === "line" ? <Sparkline series={c.series} color={accent} /> : null}
-              {c.type === "bar" ? <Bars series={c.series} color={accent} /> : null}
-              {c.type === "donut" ? <Donut series={c.series} color={accent} /> : null}
-            </div>
-          ))}
+          {(snap?.charts || []).map((c) => {
+            // P2：纯图表必须有可读的文字摘要（屏幕阅读器/无法看图的用户）
+            const summary = chartSummary(c, t);
+            return (
+              <div key={c.id} className="dash-panel">
+                <h3>{c.title}</h3>
+                <div role="img" aria-label={summary}>
+                  {c.type === "line" ? <Sparkline series={c.series} color={accent} /> : null}
+                  {c.type === "bar" ? <Bars series={c.series} color={accent} /> : null}
+                  {c.type === "donut" ? <Donut series={c.series} color={accent} /> : null}
+                </div>
+                <p className="muted">{summary}</p>
+              </div>
+            );
+          })}
           {(snap?.heatmap || []).length ? (
             <div className="dash-panel">
               <h3>{t("page.dash.heat", "Heat")}</h3>
@@ -357,6 +424,11 @@ export default function RoleDashboardPage() {
                   </tbody>
                 </table>
               </div>
+              {snap.table.rows.length > 8 ? (
+                <p className="muted">
+                  {t("page.dash.table_rows_shown", "Showing the first 8 of {n} rows", { n: snap.table.rows.length })}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </div>

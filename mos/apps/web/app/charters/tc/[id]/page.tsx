@@ -17,9 +17,10 @@ import { StatusLegend } from "@/components/StatusLegend";
 import { Tabs } from "@/components/Tabs";
 import { PartyPicker } from "@/components/DataPicker";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
-import { useStateActions } from "@/components/useTransitions";
+import { useStateActions, useTransitionTable } from "@/components/useTransitions";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -230,6 +231,8 @@ export default function TcWorkspacePage() {
   const [vessels, setVessels] = useState<RefItem[]>([]);
   const [parties, setParties] = useState<RefItem[]>([]);
   const [err, setErr] = useState("");
+  /** 子列表（对账单/停租记录等）加载失败 */
+  const [subErr, setSubErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabId>("contract");
 
@@ -237,6 +240,8 @@ export default function TcWorkspacePage() {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /** 待确认删除的子行（经纪规则/停租事件/价格档/其他条目） */
+  const [confirmRowDel, setConfirmRowDel] = useState<{ label: string; action: () => void } | null>(null);
 
   // 仅 draft 可编辑/删除（后端 _assert_tc_editable 同步约束）
   const isDraft = contract?.status === "draft";
@@ -266,6 +271,8 @@ export default function TcWorkspacePage() {
   const [childForm, setChildForm] = useState({ contract_type: "tci", contract_style: "time_charter", hire_rate: "", hire_currency: "USD", delivery_date: "", redelivery_date: "" });
 
   // 状态机动作可见性：只渲染当前状态可执行的转移（time_charter 表）
+  // 转移表取数失败时不能静默地「没有可用动作」
+  const { error: transitionErr } = useTransitionTable();
   const nextStatuses = useStateActions("time_charter", contract?.status);
 
   function validateTc(): ValidateIssue[] {
@@ -352,7 +359,7 @@ export default function TcWorkspacePage() {
       setParties(p || []);
       await reloadSummary(c.id);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -386,13 +393,23 @@ export default function TcWorkspacePage() {
         } else if (which === "other_items") {
           setOtherRows(await apiGet(`/api/v1/tc/contracts/${cid}/other-items`));
         } else if (which === "hire") {
-          const [st, voyages] = await Promise.all([
-            apiGet(`/api/v1/tc-contracts/${cid}/statements`).catch(() => []),
+          const [stR, sumR] = await Promise.allSettled([
+            apiGet(`/api/v1/tc-contracts/${cid}/statements`),
             apiGet(`/api/v1/tc/contracts/${cid}/hire-summary`),
           ]);
-          setStatements(Array.isArray(st) ? st : []);
+          if (stR.status === "fulfilled") {
+            const st = stR.value;
+            setStatements(Array.isArray(st) ? st : []);
+          } else {
+            // 对账单取数失败 ≠ 没有对账单
+            setStatements([]);
+            setSubErr(msgOf(stR.reason));
+          }
+          if (sumR.status === "rejected") throw sumR.reason;
+          const voyages = sumR.value;
           const vids: { id: string; voyage_no: string | null }[] = voyages?.voyages || [];
           const events: OffHireRow[] = [];
+          const offHireFailures: unknown[] = [];
           await Promise.all(
             vids.map(async (v) => {
               try {
@@ -400,11 +417,13 @@ export default function TcWorkspacePage() {
                 for (const r of rows || []) {
                   events.push({ ...r, voyage_no: v.voyage_no || v.id.slice(0, 8) });
                 }
-              } catch {
-                // voyage without off-hire feed — skip
+              } catch (ex) {
+                // 单个航次没有 off-hire 记录可以跳过，但失败原因不能完全静默
+                offHireFailures.push(ex);
               }
             }),
           );
+          if (offHireFailures.length) setSubErr(msgOf(offHireFailures[0]));
           events.sort((a, b) => String(a.start_at).localeCompare(String(b.start_at)));
           setOffHire(events);
         } else if (which === "surveys") {
@@ -417,7 +436,7 @@ export default function TcWorkspacePage() {
           setChildren(await apiGet(`/api/v1/tc/contracts/${cid}/children`));
         }
       } catch (ex) {
-        setErr(String(ex));
+        setErr(msgOf(ex));
       } finally {
         setTabBusy(false);
       }
@@ -470,7 +489,7 @@ export default function TcWorkspacePage() {
       toast.success(t("common.saved", "Saved"));
       await reloadSummary();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setSaving(false);
     }
@@ -483,7 +502,7 @@ export default function TcWorkspacePage() {
       toast.success(t("page.tc.deleted", "TC contract deleted"));
       router.push("/charters?type=tc");
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
       setSaving(false);
     }
   }
@@ -495,7 +514,7 @@ export default function TcWorkspacePage() {
       toast.success(t("page.tc.transitioned", "Status → {s}", { s: updated.status }));
       await reloadSummary();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -507,7 +526,7 @@ export default function TcWorkspacePage() {
       await loadTab("billing");
       await reloadSummary();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
       setTabBusy(false);
     }
   }
@@ -520,7 +539,7 @@ export default function TcWorkspacePage() {
       await loadTab("hire");
       await reloadSummary();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
       setTabBusy(false);
     }
   }
@@ -542,7 +561,7 @@ export default function TcWorkspacePage() {
       await loadTab("profit_share");
       await reloadSummary();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
       setTabBusy(false);
     }
   }
@@ -562,7 +581,7 @@ export default function TcWorkspacePage() {
       await loadTab("broker");
       await reloadSummary();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -571,7 +590,7 @@ export default function TcWorkspacePage() {
       await apiDelete(`/api/v1/tc/contracts/${cid}/broker-rules/${id}`);
       await loadTab("broker");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -589,7 +608,7 @@ export default function TcWorkspacePage() {
       toast.success(t("common.saved", "Saved"));
       await loadTab("lay_events");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -598,7 +617,7 @@ export default function TcWorkspacePage() {
       await apiDelete(`/api/v1/tc/contracts/${cid}/lay-events/${id}`);
       await loadTab("lay_events");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -618,7 +637,7 @@ export default function TcWorkspacePage() {
       toast.success(t("common.saved", "Saved"));
       await loadTab("pricing");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -627,7 +646,7 @@ export default function TcWorkspacePage() {
       await apiDelete(`/api/v1/tc/contracts/${cid}/pricing-rows/${id}`);
       await loadTab("pricing");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -645,7 +664,7 @@ export default function TcWorkspacePage() {
       toast.success(t("common.saved", "Saved"));
       await loadTab("other_items");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -654,7 +673,7 @@ export default function TcWorkspacePage() {
       await apiDelete(`/api/v1/tc/contracts/${cid}/other-items/${id}`);
       await loadTab("other_items");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -669,7 +688,7 @@ export default function TcWorkspacePage() {
       toast.success(t("common.saved", "Saved"));
       await loadTab("surveys");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -688,7 +707,7 @@ export default function TcWorkspacePage() {
       toast.success(t("page.tc.child.created", "Child TC created"));
       await loadTab("children");
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -891,7 +910,10 @@ export default function TcWorkspacePage() {
             className="btn btn-ghost btn-sm"
             onClick={(e) => {
               e.stopPropagation();
-              void delBrokerRule(r.id);
+              setConfirmRowDel({
+                label: r.broker_party_id || r.id.slice(0, 8),
+                action: () => void delBrokerRule(r.id),
+              });
             }}
           >
             {t("common.delete", "Delete")}
@@ -936,7 +958,10 @@ export default function TcWorkspacePage() {
             className="btn btn-ghost btn-sm"
             onClick={(e) => {
               e.stopPropagation();
-              void delLayEvent(r.id);
+              setConfirmRowDel({
+                label: r.port || r.kind || r.id.slice(0, 8),
+                action: () => void delLayEvent(r.id),
+              });
             }}
           >
             {t("common.delete", "Delete")}
@@ -1009,7 +1034,10 @@ export default function TcWorkspacePage() {
             className="btn btn-ghost btn-sm"
             onClick={(e) => {
               e.stopPropagation();
-              void delPricingRow(r.id);
+              setConfirmRowDel({
+                label: r.rate_type || r.id.slice(0, 8),
+                action: () => void delPricingRow(r.id),
+              });
             }}
           >
             {t("common.delete", "Delete")}
@@ -1064,7 +1092,10 @@ export default function TcWorkspacePage() {
             className="btn btn-ghost btn-sm"
             onClick={(e) => {
               e.stopPropagation();
-              void delOtherItem(r.id);
+              setConfirmRowDel({
+                label: r.code || r.id.slice(0, 8),
+                action: () => void delOtherItem(r.id),
+              });
             }}
           >
             {t("common.delete", "Delete")}
@@ -1144,6 +1175,16 @@ export default function TcWorkspacePage() {
     <>
       <AppShell>
         {err ? <p className="flash-err">{err}</p> : null}
+        {subErr ? (
+          <p className="flash-err">
+            {t("page.tc.sub_load_failed", "Some lists failed to load: {msg}", { msg: subErr })}
+          </p>
+        ) : null}
+        {transitionErr ? (
+          <p className="flash-err">
+            {t("page.transitions.load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
+          </p>
+        ) : null}
 
       {contract ? (
         <>
@@ -1540,6 +1581,7 @@ export default function TcWorkspacePage() {
                       <option value="redelivery">{t("page.tc.lay.redelivery", "Redelivery")}</option>
                     </select>
                     <input
+                      aria-label={t("page.tc.lay.port", "Port")}
                       placeholder={t("page.tc.lay.port", "Port")}
                       value={layForm.port}
                       onChange={(e) => setLayForm((f) => ({ ...f, port: e.target.value }))}
@@ -1561,6 +1603,7 @@ export default function TcWorkspacePage() {
                       />
                     </label>
                     <input
+                      aria-label={t("page.tc.col.remarks", "Remarks")}
                       placeholder={t("page.tc.col.remarks", "Remarks")}
                       value={layForm.remarks}
                       onChange={(e) => setLayForm((f) => ({ ...f, remarks: e.target.value }))}
@@ -1593,6 +1636,7 @@ export default function TcWorkspacePage() {
                     <input
                       type="number"
                       step="any"
+                      aria-label={t("page.tc.col.hire_rate", "Hire rate")}
                       placeholder={t("page.tc.col.hire_rate", "Hire rate")}
                       value={pricingForm.hire_rate}
                       onChange={(e) => setPricingForm((f) => ({ ...f, hire_rate: e.target.value }))}
@@ -1625,6 +1669,7 @@ export default function TcWorkspacePage() {
                     <input
                       type="number"
                       step="any"
+                      aria-label={t("page.tc.pricing.duration", "Duration (d)")}
                       placeholder={t("page.tc.pricing.duration", "Duration (d)")}
                       value={pricingForm.duration_days}
                       onChange={(e) => setPricingForm((f) => ({ ...f, duration_days: e.target.value }))}
@@ -1632,11 +1677,13 @@ export default function TcWorkspacePage() {
                     <input
                       type="number"
                       step="any"
+                      aria-label={t("page.tc.pricing.tcl_ins", "TCL Ins")}
                       placeholder={t("page.tc.pricing.tcl_ins", "TCL Ins")}
                       value={pricingForm.tcl_ins}
                       onChange={(e) => setPricingForm((f) => ({ ...f, tcl_ins: e.target.value }))}
                     />
                     <input
+                      aria-label={t("page.tc.col.remarks", "Comments")}
                       placeholder={t("page.tc.col.remarks", "Comments")}
                       value={pricingForm.comments}
                       onChange={(e) => setPricingForm((f) => ({ ...f, comments: e.target.value }))}
@@ -1678,6 +1725,7 @@ export default function TcWorkspacePage() {
                       ))}
                     </select>
                     <input
+                      aria-label={t("common.description", "Description")}
                       placeholder={t("common.description", "Description")}
                       value={otherForm.description}
                       onChange={(e) => setOtherForm((f) => ({ ...f, description: e.target.value }))}
@@ -1695,6 +1743,7 @@ export default function TcWorkspacePage() {
                     <input
                       type="number"
                       step="any"
+                      aria-label={t("page.tc.other.rate", "Rate")}
                       placeholder={t("page.tc.other.rate", "Rate")}
                       value={otherForm.rate}
                       onChange={(e) => setOtherForm((f) => ({ ...f, rate: e.target.value }))}
@@ -2025,6 +2074,22 @@ export default function TcWorkspacePage() {
           void removeContract();
         }}
         onCancel={() => setConfirmDelete(false)}
+      />
+
+      <ConfirmDialog
+        open={confirmRowDel !== null}
+        title={t("common.confirm", "Confirm")}
+        message={t("page.tc.confirm_delete_row", 'Delete the row "{label}"? This cannot be undone.', {
+          label: confirmRowDel?.label ?? "",
+        })}
+        confirmLabel={t("common.delete", "Delete")}
+        danger
+        onConfirm={() => {
+          const act = confirmRowDel?.action;
+          setConfirmRowDel(null);
+          act?.();
+        }}
+        onCancel={() => setConfirmRowDel(null)}
       />
     </>
   );

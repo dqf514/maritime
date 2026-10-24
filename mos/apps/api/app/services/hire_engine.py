@@ -9,7 +9,7 @@ rollups and GL period-journal allocation.
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import select
@@ -24,11 +24,11 @@ from app.models_time_charter import (
     TimeCharterContract,
 )
 from app.services.doc_numbering import next_doc_number
+from app.services.observability import traced
+from app.services.money import CENT
 
 _D = Decimal
 _ZERO = _D("0")
-_CENT = _D("0.01")
-
 
 def _f(val) -> _D:
     if val is None:
@@ -47,28 +47,126 @@ def _days_in_period(
     return _D(str((clip_end - clip_start).days))
 
 
-def _off_hire_days_in_period(
+def _period_window(period_start: date, period_end: date) -> tuple[datetime, datetime]:
+    """账单期间的时窗：[起 00:00, 止 00:00) —— 与 ``effective_days`` 的天数口径一致。"""
+    return (
+        datetime.combine(period_start, time.min),
+        datetime.combine(period_end, time.min),
+    )
+
+
+def _naive(dt: datetime) -> datetime:
+    """DateTime 列存 naive UTC；带 tzinfo 的一律去掉 tzinfo 后当 UTC 处理。"""
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
+def _merge_intervals(
+    intervals: list[tuple[datetime, datetime]]
+) -> list[tuple[datetime, datetime]]:
+    """合并重叠区间 —— 重叠的停租事件只扣一次（不双计）。"""
+    if not intervals:
+        return []
+    ordered = sorted(intervals, key=lambda iv: (iv[0], iv[1]))
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _explicit_share(
+    ev: OffHireEvent,
+    ev_start: datetime,
+    ev_end: datetime,
+    win_start: datetime,
+    win_end: datetime,
+) -> _D:
+    """显式 ``hire_deduction`` 在**本期**应扣的份额（量化到分）。
+
+    停租扣款必须**裁剪到本期**（审计 P1-B24）：
+
+    - 事件**已封闭**（有 ``end_at``）：按落在本期的时长**比例**摊。跨月事件
+      两期各扣自己那几天的份额，Σ 恰好等于事件金额 —— 既不双扣也不漏扣。
+      以前是每个重叠期都扣**全额**，跨月的 $5,000 事件会被扣成 $10,000。
+    - 事件**仍在继续**（无 ``end_at``）：时长未知，无法按比例摊，只能**一次性**
+      计在事件**开始**的那一期（后续期不再重复扣）。
+
+    返回 0 表示本期不承担这笔显式扣款。
+    """
+    amount = _f(ev.hire_deduction).quantize(CENT, ROUND_HALF_UP)
+    if amount == _ZERO:
+        return _ZERO
+    if ev.end_at is None:
+        # 未关闭：只在事件开始的那一期计一次（避免每个后续期都扣一遍）
+        if not (win_start <= ev_start < win_end):
+            return _ZERO
+        return amount
+    span = (ev_end - ev_start).total_seconds()
+    if span <= 0:
+        return _ZERO
+    overlap = (min(ev_end, win_end) - max(ev_start, win_start)).total_seconds()
+    if overlap <= 0:
+        return _ZERO
+    share = (amount * _D(str(overlap)) / _D(str(span))).quantize(CENT, ROUND_HALF_UP)
+    return share
+
+
+def _off_hire_in_period(
     events: list[OffHireEvent],
     period_start: date,
     period_end: date,
-) -> tuple[_D, _D]:
-    """Return (total_off_hire_days, total_deduction) for events overlapping the period."""
-    total_days = _ZERO
-    total_deduction = _ZERO
+) -> tuple[_D, _D, list[dict]]:
+    """统计本期停租。
+
+    返回 ``(off_hire_days, explicit_deduction, breakdown_rows)``：
+
+    - 重叠事件**合并区间**后计一次，不双计
+    - **按小时折算**（12 小时停租扣 0.5 天），不再截断到整天
+    - 只统计与本期**有交集**的事件；完全在本期之外的事件不扣
+    - 显式 ``hire_deduction`` **裁剪到本期**（跨月按天摊，未关闭事件只在开始
+      那一期计一次）—— 每个重叠期都扣全额会双扣
+    """
+    win_start, win_end = _period_window(period_start, period_end)
+    intervals: list[tuple[datetime, datetime]] = []
+    explicit = _ZERO
+    rows: list[dict] = []
+
     for ev in events:
-        if not ev.deduct_hire:
+        if not ev.deduct_hire or ev.start_at is None:
             continue
-        ev_start = ev.start_at.date() if ev.start_at else None
-        ev_end = ev.end_at.date() if ev.end_at else period_end
-        if ev_start is None:
+        ev_start = _naive(ev.start_at)
+        ev_end = _naive(ev.end_at) if ev.end_at is not None else win_end
+        if ev_end <= ev_start:
             continue
-        days = _days_in_period(ev_start, ev_end, period_start, period_end)
-        total_days += days
+        clip_start = max(ev_start, win_start)
+        clip_end = min(ev_end, win_end)
+        if clip_end <= clip_start:
+            # 与本期完全无交集 → 不计天数，也不计显式扣款
+            continue
+        intervals.append((clip_start, clip_end))
         if ev.hire_deduction is not None:
-            total_deduction += _f(ev.hire_deduction)
-    return total_days, total_deduction
+            share = _explicit_share(ev, ev_start, ev_end, win_start, win_end)
+            if share != _ZERO:
+                explicit += share
+                rows.append(
+                    {
+                        "label": f"Off-hire: {ev.event_type or ev.reason or 'event'}",
+                        "amount": f"-{share}",
+                    }
+                )
+
+    merged = _merge_intervals(intervals)
+    total_days = _ZERO
+    for start, end in merged:
+        total_days += _D(str((end - start).total_seconds())) / _D("86400")
+    total_days = total_days.quantize(_D("0.0001"), ROUND_HALF_UP)
+    return total_days, explicit, rows
 
 
+@traced("hire")
 def calculate_hire_statement(
     db: Session,
     contract: TimeCharterContract,
@@ -100,7 +198,7 @@ def calculate_hire_statement(
     )
     off_hire_events = db.scalars(off_hire_q).all()
 
-    oh_days, oh_explicit_deduction = _off_hire_days_in_period(
+    oh_days, oh_explicit_deduction, oh_explicit_rows = _off_hire_in_period(
         off_hire_events, period_start, period_end
     )
 
@@ -108,12 +206,17 @@ def calculate_hire_statement(
     if billable_days < _ZERO:
         billable_days = _ZERO
 
-    gross_hire = (billable_days * hire_rate).quantize(_CENT, ROUND_HALF_UP)
+    # 毛租金 = 期间应付天数 × 日租（**未扣停租**）。
+    # 停租只在这里扣一次：net = gross − off_hire_deduction。
+    # 恒等式：gross_hire − off_hire_deduction + other_adjustments == net_hire
+    gross_hire = (effective_days * hire_rate).quantize(CENT, ROUND_HALF_UP)
 
-    time_deduction = (oh_days * hire_rate).quantize(_CENT, ROUND_HALF_UP)
-    off_hire_deduction = time_deduction + oh_explicit_deduction
+    time_deduction = (oh_days * hire_rate).quantize(CENT, ROUND_HALF_UP)
+    off_hire_deduction = (time_deduction + oh_explicit_deduction).quantize(
+        CENT, ROUND_HALF_UP
+    )
 
-    net_hire = (gross_hire - off_hire_deduction).quantize(_CENT, ROUND_HALF_UP)
+    net_hire = (gross_hire - off_hire_deduction).quantize(CENT, ROUND_HALF_UP)
 
     # 指数联动定价 — index-linked hire components (additive; absent → no-op).
     # Each component resolves to an extra hire line; the total lands in
@@ -130,14 +233,14 @@ def calculate_hire_statement(
             tenant_id=contract.tenant_id,
             default_pricing_date=period_end,
         )
-        net_hire = (net_hire + unpriced_total).quantize(_CENT, ROUND_HALF_UP)
+        net_hire = (net_hire + unpriced_total).quantize(CENT, ROUND_HALF_UP)
 
     breakdown_lines: list[dict] = []
     breakdown_lines.append({
         "label": "Gross Hire",
-        "days": str(billable_days + oh_days),
+        "days": str(effective_days),
         "rate": str(hire_rate),
-        "amount": str(gross_hire + off_hire_deduction),
+        "amount": str(gross_hire),
     })
 
     if oh_days > _ZERO:
@@ -148,18 +251,12 @@ def calculate_hire_statement(
             "amount": f"-{time_deduction}",
         })
 
-    for ev in off_hire_events:
-        if not ev.deduct_hire or ev.hire_deduction is None:
-            continue
-        breakdown_lines.append({
-            "label": f"Off-hire: {ev.event_type or ev.reason or 'event'}",
-            "amount": f"-{_f(ev.hire_deduction)}",
-        })
+    breakdown_lines.extend(oh_explicit_rows)
 
     for row in unpriced_rows:
         line = {
             "label": row["name"],
-            "amount": str(_f(row["amount"]).quantize(_CENT, ROUND_HALF_UP)),
+            "amount": str(_f(row["amount"]).quantize(CENT, ROUND_HALF_UP)),
         }
         if row.get("rate") is not None:
             line["rate"] = str(row["rate"])
@@ -177,8 +274,8 @@ def calculate_hire_statement(
         "period_end": period_end,
         "hire_days": billable_days,
         "off_hire_days": oh_days,
-        "gross_hire": (gross_hire + off_hire_deduction).quantize(_CENT, ROUND_HALF_UP),
-        "off_hire_deduction": off_hire_deduction.quantize(_CENT, ROUND_HALF_UP),
+        "gross_hire": gross_hire,
+        "off_hire_deduction": off_hire_deduction,
         "bunker_adjustment": _ZERO,
         "other_adjustments": unpriced_total,
         "net_hire": net_hire,
@@ -295,6 +392,14 @@ def _get_contract(db: Session, tc_contract_id: uuid.UUID) -> TimeCharterContract
     return contract
 
 
+def _bounded_pct(pct: Decimal, warnings: list[str], label: str) -> Decimal:
+    """把百分数夹到 [0, 100]；越界时记录告警而不是算出负分成。"""
+    if pct < _ZERO or pct > _D("100"):
+        warnings.append(f"{label} 超出 0–100（{pct}），已按边界取值")
+        return max(_ZERO, min(_D("100"), pct))
+    return pct
+
+
 def calculate_profit_share(
     db: Session,
     tc_contract_id: uuid.UUID,
@@ -305,6 +410,9 @@ def calculate_profit_share(
     Rules (``ProfitShareRule``) bound TCE bands; ``share_pct`` is the owner's
     share of the excess inside each band. With no rules the contract-level
     ``profit_share_pct`` applies to the whole excess. Deterministic Decimal math.
+
+    分层区间**去重叠**（按 tier_from 顺序推进游标），不双计；层级之间的空档
+    会被记录到 ``gaps`` 而不是静默丢弃。百分数一律夹在 0–100。
     """
     contract = _get_contract(db, tc_contract_id)
     tce = _f(period_tce)
@@ -321,21 +429,40 @@ def calculate_profit_share(
     ).all()
 
     tiers_applied: list[dict] = []
+    gaps: list[dict] = []
+    warnings: list[str] = []
     owner_share = _ZERO
     basis = "tce"
 
     if excess_total > _ZERO:
         if rules:
+            cursor = threshold
             for rule in rules:
                 tier_lo = _f(rule.tier_from)
                 tier_hi = _f(rule.tier_to) if rule.tier_to is not None else None
-                lo = max(tier_lo, threshold)
+                share_pct = _bounded_pct(
+                    _f(rule.share_pct), warnings, f"利润分成阶梯 {rule.id} 的 share_pct"
+                )
+                lo = max(tier_lo, cursor)
                 hi = min(tier_hi, tce) if tier_hi is not None else tce
                 if hi <= lo:
+                    # 完全被前一层覆盖（或整体在门槛之下）→ 跳过，不重复计
+                    if tier_lo > cursor:
+                        gaps.append(
+                            {
+                                "from": float(cursor),
+                                "to": float(min(tier_lo, tce)),
+                                "reason": "tier_gap",
+                            }
+                        )
                     continue
+                if tier_lo > cursor:
+                    gaps.append(
+                        {"from": float(cursor), "to": float(tier_lo), "reason": "tier_gap"}
+                    )
                 band_amount = hi - lo
-                share = (band_amount * _f(rule.share_pct) / _D("100")).quantize(
-                    _CENT, ROUND_HALF_UP
+                share = (band_amount * share_pct / _D("100")).quantize(
+                    CENT, ROUND_HALF_UP
                 )
                 owner_share += share
                 basis = rule.basis or basis
@@ -344,17 +471,20 @@ def calculate_profit_share(
                         "rule_id": str(rule.id),
                         "tier_from": float(tier_lo),
                         "tier_to": float(tier_hi) if tier_hi is not None else None,
-                        "share_pct": float(_f(rule.share_pct)),
+                        "share_pct": float(share_pct),
                         "basis": rule.basis,
                         "band_amount": float(band_amount),
                         "owner_share": float(share),
                     }
                 )
+                cursor = hi
         else:
-            flat_pct = _f(contract.profit_share_pct)
+            flat_pct = _bounded_pct(
+                _f(contract.profit_share_pct), warnings, "合同 profit_share_pct"
+            )
             if flat_pct > _ZERO:
                 owner_share = (excess_total * flat_pct / _D("100")).quantize(
-                    _CENT, ROUND_HALF_UP
+                    CENT, ROUND_HALF_UP
                 )
                 tiers_applied.append(
                     {
@@ -377,6 +507,8 @@ def calculate_profit_share(
         "charterer_share": float(excess_total - owner_share),
         "basis": basis,
         "tiers": tiers_applied,
+        "gaps": gaps,
+        "warnings": warnings,
     }
 
 
@@ -421,7 +553,7 @@ def generate_billing_schedule(
                 period_start=cursor,
                 period_end=period_end,
                 due_date=period_end,
-                amount=(days * hire_rate).quantize(_CENT, ROUND_HALF_UP),
+                amount=(days * hire_rate).quantize(CENT, ROUND_HALF_UP),
                 status="draft",
             )
             db.add(row)
@@ -455,15 +587,15 @@ def bareboat_hire_statement(
     effective_days = _days_in_period(
         contract_start, contract_end, period_start, period_end
     )
-    gross_hire = (effective_days * hire_rate).quantize(_CENT, ROUND_HALF_UP)
+    gross_hire = (effective_days * hire_rate).quantize(CENT, ROUND_HALF_UP)
 
     address_comm = (gross_hire * _f(contract.address_comm_pct) / _D("100")).quantize(
-        _CENT, ROUND_HALF_UP
+        CENT, ROUND_HALF_UP
     )
     brokerage = (gross_hire * _f(contract.brokerage_pct) / _D("100")).quantize(
-        _CENT, ROUND_HALF_UP
+        CENT, ROUND_HALF_UP
     )
-    net_hire = (gross_hire - address_comm - brokerage).quantize(_CENT, ROUND_HALF_UP)
+    net_hire = (gross_hire - address_comm - brokerage).quantize(CENT, ROUND_HALF_UP)
 
     return {
         "tc_contract_id": str(contract.id),
@@ -587,7 +719,6 @@ def allocate_period_journal(
         for entry in journal.entries or []:
             if entry.get("reference") == reference:
                 return journal
-
     if contract.contract_type == "tco":
         debit_account, credit_account = "hire_receivable", "hire_revenue"
     else:
@@ -619,5 +750,9 @@ def allocate_period_journal(
         "accrual",
         entries,
         description=f"TC hire allocation {contract.id}",
+        source_type="tc_hire",
+        # 一份合同有多个账期 → 不能拿 contract.id 当 source_id（唯一约束会把
+        # 第二期挡掉）。用「合同+期间」派生的确定性 UUID，数据库层即可幂等。
+        source_id=uuid.uuid5(uuid.NAMESPACE_URL, reference),
     )
     return journal

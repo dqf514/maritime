@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -32,6 +33,7 @@ from app.services.field_perms import assert_fields_writable, filter_read, get_fi
 from app.services.optimistic_lock import assert_fresh
 from app.services.recycle import soft_delete
 from app.services.audit import audit
+from app.services.data_scope import apply_module_scope
 
 
 def _audit_write(db, *, action: str, auth: AuthContext, entity_type: str, row, detail: dict | None = None) -> None:
@@ -154,6 +156,8 @@ def list_vessels(
     if q.strip():
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Vessel.name.ilike(like), Vessel.imo.ilike(like)))
+    # 行级数据权限：scope 收窄到 "own" 时只看自己建的船舶
+    stmt = apply_module_scope(db, stmt, Vessel, auth, "masterdata")
     rows = db.scalars(stmt.order_by(Vessel.name)).all()
     return [VesselOut.model_validate(r, from_attributes=True) for r in rows]
 
@@ -164,7 +168,7 @@ def create_vessel(
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
-    row = Vessel(tenant_id=auth.tenant_id, **body.model_dump())
+    row = Vessel(tenant_id=auth.tenant_id, created_by=auth.user_id, **body.model_dump())
     db.add(row)
     _audit_write(db, action="vessel.create", auth=auth, entity_type="vessel", row=row)
     db.commit()
@@ -231,14 +235,45 @@ def delete_vessel(
 @router.get("/ports", response_model=list[PortOut])
 def list_ports(
     q: str = "",
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
+    """港口列表 —— 服务端分页。
+
+    以前这里是 ``.limit(100)`` 硬上限且没有 offset：第 101 个港口在界面上
+    **根本不存在**，而且用户看不到任何"被截断"的提示。现在 limit/offset 可调，
+    上限提到 1000；下拉场景请改用 ``/masterdata/ports/options``（一次拿全）。
+    """
     stmt = select(Port).where(_alive(Port))
     if q.strip():
         like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(Port.name.ilike(like), Port.unlocode.ilike(like)))
-    rows = db.scalars(stmt.order_by(Port.name).limit(100)).all()
+        stmt = stmt.where(
+            or_(
+                Port.name.ilike(like),
+                Port.unlocode.ilike(like),
+                Port.country.ilike(like),
+                Port.port_type.ilike(like),
+                Port.region_code.ilike(like),
+                Port.parent_country.ilike(like),
+            )
+        )
+    rows = db.scalars(stmt.order_by(Port.name).limit(limit).offset(offset)).all()
+    return [PortOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.get("/ports/options", response_model=list[PortOut])
+def list_port_options(
+    auth: AuthContext = Depends(require_module("masterdata")),
+    db: Session = Depends(get_db),
+):
+    """港口下拉参照 —— 一次给全（最多 5000 条），不做分页。
+
+    路由必须注册在 ``/ports/{port_id}`` **之前** —— 否则 ``options`` 会被
+    UUID 路径参数吃掉并返回 422。
+    """
+    rows = db.scalars(select(Port).where(_alive(Port)).order_by(Port.name).limit(5000)).all()
     return [PortOut.model_validate(r, from_attributes=True) for r in rows]
 
 
@@ -325,6 +360,8 @@ def list_counterparties(
     stmt = select(Counterparty).where(Counterparty.tenant_id == auth.tenant_id, _alive(Counterparty))
     if q.strip():
         stmt = stmt.where(Counterparty.name.ilike(f"%{q.strip()}%"))
+    # 行级数据权限：scope 收窄到 "own" 时只看自己建的对手方
+    stmt = apply_module_scope(db, stmt, Counterparty, auth, "masterdata")
     rows = db.scalars(stmt.order_by(Counterparty.name).offset(offset).limit(limit)).all()
     return [CounterpartyOut.model_validate(r, from_attributes=True) for r in rows]
 
@@ -335,10 +372,40 @@ def create_counterparty(
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
-    row = Counterparty(tenant_id=auth.tenant_id, **body.model_dump())
+    # P0-24：同名直接 409，不要落到 IntegrityError → 500。数据库上有部分唯一
+    # 索引兜底（并发下仍由索引裁决），这里只是为了给出可读的错误。
+    dup = db.scalar(
+        select(Counterparty.id).where(
+            Counterparty.tenant_id == auth.tenant_id,
+            Counterparty.name == body.name,
+            Counterparty.deleted_at.is_(None),
+        )
+    )
+    if dup is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "COUNTERPARTY_EXISTS",
+                "message": "A counterparty with this name already exists",
+                "name": body.name,
+                "id": str(dup),
+            },
+        )
+    row = Counterparty(tenant_id=auth.tenant_id, created_by=auth.user_id, **body.model_dump())
     db.add(row)
     _audit_write(db, action="counterparty.create", auth=auth, entity_type="counterparty", row=row)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "COUNTERPARTY_EXISTS",
+                "message": "A counterparty with this name already exists",
+                "name": body.name,
+            },
+        ) from exc
     db.refresh(row)
     return CounterpartyOut.model_validate(row, from_attributes=True)
 
@@ -378,7 +445,18 @@ def update_counterparty(
         setattr(row, k, v)
     row.updated_at = datetime.now(timezone.utc)
     _audit_write(db, action="counterparty.update", auth=auth, entity_type="counterparty", row=row, detail={"fields": sorted(payload_fields)})
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # P0-24：改名撞上同名记录 → 409，不是 500
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "COUNTERPARTY_EXISTS",
+                "message": "A counterparty with this name already exists",
+            },
+        ) from exc
     db.refresh(row)
     return CounterpartyOut.model_validate(row, from_attributes=True)
 
@@ -608,6 +686,7 @@ def list_counterparty_contacts(
     q: str = "",
     counterparty_id: UUID | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
@@ -634,7 +713,7 @@ def list_counterparty_contacts(
                 Counterparty.name.ilike(like),
             )
         )
-    rows = db.execute(stmt.order_by(CounterpartyContact.name).limit(limit)).all()
+    rows = db.execute(stmt.order_by(CounterpartyContact.name).limit(limit).offset(offset)).all()
     return {
         "items": [
             {

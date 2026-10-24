@@ -1,4 +1,4 @@
-# Build-context ignores (context = mos/, see Dockerfile header)
+# Build-context ignores (context = mos/, see apps/api/Dockerfile header)
 **/node_modules
 **/.venv
 **/__pycache__
@@ -8,5 +8,26 @@
 **/uploads
 **/data/backups
 .git
-.env
-.env.*
+# ⚠️ 必须用 `**/` 前缀 —— 裸 `.env` / `.env.*` 只匹配**上下文根**，
+# `deploy/compose/.env`（真实 POSTGRES_PASSWORD / JWT_SECRET / OPS_DATA_KEY）
+# 与 `apps/api/.env` 仍会留在构建上下文里（不上传远程 builder 就是泄漏）。
+# `!**/.env.example` 把示例文件放回来（镜像构建需要）。
+**/.env
+**/.env.*
+!**/.env.example
+
+# 前端镜像有独立的构建上下文（deploy/compose 里 context=apps/web），
+# API 镜像根本用不到前端源码 —— 别把 2GB+ 塞进 API 的构建上下文。
+apps/web
+
+# 残留文件：本地调试脚本 / 导出的 OpenAPI / 手工备份的数据库
+**/*.bak
+**/*.bak_*
+**/*.db.bak*
+**/openapi.json
+apps/api/_*.py
+apps/api/_*.json
+apps/api/_*.txt
+
+# 本地临时工作目录
+**/.tmp_alembic

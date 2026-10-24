@@ -19,21 +19,12 @@ from app.models_i18n import (
     TerminologyTerm,
     UiMessage,
 )
-from app.security import AuthContext, get_current_auth, get_current_auth_optional, require_auth
+from app.security import AuthContext, get_current_auth, get_current_auth_optional, require_auth, require_roles
 from app.services.timeutil import utcnow_naive
 
 router = APIRouter(tags=["i18n & Terminology"])
 
 SUPPORTED = {"en", "zh-CN"}
-
-
-def require_roles(*codes: str):
-    def _dep(auth: AuthContext = Depends(get_current_auth)) -> AuthContext:
-        if not any(c in auth.roles for c in codes):
-            raise HTTPException(status_code=403, detail={"code": "ROLE_REQUIRED", "roles": list(codes)})
-        return auth
-
-    return _dep
 
 
 def _now() -> datetime:

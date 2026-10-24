@@ -343,6 +343,16 @@ def test_pnl_lines_and_accrual_basis(client, auth_headers):
     )
     assert hire.status_code == 200, hire.text
 
+    # P0-B6：**草稿发票不计入实际收入** —— 只有签发后才算。旧实现把草稿也
+    # 算进毛利，于是「还没签发的运费」变成了已实现的收入。
+    # 状态机：draft → pending_approval → issued。
+    for body in (inv, hire):
+        iid = body.json()["id"]
+        t = client.post(f"/api/v1/invoices/{iid}/transition?target=pending_approval", headers=h)
+        assert t.status_code == 200, t.text
+        t = client.post(f"/api/v1/invoices/{iid}/transition?target=issued", headers=h)
+        assert t.status_code == 200, t.text
+
     after = row_for()
     assert after["lines_actual"]["revenue"] - before["lines_actual"]["revenue"] == pytest.approx(10000.0)
     assert after["lines_actual"]["hire"] - before["lines_actual"]["hire"] == pytest.approx(3000.0)

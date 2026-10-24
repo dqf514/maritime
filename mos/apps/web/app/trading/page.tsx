@@ -4,9 +4,11 @@
 // Blotter（成交簿）/ Positions（纸货实货净头寸）/ MtM P&L（逐日盯市）/ Exposure（敞口与限额）。
 // 新建成交走 RecordModal；金额表均用 DataGrid 聚合 footer。
 
+import { msgOf } from "@/lib/errors";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { RefreshButton } from "@/components/RefreshButton";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
@@ -101,9 +103,9 @@ function TradingWorkspace() {
   const { t } = useI18n();
   const toast = useToast();
   const router = useRouter();
-  const { query, setQuery } = useListQuery();
+  const { query, setQuery, page, limit } = useListQuery();
   const tab: Tab = TAB_IDS.includes(query.tab ?? "") ? (query.tab as Tab) : "blotter";
-  const setTab = (id: Tab) => setQuery({ tab: id === "blotter" ? null : id });
+  const setTab = (id: Tab) => setQuery({ tab: id === "blotter" ? null : id, page: null });
   useListHotkeys(() => setTradeModal(true));
 
   // —— shared ——
@@ -113,6 +115,8 @@ function TradingWorkspace() {
 
   // —— blotter ——
   const [trades, setTrades] = useState<Trade[]>([]);
+  /** blotter 总条数（分页） */
+  const [tradesTotal, setTradesTotal] = useState(0);
 
   // —— positions ——
   const [positions, setPositions] = useState<PositionRow[]>([]);
@@ -151,8 +155,10 @@ function TradingWorkspace() {
     setLoadErr("");
     try {
       if (tab === "blotter") {
-        const page = await apiList<Trade>("/api/v1/trading/trades", { limit: 200 });
-        setTrades(page.items);
+        // P1-28：分页取数，不再静默截断到 200 条
+        const res = await apiList<Trade>("/api/v1/trading/trades", { limit, offset: (page - 1) * limit });
+        setTrades(res.items);
+        setTradesTotal(res.total);
       } else if (tab === "positions") {
         const data = await apiGet("/api/v1/trading/positions");
         setPositions(
@@ -191,11 +197,11 @@ function TradingWorkspace() {
         );
       }
     } catch (ex) {
-      setLoadErr(String(ex));
+      setLoadErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
-  }, [tab, mtmDate]);
+  }, [tab, mtmDate, page, limit]);
 
   useEffect(() => {
     load();
@@ -208,7 +214,7 @@ function TradingWorkspace() {
       toast.success(t("page.trading.mtm_done", "MtM valuation completed"));
       await load();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setMtmRunning(false);
     }
@@ -240,7 +246,7 @@ function TradingWorkspace() {
       setTradeForm({ ...tradeForm, route: "", period_from: "", period_to: "", price: "0", counterparty_id: "" });
       await load();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setTradeSaving(false);
     }
@@ -554,9 +560,7 @@ function TradingWorkspace() {
         <button type="button" className="btn btn-primary btn-sm" onClick={() => setTradeModal(true)}>
           {t("page.trading.new_trade", "New Trade")}
         </button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={load} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-ghost btn-sm" onClick={load} />
         {tab === "mtm" ? (
           <>
             <span className="field-inline">
@@ -609,6 +613,45 @@ function TradingWorkspace() {
                 emptyText={t("common.empty", "No records")}
               />
               <ContextMenu controller={tradeCtx} items={tradeMenuItems} />
+              <div className="dt-pager">
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  disabled={page <= 1}
+                  onClick={() => setQuery({ page: page - 1 })}
+                  aria-label={t("common.prev_page", "Previous page")}
+                >
+                  ←
+                </button>
+                <span className="muted">
+                  {t("page.trading.page_of", "第 {page} / {pages} 页 · 共 {total} 条", {
+                    page,
+                    pages: Math.max(1, Math.ceil(tradesTotal / limit)),
+                    total: tradesTotal,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  disabled={page >= Math.max(1, Math.ceil(tradesTotal / limit))}
+                  onClick={() => setQuery({ page: page + 1 })}
+                  aria-label={t("common.next_page", "Next page")}
+                >
+                  →
+                </button>
+                <select
+                  className="input input-sm"
+                  value={limit}
+                  onChange={(e) => setQuery({ limit: e.target.value, page: 1 })}
+                  aria-label={t("common.page_size", "Rows per page")}
+                >
+                  {[10, 25, 50, 100].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </>
           ) : tab === "positions" ? (
             <>

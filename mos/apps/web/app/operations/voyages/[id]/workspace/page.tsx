@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput } from "@/components/DateInput";
 import { MailAside } from "@/components/MailAside";
 import { PageHeader } from "@/components/PageHeader";
@@ -29,7 +30,9 @@ import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
 import { useTodoAdd } from "@/components/TodoQuickAdd";
 import { apiDelete, apiGet, apiPatch, apiPost, type VoyageOverview, type VoyagePnlLine } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { fromUtcInput, parseUtc } from "@/lib/datetime";
+import { toPositiveInt } from "@/lib/numbers";
+import { fromUtcInput, parseUtc, toUtcInput } from "@/lib/datetime";
+import { handled, msgOf } from "@/lib/errors";
 
 // —— helpers ——
 
@@ -62,14 +65,9 @@ function varianceClass(n: number | null | undefined) {
   return n < 0 ? "neg" : "pos";
 }
 
-/** ISO → datetime-local 输入值（YYYY-MM-DDTHH:MM，浏览器本地时区） */
-function toLocalInput(iso: string | null | undefined) {
-  if (!iso) return "";
-  const d = parseUtc(iso);
-  if (!d) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
+// datetime-local 输入值一律用 **UTC 墙钟**（lib/datetime 的 toUtcInput）。
+// 历史缺陷：用 getFullYear()/getHours() 等本地分量回填输入框，而提交时又按 UTC
+// 解释 —— 非 UTC 客户端来回差一个 UTC 偏移（8 小时）。现在读写两端都用 UTC。
 
 type PortRef = { id: string; name: string; latitude: number | null; longitude: number | null; timezone?: string | null };
 
@@ -85,6 +83,34 @@ type PcRow = TimelinePortCall & {
 
 function fnTone(tone: string): StatusTone | null {
   return tone === "ok" || tone === "warn" || tone === "danger" || tone === "info" || tone === "muted" ? tone : null;
+}
+
+function fnLabel(fn: PortFunctionMeta, locale: string) {
+  return locale.startsWith("zh") ? fn.label_zh || fn.label_en : fn.label_en;
+}
+
+/** 港口功能码徽标 —— 模块级组件：放组件体内会让引用它的列定义每次渲染都换身份。 */
+function PortFnChip({
+  code,
+  fnByCode,
+  locale,
+}: {
+  code?: string | null;
+  fnByCode: Map<string, PortFunctionMeta>;
+  locale: string;
+}) {
+  if (!code) return null;
+  const fn = fnByCode.get(code);
+  const label = fn ? fnLabel(fn, locale) : code;
+  const tone = fn ? fnTone(fn.tone) : null;
+  if (!tone) {
+    return (
+      <span className="muted" title={label}>
+        {code}
+      </span>
+    );
+  }
+  return <StatusBadge status={code} tone={tone} label={code} title={`${code} · ${label}`} />;
 }
 
 type VoyageNote = {
@@ -215,6 +241,8 @@ export default function VoyageWorkspacePage() {
   const [noteDate, setNoteDate] = useState("");
   const [savingNote, setSavingNote] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // 不可逆操作二次确认（P1-8）：待执行动作 + 指名对象的确认文案
+  const [confirm, setConfirm] = useState<{ message: string; action: () => void } | null>(null);
 
   // port-call create/edit (C2: function_code select)
   const [pcModalOpen, setPcModalOpen] = useState(false);
@@ -240,8 +268,8 @@ export default function VoyageWorkspacePage() {
           seq: String(row.seq ?? 1),
           purpose: row.purpose || "load",
           function_code: row.function_code || "",
-          eta: toLocalInput(row.eta),
-          etd: toLocalInput(row.etd),
+          eta: toUtcInput(row.eta),
+          etd: toUtcInput(row.etd),
           agent: row.agent || "",
         });
       } else {
@@ -267,14 +295,26 @@ export default function VoyageWorkspacePage() {
     setLoading(true);
     setError("");
     try {
+      // P1-4：辅助数据取不到时**降级但必须让用户知道**哪一块没加载 ——
+      // 静默返回空数组，界面上就变成"没有备注/没有活动记录"，用户以为
+      // 是真没有，其实是没取到。降级项收集起来，最后给一条汇总提示。
+      const degraded: string[] = [];
+      const degrade = <T,>(what: string, fallback: T) => (ex: unknown): T => {
+        degraded.push(`${what} (${msgOf(ex)})`);
+        return fallback;
+      };
       const [overview, portRows, sof, twin, fnRows] = await Promise.all([
         apiGet(`/api/v1/voyages/${id}/overview`),
-        fetchList<PortRef>("/api/v1/masterdata/ports").catch(() => [] as PortRef[]),
-        fetchList<{ id: string; event_code: string; event_at: string | null }>(`/api/v1/sof-events?voyage_id=${id}`).catch(
-          () => [],
+        fetchList<PortRef>("/api/v1/masterdata/ports/options").catch(
+          degrade("ports", [] as PortRef[]),
         ),
-        apiGet(`/api/v1/twin/voyages/${id}`).catch(() => null),
-        fetchList<PortFunctionMeta>("/api/v1/meta/port-functions").catch(() => [] as PortFunctionMeta[]),
+        fetchList<{ id: string; event_code: string; event_at: string | null }>(
+          `/api/v1/sof-events?voyage_id=${id}`,
+        ).catch(degrade("SOF events", [])),
+        apiGet(`/api/v1/twin/voyages/${id}`).catch(degrade("twin", null)),
+        fetchList<PortFunctionMeta>("/api/v1/meta/port-functions").catch(
+          degrade("port functions", [] as PortFunctionMeta[]),
+        ),
       ]);
       setData(overview as VoyageOverview);
       setPorts(portRows);
@@ -295,22 +335,44 @@ export default function VoyageWorkspacePage() {
       } else {
         setLaycan(null);
       }
+      if (degraded.length) {
+        toast.warning(
+          t(
+            "ws.degraded",
+            {
+              en: "Some panels could not be loaded: {items}. The rest of the voyage is shown as usual.",
+              zh: "以下面板没有加载成功：{items}。航次其余内容照常显示。",
+            },
+            { items: degraded.join(", ") },
+          ),
+        );
+      }
     } catch (e: any) {
       setError(e?.message || t("common.failed", "Failed"));
     } finally {
       setLoading(false);
     }
-  }, [id, t]);
+  }, [id, t, toast]);
 
   const savePortCall = useCallback(
     async (e: FormEvent) => {
       e.preventDefault();
       if (!id) return;
+      // P1-24：挂靠序号是 1 起始的整数 —— 填 0 / 填字母都是非法值，必须报错，
+      // 不能静默替换成 1。
+      const seqNum = toPositiveInt(pcForm.seq);
+      if (seqNum === null) {
+        toast.error(t("ws.bad_seq", {
+          en: "Sequence must be a whole number of 1 or more.",
+          zh: "序号必须是大于等于 1 的整数。",
+        }));
+        return;
+      }
       setPcSaving(true);
       try {
         const payload = {
           port_id: pcForm.port_id || null,
-          seq: Number(pcForm.seq) || 1,
+          seq: seqNum,
           purpose: pcForm.purpose || "load",
           function_code: pcForm.function_code || null,
           // 输入框是 UTC 墙钟（平台约定：naive = UTC）—— 不能用 new Date() 按浏览器本地时区解释，
@@ -358,7 +420,15 @@ export default function VoyageWorkspacePage() {
       let payload: Record<string, unknown>;
       if (colKey === "seq") {
         const n = value === null || value === "" ? null : Number(value);
-        if (n !== null && (isNaN(n) || n === (row.seq ?? null))) return;
+        // P1-24：非法输入不能静默丢弃 —— 明确告诉用户这一格没写进去
+        if (n !== null && !Number.isFinite(n)) {
+          toast.error(t("ws.err_numeric", {
+            en: "{field} must be a valid number",
+            zh: "{field} 必须是有效数字",
+          }, { field: colKey }));
+          return;
+        }
+        if (n !== null && n === (row.seq ?? null)) return;
         payload = { seq: n };
       } else if (dtFields.includes(colKey)) {
         const prev = (row as Record<string, unknown>)[colKey];
@@ -438,19 +508,44 @@ export default function VoyageWorkspacePage() {
 
   const loadAux = useCallback(async () => {
     if (!id) return;
+    // P1-4：备注 / 指令 / 活动记录取不到时不能静默当成"没有"——
+    // 收一条汇总提示，告诉用户这三块没加载上。
+    const degraded: string[] = [];
+    const degrade = <T,>(what: string, fallback: T) => (ex: unknown): T => {
+      degraded.push(`${what} (${msgOf(ex)})`);
+      return fallback;
+    };
     const [n, ins, act, badges] = await Promise.all([
-      fetchList<VoyageNote>(`/api/v1/voyages/${id}/notes`).catch(() => [] as VoyageNote[]),
-      fetchList<VoyageNote>(`/api/v1/voyages/${id}/instructions`).catch(() => [] as VoyageNote[]),
-      fetchList<ActivityItem>(`/api/v1/voyages/${id}/activity`).catch(() => [] as ActivityItem[]),
+      fetchList<VoyageNote>(`/api/v1/voyages/${id}/notes`).catch(
+        degrade("notes", [] as VoyageNote[]),
+      ),
+      fetchList<VoyageNote>(`/api/v1/voyages/${id}/instructions`).catch(
+        degrade("instructions", [] as VoyageNote[]),
+      ),
+      fetchList<ActivityItem>(`/api/v1/voyages/${id}/activity`).catch(
+        degrade("activity", [] as ActivityItem[]),
+      ),
       apiGet(`/api/v1/me/unread?entity_type=voyage&entity_id=${id}`).catch(
-        () => ({}) as Record<string, { count: number; unread: number }>,
+        degrade("unread badges", {} as Record<string, { count: number; unread: number }>),
       ),
     ]);
     setNotes(n);
     setInstructions(ins);
     setActivity(act);
     if (badges && typeof badges === "object") setTabBadges(badges);
-  }, [id]);
+    if (degraded.length) {
+      toast.warning(
+        t(
+          "ws.degraded",
+          {
+            en: "Some panels could not be loaded: {items}. The rest of the voyage is shown as usual.",
+            zh: "以下面板没有加载成功：{items}。航次其余内容照常显示。",
+          },
+          { items: degraded.join(", ") },
+        ),
+      );
+    }
+  }, [id, t, toast]);
 
   // 打开 tab 即视为已读：上报 last-seen 并本地清零未读
   const onTabChange = useCallback(
@@ -462,7 +557,7 @@ export default function VoyageWorkspacePage() {
         if (!b || !b.unread) return prev;
         return { ...prev, [tabId]: { ...b, unread: 0 } };
       });
-      apiPost("/api/v1/me/viewed", { entity_type: "voyage", entity_id: id, tab: tabId }).catch(() => undefined);
+      apiPost("/api/v1/me/viewed", { entity_type: "voyage", entity_id: id, tab: tabId }).catch(handled);
     },
     [id],
   );
@@ -482,7 +577,7 @@ export default function VoyageWorkspacePage() {
       if (!b || !b.unread) return prev;
       return { ...prev, [wanted]: { ...b, unread: 0 } };
     });
-    apiPost("/api/v1/me/viewed", { entity_type: "voyage", entity_id: id, tab: wanted }).catch(() => undefined);
+    apiPost("/api/v1/me/viewed", { entity_type: "voyage", entity_id: id, tab: wanted }).catch(handled);
   }, [id]);
 
   const voyage = data?.voyage;
@@ -539,25 +634,6 @@ export default function VoyageWorkspacePage() {
     for (const fn of portFns) m.set(fn.code, fn);
     return m;
   }, [portFns]);
-
-  function fnLabel(fn: PortFunctionMeta) {
-    return locale.startsWith("zh") ? fn.label_zh || fn.label_en : fn.label_en;
-  }
-
-  function PortFnChip({ code }: { code?: string | null }) {
-    if (!code) return null;
-    const fn = fnByCode.get(code);
-    const label = fn ? fnLabel(fn) : code;
-    const tone = fn ? fnTone(fn.tone) : null;
-    if (!tone) {
-      return (
-        <span className="muted" title={label}>
-          {code}
-        </span>
-      );
-    }
-    return <StatusBadge status={code} tone={tone} label={code} title={`${code} · ${label}`} />;
-  }
 
   function runValidate(): ValidateIssue[] {
     const issues: ValidateIssue[] = [];
@@ -692,6 +768,37 @@ export default function VoyageWorkspacePage() {
     [id, loadAux, toast, t],
   );
 
+  /** 删除航次备注/指示 —— 二次确认并指名该条（P1-8）。 */
+  const askDeleteNote = useCallback(
+    (kind: "note" | "instruction", n: VoyageNote) => {
+      const kindText = kind === "note" ? t("ws.note", "Note") : t("ws.instruction", "Instruction");
+      const preview = noteText(n).slice(0, 30);
+      setConfirm({
+        message: t(
+          "ws.delete_note_confirm",
+          'Delete this {kind}? It cannot be undone.{preview}',
+          { kind: kindText, preview: preview ? ` "${preview}"` : "" },
+        ),
+        action: () => void deleteNote(kind, n.id),
+      });
+    },
+    [deleteNote, t],
+  );
+
+  /** 关闭 off-hire —— 关闭后不可再改期，二次确认（P1-8）。 */
+  const askCloseOffHire = useCallback(
+    (eventId: string) => {
+      setConfirm({
+        message: t(
+          "ws.oh_close_confirm",
+          "Close this off-hire period? Once closed the period can no longer be amended.",
+        ),
+        action: () => void closeOffHire(eventId),
+      });
+    },
+    [closeOffHire, t],
+  );
+
   // —— tab contents ——
 
   const summaryTab = (
@@ -795,7 +902,7 @@ export default function VoyageWorkspacePage() {
     </div>
   );
 
-  const pnlColumns: GridColumnDef<VoyagePnlLine>[] = [
+  const pnlColumns = useMemo<GridColumnDef<VoyagePnlLine>[]>(() => [
     {
       key: "category",
       title: t("ws.pnl_category", "Cost category"),
@@ -826,7 +933,7 @@ export default function VoyageWorkspacePage() {
       value: (r) => r.variance,
       render: (v) => <span className={varianceClass(v as number | null)}>{fmtMoney(v as number | null, currency, locale)}</span>,
     },
-  ];
+  ], [currency, locale, t]);
 
   const pnlTab = pnl ? (
     <Panel title={t("ws.pnl_title", "P&L attribution")}>
@@ -861,7 +968,7 @@ export default function VoyageWorkspacePage() {
     </Panel>
   );
 
-  const pcColumns: GridColumnDef<(typeof timelinePortCalls)[number]>[] = [
+  const pcColumns = useMemo<GridColumnDef<(typeof timelinePortCalls)[number]>[]>(() => [
     { key: "seq", title: "#", width: 48, align: "right", editor: { type: "number" } },
     {
       key: "port_id",
@@ -877,7 +984,7 @@ export default function VoyageWorkspacePage() {
       width: 140,
       render: (v, row) => (
         <>
-          {v ? String(v) : "—"} <PortFnChip code={row.function_code} />
+          {v ? String(v) : "—"} <PortFnChip code={row.function_code} fnByCode={fnByCode} locale={locale} />
         </>
       ),
       editor: {
@@ -937,7 +1044,7 @@ export default function VoyageWorkspacePage() {
         />
       ),
     },
-  ];
+  ], [deletePortCall, fnByCode, locale, openPortCallModal, ports, t]);
 
   const portCallsTab = (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--gap-md)" }}>
@@ -970,7 +1077,7 @@ export default function VoyageWorkspacePage() {
   type InvoiceRow = NonNullable<VoyageOverview["invoices"]>[number];
   type OffHireRow = NonNullable<VoyageOverview["off_hire"]>[number];
 
-  const laytimeColumns: GridColumnDef<LaytimeRow>[] = [
+  const laytimeColumns = useMemo<GridColumnDef<LaytimeRow>[]>(() => [
     {
       key: "result_type",
       title: t("ws.result_type", "Result"),
@@ -987,9 +1094,9 @@ export default function VoyageWorkspacePage() {
       value: (r) => r.amount,
       render: (v, r) => fmtMoney(v as number | null, r.currency || currency, locale),
     },
-  ];
+  ], [currency, locale, t]);
 
-  const claimColumns: GridColumnDef<ClaimRow>[] = [
+  const claimColumns = useMemo<GridColumnDef<ClaimRow>[]>(() => [
     {
       key: "claim_no",
       title: t("ws.claim_no", "Claim no."),
@@ -1011,9 +1118,9 @@ export default function VoyageWorkspacePage() {
       value: (r) => r.amount,
       render: (v, r) => fmtMoney(v as number | null, r.currency || currency, locale),
     },
-  ];
+  ], [currency, locale, t]);
 
-  const invoiceColumns: GridColumnDef<InvoiceRow>[] = [
+  const invoiceColumns = useMemo<GridColumnDef<InvoiceRow>[]>(() => [
     {
       key: "invoice_no",
       title: t("ws.invoice_no", "Invoice no."),
@@ -1035,9 +1142,9 @@ export default function VoyageWorkspacePage() {
       value: (r) => r.amount,
       render: (v, r) => fmtMoney(v as number | null, r.currency || currency, locale),
     },
-  ];
+  ], [currency, locale, t]);
 
-  const offHireWsColumns: GridColumnDef<OffHireRow>[] = [
+  const offHireWsColumns = useMemo<GridColumnDef<OffHireRow>[]>(() => [
     {
       key: "start_at",
       title: t("ws.start", "Start"),
@@ -1075,7 +1182,7 @@ export default function VoyageWorkspacePage() {
             title={t("ws.oh_close", "Close off-hire")}
             onClick={(e) => {
               e.stopPropagation();
-              closeOffHire(row.id);
+              askCloseOffHire(row.id);
             }}
           >
             ● {t("ws.oh_close_btn", "Close")}
@@ -1097,7 +1204,7 @@ export default function VoyageWorkspacePage() {
         />
       ),
     },
-  ];
+  ], [askCloseOffHire, deleteOffHire, t]);
 
   const financeTab = (
     <div className="ws-grid-2">
@@ -1262,7 +1369,7 @@ export default function VoyageWorkspacePage() {
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => openNoteModal(kind, n)}>
                     {t("common.edit", "Edit")}
                   </button>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => deleteNote(kind, n.id)}>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => askDeleteNote(kind, n)}>
                     {t("common.delete", "Delete")}
                   </button>
                 </span>
@@ -1435,7 +1542,7 @@ export default function VoyageWorkspacePage() {
             <option value="">{t("common.none", "None")}</option>
             {portFns.map((fn) => (
               <option key={fn.code} value={fn.code}>
-                {fn.code} · {fnLabel(fn)}
+                {fn.code} · {fnLabel(fn, locale)}
               </option>
             ))}
           </select>
@@ -1504,6 +1611,21 @@ export default function VoyageWorkspacePage() {
           />
         </label>
       </RecordModal>
+
+      {/* 不可逆操作二次确认（P1-8） */}
+      <ConfirmDialog
+        open={Boolean(confirm)}
+        title={t("common.confirm", "Confirm")}
+        message={confirm?.message || ""}
+        danger
+        confirmLabel={t("common.confirm", "Confirm")}
+        onConfirm={() => {
+          const fn = confirm?.action;
+          setConfirm(null);
+          fn?.();
+        }}
+        onCancel={() => setConfirm(null)}
+      />
 
       {todo.element}
     </AppShell>

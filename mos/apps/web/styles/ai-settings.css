@@ -38,7 +38,7 @@
 }
 
 .ai-tab.active {
-  color: var(--accent);
+  color: var(--accent-text);
   border-bottom-color: var(--accent);
   font-weight: 600;
 }
@@ -169,7 +169,7 @@
 
 .ai-chip:hover {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .ai-chip.selected {

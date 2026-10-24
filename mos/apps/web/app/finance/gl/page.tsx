@@ -3,9 +3,11 @@
 // GL 管理工作台：科目表 / 日记账 / 试算平衡 / 资产负债表 / 利润表 / 现金流量表。
 // 报表数字统一走 fmt 千分位格式化；日记账支持草稿→过账→冲销。
 
+import { msgOf } from "@/lib/errors";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
@@ -64,6 +66,18 @@ function currentPeriod(): string {
 
 const money = (v: number | null | undefined) => (v == null ? "—" : fmt(v));
 
+/** P1-24：保留原始数值文本 —— 0 保留为 "0"，非法值原样带出（不静默变 0） */
+function rawAmount(v: string | number | undefined | null): string {
+  if (v === null || v === undefined || v === "") return "";
+  const n = Number(v);
+  return Number.isFinite(n) ? String(n) : String(v);
+}
+
+/** 日记账的可读标识（用于确认文案指名对象） */
+function journalLabel(j: Journal): string {
+  return `${j.period}/${j.journal_type}${j.description ? ` · ${j.description}` : ""}`;
+}
+
 function GlPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -81,11 +95,17 @@ function GlPage() {
     [setQuery],
   );
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accountsErr, setAccountsErr] = useState<string | null>(null);
+  const [accountsLoading, setAccountsLoading] = useState(true);
   const [journals, setJournals] = useState<Journal[]>([]);
+  const [journalsErr, setJournalsErr] = useState<string | null>(null);
+  const [journalsLoading, setJournalsLoading] = useState(true);
   const [stmt, setStmt] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // P1-8：破坏性操作统一走 ConfirmDialog（pending 存待执行函数）
+  const [pending, setPending] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
 
   // 科目编辑弹窗
   const [accOpen, setAccOpen] = useState(false);
@@ -110,13 +130,30 @@ function GlPage() {
   const jrCtx = useContextMenu<Journal>();
 
   const loadAccounts = useCallback(async () => {
-    const pg = await apiGet("/api/v1/gl/accounts");
-    setAccounts(Array.isArray(pg) ? pg : pg.items || []);
+    setAccountsLoading(true);
+    setAccountsErr(null);
+    try {
+      const pg = await apiGet("/api/v1/gl/accounts");
+      setAccounts(Array.isArray(pg) ? pg : pg.items || []);
+    } catch (ex) {
+      // P1-4：主列表取数失败必须可见，不能静默变成空表
+      setAccountsErr(msgOf(ex));
+    } finally {
+      setAccountsLoading(false);
+    }
   }, []);
 
   const loadJournals = useCallback(async () => {
-    const pg = await apiGet(`/api/v1/gl/journals?period=${encodeURIComponent(period)}`);
-    setJournals(Array.isArray(pg) ? pg : pg.items || []);
+    setJournalsLoading(true);
+    setJournalsErr(null);
+    try {
+      const pg = await apiGet(`/api/v1/gl/journals?period=${encodeURIComponent(period)}`);
+      setJournals(Array.isArray(pg) ? pg : pg.items || []);
+    } catch (ex) {
+      setJournalsErr(msgOf(ex));
+    } finally {
+      setJournalsLoading(false);
+    }
   }, [period]);
 
   const loadStatement = useCallback(async () => {
@@ -133,16 +170,16 @@ function GlPage() {
               : `/api/v1/gl/trial-balance?period=${encodeURIComponent(period)}`;
       setStmt(await apiGet(path));
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
   }, [tab, period]);
 
   useEffect(() => {
-    if (tab === "accounts") loadAccounts().catch(() => undefined);
-    else if (tab === "journals") loadJournals().catch(() => undefined);
-    else loadStatement().catch(() => undefined);
+    if (tab === "accounts") void loadAccounts();
+    else if (tab === "journals") void loadJournals();
+    else void loadStatement();
   }, [tab, loadAccounts, loadJournals, loadStatement]);
 
   function openAccount(acc: Account | null) {
@@ -173,7 +210,7 @@ function GlPage() {
       setAccOpen(false);
       await loadAccounts();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -188,7 +225,7 @@ function GlPage() {
       setAccOpen(false);
       await loadAccounts();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -205,9 +242,9 @@ function GlPage() {
         journal_type: jr.journal_type,
         description: jr.description || "",
         debit_account: debitLine?.account_code || debitLine?.account || "",
-        debit: debitLine ? String(Number(debitLine.debit) || 0) : "",
+        debit: debitLine ? rawAmount(debitLine.debit) : "",
         credit_account: creditLine?.account_code || creditLine?.account || "",
-        credit: creditLine ? String(Number(creditLine.credit) || 0) : "",
+        credit: creditLine ? rawAmount(creditLine.credit) : "",
       });
     } else {
       setJrForm({
@@ -224,9 +261,12 @@ function GlPage() {
   }, []);
 
   async function saveJournal() {
-    const debit = Number(jrForm.debit);
-    const credit = Number(jrForm.credit);
-    if (Number.isNaN(debit) || Number.isNaN(credit)) {
+    // P1-24：非法数值不得被静默转成 0（0 本身合法）
+    const debitRaw = jrForm.debit.trim();
+    const creditRaw = jrForm.credit.trim();
+    const debit = Number(debitRaw);
+    const credit = Number(creditRaw);
+    if (!debitRaw || !creditRaw || !Number.isFinite(debit) || !Number.isFinite(credit)) {
       toast.error(t("page.gl.journal_bad_amount", "Debit and credit must be numbers"));
       return;
     }
@@ -252,7 +292,7 @@ function GlPage() {
       setJrEdit(null);
       await loadJournals();
     } catch (ex) {
-      toast.error((ex as { message?: string })?.message || String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -267,7 +307,7 @@ function GlPage() {
         setJrEdit(null);
         await loadJournals();
       } catch (ex) {
-        toast.error((ex as { message?: string })?.message || String(ex));
+        toast.error(msgOf(ex));
       }
     },
     [loadJournals, t, toast],
@@ -279,7 +319,7 @@ function GlPage() {
       toast.success(t("page.gl.posted", "Journal posted"));
       await loadJournals();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -289,7 +329,7 @@ function GlPage() {
       toast.success(t("page.gl.reversed", "Journal reversed"));
       await loadJournals();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -306,7 +346,7 @@ function GlPage() {
       toast.success(t("common.saved", "Saved"));
       await loadJournals();
     } catch (ex) {
-      toast.error((ex as { message?: string })?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -386,7 +426,7 @@ function GlPage() {
                 canDelete={!locked}
                 onEdit={() => openJournal(r)}
                 onDelete={() => deleteJournal(r.id)}
-                label={`${r.period}/${r.journal_type}`}
+                label={journalLabel(r)}
               />
             </span>
           );
@@ -510,7 +550,15 @@ function GlPage() {
           {
             key: "delete",
             label: t("common.delete", "Delete"),
-            onClick: () => deleteJournal(row.id),
+            // P1-8：与行内 ✕ 按钮行为统一 —— 都必须二次确认
+            onClick: () =>
+              setPending({
+                message: t("page.gl.delete_journal_confirm", "删除日记账 {label}？记录将移入回收站，可恢复。", {
+                  label: journalLabel(row),
+                }),
+                danger: true,
+                action: () => void deleteJournal(row.id),
+              }),
           } as ContextMenuItem,
         ]
       : []),
@@ -519,7 +567,15 @@ function GlPage() {
           {
             key: "reverse",
             label: t("page.gl.reverse", "Reverse"),
-            onClick: () => reverseJournal(row.id),
+            // P1-8：冲销已过账凭证不可撤销 —— 二次确认并指名对象
+            onClick: () =>
+              setPending({
+                message: t("page.gl.reverse_journal_confirm", "冲销已过账日记账 {label}？将生成等额反向分录，原凭证不可撤销。", {
+                  label: journalLabel(row),
+                }),
+                danger: true,
+                action: () => void reverseJournal(row.id),
+              }),
           } as ContextMenuItem,
         ]
       : []),
@@ -611,15 +667,23 @@ function GlPage() {
               {t("page.gl.new_account", "New account")}
             </button>
           </Toolbar>
-          <DataGrid<Account>
-            columns={accountCols}
-            data={accounts}
-            rowKey={(r) => r.id}
-            onRowClick={(r) => openAccount(r)}
-            onRowContextMenu={(row, _i, e) => accCtx.open(row)(e)}
-            storageKey="gl.accounts"
+          <StateView
+            loading={accountsLoading}
+            error={accountsErr ?? undefined}
+            empty={!accountsLoading && !accountsErr && !accounts.length}
             emptyText={t("common.empty", "No records")}
-          />
+            onRetry={() => void loadAccounts()}
+          >
+            <DataGrid<Account>
+              columns={accountCols}
+              data={accounts}
+              rowKey={(r) => r.id}
+              onRowClick={(r) => openAccount(r)}
+              onRowContextMenu={(row, _i, e) => accCtx.open(row)(e)}
+              storageKey="gl.accounts"
+              emptyText={t("common.empty", "No records")}
+            />
+          </StateView>
         </div>
       ) : null}
 
@@ -638,16 +702,24 @@ function GlPage() {
             </button>
             <StatusLegend statuses={["draft", "posted", "reversed"]} />
           </Toolbar>
-          <DataGrid<Journal>
-            columns={journalCols}
-            data={journals}
-            rowKey={(r) => r.id}
-            editable
-            onCellSave={onJournalCellSave}
-            onRowContextMenu={(row, _i, e) => jrCtx.open(row)(e)}
-            storageKey="gl.journals"
+          <StateView
+            loading={journalsLoading}
+            error={journalsErr ?? undefined}
+            empty={!journalsLoading && !journalsErr && !journals.length}
             emptyText={t("common.empty", "No records")}
-          />
+            onRetry={() => void loadJournals()}
+          >
+            <DataGrid<Journal>
+              columns={journalCols}
+              data={journals}
+              rowKey={(r) => r.id}
+              editable
+              onCellSave={onJournalCellSave}
+              onRowContextMenu={(row, _i, e) => jrCtx.open(row)(e)}
+              storageKey="gl.journals"
+              emptyText={t("common.empty", "No records")}
+            />
+          </StateView>
           {journals.length ? (
             <div className="desk-toolbar">
               {journals
@@ -662,7 +734,20 @@ function GlPage() {
                 .filter((j) => j.status === "posted")
                 .slice(0, 5)
                 .map((j) => (
-                  <button key={j.id} className="btn btn-sm btn-ghost" type="button" onClick={() => reverseJournal(j.id)}>
+                  <button
+                    key={j.id}
+                    className="btn btn-sm btn-ghost"
+                    type="button"
+                    onClick={() =>
+                      setPending({
+                        message: t("page.gl.reverse_journal_confirm", "冲销已过账日记账 {label}？将生成等额反向分录，原凭证不可撤销。", {
+                          label: journalLabel(j),
+                        }),
+                        danger: true,
+                        action: () => void reverseJournal(j.id),
+                      })
+                    }
+                  >
                     {t("page.gl.reverse", "Reverse")} {j.period}/{j.journal_type}
                   </button>
                 ))}
@@ -709,13 +794,25 @@ function GlPage() {
       <ContextMenu controller={accCtx} items={accountMenuItems} />
       <ContextMenu controller={jrCtx} items={journalMenuItems} />
 
+      <ConfirmDialog
+        open={Boolean(pending)}
+        title={t("common.confirm", "确认操作")}
+        message={pending?.message || ""}
+        danger={pending?.danger}
+        onConfirm={() => {
+          const fn = pending?.action;
+          setPending(null);
+          fn?.();
+        }}
+        onCancel={() => setPending(null)}
+      />
+
       <RecordModal
         open={accOpen}
         title={accEdit ? t("page.gl.edit_account", "Edit account") : t("page.gl.new_account", "New account")}
         onClose={() => setAccOpen(false)}
         onSave={saveAccount}
-        onDelete={accEdit ? deleteAccount : undefined}
-        canDelete={!!accEdit}
+        canDelete={false}
         saving={busy}
       >
         <div className="form-grid">
@@ -746,6 +843,28 @@ function GlPage() {
             <input value={accForm.currency} onChange={(e) => setAccForm({ ...accForm, currency: e.target.value })} />
           </label>
         </div>
+        {accEdit ? (
+          // P1-8：删除科目走指名对象的二次确认（RecordModal 内置文案无法指名对象）
+          <div className="desk-toolbar">
+            <button
+              className="btn btn-danger btn-sm"
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setPending({
+                  message: t("page.gl.delete_account_confirm", "删除科目 {code} {name}？已有凭证的科目不可删除。", {
+                    code: accForm.account_code,
+                    name: accForm.account_name,
+                  }),
+                  danger: true,
+                  action: () => void deleteAccount(),
+                })
+              }
+            >
+              {t("common.delete", "删除")}
+            </button>
+          </div>
+        ) : null}
       </RecordModal>
 
       <RecordModal
@@ -756,8 +875,7 @@ function GlPage() {
           setJrEdit(null);
         }}
         onSave={saveJournal}
-        onDelete={jrEdit ? () => deleteJournal(jrEdit.id) : undefined}
-        canDelete={!!jrEdit}
+        canDelete={false}
         saving={busy}
       >
         <div className="form-grid">
@@ -803,6 +921,27 @@ function GlPage() {
             </option>
           ))}
         </datalist>
+        {jrEdit && jrEdit.status === "draft" ? (
+          // P1-8：删除日记账走指名对象的二次确认
+          <div className="desk-toolbar">
+            <button
+              className="btn btn-danger btn-sm"
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setPending({
+                  message: t("page.gl.delete_journal_confirm", "删除日记账 {label}？记录将移入回收站，可恢复。", {
+                    label: journalLabel(jrEdit),
+                  }),
+                  danger: true,
+                  action: () => void deleteJournal(jrEdit.id),
+                })
+              }
+            >
+              {t("common.delete", "删除")}
+            </button>
+          </div>
+        ) : null}
       </RecordModal>
     </AppShell>
   );

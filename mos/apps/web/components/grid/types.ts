@@ -85,6 +85,8 @@ export type DataGridProps<T = any> = {
   /** 外部控制选中行 */
   selectedKeys?: Set<string>;
   onSelectedKeysChange?: (keys: Set<string>) => void;
+  /** 显示行选择（复选框列）。与 selectedKeys/onSelectedKeysChange 配套使用。 */
+  selectable?: boolean;
   /** 加载状态 */
   loading?: boolean;
   /** 空数据文案 */

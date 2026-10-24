@@ -13,7 +13,7 @@ from __future__ import annotations
 import statistics
 from collections import defaultdict
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -23,17 +23,18 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models_domain import MarketQuote
 from app.models_trading import Trade, TradeLeg
-from app.security import AuthContext, require_module
+from app.security import AuthContext, require_module, require_roles
 from app.services import market_data as mkt
 from app.services.mtm_engine import OPEN_STATUSES, market_price_for
 from app.services.tenant_guard import scoped_query
+from app.services.money import CENT
 
 router = APIRouter(prefix="/market-data", tags=["Market Data"])
 # 无 prefix：注册到 /api/v1 下即为 /api/v1/market-positions
 positions_router = APIRouter(tags=["Market Data"])
 
 ZERO = Decimal("0")
-PENNY = Decimal("0.01")
+
 # 无历史行情时的兜底波动率（见 _volatility 注释）
 DEFAULT_VOL = Decimal("0.05")
 Z_95 = Decimal("1.65")
@@ -68,7 +69,7 @@ def bunker_comparison(
 
 @router.post("/seed-demo", status_code=201)
 def seed_demo(
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     count = mkt.seed_demo_data(db, auth.tenant_id)
@@ -79,7 +80,9 @@ def seed_demo(
 
 
 def _q(v: Decimal) -> Decimal:
-    return v.quantize(PENNY)
+    # 显式 ROUND_HALF_UP —— 裸 quantize() 是银行家舍入（HALF_EVEN），
+    # 同一笔钱在两条代码路径上会差一分钱。
+    return v.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 def _f(v: Decimal | None) -> float:

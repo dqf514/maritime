@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 import uuid
 from datetime import datetime
 
@@ -91,7 +92,7 @@ class MonitorMetric(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     category: Mapped[str] = mapped_column(Text, default="system")  # system|database|app|resource
     unit: Mapped[str] = mapped_column(Text, default="")
-    value: Mapped[float] = mapped_column(Numeric(18, 4), default=0)
+    value: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0)
     labels: Mapped[dict] = mapped_column(JSON, default=dict)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -106,7 +107,7 @@ class AlertRule(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     metric_code: Mapped[str] = mapped_column(Text, nullable=False)
     operator: Mapped[str] = mapped_column(String(8), default="gt")  # gt|gte|lt|lte|eq
-    threshold: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    threshold: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     severity: Mapped[str] = mapped_column(Text, default="warning")  # info|warning|critical
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     channels: Mapped[dict] = mapped_column(JSON, default=dict)  # {console: true, email: false}

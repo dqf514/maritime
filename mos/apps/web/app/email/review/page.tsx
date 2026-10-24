@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
+import { StateView } from "@/components/StateView";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -88,34 +91,64 @@ export default function EmailReviewPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [rows, setRows] = useState<Msg[]>([]);
   const [m365, setM365] = useState(false);
+  const [loading, setLoading] = useState(true);
+  /** 主列表（待复核邮件）加载失败 —— 绝不能与「没有邮件」混淆 */
+  const [err, setErr] = useState<string | null>(null);
+  /** 邮箱账号面板（次级列表）加载失败 —— 局部提示，不影响主列表 */
+  const [accErr, setAccErr] = useState<string | null>(null);
+  /** M365 连接状态（参考数据）加载失败 —— 只影响徽标 */
+  const [officeErr, setOfficeErr] = useState<string | null>(null);
   const rowCtx = useContextMenu<Msg>();
   // 回复对话框状态
   const [replyFor, setReplyFor] = useState<Msg | null>(null);
   const [replyTemplate, setReplyTemplate] = useState<ReplyTemplate>("ack_recap");
   const [replyBody, setReplyBody] = useState("");
   const [replySending, setReplySending] = useState(false);
+  /** 待确认的破坏性动作：落单（创建真实记录）/ 确认解析（出队）/ 发信 */
+  const [pending, setPending] = useState<{ kind: "apply" | "confirm"; msg: Msg } | null>(null);
+  const [pendingSend, setPendingSend] = useState(false);
   // AI 推荐
   const [recFor, setRecFor] = useState<Msg | null>(null);
   const [rec, setRec] = useState<Recommend | null>(null);
   const [recBusy, setRecBusy] = useState(false);
 
-  async function load() {
-    const [acc, review, office] = await Promise.all([
+  /**
+   * 取数：三个来源彼此独立（allSettled），主列表失败走错误态，参考数据失败只做局部提示。
+   */
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [accR, reviewR, officeR] = await Promise.allSettled([
       apiGet("/api/v1/email/accounts"),
       apiGet("/api/v1/email/review"),
-      apiGet("/api/v1/office/status").catch(() => null),
+      apiGet("/api/v1/office/status"),
     ]);
-    setAccounts(acc);
-    setRows(review);
-    setM365(Boolean(office?.connected));
-  }
+    if (reviewR.status === "fulfilled") {
+      setRows(reviewR.value as Msg[]);
+      setErr(null);
+    } else {
+      setRows([]);
+      setErr(msgOf(reviewR.reason));
+    }
+    if (accR.status === "fulfilled") {
+      setAccounts(accR.value as Account[]);
+      setAccErr(null);
+    } else {
+      setAccounts([]);
+      setAccErr(msgOf(accR.reason));
+    }
+    if (officeR.status === "fulfilled") {
+      setM365(Boolean((officeR.value as { connected?: boolean } | null)?.connected));
+      setOfficeErr(null);
+    } else {
+      setM365(false);
+      setOfficeErr(msgOf(officeR.reason));
+    }
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    load().catch(() => {
-      setAccounts([]);
-      setRows([]);
-    });
-  }, []);
+    load();
+  }, [load]);
 
   async function ensureSyncAccount() {
     if (accounts.length) return accounts[0];
@@ -173,25 +206,38 @@ export default function EmailReviewPage() {
         toast.error(t("page.email.apply_none", "This email type has no auto-draft yet."));
       }
       await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("page.email.apply_fail", "Create draft failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.email.apply_fail", "Create draft failed")));
     }
   }
 
-  async function openReply(m: Msg) {
-    setReplyFor(m);
-    setReplyTemplate("ack_recap");
-    setReplyBody("");
-    try {
-      const rendered: ReplyDraft = await apiPost(`/api/v1/email/messages/${m.id}/reply`, {
-        template: "ack_recap",
-        preview: true,
-      });
-      setReplyBody(rendered.body);
-    } catch {
-      toast.error(t("page.email.reply_preview_fail", "Preview failed"));
-    }
-  }
+  /** 破坏性入口：落单会真实创建业务记录 —— 先确认。 */
+  const requestApply = useCallback((m: Msg) => {
+    setPending({ kind: "apply", msg: m });
+  }, []);
+
+  /** 确认解析结果会把该邮件移出待办队列 —— 先确认。 */
+  const requestConfirm = useCallback((m: Msg) => {
+    setPending({ kind: "confirm", msg: m });
+  }, []);
+
+  const openReply = useCallback(
+    async (m: Msg) => {
+      setReplyFor(m);
+      setReplyTemplate("ack_recap");
+      setReplyBody("");
+      try {
+        const rendered: ReplyDraft = await apiPost(`/api/v1/email/messages/${m.id}/reply`, {
+          template: "ack_recap",
+          preview: true,
+        });
+        setReplyBody(rendered.body);
+      } catch (ex) {
+        toast.error(msgOf(ex, t("page.email.reply_preview_fail", "Preview failed")));
+      }
+    },
+    [t, toast],
+  );
 
   async function changeReplyTemplate(tpl: ReplyTemplate) {
     setReplyTemplate(tpl);
@@ -218,43 +264,48 @@ export default function EmailReviewPage() {
       toast.success(t("page.email.reply_sent", "Reply sent via {channel}", { channel: res.channel }));
       setReplyFor(null);
       await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("page.email.reply_fail", "Reply failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.email.reply_fail", "Reply failed")));
     } finally {
       setReplySending(false);
     }
   }
 
   /** AI 推荐下一步动作（apply/reply/review）—— 建议，不落库 */
-  async function openRecommend(m: Msg) {
-    setRecFor(m);
-    setRec(null);
-    setRecBusy(true);
-    try {
-      const r: Recommend = await apiPost(`/api/v1/ai/assist/recommend/email/${m.id}`, {});
-      setRec(r);
-    } catch (ex: any) {
-      toast.error(ex?.message || t("page.email.rec_fail", "AI 推荐失败"));
-      setRecFor(null);
-    } finally {
-      setRecBusy(false);
-    }
-  }
+  const openRecommend = useCallback(
+    async (m: Msg) => {
+      setRecFor(m);
+      setRec(null);
+      setRecBusy(true);
+      try {
+        const r: Recommend = await apiPost(`/api/v1/ai/assist/recommend/email/${m.id}`, {});
+        setRec(r);
+      } catch (ex) {
+        toast.error(msgOf(ex, t("page.email.rec_fail", "AI 推荐失败")));
+        setRecFor(null);
+      } finally {
+        setRecBusy(false);
+      }
+    },
+    [t, toast],
+  );
 
   /** 按 AI 推荐执行 —— 仍走既有的人工确认端点 */
   async function actOnRecommend() {
     if (!recFor || !rec) return;
     if (rec.recommendation === "apply") {
+      const target = recFor;
       setRecFor(null);
-      await applyDraft(recFor).catch(() => undefined);
+      // 落单会真实建记录 —— 走二次确认
+      setPending({ kind: "apply", msg: target });
       return;
     }
     if (rec.recommendation === "reply") {
       const target = recFor;
       const tpl = (rec.reply_template || "ack_recap") as ReplyTemplate;
       setRecFor(null);
-      await openReply(target).catch(() => undefined);
-      if (tpl !== "ack_recap") await changeReplyTemplate(tpl).catch(() => undefined);
+      await openReply(target);
+      if (tpl !== "ack_recap") await changeReplyTemplate(tpl);
     }
     // "review" → 保持人工复核，无需自动动作
   }
@@ -268,19 +319,22 @@ export default function EmailReviewPage() {
       toast.success(t("common.saved", "Saved"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
-  async function deleteAccount(id: string) {
-    try {
-      await apiDelete(`/api/v1/email/accounts/${id}`);
-      toast.success(t("common.recycled", "Moved to recycle bin"));
-      await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
-    }
-  }
+  const deleteAccount = useCallback(
+    async (id: string) => {
+      try {
+        await apiDelete(`/api/v1/email/accounts/${id}`);
+        toast.success(t("common.recycled", "Moved to recycle bin"));
+        await load();
+      } catch (ex: any) {
+        toast.error(msgOf(ex));
+      }
+    },
+    [t, toast, load],
+  );
 
   function copyMsgId(m: Msg) {
     void navigator.clipboard.writeText(m.id);
@@ -300,161 +354,167 @@ export default function EmailReviewPage() {
     {
       key: "ai",
       label: t("page.email.ai_rec", "AI 建议"),
-      onClick: () => openRecommend(m).catch(() => undefined),
+      onClick: () => void openRecommend(m),
     },
     ...(m.parse_status === "review"
       ? [
           {
             key: "apply",
             label: t("page.email.apply_btn", "Create draft"),
-            onClick: () => applyDraft(m).catch(() => undefined),
+            onClick: () => requestApply(m),
           },
           {
             key: "confirm",
             label: t("common.confirm", "Confirm"),
-            onClick: () => confirm(m.id).catch(() => toast.error(t("page.email.confirm_fail", "Confirm failed"))),
+            onClick: () => requestConfirm(m),
           },
         ]
       : []),
     {
       key: "reply",
       label: t("page.email.reply_btn", "Reply"),
-      onClick: () => openReply(m).catch(() => undefined),
+      onClick: () => void openReply(m),
     },
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyMsgId(m) },
     { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportMsgs([m]) },
   ];
 
-  const accountColumns: ColumnDef<Account>[] = [
-    {
-      key: "email",
-      title: t("common.email", "Email"),
-      minWidth: 180,
-      value: (r) => r.email,
-      editor: { type: "text" },
-    },
-    {
-      key: "display_name",
-      title: t("page.email.display_name", "Display name"),
-      minWidth: 140,
-      value: (r) => r.display_name || "",
-      editor: { type: "text" },
-      render: (v) => (v ? String(v) : "—"),
-    },
-    {
-      key: "provider",
-      title: t("page.email.provider", "Provider"),
-      width: 120,
-      value: (r) => r.provider,
-      editor: { type: "text" },
-    },
-    {
-      key: "status",
-      title: t("common.status", "Status"),
-      width: 110,
-      value: (r) => r.status,
-      editor: {
-        type: "select",
-        options: [
-          { value: "active", label: t("page.email.status_active", "Active") },
-          { value: "paused", label: t("page.email.status_paused", "Paused") },
-        ],
+  const accountColumns = useMemo<ColumnDef<Account>[]>(
+    () => [
+      {
+        key: "email",
+        title: t("common.email", "Email"),
+        minWidth: 180,
+        value: (r) => r.email,
+        editor: { type: "text" },
       },
-    },
-    {
-      key: "_actions",
-      title: "",
-      width: 70,
-      align: "right",
-      render: (_v, a) => <RowActions label={a.email} onDelete={() => deleteAccount(a.id)} />,
-    },
-  ];
+      {
+        key: "display_name",
+        title: t("page.email.display_name", "Display name"),
+        minWidth: 140,
+        value: (r) => r.display_name || "",
+        editor: { type: "text" },
+        render: (v) => (v ? String(v) : "—"),
+      },
+      {
+        key: "provider",
+        title: t("page.email.provider", "Provider"),
+        width: 120,
+        value: (r) => r.provider,
+        editor: { type: "text" },
+      },
+      {
+        key: "status",
+        title: t("common.status", "Status"),
+        width: 110,
+        value: (r) => r.status,
+        editor: {
+          type: "select",
+          options: [
+            { value: "active", label: t("page.email.status_active", "Active") },
+            { value: "paused", label: t("page.email.status_paused", "Paused") },
+          ],
+        },
+      },
+      {
+        key: "_actions",
+        title: "",
+        width: 70,
+        align: "right",
+        render: (_v, a) => <RowActions label={a.email} onDelete={() => deleteAccount(a.id)} />,
+      },
+    ],
+    [t, deleteAccount],
+  );
 
-  const columns: ColumnDef<Msg>[] = [
-    {
-      key: "subject",
-      title: t("page.email.subject", "Subject"),
-      minWidth: 180,
-      value: (r) => r.subject || "",
-      render: (_v, r) => r.subject || t("page.email.no_subject", "(no subject)"),
-    },
-    {
-      key: "from_email",
-      title: t("page.email.from", "From"),
-      width: 160,
-      value: (r) => r.from_email || "",
-      render: (_v, r) => r.from_email || "—",
-    },
-    { key: "parse_status", title: t("common.status", "Status"), width: 110, value: (r) => r.parse_status },
-    {
-      key: "parse_confidence",
-      title: t("page.email.confidence", "Confidence"),
-      width: 110,
-      align: "right",
-      value: (r) => r.parse_confidence ?? null,
-      render: (_v, r) => (r.parse_confidence != null ? <><Num v={r.parse_confidence * 100} digits={0} />%</> : "—"),
-    },
-    {
-      key: "parse_preview",
-      title: t("page.email.parse_fields", "Parsed fields"),
-      minWidth: 260,
-      value: (r) => JSON.stringify(r.parse_result),
-      render: (_v, r) => {
-        const { etype, pairs } = parseFields(r);
-        return (
-          <span className="parse-fields">
-            {etype ? <span className="badge badge-info">{t(`email.type.${etype}`, etype)}</span> : null}
-            {pairs.length ? (
-              // 两列 dl：标签走 email.parse.* 词表，未知键回落原键；值原样展示
-              <dl className="parse-kv">
-                {pairs.map(([k, val]) => (
-                  <div key={k}>
-                    <dt>{t(`email.parse.${k}`, k)}</dt>
-                    <dd>{String(val)}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : (
-              <code>{JSON.stringify(r.parse_result).slice(0, 120)}</code>
-            )}
-          </span>
-        );
+  const columns = useMemo<ColumnDef<Msg>[]>(
+    () => [
+      {
+        key: "subject",
+        title: t("page.email.subject", "Subject"),
+        minWidth: 180,
+        value: (r) => r.subject || "",
+        render: (_v, r) => r.subject || t("page.email.no_subject", "(no subject)"),
       },
-    },
-    {
-      key: "actions",
-      title: "",
-      width: 250,
-      render: (_v, r) => (
-        <span className="row-actions">
-          <button className="btn btn-sm" type="button" onClick={() => openRecommend(r).catch(() => undefined)}>
-            ✦ {t("page.email.ai_rec", "AI 建议")}
-          </button>
-          <button className="btn btn-sm" type="button" onClick={() => openReply(r).catch(() => undefined)}>
-            {t("page.email.reply_btn", "Reply")}
-          </button>
-          {r.parse_status === "review" ? (
-            <>
-              <button
-                className="btn btn-sm btn-primary"
-                type="button"
-                onClick={() => applyDraft(r).catch(() => undefined)}
-              >
-                {t("page.email.apply_btn", "Create draft")}
-              </button>
-              <button
-                className="btn btn-sm"
-                type="button"
-                onClick={() => confirm(r.id).catch(() => toast.error(t("page.email.confirm_fail", "Confirm failed")))}
-              >
-                {t("common.confirm", "Confirm")}
-              </button>
-            </>
-          ) : null}
-        </span>
-      ),
-    },
-  ];
+      {
+        key: "from_email",
+        title: t("page.email.from", "From"),
+        width: 160,
+        value: (r) => r.from_email || "",
+        render: (_v, r) => r.from_email || "—",
+      },
+      { key: "parse_status", title: t("common.status", "Status"), width: 110, value: (r) => r.parse_status },
+      {
+        key: "parse_confidence",
+        title: t("page.email.confidence", "Confidence"),
+        width: 110,
+        align: "right",
+        value: (r) => r.parse_confidence ?? null,
+        render: (_v, r) => (r.parse_confidence != null ? <><Num v={r.parse_confidence * 100} digits={0} />%</> : "—"),
+      },
+      {
+        key: "parse_preview",
+        title: t("page.email.parse_fields", "Parsed fields"),
+        minWidth: 260,
+        value: (r) => JSON.stringify(r.parse_result),
+        render: (_v, r) => {
+          const { etype, pairs } = parseFields(r);
+          return (
+            <span className="parse-fields">
+              {etype ? <span className="badge badge-info">{t(`email.type.${etype}`, etype)}</span> : null}
+              {pairs.length ? (
+                // 两列 dl：标签走 email.parse.* 词表，未知键回落原键；值原样展示
+                <dl className="parse-kv">
+                  {pairs.map(([k, val]) => (
+                    <div key={k}>
+                      <dt>{t(`email.parse.${k}`, k)}</dt>
+                      <dd>{String(val)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : (
+                <code>{JSON.stringify(r.parse_result).slice(0, 120)}</code>
+              )}
+            </span>
+          );
+        },
+      },
+      {
+        key: "actions",
+        title: "",
+        width: 250,
+        render: (_v, r) => (
+          <span className="row-actions">
+            <button className="btn btn-sm" type="button" onClick={() => void openRecommend(r)}>
+              ✦ {t("page.email.ai_rec", "AI 建议")}
+            </button>
+            <button className="btn btn-sm" type="button" onClick={() => void openReply(r)}>
+              {t("page.email.reply_btn", "Reply")}
+            </button>
+            {r.parse_status === "review" ? (
+              <>
+                <button
+                  className="btn btn-sm btn-primary"
+                  type="button"
+                  onClick={() => requestApply(r)}
+                >
+                  {t("page.email.apply_btn", "Create draft")}
+                </button>
+                <button
+                  className="btn btn-sm"
+                  type="button"
+                  onClick={() => requestConfirm(r)}
+                >
+                  {t("common.confirm", "Confirm")}
+                </button>
+              </>
+            ) : null}
+          </span>
+        ),
+      },
+    ],
+    [t, openRecommend, openReply, requestApply, requestConfirm],
+  );
 
   return (
     <AppShell>
@@ -464,14 +524,24 @@ export default function EmailReviewPage() {
         subtitle={t("page.email.sub", "AI-parsed recaps awaiting confirmation.")}
       />
       <Toolbar right={<span className="hint">{t("page.email.count", "{n} messages", { n: rows.length })}</span>}>
-        <button className="btn btn-primary" type="button" onClick={() => sync().catch(() => toast.error(t("page.email.sync_fail", "Sync failed")))}>
+        <button className="btn btn-primary" type="button" onClick={() => sync().catch((ex) => toast.error(msgOf(ex, t("page.email.sync_fail", "Sync failed"))))}>
           {m365 ? t("page.email.sync_btn_m365", "同步 Microsoft 365 收件箱") : t("page.email.sync_btn", "Sync demo inbox")}
         </button>
         {m365 ? <span className="badge badge-pass">{t("page.email.m365_connected", "Microsoft 365 已连接")}</span> : null}
+        {officeErr ? (
+          <span className="badge badge-warn" title={officeErr}>
+            {t("page.email.office_status_fail", "M365 status unavailable")}
+          </span>
+        ) : null}
       </Toolbar>
       <StatusLegend statuses={["pending", "review", "parsed", "failed"]} />
       <div className="panel">
         <h3>{t("page.email.accounts", "Mailbox accounts")}</h3>
+        {accErr ? (
+          <p className="state-view-error" role="alert">
+            {t("page.email.accounts_fail", "Mailbox accounts could not be loaded: {err}", { err: accErr })}
+          </p>
+        ) : null}
         <DataGrid<Account>
           columns={accountColumns}
           data={accounts}
@@ -483,21 +553,29 @@ export default function EmailReviewPage() {
         />
       </div>
       <div className="panel">
-        <DataGrid<Msg>
-          columns={columns}
-          data={rows}
-          rowKey={(r) => r.id}
-          onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
-          storageKey="email_review_grid"
+        <StateView
+          loading={loading}
+          error={err ?? undefined}
+          empty={!loading && !err && rows.length === 0}
           emptyText={t("page.email.empty", "No messages pending review.")}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid<Msg>
+            columns={columns}
+            data={rows}
+            rowKey={(r) => r.id}
+            onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
+            storageKey="email_review_grid"
+            emptyText={t("page.email.empty", "No messages pending review.")}
+          />
+        </StateView>
         <ContextMenu controller={rowCtx} items={menuItems} />
       </div>
       <RecordModal
         open={Boolean(replyFor)}
         title={t("page.email.reply_title", "Reply to sender")}
         onClose={() => setReplyFor(null)}
-        onSave={sendReply}
+        onSave={() => setPendingSend(true)}
         saving={replySending}
         canDelete={false}
         size="lg"
@@ -571,7 +649,7 @@ export default function EmailReviewPage() {
             </p>
             {rec.recommendation !== "review" ? (
               <p className="row-actions">
-                <button className="btn btn-primary" type="button" onClick={() => actOnRecommend().catch(() => undefined)}>
+                <button className="btn btn-primary" type="button" onClick={() => void actOnRecommend()}>
                   {t("page.email.rec_act", "按建议执行")}
                 </button>
               </p>
@@ -586,6 +664,53 @@ export default function EmailReviewPage() {
           <p className="muted">{t("page.email.rec_none", "无推荐")}</p>
         )}
       </RecordModal>
+
+      {/* 落单 / 确认解析 —— 都会改变真实数据，先二次确认 */}
+      <ConfirmDialog
+        open={pending !== null}
+        title={
+          pending?.kind === "apply"
+            ? t("page.email.confirm_apply_title", "Create business draft")
+            : t("page.email.confirm_parse_title", "Confirm parse result")
+        }
+        message={
+          pending?.kind === "apply"
+            ? t("page.email.confirm_apply_msg", 'Create a real business draft from "{subject}"? This cannot be undone automatically.', {
+                subject: pending?.msg.subject || pending?.msg.from_email || pending?.msg.id || "",
+              })
+            : t("page.email.confirm_parse_msg", 'Confirm the parse result of "{subject}"? It will leave the review queue.', {
+                subject: pending?.msg.subject || pending?.msg.from_email || pending?.msg.id || "",
+              })
+        }
+        confirmLabel={
+          pending?.kind === "apply" ? t("page.email.apply_btn", "Create draft") : t("common.confirm", "Confirm")
+        }
+        danger={pending?.kind === "apply"}
+        onConfirm={() => {
+          const p = pending;
+          setPending(null);
+          if (!p) return;
+          if (p.kind === "apply") void applyDraft(p.msg);
+          else void confirm(p.msg.id).catch((ex) => toast.error(msgOf(ex, t("page.email.confirm_fail", "Confirm failed"))));
+        }}
+        onCancel={() => setPending(null)}
+      />
+
+      {/* 发信不可撤回 —— 二次确认 */}
+      <ConfirmDialog
+        open={pendingSend}
+        title={t("page.email.confirm_send_title", "Send reply")}
+        message={t("page.email.confirm_send_msg", 'Send this reply to {to}? The message will be delivered immediately.', {
+          to: replyFor?.from_email || "—",
+        })}
+        confirmLabel={t("page.email.send_btn", "Send")}
+        danger
+        onConfirm={() => {
+          setPendingSend(false);
+          void sendReply();
+        }}
+        onCancel={() => setPendingSend(false)}
+      />
     </AppShell>
   );
 }

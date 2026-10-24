@@ -36,7 +36,9 @@ def _first_party_id(client, h):
 
 
 def _first_voyage_id(client, h):
-    return client.get("/api/v1/voyages", headers=h).json()[0]["id"]
+    rows = client.get("/api/v1/voyages", headers=h).json()
+    rows = rows["items"] if isinstance(rows, dict) else rows
+    return rows[0]["id"]
 
 
 def _create_invoice(client, h, **kw):
@@ -118,10 +120,12 @@ def test_invoice_fx_rate_and_base_amount(client, auth_headers, db_session):
     assert r2.json()["fx_rate"] == 1.5
     assert r2.json()["base_amount"] == 1500.0
 
-    # no rate available -> base_amount left empty (P&L falls back to amount)
+    # no rate available -> 422 FX_RATE_NOT_FOUND（P0-B5：fail closed）
+    # 旧行为是静默放行（base_amount 留空），于是这张外币发票在 P&L / 账龄里
+    # 被当成本币金额直接求和 —— 那是缺陷，不是契约。
     r3 = client.post("/api/v1/invoices", headers=h, json={"amount": 1000, "currency": "JPY"})
-    assert r3.status_code == 200
-    assert r3.json()["base_amount"] is None
+    assert r3.status_code == 422, r3.text
+    assert r3.json()["detail"]["code"] == "FX_RATE_NOT_FOUND"
 
 
 def test_pnl_aggregates_base_amount(client, auth_headers):
@@ -136,8 +140,19 @@ def test_pnl_aggregates_base_amount(client, auth_headers):
         json={"amount": 1000, "currency": "USD", "voyage_id": vid, "fx_rate": 1.1},
     )
     assert r.status_code == 200, r.text
+    inv_id = r.json()["id"]
 
-    after = {r["voyage_id"]: r for r in client.get("/api/v1/analytics/reports/voyage-pnl", headers=h).json()}
+    # P0-B6：草稿发票**不**计入实际收入 —— 旧实现把草稿也算进毛利。
+    mid = {x["voyage_id"]: x for x in client.get("/api/v1/analytics/reports/voyage-pnl", headers=h).json()}
+    assert mid[vid]["actual_revenue"] - rev_before == pytest.approx(0.0)
+
+    # 签发后才计入（draft → pending_approval → issued）
+    t = client.post(f"/api/v1/invoices/{inv_id}/transition?target=pending_approval", headers=h)
+    assert t.status_code == 200, t.text
+    t = client.post(f"/api/v1/invoices/{inv_id}/transition?target=issued", headers=h)
+    assert t.status_code == 200, t.text
+
+    after = {x["voyage_id"]: x for x in client.get("/api/v1/analytics/reports/voyage-pnl", headers=h).json()}
     assert after[vid]["actual_revenue"] - rev_before == pytest.approx(1100.0)
 
 

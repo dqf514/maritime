@@ -6,10 +6,12 @@
 // - 联系人目录跨公司可见；新建联系人用 PartyPicker 选公司
 // - 公司详情弹窗保留联系人区块（按公司上下文管理）
 
-import { FormEvent, Suspense, useCallback, useEffect, useState } from "react";
+import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { RefreshButton } from "@/components/RefreshButton";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
@@ -18,6 +20,7 @@ import { LookupSelect } from "@/components/LookupSelect";
 import { PartyPicker } from "@/components/DataPicker";
 import { RecordModal } from "@/components/RecordModal";
 import { SavedViews } from "@/components/SavedViews";
+import { StateView } from "@/components/StateView";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Tabs, type TabItem } from "@/components/Tabs";
 import { Toolbar } from "@/components/Toolbar";
@@ -26,6 +29,7 @@ import { useToast } from "@/components/ToastProvider";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 
@@ -85,7 +89,7 @@ function CounterpartiesPage() {
   const toast = useToast();
   const router = useRouter();
   const pathname = usePathname();
-  const { query, setQuery } = useListQuery();
+  const { query, setQuery, page, limit } = useListQuery();
   const tab: Tab = query.tab === "contacts" ? "contacts" : "parties";
   const urlQ = query.q ?? "";
   const [search, setSearch] = useState(urlQ);
@@ -100,6 +104,14 @@ function CounterpartiesPage() {
   const [contactEdit, setContactEdit] = useState({ ...emptyContact });
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [contactParty, setContactParty] = useState(""); // 联系人表单所属公司（跨公司新建用）
+  // 列表取数状态（失败必须走 StateView 错误态，不得静默变空列表）
+  const [loading, setLoading] = useState(true);
+  const [listErr, setListErr] = useState("");
+  const [contactsErr, setContactsErr] = useState("");
+  // 分页（服务端 limit/offset）—— 截断必须对用户可见
+  const [hasMore, setHasMore] = useState(false);
+  // 破坏性操作二次确认：pending 存待执行函数 + 被指名的对象
+  const [pendingDelete, setPendingDelete] = useState<{ run: () => void; name: string } | null>(null);
 
   const partyCtx = useContextMenu<Party>();
   const contactCtx = useContextMenu<Contact>();
@@ -116,34 +128,74 @@ function CounterpartiesPage() {
     return () => clearTimeout(timer);
   }, [search, urlQ, setQuery]);
 
-  // 公司列表（服务端搜索）
+  // 公司列表（服务端搜索 + 分页；多取一条用于探测「还有更多」）
   const load = useCallback(async (q: string) => {
-    setRows(await apiGet(`/api/v1/masterdata/counterparties?q=${encodeURIComponent(q)}&limit=200`));
-  }, []);
+    setLoading(true);
+    try {
+      const offset = (page - 1) * limit;
+      const res = await apiGet(
+        `/api/v1/masterdata/counterparties?q=${encodeURIComponent(q)}&limit=${limit + 1}&offset=${offset}`,
+      );
+      const arr = Array.isArray(res) ? (res as Party[]) : [];
+      setHasMore(arr.length > limit);
+      setRows(arr.slice(0, limit));
+      setListErr("");
+    } catch (ex) {
+      setRows([]);
+      setHasMore(false);
+      setListErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
+  }, [page, limit]);
 
-  // 联系人目录（服务端搜索）
+  // 联系人目录（服务端搜索；上限 200 条）
   const loadAllContacts = useCallback(async (q: string) => {
+    setLoading(true);
     try {
       const data = await apiGet(`/api/v1/masterdata/counterparty-contacts?q=${encodeURIComponent(q)}&limit=200`);
       setAllContacts((data as { items: Contact[] }).items ?? []);
-    } catch {
+      setContactsErr("");
+    } catch (ex) {
       setAllContacts([]);
+      setContactsErr(msgOf(ex));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (tab === "parties") load(search).catch(() => setRows([]));
-      else loadAllContacts(search).catch(() => setAllContacts([]));
+      if (tab === "parties") void load(search);
+      else void loadAllContacts(search);
     }, 200);
     return () => clearTimeout(timer);
   }, [tab, search, load, loadAllContacts]);
 
-  async function loadContacts(partyId: string) {
+  const loadContacts = useCallback(async (partyId: string) => {
     try {
       setContacts(await apiGet(`/api/v1/masterdata/counterparties/${partyId}/contacts`));
-    } catch { setContacts([]); }
-  }
+    } catch (ex) {
+      setContacts([]);
+      toast.error(msgOf(ex));
+    }
+  }, [toast]);
+
+  const openContactForm = useCallback((c?: Contact) => {
+    if (c) {
+      setEditingContact(c);
+      setContactParty(c.counterparty_id);
+      setContactEdit({
+        name: c.name, title: c.title || "", email: c.email || "", phone: c.phone || "",
+        mobile: c.mobile || "", department: c.department || "", is_primary: c.is_primary, notes: c.notes || "",
+      });
+    } else {
+      setEditingContact(null);
+      setContactEdit({ ...emptyContact });
+      setContactParty(open?.id || "");
+    }
+    setContactOpen(true);
+  }, [open]);
 
   function openCreate() {
     if (tab === "contacts") {
@@ -158,7 +210,7 @@ function CounterpartiesPage() {
 
   useListHotkeys(openCreate);
 
-  function openRow(r: Party) {
+  const openRow = useCallback((r: Party) => {
     setOpen(r);
     setEdit({
       name: r.name, type: r.type, country: r.country || "", sanctions_status: r.sanctions_status || "clear",
@@ -168,7 +220,7 @@ function CounterpartiesPage() {
     });
     setEditorOpen(true);
     loadContacts(r.id);
-  }
+  }, [loadContacts]);
 
   function editorBody() {
     return {
@@ -193,12 +245,9 @@ function CounterpartiesPage() {
       setOpen(null);
       setEditorOpen(false);
       await load(search);
+    } catch (ex) {
+      toast.error(msgOf(ex));
     } finally { setSaving(false); }
-  }
-
-  async function remove() {
-    if (!open) return;
-    await removeParty(open);
   }
 
   async function removeParty(p: Party) {
@@ -209,7 +258,14 @@ function CounterpartiesPage() {
       setOpen(null);
       setEditorOpen(false);
       await load(search);
+    } catch (ex) {
+      toast.error(msgOf(ex));
     } finally { setSaving(false); }
+  }
+
+  /** 删除是不可逆动作 —— 统一走 ConfirmDialog，确认文案指名对象。 */
+  function requestDeleteParty(p: Party) {
+    setPendingDelete({ run: () => void removeParty(p), name: p.name });
   }
 
   async function saveContact(e: FormEvent) {
@@ -219,42 +275,39 @@ function CounterpartiesPage() {
       toast.error(t("page.parties.need_company", "Please select a company"));
       return;
     }
-    if (editingContact) {
-      await apiPatch(`/api/v1/masterdata/counterparties/${editingContact.counterparty_id}/contacts/${editingContact.id}`, contactEdit);
-    } else {
-      await apiPost(`/api/v1/masterdata/counterparties/${partyId}/contacts`, contactEdit);
-    }
-    setContactOpen(false);
-    setEditingContact(null);
-    setContactEdit({ ...emptyContact });
-    setContactParty("");
-    toast.success(t("common.saved", "Saved"));
-    if (open) await loadContacts(open.id);
-    await loadAllContacts(search);
-  }
-
-  async function deleteContact(c: Contact) {
-    await apiDelete(`/api/v1/masterdata/counterparties/${c.counterparty_id}/contacts/${c.id}`);
-    toast.success(t("common.recycled", "Moved to recycle bin"));
-    if (open) await loadContacts(open.id);
-    await loadAllContacts(search);
-  }
-
-  function openContactForm(c?: Contact) {
-    if (c) {
-      setEditingContact(c);
-      setContactParty(c.counterparty_id);
-      setContactEdit({
-        name: c.name, title: c.title || "", email: c.email || "", phone: c.phone || "",
-        mobile: c.mobile || "", department: c.department || "", is_primary: c.is_primary, notes: c.notes || "",
-      });
-    } else {
+    try {
+      if (editingContact) {
+        await apiPatch(`/api/v1/masterdata/counterparties/${editingContact.counterparty_id}/contacts/${editingContact.id}`, contactEdit);
+      } else {
+        await apiPost(`/api/v1/masterdata/counterparties/${partyId}/contacts`, contactEdit);
+      }
+      setContactOpen(false);
       setEditingContact(null);
       setContactEdit({ ...emptyContact });
-      setContactParty(open?.id || "");
+      setContactParty("");
+      toast.success(t("common.saved", "Saved"));
+      if (open) await loadContacts(open.id);
+      await loadAllContacts(search);
+    } catch (ex) {
+      toast.error(msgOf(ex));
     }
-    setContactOpen(true);
   }
+
+  const deleteContact = useCallback(async (c: Contact) => {
+    try {
+      await apiDelete(`/api/v1/masterdata/counterparties/${c.counterparty_id}/contacts/${c.id}`);
+      toast.success(t("common.recycled", "Moved to recycle bin"));
+      if (open) await loadContacts(open.id);
+      await loadAllContacts(search);
+    } catch (ex) {
+      toast.error(msgOf(ex));
+    }
+  }, [toast, t, open, loadContacts, loadAllContacts, search]);
+
+  /** 删除是不可逆动作 —— 统一走 ConfirmDialog，确认文案指名对象。 */
+  const requestDeleteContact = useCallback((c: Contact) => {
+    setPendingDelete({ run: () => void deleteContact(c), name: c.name });
+  }, [deleteContact]);
 
   function changeTab(k: Tab) {
     setQuery({ tab: k === "parties" ? null : k, q: null }, { resetPage: true });
@@ -307,9 +360,7 @@ function CounterpartiesPage() {
       label: t("common.delete", "Delete"),
       danger: true,
       disabled: r.sanctions_status === "blocked",
-      onClick: () => {
-        void removeParty(r);
-      },
+      onClick: () => requestDeleteParty(r),
     },
   ];
 
@@ -318,10 +369,10 @@ function CounterpartiesPage() {
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyId(r.id) },
     { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportContacts([r]) },
     { key: "d1", label: "", divider: true },
-    { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => void deleteContact(r) },
+    { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => requestDeleteContact(r) },
   ];
 
-  const partyColumns: ColumnDef<Party>[] = [
+  const partyColumns = useMemo<ColumnDef<Party>[]>(() => [
     {
       key: "name",
       title: t("common.name", "Name"),
@@ -440,9 +491,9 @@ function CounterpartiesPage() {
         </button>
       ),
     },
-  ];
+  ], [t, openRow]);
 
-  function contactColumns(opts: { showCompany: boolean; compact?: boolean }): ColumnDef<Contact>[] {
+  const contactColumns = useCallback((opts: { showCompany: boolean; compact?: boolean }): ColumnDef<Contact>[] => {
     const cols: ColumnDef<Contact>[] = [
       {
         key: "name",
@@ -527,7 +578,7 @@ function CounterpartiesPage() {
               className="btn btn-ghost btn-sm btn-danger-text"
               onClick={(e) => {
                 e.stopPropagation();
-                deleteContact(r);
+                requestDeleteContact(r);
               }}
             >
               {t("common.delete", "Delete")}
@@ -537,7 +588,17 @@ function CounterpartiesPage() {
       },
     );
     return cols;
-  }
+  }, [t, setQuery, openRow, openContactForm, requestDeleteContact]);
+
+  const contactColsDirectory = useMemo<ColumnDef<Contact>[]>(
+    () => contactColumns({ showCompany: true }),
+    [contactColumns],
+  );
+
+  const contactColsParty = useMemo<ColumnDef<Contact>[]>(
+    () => contactColumns({ showCompany: false, compact: true }),
+    [contactColumns],
+  );
 
   return (
     <AppShell>
@@ -582,7 +643,11 @@ function CounterpartiesPage() {
               aria-label={t("common.search", "Search")}
             />
             <span className="muted">
-              {tab === "parties" ? rows.length : allContacts.length} {t("common.records", "records")}
+              {tab === "parties"
+                ? hasMore
+                  ? t("list.count_more", "{n}+ records", { n: (page - 1) * limit + rows.length })
+                  : t("list.count_total", "{n} records", { n: (page - 1) * limit + rows.length })
+                : t("list.count_total", "{n} records", { n: allContacts.length })}
             </span>
             <SavedViews storageKey="md_counterparties" onApply={(q) => router.replace(`${pathname}${q}`)} />
           </>
@@ -591,43 +656,78 @@ function CounterpartiesPage() {
         <button className="btn btn-primary btn-sm" type="button" onClick={openCreate}>
           + {tab === "parties" ? t("page.parties.add", "Add counterparty") : t("page.parties.add_contact", "Add contact")}
         </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => {
-            if (tab === "parties") load(search).catch(() => undefined);
-            else loadAllContacts(search).catch(() => undefined);
-          }}
-          title={t("common.refresh", "Refresh")}
-        >
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => {
+            if (tab === "parties") void load(search);
+            else void loadAllContacts(search);
+          }} />
       </Toolbar>
 
       {tab === "parties" ? (
         <div className="panel">
           <StatusLegend statuses={["clear", "review", "blocked"]} />
-          <DataGrid<Party>
-            columns={partyColumns}
-            data={rows}
-            rowKey={(r) => r.id}
-            onRowClick={(r) => router.push(`/masterdata/counterparties/${r.id}`)}
-            onRowContextMenu={(r, _i, e) => partyCtx.open(r)(e)}
-            storageKey="masterdata_counterparties_grid"
+          <StateView
+            loading={loading}
+            error={listErr || undefined}
+            empty={!rows.length}
             emptyText={t("common.empty", "No records")}
-          />
+            onRetry={() => void load(search)}
+          >
+            <DataGrid<Party>
+              columns={partyColumns}
+              data={rows}
+              rowKey={(r) => r.id}
+              onRowClick={(r) => router.push(`/masterdata/counterparties/${r.id}`)}
+              onRowContextMenu={(r, _i, e) => partyCtx.open(r)(e)}
+              storageKey="masterdata_counterparties_grid"
+              emptyText={t("common.empty", "No records")}
+            />
+          </StateView>
+          {page > 1 || hasMore ? (
+            <div className="toolbar">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={page <= 1}
+                onClick={() => setQuery({ page: page - 1 })}
+              >
+                ← {t("common.prev", "Previous")}
+              </button>
+              <span className="muted">{t("list.page_of", "Page {page}", { page })}</span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={!hasMore}
+                onClick={() => setQuery({ page: page + 1 })}
+              >
+                {t("common.next", "Next")} →
+              </button>
+            </div>
+          ) : null}
           <ContextMenu controller={partyCtx} items={partyMenuItems} />
         </div>
       ) : (
         <div className="panel">
-          <DataGrid<Contact>
-            columns={contactColumns({ showCompany: true })}
-            data={allContacts}
-            rowKey={(r) => r.id}
-            onRowContextMenu={(r, _i, e) => contactCtx.open(r)(e)}
-            storageKey="masterdata_contacts_grid"
+          <StateView
+            loading={loading}
+            error={contactsErr || undefined}
+            empty={!allContacts.length}
             emptyText={t("common.empty", "No records")}
-          />
+            onRetry={() => void loadAllContacts(search)}
+          >
+            <DataGrid<Contact>
+              columns={contactColsDirectory}
+              data={allContacts}
+              rowKey={(r) => r.id}
+              onRowContextMenu={(r, _i, e) => contactCtx.open(r)(e)}
+              storageKey="masterdata_contacts_grid"
+              emptyText={t("common.empty", "No records")}
+            />
+          </StateView>
+          {allContacts.length >= 200 ? (
+            <p className="muted">
+              {t("page.parties.contacts_truncated", "Showing the first 200 contacts — narrow the search to see the rest.")}
+            </p>
+          ) : null}
           <ContextMenu controller={contactCtx} items={contactMenuItems} />
         </div>
       )}
@@ -638,8 +738,6 @@ function CounterpartiesPage() {
         title={open ? t("page.parties.edit", "Edit counterparty") : t("page.parties.add", "Add counterparty")}
         onClose={() => { setEditorOpen(false); setOpen(null); }}
         onSave={save}
-        onDelete={open ? remove : undefined}
-        canDelete={!!open}
         saving={saving}
       >
         <label>{t("common.name", "Name")}
@@ -689,6 +787,20 @@ function CounterpartiesPage() {
           <ValidateButton onValidate={validateEdit} />
         </div>
 
+        {/* P1-8：删除公司是不可逆动作 —— 走指名对象的二次确认。 */}
+        {open ? (
+          <div className="desk-toolbar">
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={saving}
+              onClick={() => requestDeleteParty(open)}
+            >
+              {t("common.delete", "Delete")}
+            </button>
+          </div>
+        ) : null}
+
         {/* Contacts section（仅编辑已有公司时展示） */}
         {open ? (
         <div style={{ gridColumn: "1 / -1", borderTop: "1px solid var(--border)", paddingTop: "0.75rem", marginTop: "0.5rem" }}>
@@ -702,7 +814,7 @@ function CounterpartiesPage() {
             <p className="muted" style={{ margin: 0 }}>{t("page.parties.no_contacts", "No contacts yet")}</p>
           ) : (
             <DataGrid<Contact>
-              columns={contactColumns({ showCompany: false, compact: true })}
+              columns={contactColsParty}
               data={contacts}
               rowKey={(r) => r.id}
               storageKey="masterdata_party_contacts_grid"
@@ -758,6 +870,22 @@ function CounterpartiesPage() {
           <textarea value={contactEdit.notes} onChange={(e) => setContactEdit({ ...contactEdit, notes: e.target.value })} rows={2} />
         </label>
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', {
+          name: pendingDelete?.name ?? "",
+        })}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = pendingDelete;
+          setPendingDelete(null);
+          fn?.run();
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

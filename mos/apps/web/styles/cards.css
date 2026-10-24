@@ -34,7 +34,7 @@
 }
 .kpi-card span { color: var(--muted); font-size: var(--font-label); }
 .kpi-card strong { font-size: 1.15rem; }
-.kpi-card.warn strong { color: var(--warn); }
+.kpi-card.warn strong { color: var(--warn-text, var(--warn)); }
 
 .pill {
   display: inline-block;

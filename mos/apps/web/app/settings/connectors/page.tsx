@@ -1,15 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -56,28 +59,42 @@ export default function ConnectorsPage() {
     config: {} as Record<string, string>,
   });
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  // 目录（参考数据）失败：局部提示，不阻断整页
+  const [catalogErr, setCatalogErr] = useState<string | null>(null);
 
   const selectedCatalog = useMemo(
     () => catalog.find((c) => c.connector_type === edit.connector_type),
     [catalog, edit.connector_type],
   );
 
-  async function load() {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    setCatalogErr(null);
     const loc = locale?.startsWith("zh") ? "zh-CN" : "en";
-    const [list, cat] = await Promise.all([
-      apiGet("/api/v1/settings/connectors"),
-      apiGet(`/api/v1/settings/connectors/catalog?locale=${encodeURIComponent(loc)}`),
-    ]);
-    setRows(list);
-    setCatalog(Array.isArray(cat) ? cat : []);
-  }
+    try {
+      const list = await apiGet("/api/v1/settings/connectors");
+      setRows(Array.isArray(list) ? list : []);
+    } catch (ex) {
+      setErr(msgOf(ex));
+      setRows([]);
+    }
+    try {
+      const cat = await apiGet(`/api/v1/settings/connectors/catalog?locale=${encodeURIComponent(loc)}`);
+      setCatalog(Array.isArray(cat) ? cat : []);
+    } catch (ex) {
+      setCatalogErr(msgOf(ex));
+      setCatalog([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [locale]);
 
   useEffect(() => {
-    load().catch(() => {
-      setRows([]);
-      setCatalog([]);
-    });
-  }, [locale]);
+    load();
+  }, [load]);
 
   function openCreate() {
     setCreating(true);
@@ -100,7 +117,7 @@ export default function ConnectorsPage() {
     setCreating(false);
   }
 
-  function openRow(r: Connector) {
+  const openRow = useCallback((r: Connector) => {
     setCreating(false);
     setOpen(r);
     const cfg: Record<string, string> = {};
@@ -115,7 +132,7 @@ export default function ConnectorsPage() {
       secret_ref: r.secret_ref || "",
       config: cfg,
     });
-  }
+  }, [catalog]);
 
   async function save() {
     setSaving(true);
@@ -141,8 +158,8 @@ export default function ConnectorsPage() {
       }
       closeModal();
       await load();
-    } catch {
-      toast.error(t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
@@ -177,7 +194,7 @@ export default function ConnectorsPage() {
     await load();
   }
 
-  const instanceColumns: ColumnDef<Connector>[] = [
+  const instanceColumns = useMemo<ColumnDef<Connector>[]>(() => [
     {
       key: "instance_name",
       title: t("common.name", "Name"),
@@ -217,9 +234,9 @@ export default function ConnectorsPage() {
         );
       },
     },
-  ];
+  ], [t, openRow]);
 
-  const catalogColumns: ColumnDef<CatalogItem>[] = [
+  const catalogColumns = useMemo<ColumnDef<CatalogItem>[]>(() => [
     { key: "connector_type", title: t("common.type", "Type"), width: 150, value: (r) => r.connector_type },
     { key: "name", title: t("common.name", "Name"), minWidth: 150, value: (r) => r.name },
     {
@@ -233,7 +250,7 @@ export default function ConnectorsPage() {
         return <span>{cat ? `${cat} — ${desc}` : desc}</span>;
       },
     },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -257,32 +274,47 @@ export default function ConnectorsPage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.connectors.create", "New connector")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load()} />
       </Toolbar>
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <h3 style={{ marginTop: 0 }}>{t("page.connectors.instances", "Instances")}</h3>
-        <DataGrid<Connector>
-          columns={instanceColumns}
-          data={rows}
-          rowKey={(r) => r.id}
-          storageKey="settings_connectors_instances_grid"
-          onRowDoubleClick={(r) => openRow(r)}
+        <StateView
+          loading={loading}
+          error={err ?? undefined}
+          empty={!rows.length}
+          onRetry={() => load()}
           emptyText={t("common.no_data", "No data")}
-        />
+        >
+          <DataGrid<Connector>
+            columns={instanceColumns}
+            data={rows}
+            rowKey={(r) => r.id}
+            storageKey="settings_connectors_instances_grid"
+            onRowDoubleClick={(r) => openRow(r)}
+            emptyText={t("common.no_data", "No data")}
+          />
+        </StateView>
       </div>
 
       <div className="panel" style={{ marginTop: "1rem" }}>
         <h3 style={{ marginTop: 0 }}>{t("page.connectors.catalog", "Catalog")}</h3>
-        <DataGrid<CatalogItem>
-          columns={catalogColumns}
-          data={catalog}
-          rowKey={(r) => r.connector_type}
-          storageKey="settings_connectors_catalog_grid"
+        {catalogErr ? <p className="text-danger">{catalogErr}</p> : null}
+        <StateView
+          loading={loading}
+          error={catalogErr ?? undefined}
+          empty={!catalog.length}
+          onRetry={() => load()}
           emptyText={t("common.no_data", "No data")}
-        />
+        >
+          <DataGrid<CatalogItem>
+            columns={catalogColumns}
+            data={catalog}
+            rowKey={(r) => r.connector_type}
+            storageKey="settings_connectors_catalog_grid"
+            emptyText={t("common.no_data", "No data")}
+          />
+        </StateView>
       </div>
 
       <RecordModal

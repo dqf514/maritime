@@ -9,10 +9,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.pagination import envelope, paginate
 from app.models import User
 from app.models_domain import (
     Charter,
@@ -34,6 +35,7 @@ from app.services.pnl import PNL_LINE_KEYS, voyage_pnl_row
 from app.services.port_functions import normalize_function_code
 from app.services.alert_engine import assert_no_blocking_alerts
 from app.services.audit import audit
+from app.services.data_scope import apply_module_scope
 from app.services.notifications import notify_once, role_recipients
 from app.services.recycle import soft_delete
 from app.services.report_sequence import assert_report_sequence, derive_report_stage
@@ -104,6 +106,23 @@ class VoyageOut(BaseModel):
     created_by: UUID | None = None
     updated_at: datetime | None = None
     updated_by: UUID | None = None
+
+
+class VoyageOptionOut(BaseModel):
+    """下拉用的轻量航次参照 —— 字段少、载荷小。
+
+    专供 ``<select>`` / LookupSelect 这类"选一个航次"的场景：不做分页
+    （一次最多 1000 条，超出时前端搜索），但**必须**是全量可见 —— 下拉里
+    看不见的航次等于不存在。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    voyage_no: str
+    status: str
+    vessel_id: UUID | None = None
+    vessel_name: str | None = None
+    cargo: str | None = None
 
 
 class PortCallIn(BaseModel):
@@ -194,14 +213,68 @@ class SofEventUpdate(BaseModel):
     remarks: str | None = None
 
 
-@router.get("/voyages", response_model=list[VoyageOut])
-def list_voyages(auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
-    from app.services.data_scope import apply_data_scope, effective_scope
+@router.get("/voyages/options", response_model=list[VoyageOptionOut])
+def list_voyage_options(
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """航次下拉参照（最多 1000 条，字段精简）。
 
+    路由必须注册在 ``/voyages/{voyage_id}`` **之前** —— 否则 ``options`` 会被
+    UUID 路径参数吃掉并返回 422。
+    """
     stmt = select(Voyage).where(Voyage.tenant_id == auth.tenant_id, Voyage.status != "deleted")
-    stmt = apply_data_scope(stmt, Voyage, auth.user_id, effective_scope(db, auth.tenant_id, auth.roles, "operations"))
-    rows = db.scalars(stmt.order_by(Voyage.created_at.desc())).all()
-    return [VoyageOut.model_validate(r) for r in rows]
+    stmt = apply_module_scope(db, stmt, Voyage, auth, "operations")
+    rows = db.scalars(
+        stmt.order_by(Voyage.created_at.desc(), Voyage.id.desc()).limit(1000)
+    ).all()
+    # 船舶名一次性取回（N+1 会在大租户上放大成几百条查询）
+    vessel_names: dict[UUID, str] = {}
+    vessel_ids = [r.vessel_id for r in rows if r.vessel_id]
+    if vessel_ids:
+        for v in db.scalars(select(Vessel).where(Vessel.id.in_(vessel_ids))).all():
+            vessel_names[v.id] = v.name
+    return [
+        VoyageOptionOut(
+            id=r.id,
+            voyage_no=r.voyage_no,
+            status=r.status,
+            vessel_id=r.vessel_id,
+            vessel_name=vessel_names.get(r.vessel_id) if r.vessel_id else None,
+            cargo=r.cargo,
+        )
+        for r in rows
+    ]
+
+
+@router.get("/voyages")
+def list_voyages(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    q: str = "",
+    status: str = "",
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """航次列表 —— 标准分页信封 ``{items,total,limit,offset}``。
+
+    以前这里是"返回全表裸数组"，前端只能一次性拉全部再切片 —— 租户航次一多
+    就既慢又会把每行都序列化一遍。
+    """
+    stmt = select(Voyage).where(Voyage.tenant_id == auth.tenant_id, Voyage.status != "deleted")
+    stmt = apply_module_scope(db, stmt, Voyage, auth, "operations")
+    needle = q.strip()
+    if needle:
+        like = f"%{needle}%"
+        stmt = stmt.where(
+            or_(Voyage.voyage_no.ilike(like), Voyage.cargo.ilike(like), Voyage.status.ilike(like))
+        )
+    if status.strip():
+        stmt = stmt.where(Voyage.status == status.strip())
+    rows, total = paginate(
+        db, stmt.order_by(Voyage.created_at.desc(), Voyage.id.desc()), limit, offset
+    )
+    return envelope([VoyageOut.model_validate(r) for r in rows], total, limit, offset)
 
 
 @router.get("/voyages/{voyage_id}", response_model=VoyageOut)
@@ -733,7 +806,15 @@ def voyage_overview(
         select(Claim).where(Claim.tenant_id == auth.tenant_id, Claim.voyage_id == v.id, Claim.status != "deleted")
     ).all()
     invoices = db.scalars(
-        select(Invoice).where(Invoice.tenant_id == auth.tenant_id, Invoice.voyage_id == v.id, Invoice.status != "deleted")
+        apply_module_scope(
+            db,
+            select(Invoice).where(
+                Invoice.tenant_id == auth.tenant_id, Invoice.voyage_id == v.id, Invoice.status != "deleted"
+            ),
+            Invoice,
+            auth,
+            "finance",
+        )
     ).all()
     off_hire = db.scalars(
         select(OffHireEvent).where(

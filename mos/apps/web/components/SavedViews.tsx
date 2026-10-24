@@ -69,6 +69,7 @@ export function SavedViews({ storageKey, onApply }: { storageKey: string; onAppl
         className="saved-views-name"
         value={name}
         onChange={(e) => setName(e.target.value)}
+        aria-label={t("views.name_placeholder", "视图名称")}
         placeholder={t("views.name_placeholder", "视图名称")}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -89,6 +90,7 @@ export function SavedViews({ storageKey, onApply }: { storageKey: string; onAppl
             if (last) remove(last.name);
           }}
           title={t("views.delete_last", "删除最近保存的视图")}
+          aria-label={t("views.delete_last", "删除最近保存的视图")}
         >
           ×
         </button>

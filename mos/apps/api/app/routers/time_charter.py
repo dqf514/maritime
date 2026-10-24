@@ -14,7 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -43,6 +43,13 @@ router = APIRouter(tags=["Time Charter"])
 ContractStyle = Literal["time_charter", "bareboat"]
 ContractType = Literal["tci", "tco"]
 
+#: 百分数字段 —— 佣金 / 分成 / 管理费都是「百分比」，必须落在 0–100。
+#: 以前这些字段是裸 ``Optional[Decimal]``：500% 佣金、150% 分成都能入库，
+#: 分成 150% 会把 ``charterer_share`` 算成负数（审计 P1-B25 / P1-B27）。
+Pct = Annotated[Optional[Decimal], Field(ge=0, le=100)]
+#: 有符号百分数（内部往来调整可以是负的）
+SignedPct = Annotated[Optional[Decimal], Field(ge=-100, le=100)]
+
 
 def _f(v) -> float:
     return float(v) if v is not None else 0.0
@@ -66,10 +73,10 @@ class TCContractIn(BaseModel):
     payment_frequency: Literal["monthly", "semi_monthly"] = "monthly"
     cancel_date: Optional[date] = None
     parent_contract_id: Optional[UUID] = None
-    profit_share_pct: Optional[Decimal] = None
+    profit_share_pct: Pct = None
     profit_share_threshold: Optional[Decimal] = None
-    address_comm_pct: Optional[Decimal] = None
-    brokerage_pct: Optional[Decimal] = None
+    address_comm_pct: Pct = None
+    brokerage_pct: Pct = None
     # 指数联动定价 — index-linked hire components (same spec as
     # Estimate.inputs["unpriced_components"]); additive, optional.
     hire_components: Optional[list[dict]] = None
@@ -98,17 +105,17 @@ class TCContractIn(BaseModel):
     # 计费与账务
     billing_period: Optional[str] = None
     billing_schedule: Optional[str] = None
-    rebillable_admin_fee_pct: Optional[Decimal] = None
+    rebillable_admin_fee_pct: Pct = None
     exchange_rate: Optional[Decimal] = Decimal("1")
     ref_contract: Optional[str] = None
     chtr_specialist: Optional[str] = None
     conf_date_gmt: Optional[datetime] = None
     intercompany: bool = False
     ic_company: Optional[str] = None
-    ic_adj_pct: Optional[Decimal] = None
+    ic_adj_pct: SignedPct = None
     # 右栏 Summary
     next_open_date: Optional[datetime] = None
-    owner_comm_pct: Optional[Decimal] = None
+    owner_comm_pct: Pct = None
     owner_comm_pay_to: Optional[str] = None
     valuation_id: Optional[str] = None
     remarks: Optional[str] = None
@@ -125,10 +132,10 @@ class TCContractPatch(BaseModel):
     hire_currency: Optional[str] = None
     payment_frequency: Optional[Literal["monthly", "semi_monthly"]] = None
     cancel_date: Optional[date] = None
-    profit_share_pct: Optional[Decimal] = None
+    profit_share_pct: Pct = None
     profit_share_threshold: Optional[Decimal] = None
-    address_comm_pct: Optional[Decimal] = None
-    brokerage_pct: Optional[Decimal] = None
+    address_comm_pct: Pct = None
+    brokerage_pct: Pct = None
     hire_components: Optional[list[dict]] = None
     # ── P11 IMOS TC header 对齐 ──
     tc_code: Optional[str] = None
@@ -153,16 +160,16 @@ class TCContractPatch(BaseModel):
     use_local_time: Optional[bool] = None
     billing_period: Optional[str] = None
     billing_schedule: Optional[str] = None
-    rebillable_admin_fee_pct: Optional[Decimal] = None
+    rebillable_admin_fee_pct: Pct = None
     exchange_rate: Optional[Decimal] = None
     ref_contract: Optional[str] = None
     chtr_specialist: Optional[str] = None
     conf_date_gmt: Optional[datetime] = None
     intercompany: Optional[bool] = None
     ic_company: Optional[str] = None
-    ic_adj_pct: Optional[Decimal] = None
+    ic_adj_pct: SignedPct = None
     next_open_date: Optional[datetime] = None
-    owner_comm_pct: Optional[Decimal] = None
+    owner_comm_pct: Pct = None
     owner_comm_pay_to: Optional[str] = None
     valuation_id: Optional[str] = None
     remarks: Optional[str] = None
@@ -442,10 +449,10 @@ class ChildTCIn(BaseModel):
     hire_currency: Optional[str] = None
     payment_frequency: Optional[Literal["monthly", "semi_monthly"]] = None
     cancel_date: Optional[date] = None
-    profit_share_pct: Optional[Decimal] = None
+    profit_share_pct: Pct = None
     profit_share_threshold: Optional[Decimal] = None
-    address_comm_pct: Optional[Decimal] = None
-    brokerage_pct: Optional[Decimal] = None
+    address_comm_pct: Pct = None
+    brokerage_pct: Pct = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

@@ -7,7 +7,8 @@ Adapters validate config and run health/sync against configured endpoints
 
 from __future__ import annotations
 
-from datetime import date, datetime
+import logging
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +18,9 @@ from sqlalchemy.orm import Session
 
 from app.models_domain import MarketQuote
 from app.models_wave1 import ConnectorInstance, ExchangeRate
+from app.security import assert_safe_outbound_url
+
+log = logging.getLogger("marios.integration")
 
 FieldSpec = dict[str, Any]
 
@@ -297,12 +301,185 @@ def catalog_entry(connector_type: str) -> dict[str, Any] | None:
     return None
 
 
+#: 凭据脱敏 —— API 响应里**永不**回吐明文密钥（P0-19）。
+SECRET_MASK = "***"
+
+#: 版本化令牌的版本前缀（``ops_crypto.TOKEN_KEY_VERSION``）。
+TOKEN_PREFIX = "v1:"
+
+#: 配置 JSON 里出现这些键名即视为密钥（大小写不敏感，子串匹配）。
+#: 连接器目录里的 ``secret=True`` 是权威来源；本表是**没有目录元数据**时
+#: （邮箱账号、AI 供应商等）的兜底启发式 —— 两边必须一致，
+#: 否则就会出现「响应里遮了、库里却是明文」的空档（P0-19）。
+SECRET_KEY_HINTS: tuple[str, ...] = (
+    "secret",
+    "password",
+    "passwd",
+    "passphrase",
+    "token",
+    "apikey",
+    "api_key",
+    "credential",
+    "private_key",
+)
+
+#: 命中上面启发式但**不是**密钥的键名（token 计数之类）。
+NON_SECRET_KEYS: frozenset[str] = frozenset(
+    {
+        "max_tokens",
+        "max_output_tokens",
+        "min_tokens",
+        "tokens",
+        "token_budget",
+        "total_tokens",
+        "tokens_used",
+        "input_tokens",
+        "output_tokens",
+        "prompt_tokens",
+        "completion_tokens",
+    }
+)
+
+
+def is_secret_key(key: str) -> bool:
+    """键名是否像密钥（大小写不敏感、子串匹配，排除 token 计数类）。"""
+    low = str(key).strip().lower()
+    if not low or low in NON_SECRET_KEYS:
+        return False
+    return any(hint in low for hint in SECRET_KEY_HINTS)
+
+
+def mask_secret_keys(config: dict | None) -> dict[str, Any]:
+    """按键名启发式把配置里的密钥值替换成 ``***``（响应用）。
+
+    只处理**字符串**值 —— 数字/布尔不构成凭据。
+    """
+    out = dict(config or {})
+    for key, value in list(out.items()):
+        if isinstance(value, str) and value and is_secret_key(key):
+            out[key] = SECRET_MASK
+    return out
+
+
+def encrypt_secret_keys(config: dict | None) -> dict[str, Any]:
+    """按键名启发式把配置里的密钥值**加密落库**（``v1:`` 前缀 + Fernet）。
+
+    与 :func:`mask_secret_keys` 用同一套键名启发式 —— 「遮了的就必须加密」。
+    已加密（``v1:`` 前缀）的值原样保留（幂等）。
+    """
+    from app.services.ops_crypto import encrypt_token
+
+    out = dict(config or {})
+    for key, value in list(out.items()):
+        if (
+            isinstance(value, str)
+            and value
+            and is_secret_key(key)
+            and not value.startswith(TOKEN_PREFIX)
+        ):
+            out[key] = encrypt_token(value)
+    return out
+
+
+def mask_token_ref(value: str | None) -> str | None:
+    """把存好的密钥引用 / 密文回显成**不可逆的占位**。
+
+    ``v1:`` 版本前缀保留（前端据此知道「已配置了加密密钥」），
+    密文本体一律遮掉 —— 密文进了响应体也等于把密钥材料外送（P0-19）。
+    """
+    if not value:
+        return None
+    text = str(value)
+    if text.startswith(TOKEN_PREFIX):
+        return f"{TOKEN_PREFIX}{SECRET_MASK}"
+    return SECRET_MASK
+
+
+def secret_config_keys(connector_type: str | None) -> set[str]:
+    """该连接器类型里被目录标记为 ``secret=True`` 的配置键。"""
+    if not connector_type:
+        return set()
+    entry = catalog_entry(connector_type)
+    if not entry:
+        return set()
+    return {f["key"] for f in (entry.get("config_schema") or []) if f.get("secret")}
+
+
+def mask_config_secrets(connector_type: str | None, config: dict | None) -> dict[str, Any]:
+    """把配置里的密钥值替换成 ``***``（响应用）。
+
+    审计 P0-19：``ConnectorOut`` 继承了 ``ConnectorIn``，于是 ``config``
+    里的 ``password`` / ``api_key`` / ``auth_header`` / ``inbound_secret``
+    原样出现在响应体里 —— **任何登录用户**（含 viewer）都能读到管理员配的
+    SMTP 口令、API Key、webhook 密钥。
+    """
+    out = dict(config or {})
+    for key in secret_config_keys(connector_type):
+        if out.get(key):
+            out[key] = SECRET_MASK
+    # 兜底：键名里带 secret/password/token/credential 的也一并遮掉
+    # （与 encrypt_config_secrets 同一套启发式 —— 遮了就必须加密）。
+    return mask_secret_keys(out)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def encrypt_config_secrets(connector_type: str | None, config: dict | None) -> dict[str, Any]:
+    """落库前把密钥字段加密（P0-19）。
+
+    用 ``ops_crypto.encrypt_token``（``v1:`` 前缀 + Fernet）——
+    ``decrypt_token`` 对**没有**前缀的历史明文原样返回，所以存量数据
+    不用迁移也能继续用。
+
+    目录里标了 ``secret=True`` 的键 + 按键名启发式认出来的密钥键
+    （``*credential*`` / ``*password*`` / ``*token*`` …）**都**加密，
+    与 :func:`mask_config_secrets` 的遮蔽范围保持一致。
+    """
+    from app.services.ops_crypto import encrypt_token
+
+    out = dict(config or {})
+    for key in secret_config_keys(connector_type):
+        value = out.get(key)
+        if isinstance(value, str) and value and not value.startswith(TOKEN_PREFIX):
+            out[key] = encrypt_token(value)
+    return encrypt_secret_keys(out)
+
+
+def decrypt_config_secrets(config: dict | None) -> dict[str, Any]:
+    """内部使用时解密配置里的密钥字段（历史明文原样返回）。"""
+    from app.services.ops_crypto import decrypt_token
+
+    out = dict(config or {})
+    for key, value in list(out.items()):
+        if isinstance(value, str) and value.startswith(TOKEN_PREFIX):
+            try:
+                out[key] = decrypt_token(value) or ""
+            except Exception:  # noqa: BLE001 — 密钥解不开时留空，不阻断同步
+                log.warning("integration_adapters: cannot decrypt config key %s", key)
+                out[key] = ""
+    return out
+
+
+def mask_email_config(config: dict | None) -> dict[str, Any]:
+    """邮箱账号配置里的密钥脱敏（P0-19 邮箱侧）。
+
+    ``EmailAccount.config`` 装的是 SMTP 口令 / OAuth 客户端密钥之类，
+    ``EmailAccountOut`` 继承 ``EmailAccountIn`` → 整块原样回吐。
+    邮箱账号**没有**目录元数据可用，所以按键名启发式遮蔽。
+    """
+    return mask_secret_keys(config)
+
+
+def encrypt_email_config(config: dict | None) -> dict[str, Any]:
+    """邮箱账号配置落库前加密密钥字段（与 :func:`mask_email_config` 同范围）。"""
+    return encrypt_secret_keys(config)
+
+
 def test_adapter(row: ConnectorInstance, *, office_health: dict | None = None) -> dict[str, Any]:
-    cfg = row.config or {}
+    # P0-19：库里是密文 → 用之前先解密
+    cfg = decrypt_config_secrets(row.config)
     ctype = row.connector_type
     now = _now_iso()
 
@@ -313,6 +490,9 @@ def test_adapter(row: ConnectorInstance, *, office_health: dict | None = None) -
     url = row.endpoint or cfg.get("base_url") or cfg.get("post_url") or cfg.get("odata_url") or cfg.get("list_url") or cfg.get("url")
     if url and str(url).startswith("http"):
         try:
+            # P0-18：出网前做 URL 白名单校验（内网/环回/链路本地/元数据地址
+            # 一律拒绝）—— 这个端点任何登录用户都能触发，是现成的 SSRF 触发器。
+            assert_safe_outbound_url(str(url), purpose="connector connectivity test")
             with httpx.Client(timeout=8.0) as client:
                 resp = client.get(str(url)) if ctype not in {"erp.generic", "webhook.custom"} else client.head(str(url))
             ok = resp.status_code < 500
@@ -347,7 +527,8 @@ def test_adapter(row: ConnectorInstance, *, office_health: dict | None = None) -
 
 def sync_adapter(db: Session, row: ConnectorInstance, *, tenant_id: UUID) -> dict[str, Any]:
     """Pull/push data for the connector. Returns summary."""
-    cfg = dict(row.config or {})
+    # P0-19：库里是密文 → 用之前先解密
+    cfg = decrypt_config_secrets(row.config)
     ctype = row.connector_type
     now = _now_iso()
     result: dict[str, Any] = {"connector_type": ctype, "synced_at": now, "actions": []}
@@ -360,6 +541,8 @@ def sync_adapter(db: Session, row: ConnectorInstance, *, tenant_id: UUID) -> dic
         url = row.endpoint or cfg.get("base_url")
         if ctype == "fx.openex" and url and cfg.get("app_id"):
             try:
+                # P0-18：同样做出网白名单校验
+                assert_safe_outbound_url(str(url), purpose="connector sync")
                 with httpx.Client(timeout=12.0) as client:
                     resp = client.get(
                         f"{str(url).rstrip('/')}/latest.json",

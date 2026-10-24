@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
@@ -48,12 +49,14 @@ export default function PermissionsPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [edit, setEdit] = useState({ entity: "", field: "", role: "", mode: "read" });
+  // 破坏性操作二次确认（P1-8）
+  const [ruleDelete, setRuleDelete] = useState<{ title: string; message: string; action: () => void } | null>(null);
 
   // ── Data scope (tab 3) ──
   const [scopes, setScopes] = useState<ScopeItem[]>([]);
   const [scopeModules, setScopeModules] = useState<string[]>([]);
 
-  async function load() {
+  const load = useCallback(async () => {
     const [c, m, r] = await Promise.all([
       apiGet("/api/v1/admin/features/catalog"),
       apiGet("/api/v1/admin/features/matrix"),
@@ -62,9 +65,9 @@ export default function PermissionsPage() {
     setCatalog(c);
     setMatrix(m);
     setRoles(r);
-  }
+  }, []);
 
-  async function loadScopes() {
+  const loadScopes = useCallback(async () => {
     try {
       const s = (await apiGet("/api/v1/admin/data-scopes")) as { modules: string[]; items: ScopeItem[] };
       setScopeModules(s.modules || []);
@@ -72,9 +75,9 @@ export default function PermissionsPage() {
     } catch {
       /* ignore */
     }
-  }
+  }, []);
 
-  async function loadFieldPerms() {
+  const loadFieldPerms = useCallback(async () => {
     const [ent, rl] = await Promise.all([
       apiGet("/api/v1/field-permissions/entities"),
       apiGet("/api/v1/field-permissions"),
@@ -82,7 +85,7 @@ export default function PermissionsPage() {
     setRegistry(ent);
     setRules(rl);
     if (!fpEntity && ent.length) setFpEntity(ent[0].entity);
-  }
+  }, [fpEntity]);
 
   useEffect(() => {
     load().catch(() => toast.error(t("page.perm.admin_required", "需要租户管理员")));
@@ -91,74 +94,89 @@ export default function PermissionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
-  async function toggle(role_code: string, feature_code: string, allowed: boolean) {
-    await apiPut("/api/v1/admin/features", { role_code, feature_code, allowed });
-    toast.success(`${role_code} · ${feature_code} = ${allowed ? t("page.perm.allow", "允许") : t("page.perm.deny", "拒绝")}`);
-    await load();
-  }
-
-  const roleCodes = roles.map((r) => r.code).filter((c) => c !== "platform_admin");
-
-  function allowedFor(role: string, featureCode: string): boolean {
-    if (role === "tenant_admin") return true;
-    const hit = matrix.find((m) => m.role_code === role && m.feature_code === featureCode);
-    return hit ? hit.allowed : true;
-  }
-
-  function scopeFor(role: string, module: string): string {
-    if (role === "tenant_admin" || role === "management") return "all";
-    const hit = scopes.find((s) => s.role_code === role && s.module === module);
-    return hit ? hit.scope : "all";
-  }
-
-  async function setScope(role_code: string, module: string, scope: string) {
-    try {
-      await apiPut("/api/v1/admin/data-scopes", { role_code, module, scope });
-      toast.success(`${role_code} · ${module} → ${scope === "own" ? t("page.perm.scope_own", "仅本人") : t("page.perm.scope_all", "全租户")}`);
-      await loadScopes();
-    } catch {
-      toast.error(t("common.failed", "Failed"));
-    }
-  }
-
-  const columns: ColumnDef<FeatureRow>[] = [
-    {
-      key: "feature",
-      title: t("page.perm.feature", "功能"),
-      minWidth: 220,
-      value: (r) => r.name,
-      render: (_v, r) => (
-        <span>
-          <b>{locale.startsWith("zh") ? r.name_zh || r.name : r.name}</b>
-          <div className="muted">
-            {r.code} · {r.module}
-          </div>
-        </span>
-      ),
+  const toggle = useCallback(
+    async (role_code: string, feature_code: string, allowed: boolean) => {
+      await apiPut("/api/v1/admin/features", { role_code, feature_code, allowed });
+      toast.success(`${role_code} · ${feature_code} = ${allowed ? t("page.perm.allow", "允许") : t("page.perm.deny", "拒绝")}`);
+      await load();
     },
-    ...roleCodes.map(
-      (role): ColumnDef<FeatureRow> => ({
-        key: role,
-        // 角色列头走 role.* 词表（未知角色回退原始 code）
-        title: t(`role.${role}`, role),
-        width: 110,
-        align: "center",
-        value: (r) => allowedFor(role, r.code),
+    [t, toast, load],
+  );
+
+  const roleCodes = useMemo(() => roles.map((r) => r.code).filter((c) => c !== "platform_admin"), [roles]);
+
+  const allowedFor = useCallback(
+    (role: string, featureCode: string): boolean => {
+      if (role === "tenant_admin") return true;
+      const hit = matrix.find((m) => m.role_code === role && m.feature_code === featureCode);
+      return hit ? hit.allowed : true;
+    },
+    [matrix],
+  );
+
+  const scopeFor = useCallback(
+    (role: string, module: string): string => {
+      if (role === "tenant_admin" || role === "management") return "all";
+      const hit = scopes.find((s) => s.role_code === role && s.module === module);
+      return hit ? hit.scope : "all";
+    },
+    [scopes],
+  );
+
+  const setScope = useCallback(
+    async (role_code: string, module: string, scope: string) => {
+      try {
+        await apiPut("/api/v1/admin/data-scopes", { role_code, module, scope });
+        toast.success(`${role_code} · ${module} → ${scope === "own" ? t("page.perm.scope_own", "仅本人") : t("page.perm.scope_all", "全租户")}`);
+        await loadScopes();
+      } catch {
+        toast.error(t("common.failed", "Failed"));
+      }
+    },
+    [t, toast, loadScopes],
+  );
+
+  const columns = useMemo<ColumnDef<FeatureRow>[]>(
+    () => [
+      {
+        key: "feature",
+        title: t("page.perm.feature", "功能"),
+        minWidth: 220,
+        value: (r) => r.name,
         render: (_v, r) => (
-          <input
-            type="checkbox"
-            checked={allowedFor(role, r.code)}
-            disabled={role === "tenant_admin"}
-            onChange={(e) =>
-              toggle(role, r.code, e.target.checked).catch(() =>
-                toast.error(t("page.perm.update_fail", "更新失败")),
-              )
-            }
-          />
+          <span>
+            <b>{locale.startsWith("zh") ? r.name_zh || r.name : r.name}</b>
+            <div className="muted">
+              {r.code} · {r.module}
+            </div>
+          </span>
         ),
-      }),
-    ),
-  ];
+      },
+      ...roleCodes.map(
+        (role): ColumnDef<FeatureRow> => ({
+          key: role,
+          // 角色列头走 role.* 词表（未知角色回退原始 code）
+          title: t(`role.${role}`, role),
+          width: 110,
+          align: "center",
+          value: (r) => allowedFor(role, r.code),
+          render: (_v, r) => (
+            <input
+              type="checkbox"
+              checked={allowedFor(role, r.code)}
+              disabled={role === "tenant_admin"}
+              onChange={(e) =>
+                toggle(role, r.code, e.target.checked).catch(() =>
+                  toast.error(t("page.perm.update_fail", "更新失败")),
+                )
+              }
+            />
+          ),
+        }),
+      ),
+    ],
+    [t, locale, roleCodes, allowedFor, toggle, toast],
+  );
 
   // ── Field-permission helpers ──
   const fieldOptions = useMemo(() => {
@@ -182,25 +200,47 @@ export default function PermissionsPage() {
     return [...set].sort();
   }, [rules, roleCodes]);
 
-  async function changeMode(row: FieldRule, mode: string) {
-    try {
-      await apiPatch(`/api/v1/field-permissions/${row.id}`, { mode });
-      toast.success(t("fp.updated", "Rule updated"));
-      await loadFieldPerms();
-    } catch {
-      toast.error(t("fp.update_fail", "Failed to update rule"));
-    }
-  }
+  const changeMode = useCallback(
+    async (row: FieldRule, mode: string) => {
+      try {
+        await apiPatch(`/api/v1/field-permissions/${row.id}`, { mode });
+        toast.success(t("fp.updated", "Rule updated"));
+        await loadFieldPerms();
+      } catch {
+        toast.error(t("fp.update_fail", "Failed to update rule"));
+      }
+    },
+    [t, toast, loadFieldPerms],
+  );
 
-  async function removeRule(row: FieldRule) {
-    try {
-      await apiDelete(`/api/v1/field-permissions/${row.id}`);
-      toast.success(t("fp.deleted", "Rule deleted"));
-      await loadFieldPerms();
-    } catch {
-      toast.error(t("fp.delete_fail", "Failed to delete rule"));
-    }
-  }
+  const removeRule = useCallback(
+    async (row: FieldRule) => {
+      try {
+        await apiDelete(`/api/v1/field-permissions/${row.id}`);
+        toast.success(t("fp.deleted", "Rule deleted"));
+        await loadFieldPerms();
+      } catch {
+        toast.error(t("fp.delete_fail", "Failed to delete rule"));
+      }
+    },
+    [t, toast, loadFieldPerms],
+  );
+
+  /** 删除字段权限规则 —— 二次确认并指名规则（P1-8）。 */
+  const askRemoveRule = useCallback(
+    (row: FieldRule) => {
+      setRuleDelete({
+        title: t("common.delete", "删除"),
+        message: t(
+          "fp.delete_confirm",
+          'Delete the field-permission rule "{entity}.{field}" for role "{role}"?',
+          { entity: row.entity, field: row.field, role: row.role },
+        ),
+        action: () => void removeRule(row),
+      });
+    },
+    [t, removeRule],
+  );
 
   async function saveRule(e: FormEvent) {
     e.preventDefault();
@@ -222,61 +262,64 @@ export default function PermissionsPage() {
     }
   }
 
-  const fpColumns: ColumnDef<FieldRule>[] = [
-    {
-      key: "field",
-      title: t("fp.field", "字段"),
-      minWidth: 180,
-      value: (r) => r.field,
-      render: (_v, r) => (
-        <span>
-          <b>{r.field}</b>
-          <div className="muted">{r.entity}</div>
-        </span>
-      ),
-    },
-    {
-      key: "role",
-      title: t("fp.role", "角色"),
-      width: 140,
-      value: (r) => r.role,
-    },
-    {
-      key: "mode",
-      title: t("fp.mode", "模式"),
-      width: 140,
-      value: (r) => r.mode,
-      render: (_v, r) => (
-        <select value={r.mode} onChange={(e) => changeMode(r, e.target.value)}>
-          {MODES.map((m) => (
-            <option key={m} value={m}>
-              {t(`fp.mode.${m}`, m)}
-            </option>
-          ))}
-        </select>
-      ),
-    },
-    {
-      key: "active",
-      title: t("fp.active", "启用"),
-      width: 80,
-      align: "center",
-      value: (r) => r.active,
-      render: (_v, r) => <span>{r.active ? t("common.yes", "是") : t("common.no", "否")}</span>,
-    },
-    {
-      key: "actions",
-      title: t("common.actions", "操作"),
-      width: 90,
-      align: "center",
-      value: (r) => r.id,
-      render: (_v, r) => (
-        <button type="button" className="btn btn-sm btn-ghost" onClick={() => removeRule(r)}>
-          {t("common.delete", "删除")}
-        </button>
-      ),
-    },
-  ];
+  const fpColumns = useMemo<ColumnDef<FieldRule>[]>(
+    () => [
+      {
+        key: "field",
+        title: t("fp.field", "字段"),
+        minWidth: 180,
+        value: (r) => r.field,
+        render: (_v, r) => (
+          <span>
+            <b>{r.field}</b>
+            <div className="muted">{r.entity}</div>
+          </span>
+        ),
+      },
+      {
+        key: "role",
+        title: t("fp.role", "角色"),
+        width: 140,
+        value: (r) => r.role,
+      },
+      {
+        key: "mode",
+        title: t("fp.mode", "模式"),
+        width: 140,
+        value: (r) => r.mode,
+        render: (_v, r) => (
+          <select value={r.mode} onChange={(e) => changeMode(r, e.target.value)}>
+            {MODES.map((m) => (
+              <option key={m} value={m}>
+                {t(`fp.mode.${m}`, m)}
+              </option>
+            ))}
+          </select>
+        ),
+      },
+      {
+        key: "active",
+        title: t("fp.active", "启用"),
+        width: 80,
+        align: "center",
+        value: (r) => r.active,
+        render: (_v, r) => <span>{r.active ? t("common.yes", "是") : t("common.no", "否")}</span>,
+      },
+      {
+        key: "actions",
+        title: t("common.actions", "操作"),
+        width: 90,
+        align: "center",
+        value: (r) => r.id,
+        render: (_v, r) => (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => askRemoveRule(r)}>
+            {t("common.delete", "删除")}
+          </button>
+        ),
+      },
+    ],
+    [t, changeMode, askRemoveRule],
+  );
 
   const tabs: TabItem[] = [
     { key: "features", label: t("page.perm.tab.features", "Feature matrix") },
@@ -459,6 +502,20 @@ export default function PermissionsPage() {
           </RecordModal>
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(ruleDelete)}
+        title={ruleDelete?.title || ""}
+        message={ruleDelete?.message || ""}
+        danger
+        confirmLabel={t("common.delete", "删除")}
+        onConfirm={() => {
+          const fn = ruleDelete?.action;
+          setRuleDelete(null);
+          fn?.();
+        }}
+        onCancel={() => setRuleDelete(null)}
+      />
     </AppShell>
   );
 }

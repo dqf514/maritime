@@ -23,8 +23,10 @@ from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
 from app.models_ai import AIConversation, AIMessage, AIAgentDefinition
+from app.security import tenant_has_module
 from app.services import llm_client
 from app.services.llm_client import LLMError, LLMNotConfigured
+from app.services.money import round_half_up
 
 # Agentic loop bound: assistant may call tools this many rounds before we take
 # the last text as final (prevents unbounded tool spirals).
@@ -59,6 +61,9 @@ class AITool:
     name: str = ""
     description: str = ""
     parameters: dict = {}
+    #: 该工具读写的业务域对应的**模块码**（P0-20）。
+    #: 空 = 不需要模块许可（纯计算 / 公共数据）。
+    module: str = ""
 
     def execute(self, db: Session, tenant_id: UUID, **kwargs) -> dict:
         raise NotImplementedError
@@ -104,20 +109,21 @@ class CalculateTCETool(AITool):
     }
 
     def execute(self, db: Session, tenant_id: UUID, **kwargs) -> dict:
-        revenue = float(kwargs.get("freight_revenue", 0))
-        bunker = float(kwargs.get("bunker_cost", 0))
-        ports = float(kwargs.get("port_costs", 0))
-        days = float(kwargs.get("voyage_days", 1))
+        revenue = Decimal(str(kwargs.get("freight_revenue", 0)))
+        bunker = Decimal(str(kwargs.get("bunker_cost", 0)))
+        ports = Decimal(str(kwargs.get("port_costs", 0)))
+        days = Decimal(str(kwargs.get("voyage_days", 1)))
         if days <= 0:
             return {"error": "voyage_days must be positive"}
         voyage_cost = bunker + ports
-        tce = (revenue - voyage_cost) / days
+        # 金额口径：Decimal + 显式 ROUND_HALF_UP（内建 round() 是银行家舍入）
+        tce = round_half_up((revenue - voyage_cost) / days, 2)
         return {
-            "freight_revenue": revenue,
-            "voyage_cost": voyage_cost,
-            "net_revenue": revenue - voyage_cost,
-            "tce_per_day": round(tce, 2),
-            "voyage_days": days,
+            "freight_revenue": float(revenue),
+            "voyage_cost": float(voyage_cost),
+            "net_revenue": float(revenue - voyage_cost),
+            "tce_per_day": float(tce),
+            "voyage_days": float(days),
         }
 
 
@@ -138,10 +144,10 @@ class CalculateLaytimeTool(AITool):
     }
 
     def execute(self, db: Session, tenant_id: UUID, **kwargs) -> dict:
-        allowed = float(kwargs.get("allowed_days", 0))
-        actual = float(kwargs.get("actual_days", 0))
-        dem_rate = float(kwargs.get("demurrage_rate", 0))
-        des_rate = float(kwargs.get("despatch_rate", 0))
+        allowed = Decimal(str(kwargs.get("allowed_days", 0)))
+        actual = Decimal(str(kwargs.get("actual_days", 0)))
+        dem_rate = Decimal(str(kwargs.get("demurrage_rate", 0)))
+        des_rate = Decimal(str(kwargs.get("despatch_rate", 0)))
         diff = allowed - actual
         if diff < 0:
             amount = abs(diff) * dem_rate
@@ -150,11 +156,11 @@ class CalculateLaytimeTool(AITool):
             amount = diff * des_rate
             result_type = "despatch"
         return {
-            "allowed_days": allowed,
-            "actual_days": actual,
-            "time_saved_days": round(diff, 2),
+            "allowed_days": float(allowed),
+            "actual_days": float(actual),
+            "time_saved_days": float(round_half_up(diff, 2)),
             "result": result_type,
-            "amount_usd": round(amount, 2),
+            "amount_usd": float(round_half_up(amount, 2)),
         }
 
 
@@ -206,6 +212,7 @@ class CheckComplianceTool(AITool):
     """Check emissions compliance at a position."""
 
     name = "check_compliance"
+    module = "emissions"
     description = "Check fuel/emissions compliance at a given position (lat/lon)"
     parameters = {
         "type": "object",
@@ -235,6 +242,7 @@ class ListVesselsTool(AITool):
     """List fleet vessels."""
 
     name = "list_vessels"
+    module = "masterdata"
     description = "List vessels in the fleet with name/IMO/DWT/speed/consumption"
     parameters = {
         "type": "object",
@@ -266,6 +274,7 @@ class GetVesselTool(AITool):
     """Vessel detail by name or IMO."""
 
     name = "get_vessel"
+    module = "masterdata"
     description = "Get vessel detail (name/IMO/DWT/speed/consumption) by vessel name or IMO number"
     parameters = {
         "type": "object",
@@ -298,6 +307,7 @@ class ListVoyagesTool(AITool):
     """List voyages with optional status filter."""
 
     name = "list_voyages"
+    module = "operations"
     description = "List voyages with optional status filter (planned/in_progress/completed)"
     parameters = {
         "type": "object",
@@ -326,6 +336,7 @@ class GetVoyageTool(AITool):
     """Voyage detail including port calls."""
 
     name = "get_voyage"
+    module = "operations"
     description = "Get voyage detail (status, cargo, dates) with its port calls by voyage ID or voyage number"
     parameters = {
         "type": "object",
@@ -371,6 +382,7 @@ class ListPortCallsTool(AITool):
     """Port calls for a voyage."""
 
     name = "list_port_calls"
+    module = "operations"
     description = "List port calls (seq, purpose, ETA/ETD/ATA/ATD, NOR) for a voyage"
     parameters = {
         "type": "object",
@@ -412,6 +424,7 @@ class GetNoonReportsTool(AITool):
     """Noon reports for a voyage."""
 
     name = "get_noon_reports"
+    module = "operations"
     description = "Get noon reports (position, speed, ROB, ETA deviation) for a voyage"
     parameters = {
         "type": "object",
@@ -461,6 +474,7 @@ class ListChartersTool(AITool):
     """List charters with optional status filter."""
 
     name = "list_charters"
+    module = "chartering"
     description = "List charters/CPs with optional status filter (draft/submitted/active/completed)"
     parameters = {
         "type": "object",
@@ -489,6 +503,7 @@ class GetCharterTool(AITool):
     """Charter detail with CP terms."""
 
     name = "get_charter"
+    module = "chartering"
     description = "Get a charter with its CP terms (freight, laytime, demurrage, commission, clauses) by charter ID or number"
     parameters = {
         "type": "object",
@@ -527,6 +542,7 @@ class ListEstimatesTool(AITool):
     """List estimates with TCE results."""
 
     name = "list_estimates"
+    module = "estimate"
     description = "List cargo/voyage estimates with their TCE results and status"
     parameters = {
         "type": "object",
@@ -563,6 +579,7 @@ class ListCargoTool(AITool):
     """Cargo book."""
 
     name = "list_cargo"
+    module = "operations"
     description = "List the cargo book (commodity, qty, laycan, load/discharge, status)"
     parameters = {
         "type": "object",
@@ -594,6 +611,7 @@ class ListInvoicesTool(AITool):
     """List invoices with optional status filter."""
 
     name = "list_invoices"
+    module = "finance"
     description = "List invoices with optional status filter (draft/issued/paid/overdue) including amounts"
     parameters = {
         "type": "object",
@@ -625,6 +643,7 @@ class GetInvoiceTool(AITool):
     """Invoice detail with payments."""
 
     name = "get_invoice"
+    module = "finance"
     description = "Get an invoice with its payment history by invoice ID or invoice number"
     parameters = {
         "type": "object",
@@ -669,6 +688,7 @@ class ListClaimsTool(AITool):
     """List claims with time bar."""
 
     name = "list_claims"
+    module = "claims"
     description = "List claims (demurrage/cargo/etc.) with amounts and time-bar dates"
     parameters = {
         "type": "object",
@@ -706,6 +726,7 @@ class GetLaytimeTool(AITool):
     """Laytime calculation detail."""
 
     name = "get_laytime"
+    module = "laytime"
     description = "Get a laytime calculation (inputs, results: laytime used, demurrage/despatch) by laytime ID or voyage ID"
     parameters = {
         "type": "object",
@@ -745,6 +766,7 @@ class ListPaymentsTool(AITool):
     """Payment history."""
 
     name = "list_payments"
+    module = "finance"
     description = "List payment history, optionally filtered by invoice"
     parameters = {
         "type": "object",
@@ -766,8 +788,12 @@ class ListPaymentsTool(AITool):
                 return {"error": f"Invalid invoice_id: {kwargs['invoice_id']}"}
         rows = db.scalars(stmt.order_by(desc(Payment.paid_at)).limit(_limit(kwargs))).all()
         fields = ("id", "invoice_id", "amount", "currency", "paid_at", "reference", "batch_id")
-        total = sum(float(r.amount or 0) for r in rows)
-        return {"count": len(rows), "total_amount": round(total, 2), "payments": [_row_dict(r, fields) for r in rows]}
+        total = sum((Decimal(str(r.amount or 0)) for r in rows), Decimal("0"))
+        return {
+            "count": len(rows),
+            "total_amount": float(round_half_up(total, 2)),
+            "payments": [_row_dict(r, fields) for r in rows],
+        }
 
 
 # ── Risk & Market tools ──
@@ -798,6 +824,7 @@ class GetExposureTool(AITool):
     """Risk exposure summary."""
 
     name = "get_exposure"
+    module = "risk"
     description = "Get the fleet hire risk exposure summary (locked hire by horizon window, sensitivity)"
     parameters = {
         "type": "object",
@@ -825,6 +852,7 @@ class GetMarketQuotesTool(AITool):
     """Freight/bunker price quotes."""
 
     name = "get_market_quotes"
+    module = "analytics"
     description = "Get latest freight index / bunker price quotes (by symbol or all)"
     parameters = {
         "type": "object",
@@ -880,6 +908,7 @@ class QueryVoyagePnLTool(AITool):
     """Query voyage P&L summary."""
 
     name = "query_voyage_pnl"
+    module = "finance"
     description = "Get P&L summary for a voyage including revenue, costs, and profit"
     parameters = {
         "type": "object",
@@ -1196,10 +1225,26 @@ def add_message(
 def execute_tool(
     db: Session, tenant_id: UUID, tool_name: str, parameters: dict
 ) -> dict:
-    """Execute a tool by name with given parameters."""
+    """Execute a tool by name with given parameters.
+
+    **模块授权前置**（P0-20）：审计发现 ``POST /api/v1/ai/tools/execute`` 只挂
+    ``require_module("operations")``，而 ``TOOL_REGISTRY`` 里有
+    ``list_invoices`` / ``get_invoice`` / ``list_claims`` / ``get_exposure`` …
+
+    —— 于是**没买 finance 模块**的租户依然能通过 AI 工具读财务数据
+    （模块许可被绕开）。现在每个工具声明自己需要的模块码
+    （``AITool.module``），执行前先查该租户的模块许可证，不通过就拒。
+    """
     tool = TOOL_REGISTRY.get(tool_name)
     if not tool:
         return {"error": f"Unknown tool: {tool_name}"}
+    required = getattr(tool, "module", "") or ""
+    if required and not tenant_has_module(db, tenant_id, required):
+        return {
+            "error": f"Module '{required}' is not licensed for this tenant",
+            "code": "MODULE_NOT_LICENSED",
+            "module": required,
+        }
     try:
         start = time.time()
         result = tool.execute(db, tenant_id, **(parameters or {}))

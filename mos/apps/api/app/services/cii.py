@@ -15,6 +15,7 @@ types fall back to the bulk carrier parameters.
 """
 
 from __future__ import annotations
+from app.services.money import round_half_up
 
 # MEPC.328(76): (a, c) per ship type, capacity in DWT.
 _REFERENCE_PARAMS: dict[str, tuple[float, float]] = {
@@ -45,7 +46,13 @@ def _vector(ship_type: str | None) -> tuple[float, float, float, float]:
 
 
 def reference_cii(dwt: float, ship_type: str | None = None) -> float:
-    """2019 reference CII for the given capacity (MEPC.328(76))."""
+    """2019 reference CII for the given capacity (MEPC.328(76)).
+
+    ``dwt <= 0`` 直接报错：容量为 0 时参考线无定义（除零），以前会一路
+    抛成 500；口径与 :func:`attained_cii` 一致（P1-B13）。
+    """
+    if dwt is None or float(dwt) <= 0:
+        raise ValueError("dwt must be > 0")
     a, c = _params(ship_type)
     return a * float(dwt) ** (-c)
 
@@ -87,8 +94,8 @@ def rate_cii(
     else:
         rating = "E"
     return {
-        "attained_cii": round(attained, 4),
-        "required_cii": round(required, 4),
+        "attained_cii": float(round_half_up(attained, 4)),
+        "required_cii": float(round_half_up(required, 4)),
         "rating": rating,
         "year": year,
         "ship_type": ship_type or DEFAULT_SHIP_TYPE,

@@ -3,6 +3,8 @@
 // 配置标志（CFG*）管理 — IMOS Configuration Flag List 同构。
 // 租户 + 平台两级 flags：查看/搜索/新建/编辑/删除，bool 值内联开关。
 
+import { RefreshButton } from "@/components/RefreshButton";
+import { msgOf } from "@/lib/errors";
 import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -12,6 +14,7 @@ import { SavedViews } from "@/components/SavedViews";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { StatusBadge } from "@/components/StatusBadge";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { RowActions } from "@/components/RowActions";
@@ -46,15 +49,25 @@ function ConfigFlagsPage() {
   const [editing, setEditing] = useState<Flag | null>(null);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const qs = category ? `?category=${encodeURIComponent(category)}` : "";
-    const rows = (await apiGet(`/api/v1/config/flags${qs}`)) as Flag[];
-    setFlags(rows);
+    setLoading(true);
+    setErr(null);
+    try {
+      const qs = category ? `?category=${encodeURIComponent(category)}` : "";
+      const rows = (await apiGet(`/api/v1/config/flags${qs}`)) as Flag[];
+      setFlags(Array.isArray(rows) ? rows : []);
+    } catch (ex) {
+      setErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
   }, [category]);
 
   useEffect(() => {
-    load().catch(() => setFlags([]));
+    load();
   }, [load]);
 
   const categories = useMemo(() => Array.from(new Set(flags.map((f) => f.category))).sort(), [flags]);
@@ -77,7 +90,7 @@ function ConfigFlagsPage() {
 
   useListHotkeys(openCreate);
 
-  function openEdit(row: Flag) {
+  const openEdit = useCallback((row: Flag) => {
     setForm({
       key: row.flag_key,
       value: row.flag_value,
@@ -86,7 +99,7 @@ function ConfigFlagsPage() {
       description: row.description || "",
     });
     setEditing(row);
-  }
+  }, []);
 
   async function save(e?: FormEvent) {
     e?.preventDefault();
@@ -114,22 +127,22 @@ function ConfigFlagsPage() {
       setEditing(null);
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  async function toggleBool(row: Flag) {
+  const toggleBool = useCallback(async (row: Flag) => {
     const next = /^(true|1|yes|on)$/i.test(row.flag_value) ? "false" : "true";
     try {
       await apiPatch(`/api/v1/config/flags/${row.id}`, { value: next, value_type: "bool" });
       toast.success(t("common.saved", "Saved"));
       setFlags((prev) => prev.map((f) => (f.id === row.id ? { ...f, flag_value: next } : f)));
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
-  }
+  }, [t, toast]);
 
   // ── 行内编辑（失焦/回车保存；值未变化不发请求，避免 blur→reload 打断输入） ──
   async function onCellSave(rowId: string, colKey: string, value: unknown, row: Flag) {
@@ -148,21 +161,21 @@ function ConfigFlagsPage() {
       toast.success(t("common.saved", "Saved"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
-  async function remove(row: Flag) {
+  const remove = useCallback(async (row: Flag) => {
     try {
       await apiDelete(`/api/v1/config/flags/${row.id}`);
       toast.success(t("common.recycled", "Moved to recycle bin"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
-  }
+  }, [load, t, toast]);
 
-  const columns: ColumnDef<Flag>[] = [
+  const columns = useMemo<ColumnDef<Flag>[]>(() => [
     {
       key: "flag_key",
       title: t("flags.col_key", "Flag"),
@@ -187,6 +200,7 @@ function ConfigFlagsPage() {
             className="linklike"
             onClick={() => toggleBool(r)}
             title={t("flags.toggle_hint", "Click to toggle")}
+            aria-label={t("flags.toggle_value", "Toggle flag value")}
           >
             <StatusBadge status={String(v)} tone={/^(true|1|yes|on)$/i.test(String(v)) ? "ok" : "muted"} label={/^(true|1|yes|on)$/i.test(String(v)) ? t("flags.on", "ON") : t("flags.off", "OFF")} />
           </button>
@@ -243,7 +257,7 @@ function ConfigFlagsPage() {
         />
       ),
     },
-  ];
+  ], [t, openEdit, toggleBool, remove]);
 
   const formFields = (
     <>
@@ -341,24 +355,30 @@ function ConfigFlagsPage() {
         <button type="button" className="btn btn-primary btn-sm" onClick={openCreate}>
           {t("flags.new", "New flag")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load()} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load()} />
         <span className="muted" style={{ fontSize: "var(--font-label)" }}>
           {filtered.length} / {flags.length}
         </span>
       </Toolbar>
 
-      <DataGrid<Flag>
-        columns={columns}
-        data={filtered}
-        rowKey={(r) => r.id}
-        storageKey="settings_flags"
-        editable
-        onCellSave={onCellSave}
-        onRowDoubleClick={(r) => openEdit(r)}
+      <StateView
+        loading={loading}
+        error={err ?? undefined}
+        empty={!filtered.length}
+        onRetry={() => load()}
         emptyText={t("flags.empty", "No configuration flags")}
-      />
+      >
+        <DataGrid<Flag>
+          columns={columns}
+          data={filtered}
+          rowKey={(r) => r.id}
+          storageKey="settings_flags"
+          editable
+          onCellSave={onCellSave}
+          onRowDoubleClick={(r) => openEdit(r)}
+          emptyText={t("flags.empty", "No configuration flags")}
+        />
+      </StateView>
 
       <RecordModal
         open={creating || !!editing}

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -45,6 +45,8 @@ from app.models_finance_ext import BunkerInquiry, CreditNote, OffHireEvent, Risk
 from app.models_wave1 import Company, Counterparty, ExchangeRate, Port, Vessel
 from app.services import cii as cii_service
 from app.services.laytime_engine import compute_laytime, compute_laytime_statement
+from app.services.data_scope import apply_module_scope
+from app.services.money import allocate_by_weight, dec, round_half_up
 from app.services.pnl import PNL_LINE_KEYS, voyage_pnl_rows
 from app.services import pnl_engine
 from app.services.sanctions import assert_not_sanctioned
@@ -240,6 +242,27 @@ def _eeoi(co2_mt: float, cargo_mt: float | None, distance_nm: float | None) -> f
     return co2_mt / (cargo_mt * distance_nm)
 
 
+def _assert_emission_refs(
+    db: Session,
+    tenant_id: UUID,
+    *,
+    voyage_id: UUID | None = None,
+    vessel_id: UUID | None = None,
+) -> None:
+    """排放记录引用的航次 / 船舶必须属于本租户（P1-17）。
+
+    旧实现两个外键都不校验：写进本租户的排放表，却挂着**别的租户**的
+    航次 / 船舶 —— 列表端再把航次号、船舶名 join 出来，等于把外租户的
+    业务标识泄漏给本租户用户。
+
+    按 IDOR 约定：不存在与跨租户一律 404，不区分两者。
+    """
+    if voyage_id is not None and scoped_get(db, Voyage, voyage_id, tenant_id) is None:
+        raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "Voyage not found"})
+    if vessel_id is not None and scoped_get(db, Vessel, vessel_id, tenant_id) is None:
+        raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "Vessel not found"})
+
+
 @router.post("/emissions")
 def create_emission(
     voyage_id: UUID | None = None,
@@ -254,6 +277,7 @@ def create_emission(
     auth: AuthContext = Depends(require_module("emissions")),
     db: Session = Depends(get_db),
 ):
+    _assert_emission_refs(db, auth.tenant_id, voyage_id=voyage_id, vessel_id=vessel_id)
     co2 = fo_mt * 3.114 + do_mt * 3.206
     extra: dict = {}
     eeoi = _eeoi(co2, cargo_mt, distance_nm)
@@ -282,12 +306,20 @@ def list_emissions(auth: AuthContext = Depends(require_module("emissions")), db:
     if voyage_ids:
         voyage_nos = {
             str(i): n
-            for i, n in db.execute(select(Voyage.id, Voyage.voyage_no).where(Voyage.id.in_(voyage_ids))).all()
+            for i, n in db.execute(
+                select(Voyage.id, Voyage.voyage_no).where(
+                    Voyage.id.in_(voyage_ids), Voyage.tenant_id == auth.tenant_id
+                )
+            ).all()
         }
     if vessel_ids:
         vessel_names = {
             str(i): n
-            for i, n in db.execute(select(Vessel.id, Vessel.name).where(Vessel.id.in_(vessel_ids))).all()
+            for i, n in db.execute(
+                select(Vessel.id, Vessel.name).where(
+                    Vessel.id.in_(vessel_ids), Vessel.tenant_id == auth.tenant_id
+                )
+            ).all()
         }
     return [
         {
@@ -327,6 +359,11 @@ def update_emission(
     row = scoped_get(db, EmissionRecord, emission_id, auth.tenant_id)
     if row is None:
         raise HTTPException(404, "Emission not found")
+    # 外键同样要校验租户（P1-17）—— 否则可以把记录改挂到外租户的航次 / 船舶上
+    if "voyage_id" in body.model_fields_set and body.voyage_id is not None:
+        _assert_emission_refs(db, auth.tenant_id, voyage_id=body.voyage_id)
+    if "vessel_id" in body.model_fields_set and body.vessel_id is not None:
+        _assert_emission_refs(db, auth.tenant_id, vessel_id=body.vessel_id)
     fields = body.model_fields_set
     if "voyage_id" in fields:
         row.voyage_id = body.voyage_id
@@ -394,6 +431,9 @@ def _infer_eu_share(db: Session, tenant_id: UUID, voyage_id: UUID) -> float | No
 @router.post("/emissions/fueleu-calc")
 def fueleu_calc(body: FuelEuIn, auth: AuthContext = Depends(require_module("emissions")), db: Session = Depends(get_db)):
     """FuelEU / EU ETS style calculator — persists EmissionRecord + returns compliance snapshot."""
+    # 航次 / 船舶必须是本租户的（P1-17）—— 否则落进本租户排放表的记录会挂着
+    # 外租户的航次，列表端再把对方航次号 join 出来。
+    _assert_emission_refs(db, auth.tenant_id, voyage_id=body.voyage_id, vessel_id=body.vessel_id)
     eu_share = body.eu_share
     eu_share_source = "manual"
     if eu_share is None:
@@ -403,27 +443,39 @@ def fueleu_calc(body: FuelEuIn, auth: AuthContext = Depends(require_module("emis
     # ETS cost bearer is a commercial hint only — it does not change the amounts.
     borne_by = "owner"
     if body.voyage_id:
-        voyage = db.get(Voyage, body.voyage_id)
-        charter = db.get(Charter, voyage.charter_id) if voyage and voyage.charter_id else None
+        voyage = scoped_get(db, Voyage, body.voyage_id, auth.tenant_id)
+        charter = (
+            scoped_get(db, Charter, voyage.charter_id, auth.tenant_id) if voyage and voyage.charter_id else None
+        )
         if charter and charter.ets_responsibility == "charterer":
             borne_by = "charterer"
     # Simplified GHG intensity (gCO2e/MJ) vs FuelEU target trajectory
-    energy_mj = body.fo_mt * 42700 + body.do_mt * 42700 + body.lng_mt * 48000  # approx LHV MJ/t
-    co2e_t = body.fo_mt * 3.114 + body.do_mt * 3.206 + body.lng_mt * 2.75
-    intensity = (co2e_t * 1_000_000 / energy_mj) if energy_mj > 0 else 0.0
-    target_2025 = 89.34  # illustrative FuelEU reference gCO2e/MJ
-    compliance_balance_t = max(0.0, (intensity - target_2025) / 1_000_000 * energy_mj) * eu_share
-    ets_allowances = co2e_t * eu_share
-    ets_cost = ets_allowances * body.ets_price_eur
-    fueleu_penalty = compliance_balance_t * body.fueleu_penalty_eur_per_tco2e
+    #
+    # P1-B3：金额 / 数量一律 Decimal + 显式 ROUND_HALF_UP。旧实现是 float +
+    # 裸 round()（银行家舍入，``.5`` 往偶数靠），与系统其余口径不一致 ——
+    # 同一笔碳成本在看板和导出上能差半分。JSON 出口才转 float。
+    fo_mt = dec(body.fo_mt)
+    do_mt = dec(body.do_mt)
+    lng_mt = dec(body.lng_mt)
+    eu_share_d = dec(eu_share)
+    energy_mj = fo_mt * 42700 + do_mt * 42700 + lng_mt * 48000  # approx LHV MJ/t
+    co2e_t = fo_mt * Decimal("3.114") + do_mt * Decimal("3.206") + lng_mt * Decimal("2.75")
+    intensity = (co2e_t * 1_000_000 / energy_mj) if energy_mj > 0 else Decimal("0")
+    target_2025 = Decimal("89.34")  # illustrative FuelEU reference gCO2e/MJ
+    compliance_balance_t = (
+        max(Decimal("0"), (intensity - target_2025) / 1_000_000 * energy_mj) * eu_share_d
+    )
+    ets_allowances = co2e_t * eu_share_d
+    ets_cost = ets_allowances * dec(body.ets_price_eur)
+    fueleu_penalty = compliance_balance_t * dec(body.fueleu_penalty_eur_per_tco2e)
     extra: dict = {}
     if body.dwt > 0 and body.distance_nm > 0 and co2e_t > 0:
-        res = cii_service.rate_cii(co2_mt=co2e_t, dwt=body.dwt, distance_nm=body.distance_nm, year=date.today().year, ship_type=body.ship_type)
+        res = cii_service.rate_cii(co2_mt=float(co2e_t), dwt=body.dwt, distance_nm=body.distance_nm, year=date.today().year, ship_type=body.ship_type)
         cii = res["rating"]
         extra = {"attained_cii": res["attained_cii"], "required_cii": res["required_cii"]}
     else:
         cii = "C" if co2e_t > 1000 else "B" if co2e_t > 500 else "A"
-    eeoi = _eeoi(co2e_t, body.cargo_mt or None, body.distance_nm or None)
+    eeoi = _eeoi(float(co2e_t), body.cargo_mt or None, body.distance_nm or None)
     if eeoi is not None:
         extra["eeoi"] = eeoi
     row = EmissionRecord(
@@ -440,16 +492,16 @@ def fueleu_calc(body: FuelEuIn, auth: AuthContext = Depends(require_module("emis
     db.commit()
     return {
         "id": str(row.id),
-        "co2e_t": round(co2e_t, 3),
-        "ghg_intensity": round(intensity, 4),
-        "target_intensity": target_2025,
-        "compliance_balance_t": round(compliance_balance_t, 4),
-        "ets_allowances_t": round(ets_allowances, 3),
-        "ets_cost_eur": round(ets_cost, 2),
-        "fueleu_penalty_eur": round(fueleu_penalty, 2),
-        "total_compliance_cost_eur": round(ets_cost + fueleu_penalty, 2),
+        "co2e_t": float(round_half_up(co2e_t, 3)),
+        "ghg_intensity": float(round_half_up(intensity, 4)),
+        "target_intensity": float(target_2025),
+        "compliance_balance_t": float(round_half_up(compliance_balance_t, 4)),
+        "ets_allowances_t": float(round_half_up(ets_allowances, 3)),
+        "ets_cost_eur": float(round_half_up(ets_cost, 2)),
+        "fueleu_penalty_eur": float(round_half_up(fueleu_penalty, 2)),
+        "total_compliance_cost_eur": float(round_half_up(ets_cost + fueleu_penalty, 2)),
         "cii_rating": cii,
-        "eu_share": round(eu_share, 4),
+        "eu_share": float(round_half_up(eu_share_d, 4)),
         "eu_share_source": eu_share_source,
         "borne_by": borne_by,
         "format": "FuelEU_EU_ETS_v1",
@@ -682,8 +734,9 @@ def create_period(pool_id: UUID, label: str, total_pool_result: float, auth: Aut
     if not pool or pool.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Pool not found")
     vessels = db.scalars(select(PoolVessel).where(PoolVessel.pool_id == pool_id, PoolVessel.left_on.is_(None))).all()
-    total_points = sum(float(v.points) for v in vessels) or 1.0
-    dist = {str(v.vessel_id): round(total_pool_result * float(v.points) / total_points, 2) for v in vessels}
+    # 分位之和必须精确等于总额（逐船 round 会差分）—— P2-B1
+    shares = allocate_by_weight(total_pool_result, [float(v.points or 0) for v in vessels])
+    dist = {str(v.vessel_id): float(shares[i]) for i, v in enumerate(vessels)}
     row = PoolPeriod(pool_id=pool_id, label=label, total_pool_result=total_pool_result, distribution=dist, status="calculating")
     db.add(row)
     db.commit()
@@ -756,7 +809,7 @@ def create_risk_limit(body: RiskLimitIn, auth: AuthContext = Depends(require_mod
         tenant_id=auth.tenant_id,
         scope=body.scope,
         limit_type=body.limit_type,
-        amount=Decimal(str(body.amount)).quantize(Decimal("0.01")),
+        amount=Decimal(str(body.amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         currency=body.currency,
         active=body.active,
     )
@@ -960,7 +1013,15 @@ def portal_message(counterparty_id: UUID, subject: str, body: str | None = None,
 @router.get("/portal/invoices")
 def portal_invoices(counterparty_id: UUID, auth: AuthContext = Depends(require_module("finance")), db: Session = Depends(get_db)):
     rows = db.scalars(
-        select(Invoice).where(Invoice.tenant_id == auth.tenant_id, Invoice.counterparty_id == counterparty_id)
+        apply_module_scope(
+            db,
+            select(Invoice).where(
+                Invoice.tenant_id == auth.tenant_id, Invoice.counterparty_id == counterparty_id
+            ),
+            Invoice,
+            auth,
+            "finance",
+        )
     ).all()
     return [{"invoice_no": r.invoice_no, "status": r.status, "amount": float(r.amount)} for r in rows]
 
@@ -978,10 +1039,15 @@ def risk_exposure(
     horizon_days: int = Query(90, ge=30, le=365),
     market_hire_rate: float | None = Query(None, gt=0),
     sensitivity_per_day: float = Query(1000.0, gt=0),
+    currency: str = Query("USD", min_length=3, max_length=3),
     auth: AuthContext = Depends(require_module("risk")),
     db: Session = Depends(get_db),
 ):
-    """D23 船队敞口：30/60/90 天已锁定租金 + 敏感度 + 可选市场对比。"""
+    """D23 船队敞口：30/60/90 天已锁定租金 + 敏感度 + 可选市场对比。
+
+    ``currency`` 是敞口的计价币种 —— ``Charter`` 表没有币种列，必须由调用方
+    显式声明，否则看板会把非美元租约组合错标成 USD（审计 P1-B4）。
+    """
     from app.services.exposure import fleet_exposure
 
     return fleet_exposure(
@@ -990,6 +1056,7 @@ def risk_exposure(
         horizon_days=horizon_days,
         market_hire_rate=market_hire_rate,
         sensitivity_per_day=sensitivity_per_day,
+        currency=currency.upper(),
     )
 
 

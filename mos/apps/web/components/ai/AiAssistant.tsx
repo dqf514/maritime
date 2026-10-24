@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { apiGet, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useAiContext } from "./aiContextStore";
 
@@ -42,6 +43,8 @@ export function AiAssistant() {
   const [mounted, setMounted] = useState(false);
   // 已配置模型但本轮回落到规则引擎 → 给一条友好说明
   const [replyFallback, setReplyFallback] = useState(false);
+  /** 可用性状态取数失败 —— 不能伪装成「未配置模型」 */
+  const [statusErr, setStatusErr] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMounted(true), []);
@@ -68,8 +71,14 @@ export function AiAssistant() {
   useEffect(() => {
     if (!open || status) return;
     apiGet("/api/v1/ai/assist/status")
-      .then((s: Status) => setStatus(s))
-      .catch(() => setStatus({ available: false, provider: null, metering: false, balance: null, fallback_mode: "rules" }));
+      .then((s: Status) => {
+        setStatus(s);
+        setStatusErr(null);
+      })
+      .catch((ex) => {
+        setStatusErr(msgOf(ex));
+        setStatus({ available: false, provider: null, metering: false, balance: null, fallback_mode: "rules" });
+      });
   }, [open, status]);
 
   useEffect(() => {
@@ -105,7 +114,7 @@ export function AiAssistant() {
           role: "assistant",
           text: quota
             ? t("ai.assist.quota_exceeded", "AI 额度不足 — 请在设置中充值或改用租户自有 API Key。")
-            : ex?.message || t("ai.assist.error", "请求失败，请重试。"),
+            : msgOf(ex, t("ai.assist.error", "请求失败，请重试。")),
         },
       ]);
     } finally {
@@ -128,7 +137,7 @@ export function AiAssistant() {
         { role: "assistant", text: res.narrative || "—", source: res.source },
       ]);
     } catch (ex: any) {
-      setMsgs((m) => [...m, { role: "assistant", text: ex?.message || t("ai.assist.error", "请求失败，请重试。") }]);
+      setMsgs((m) => [...m, { role: "assistant", text: msgOf(ex, t("ai.assist.error", "请求失败，请重试。")) }]);
     } finally {
       setBusy(false);
     }
@@ -154,11 +163,13 @@ export function AiAssistant() {
           <div className="ai-dock-head">
             <span className="ai-dock-title">✦ {t("ai.assist.title", "Mari Copilot")}</span>
             <span className="ai-dock-meta">
-              {status === null
-                ? "…"
-                : status.available
-                  ? status.provider || t("ai.assist.ready", "就绪")
-                  : t("ai.assist.fallback", "规则模式（未配置模型）")}
+              {statusErr
+                ? t("ai.assist.status_fail", "状态不可用")
+                : status === null
+                  ? "…"
+                  : status.available
+                    ? status.provider || t("ai.assist.ready", "就绪")
+                    : t("ai.assist.fallback", "规则模式（未配置模型）")}
             </span>
             <button type="button" className="icon-btn" aria-label={t("ai.assist.close", "关闭")} onClick={() => setOpen(false)}>
               ×
@@ -171,7 +182,7 @@ export function AiAssistant() {
               : t("ai.assist.ctx_screen", "当前页面：{page}", { page: shortPage(ctx?.page) })}
           </div>
 
-          {status !== null && !status.available ? (
+          {status !== null && !status.available && !statusErr ? (
             <div className="ai-dock-fallback-note" role="status">
               {t(
                 "ai.assist.no_model_hint",
@@ -188,7 +199,7 @@ export function AiAssistant() {
             </div>
           ) : null}
 
-          <div className="ai-dock-list" ref={listRef}>
+          <div className="ai-dock-list" ref={listRef} role="log" aria-live="polite" aria-label={t("ai.assist.log_label", "AI 对话记录")}>
             {msgs.length === 0 ? (
               <p className="ai-dock-empty">
                 {t(
@@ -220,7 +231,7 @@ export function AiAssistant() {
 
           <div className="ai-dock-actions">
             {QUICK_ACTIONS.map((a) => (
-              <button key={a.task} type="button" className="btn btn-sm" disabled={busy} onClick={() => runQuick(a.task).catch(() => undefined)}>
+              <button key={a.task} type="button" className="btn btn-sm" disabled={busy} onClick={() => void runQuick(a.task)}>
                 {t(a.key, a.task.replace("_", " "))}
               </button>
             ))}
@@ -230,7 +241,7 @@ export function AiAssistant() {
             className="ai-dock-form"
             onSubmit={(e) => {
               e.preventDefault();
-              ask(input).catch(() => undefined);
+              void ask(input);
             }}
           >
             <input

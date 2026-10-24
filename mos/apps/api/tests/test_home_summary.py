@@ -97,7 +97,9 @@ def test_summary_schedule_includes_upcoming_port_call(client, auth_headers):
     h = auth_headers
     voyages = client.get(f"{API}/voyages", headers=h)
     assert voyages.status_code == 200, voyages.text
-    voyage_id = voyages.json()[0]["id"]
+    _vpayload = voyages.json()
+    _vrows = _vpayload["items"] if isinstance(_vpayload, dict) else _vpayload
+    voyage_id = _vrows[0]["id"]
     eta = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
     r = client.post(
         f"{API}/port-calls",

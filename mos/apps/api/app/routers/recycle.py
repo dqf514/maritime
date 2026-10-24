@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -194,7 +195,24 @@ def recycle_restore(
 
     restore_row(row, et, item.payload if isinstance(item.payload, dict) else {})
     item.restored_at = _now()
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # P0-24：还原会撞上数据库唯一约束（例如同名对手方已经重新建过档）
+        # → 409，不是 500。
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RESTORE_CONFLICT",
+                "message": (
+                    f"Cannot restore {et}: it conflicts with an existing record "
+                    f"(e.g. a duplicate name). Remove or rename the existing one first."
+                ),
+                "entity_type": et,
+                "entity_id": eid,
+            },
+        ) from exc
     return {"ok": True, "id": str(item.id), "entity_type": et, "entity_id": eid}
 
 

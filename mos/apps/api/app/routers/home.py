@@ -21,6 +21,7 @@ from app.routers.ship_mgmt import _refresh_certificate_status
 from app.routers.tasks import task_out
 from app.security import AuthContext, get_current_auth
 from app.services.notifications import notify_once, role_recipients
+from app.services.data_scope import apply_module_scope
 
 log = logging.getLogger("marios.home")
 
@@ -469,8 +470,13 @@ def _queues_section(db: Session, auth: AuthContext) -> list[dict]:
 
     # 2) 待审批发票
     pending_inv = db.scalars(
-        select(Invoice)
-        .where(Invoice.tenant_id == tid, Invoice.status == "pending_approval")
+        apply_module_scope(
+            db,
+            select(Invoice).where(Invoice.tenant_id == tid, Invoice.status == "pending_approval"),
+            Invoice,
+            auth,
+            "finance",
+        )
         .order_by(Invoice.due_date.is_(None), Invoice.due_date)
         .limit(8)
     ).all()

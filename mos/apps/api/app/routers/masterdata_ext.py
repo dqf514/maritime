@@ -20,6 +20,7 @@ IMOS Data Center parity（P10）子表：
 
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -68,10 +69,13 @@ from app.schemas_wave1 import (
     VesselPortConsumptionPatch,
     VesselSpeedConsumptionIn,
     VesselSpeedConsumptionOut,
+    MasterDataName,
+    _reject_empty,
 )
 from app.security import AuthContext, require_module
 from app.services.recycle import soft_delete
 from app.services.tenant_guard import scoped_get, scoped_query
+from app.services.data_scope import apply_module_scope
 
 router = APIRouter(prefix="/masterdata", tags=["Master Data"])  # 由 main.py 以 /api/v1 挂载
 
@@ -80,10 +84,12 @@ router = APIRouter(prefix="/masterdata", tags=["Master Data"])  # 由 main.py �
 
 
 class HolidayCalendarIn(BaseModel):
-    name: str
+    name: MasterDataName
     country_code: str | None = None
     year: int
     holidays: list[dict] | dict | None = None  # [{date, name, type}]
+
+    _name_not_empty = _reject_empty("name")
 
 
 class HolidayCalendarOut(BaseModel):
@@ -205,7 +211,7 @@ def delete_holiday_calendar(
 
 
 class WorkingDayPatternIn(BaseModel):
-    name: str
+    name: MasterDataName
     monday: bool = True
     tuesday: bool = True
     wednesday: bool = True
@@ -214,6 +220,8 @@ class WorkingDayPatternIn(BaseModel):
     saturday: bool = False
     sunday: bool = False
     is_default: bool = False
+
+    _name_not_empty = _reject_empty("name")
 
 
 class WorkingDayPatternOut(BaseModel):
@@ -331,12 +339,18 @@ def delete_working_day_pattern(
 
 
 class TermListIn(BaseModel):
-    category: str = Field(..., description="laytime_terms|delivery_terms|payment_terms|etc")
-    code: str
-    label_en: str
+    category: Annotated[
+        str, Field(min_length=1, max_length=64)
+    ] = Field(..., description="laytime_terms|delivery_terms|payment_terms|etc")
+    code: Annotated[str, Field(min_length=1, max_length=64)]
+    label_en: MasterDataName
     label_zh: str | None = None
     sort_order: int = 0
     is_active: bool = True
+
+    _category_not_empty = _reject_empty("category")
+    _code_not_empty = _reject_empty("code")
+    _label_en_not_empty = _reject_empty("label_en")
 
 
 class TermListOut(BaseModel):
@@ -449,11 +463,17 @@ def delete_term_list(
 
 
 class StandardParagraphIn(BaseModel):
-    category: str = Field(..., description="cp_clause|invoice_note|claim_note")
-    code: str
-    title: str
+    category: Annotated[
+        str, Field(min_length=1, max_length=64)
+    ] = Field(..., description="cp_clause|invoice_note|claim_note")
+    code: Annotated[str, Field(min_length=1, max_length=64)]
+    title: MasterDataName
     content: str
     is_system: bool = False
+
+    _category_not_empty = _reject_empty("category")
+    _code_not_empty = _reject_empty("code")
+    _title_not_empty = _reject_empty("title")
 
 
 class StandardParagraphOut(BaseModel):
@@ -681,6 +701,8 @@ def list_cargo_names(
         stmt = stmt.where(CargoName.cargo_group_id == group_id)
     if inactive is not None:
         stmt = stmt.where(CargoName.inactive.is_(bool(inactive)))
+    # 行级数据权限：scope 收窄到 "own" 时只看自己建的货种
+    stmt = apply_module_scope(db, stmt, CargoName, auth, "masterdata")
     rows = db.scalars(stmt.order_by(CargoName.short_name)).all()
     return [CargoNameOut.model_validate(r, from_attributes=True) for r in rows]
 
@@ -691,7 +713,7 @@ def create_cargo_name(
     auth: AuthContext = Depends(require_module("masterdata")),
     db: Session = Depends(get_db),
 ):
-    row = CargoName(tenant_id=auth.tenant_id, **body.model_dump())
+    row = CargoName(tenant_id=auth.tenant_id, created_by=auth.user_id, **body.model_dump())
     db.add(row)
     _commit_or_conflict(db, "CARGO_NAME_EXISTS", "Cargo short name already exists")
     db.refresh(row)

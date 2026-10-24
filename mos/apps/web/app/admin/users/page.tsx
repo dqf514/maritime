@@ -1,6 +1,7 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -12,8 +13,10 @@ import { useListHotkeys } from "@/components/useListHotkeys";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost, generateTempPassword } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
+import { StateView } from "@/components/StateView";
 import { useToast } from "@/components/ToastProvider";
 
 type UserRow = {
@@ -29,14 +32,17 @@ type UserRow = {
 type RoleRow = { code: string; name: string };
 type OrgUnit = { id: string; code: string; name: string; unit_type: string };
 
+// Fallback text must match the UI default language (English) — a Chinese
+// fallback leaks into the English UI whenever the i18n bundle is missing the
+// key. The zh wording lives in the server-side i18n catalogue.
 const BUSINESS_ROLES_HINT =
-  "可同时勾选多个业务角色（如租船+营运），适合小型企业一人多岗；租户管理员可与业务角色并存。";
+  "You can tick multiple business roles (e.g. chartering + operations) for one-person desks in small companies; the tenant admin role can coexist with business roles.";
 
 function UsersAdminPage() {
   const { t, locale } = useI18n();
   const toast = useToast();
   const router = useRouter();
-  const { query, setQuery } = useListQuery();
+  const { query, setQuery, page, limit } = useListQuery();
   const filterOrg = query.dept ?? "";
   const [users, setUsers] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
@@ -52,22 +58,43 @@ function UsersAdminPage() {
   });
   const [saving, setSaving] = useState(false);
   const [initialPw, setInitialPw] = useState("");
+  // 主列表加载态 / 错误态（P1-4）：失败不能静默变成「无数据」
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
+  // 角色 / 组织单元属于下拉参考数据，失败要可见但不能整页报错
+  const [refWarn, setRefWarn] = useState("");
 
   const assignableRoles = roles.filter((r) => r.code !== "platform_admin");
 
   async function load() {
-    const [u, r, o] = await Promise.all([
-      apiGet("/api/v1/admin/users"),
-      apiGet("/api/v1/admin/roles"),
-      apiGet("/api/v1/admin/org-units"),
-    ]);
-    setUsers(u);
-    setRoles(r);
-    setOrgs(o);
+    setLoading(true);
+    setLoadErr("");
+    try {
+      const [u, r, o] = await Promise.all([
+        apiGet("/api/v1/admin/users"),
+        apiGet("/api/v1/admin/roles").catch((e) => {
+          setRefWarn(msgOf(e, t("common.failed", "失败")));
+          return [];
+        }),
+        apiGet("/api/v1/admin/org-units").catch((e) => {
+          setRefWarn(msgOf(e, t("common.failed", "失败")));
+          return [];
+        }),
+      ]);
+      setUsers(u);
+      setRoles(r);
+      setOrgs(o);
+    } catch (e) {
+      setUsers([]);
+      setLoadErr(msgOf(e, t("page.users.admin_required", "需要租户管理员角色")));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch(() => toast.error(t("page.users.admin_required", "需要租户管理员角色")));
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
   function toggleRole(list: string[], code: string): string[] {
@@ -161,7 +188,7 @@ function UsersAdminPage() {
       closeModal();
       await load();
     } catch (err: any) {
-      toast.error(String(err?.detail?.code || err?.message || t("common.failed", "失败")));
+      toast.error(msgOf(err, t("common.failed", "失败")));
     } finally {
       setSaving(false);
     }
@@ -192,8 +219,13 @@ function UsersAdminPage() {
   }
 
   const filtered = filterOrg ? users.filter((u) => u.org_unit_id === filterOrg) : users;
+  // 分页（P1-28）：列表不再一次性渲染全表，且截断对用户可见
+  const totalPages = Math.max(1, Math.ceil(filtered.length / limit));
+  const safePage = Math.min(page, totalPages);
+  const pagedUsers = filtered.slice((safePage - 1) * limit, safePage * limit);
+  const setPage = (p: number) => setQuery({ page: p > 1 ? p : null });
 
-  const columns: ColumnDef<UserRow>[] = [
+  const columns = useMemo<ColumnDef<UserRow>[]>(() => [
     { key: "full_name", title: t("common.name", "姓名"), width: 160, value: (r) => r.full_name || "" },
     { key: "email", title: t("common.email", "邮箱"), minWidth: 200, value: (r) => r.email },
     {
@@ -220,7 +252,7 @@ function UsersAdminPage() {
       value: (r) => r.status,
       render: (v) => <span className={`badge badge-${v === "active" ? "ok" : v === "invited" ? "info" : "warn"}`}>{t(`status.${v}`, String(v))}</span>,
     },
-  ];
+  ], [locale, t]);
 
   return (
     <AppShell>
@@ -276,21 +308,47 @@ function UsersAdminPage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.users.invite", "新建用户")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load().catch(handled)} />
       </Toolbar>
+      {refWarn ? <p className="flash-err">{refWarn}</p> : null}
       <div className="panel">
-        <DataGrid<UserRow>
-          columns={columns}
-          data={filtered}
-          rowKey={(u) => u.id}
-          storageKey="admin_users_grid"
+        <StateView
+          loading={loading}
+          error={loadErr || undefined}
+          empty={!loadErr && !filtered.length}
           emptyText={t("common.none", "无")}
-          showFooter={false}
-          onRowClick={(u) => openRow(u)}
-          onRowDoubleClick={(u) => openRow(u)}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid<UserRow>
+            columns={columns}
+            data={pagedUsers}
+            rowKey={(u) => u.id}
+            storageKey="admin_users_grid"
+            emptyText={t("common.none", "无")}
+            showFooter={false}
+            onRowClick={(u) => openRow(u)}
+            onRowDoubleClick={(u) => openRow(u)}
+          />
+        </StateView>
+        {!loadErr ? (
+          <div className="dt-pagination">
+            <span className="dt-page-info">
+              {t("common.page_of", "{from}-{to} of {n}", {
+                from: filtered.length ? (safePage - 1) * limit + 1 : 0,
+                to: Math.min(safePage * limit, filtered.length),
+                n: filtered.length,
+              })}
+            </span>
+            <span className="dt-page-btns">
+              <button type="button" onClick={() => setPage(safePage - 1)} disabled={safePage <= 1} aria-label="prev">
+                ‹
+              </button>
+              <button type="button" onClick={() => setPage(safePage + 1)} disabled={safePage >= totalPages} aria-label="next">
+                ›
+              </button>
+            </span>
+          </div>
+        ) : null}
       </div>
 
       <RecordModal

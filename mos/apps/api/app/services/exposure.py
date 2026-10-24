@@ -3,6 +3,10 @@
 口径：
 - 敞口 = 生效 TC 租约（time/tct, active）的 hire_per_day × 窗口内剩余天数
   （截断到 redelivery_at，无还船期则满窗口）；
+- 币种：``Charter.hire_per_day`` 这张表**没有币种列**（只有 TimeCharterContract
+  才有 ``hire_currency``），所以敞口是"单一币种"口径。以前这个币种是隐式的，
+  看板直接标 "USD" —— 非美元租约组合会被错标（审计 P1-B4）。
+  现在把币种**显式化**：由调用方传入并原样输出，不再假装是 USD；
 - 敏感度 = 窗口天数 × ±sensitivity_per_day（默认 $1000/天）；
 - 已锁定 vs 市场：给 market_hire_rate 时输出对市场差额（正=锁定贵）。
 """
@@ -34,6 +38,7 @@ def fleet_exposure(
     horizon_days: int = 90,
     market_hire_rate: float | None = None,
     sensitivity_per_day: float = 1000.0,
+    currency: str = "USD",
     today: date | None = None,
 ) -> dict[str, Any]:
     today = today or datetime.now(timezone.utc).date()
@@ -74,7 +79,16 @@ def fleet_exposure(
 
     return {
         "as_of": today.isoformat(),
-        "charters": [{"id": str(c.id), "charter_no": c.charter_no, "hire_per_day": float(c.hire_per_day)} for c in charters],
+        "currency": currency,
+        "charters": [
+            {
+                "id": str(c.id),
+                "charter_no": c.charter_no,
+                "hire_per_day": float(c.hire_per_day),
+                "currency": currency,
+            }
+            for c in charters
+        ],
         "windows": windows,
         "sensitivity_per_day": sensitivity_per_day,
     }

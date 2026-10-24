@@ -4,7 +4,7 @@
 // 自包含：拉取租约 + 船舶/对手方/航次引用，承载编辑/状态推进/变更单/
 // hire 汇总/COA liftings 全功能，供 /charters/[id] 详情页挂载。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DataGrid } from "@/components/grid";
@@ -18,8 +18,9 @@ import { StatusLegend } from "@/components/StatusLegend";
 import { Tabs } from "@/components/Tabs";
 import { PartyPicker } from "@/components/DataPicker";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
-import { useStateActions } from "@/components/useTransitions";
+import { useStateActions, useTransitionTable } from "@/components/useTransitions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { formatDateInTz } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -483,12 +484,18 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
   const [liftModalOpen, setLiftModalOpen] = useState(false);
   const [amendModalOpen, setAmendModalOpen] = useState(false);
   const [err, setErr] = useState("");
+  /** 参考数据（船/对手方/航次/母合同/条款/经纪规则）加载失败 —— 局部提示，不整页报错 */
+  const [refErr, setRefErr] = useState<string | null>(null);
+  /** 子列表（liftings / broker-rules / amendments / itinerary）加载失败 */
+  const [subErr, setSubErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [confirm, setConfirm] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
 
   // 状态机动作可见性：只渲染当前状态可执行的转移
+  // 转移表拉取失败必须可见，否则页面会静默地「没有可用动作」
+  const { error: transitionErr } = useTransitionTable();
   const nextStatuses = useStateActions("charter", charter?.status);
 
   function validateCharter(): ValidateIssue[] {
@@ -583,29 +590,43 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
   }, [charterId]);
 
   const loadSide = useCallback(async () => {
-    const [v, p, voy, ams, cls, mcs, brs] = await Promise.all([
+    // 参考数据取数失败不能伪装成「没有选项」：逐项结算，失败项只提示不阻塞整页
+    const [vR, pR, voyR, amsR, clsR, mcsR, brsR] = await Promise.allSettled([
       apiGet("/api/v1/masterdata/vessels"),
       apiGet("/api/v1/masterdata/counterparties"),
-      apiGet("/api/v1/voyages").catch(() => []),
-      apiGet(`/api/v1/charters/${charterId}/amendments`).catch(() => []),
-      apiGet("/api/v1/clauses").catch(() => ({ items: [] })),
-      apiGet("/api/v1/master-contracts").catch(() => []),
-      apiGet(`/api/v1/charters/${charterId}/broker-rules`).catch(() => []),
+      apiGet("/api/v1/voyages/options"),
+      apiGet(`/api/v1/charters/${charterId}/amendments`),
+      apiGet("/api/v1/clauses"),
+      apiGet("/api/v1/master-contracts"),
+      apiGet(`/api/v1/charters/${charterId}/broker-rules`),
     ]);
-    setVessels(v);
-    setParties(p);
-    setVoyages(voy);
-    setAmendments(Array.isArray(ams) ? ams : []);
-    setClauseCatalog(Array.isArray(cls?.items) ? cls.items : []);
-    setMasters(Array.isArray(mcs) ? mcs : (mcs?.items ?? []));
-    setBrokerRules(Array.isArray(brs) ? brs : (brs?.items ?? []));
+    const firstError = () => {
+      for (const r of [vR, pR, voyR, amsR, clsR, mcsR, brsR]) {
+        if (r.status === "rejected") return msgOf(r.reason);
+      }
+      return null;
+    };
+    setRefErr(firstError());
+    if (vR.status === "fulfilled") setVessels(vR.value);
+    if (pR.status === "fulfilled") setParties(pR.value);
+    if (voyR.status === "fulfilled") setVoyages(Array.isArray(voyR.value) ? voyR.value : []);
+    if (amsR.status === "fulfilled") setAmendments(Array.isArray(amsR.value) ? amsR.value : []);
+    if (clsR.status === "fulfilled") setClauseCatalog(Array.isArray(clsR.value?.items) ? clsR.value.items : []);
+    if (mcsR.status === "fulfilled") {
+      const mcs = mcsR.value;
+      setMasters(Array.isArray(mcs) ? mcs : ((mcs?.items ?? []) as MasterContractOpt[]));
+    }
+    if (brsR.status === "fulfilled") {
+      const brs = brsR.value;
+      setBrokerRules(Array.isArray(brs) ? brs : ((brs?.items ?? []) as BrokerRule[]));
+    }
   }, [charterId]);
 
   useEffect(() => {
     Promise.all([loadCharter(), loadSide()])
       .catch((ex) => {
         if (ex?.status === 404) setNotFound(true);
-        else setErr(String(ex));
+        else setErr(msgOf(ex));
       });
   }, [loadCharter, loadSide]);
 
@@ -615,9 +636,11 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       const res = await apiGet(`/api/v1/charters/${charterId}/itinerary-rows`);
       setItinRows(Array.isArray(res?.items) ? res.items : []);
       setItinTotals(res?.totals ?? null);
-    } catch {
+    } catch (ex) {
+      // 取数失败不等于「没有航次安排」——保留空列表但给出可见错误
       setItinRows([]);
       setItinTotals(null);
+      setSubErr(msgOf(ex));
     } finally {
       setItinBusy(false);
     }
@@ -647,30 +670,33 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       toast.success(t("common.saved", "已保存"));
       await loadItinerary();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
-  async function delItinRow(id: string) {
+  const delItinRow = useCallback(async (id: string) => {
     try {
       await apiDelete(`/api/v1/charters/${charterId}/itinerary-rows/${id}`);
       await loadItinerary();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
-  }
+  }, [charterId, loadItinerary, toast]);
 
   useEffect(() => {
     if (!charter) return;
     if (charter.charter_type === "coa") {
       apiGet(`/api/v1/charters/${charter.id}/liftings`)
         .then((rows: Lifting[]) => setLiftings(Array.isArray(rows) ? rows : []))
-        .catch(() => setLiftings([]));
+        .catch((ex: unknown) => {
+          setLiftings([]);
+          setSubErr(msgOf(ex));
+        });
     }
     if (isTc(charter.charter_type)) {
       apiGet(`/api/v1/charters/${charter.id}/hire-summary`)
         .then((s: HireSummary) => setHireSummary(s))
-        .catch((ex: unknown) => setHireErr(ex instanceof Error ? ex.message : String(ex)));
+        .catch((ex: unknown) => setHireErr(msgOf(ex)));
     }
     // P11 — voyage calculator rows（任何 fixture 类型都可有行程）
     loadItinerary();
@@ -678,6 +704,33 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
 
   async function save() {
     if (!charter) return;
+    // P1-24：数值字段校验 —— 非法输入不得静默变 0 / NaN，必须中止提交
+    const numFields: Array<[string, string]> = [
+      [t("page.charters.freight_rate", "Freight rate"), edit.freight_rate],
+      [t("page.charters.cargo_qty", "Cargo qty"), edit.cargo_qty],
+      [t("page.charters.commission_pct", "Commission %"), edit.commission_pct],
+      [t("page.charters.exposure_amount", "Exposure amount"), edit.exposure_amount],
+      [t("page.charters.demurrage_rate", "Demurrage rate"), edit.demurrage_rate],
+      [t("page.charters.despatch_rate", "Despatch rate"), edit.despatch_rate],
+      [t("page.charters.tolerance_pct", "Tolerance %"), edit.tolerance_pct],
+      [t("page.charters.overage_pct", "Overage %"), edit.overage_pct],
+      [t("page.charters.load_rate_pd", "Load rate pd"), edit.load_rate_pd],
+      [t("page.charters.disch_rate_pd", "Disch rate pd"), edit.disch_rate_pd],
+      [t("page.charters.address_comm_pct", "Address commission %"), edit.address_comm_pct],
+      [t("page.charters.brokerage_pct", "Brokerage %"), edit.brokerage_pct],
+      [t("page.charters.hire_per_day", "Hire per day"), edit.hire_per_day],
+      [t("page.charters.hire_cycle_days", "Hire cycle days"), edit.hire_cycle_days],
+      [t("page.charters.ballast_bonus", "Ballast bonus"), edit.ballast_bonus],
+      [t("page.charters.dwf_pct", "DWF %"), edit.dwf_pct],
+    ];
+    for (const [label, raw] of numFields) {
+      if (raw === "" || raw === null || raw === undefined) continue;
+      if (!Number.isFinite(Number(raw))) {
+        toast.error(t("page.charters.err_number", "{field} must be a valid number", { field: label }));
+        setSaving(false);
+        return;
+      }
+    }
     setSaving(true);
     setErr("");
     try {
@@ -745,7 +798,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
         toast.error(msg);
         setErr(msg);
       } else {
-        setErr(String(ex));
+        setErr(msgOf(ex));
       }
     } finally {
       setSaving(false);
@@ -759,7 +812,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       await apiDelete(`/api/v1/charters/${charter.id}`);
       window.location.href = "/charters";
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
       setSaving(false);
     }
   }
@@ -784,7 +837,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       } else if (code === "SANCTIONS_BLOCKED") {
         setErr(t("page.charters.sanctions_block", "Cannot activate — counterparty sanctions blocked."));
       } else {
-        setErr(ex?.message || String(ex));
+        setErr(msgOf(ex));
       }
     } finally {
       setBusy(false);
@@ -796,17 +849,30 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
     setBusy(true);
     setErr("");
     try {
+      // 数值校验：非法输入不得静默变 0（合法的 0 保留）
+      if (liftQty !== "" && !Number.isFinite(Number(liftQty))) {
+        toast.error(
+          t("page.charters.err_number", "{field} must be a valid number", {
+            field: t("page.charters.planned_qty", "Planned qty"),
+          }),
+        );
+        setBusy(false);
+        return;
+      }
       const q = new URLSearchParams({
         period_label: liftPeriod,
-        planned_qty: String(Number(liftQty) || 0),
+        planned_qty: String(liftQty === "" ? 0 : Number(liftQty)),
       });
       const res = await apiPost(`/api/v1/charters/${charter.id}/liftings?${q.toString()}`);
       toast.success(t("page.charters.lifting_ok", "Lifting added: {period}", { period: res.period_label }));
       setLiftModalOpen(false);
-      const rows: Lifting[] = await apiGet(`/api/v1/charters/${charter.id}/liftings`).catch(() => []);
+      const rows: Lifting[] = await apiGet(`/api/v1/charters/${charter.id}/liftings`).catch((ex) => {
+        setSubErr(msgOf(ex));
+        return [] as Lifting[];
+      });
       setLiftings(Array.isArray(rows) ? rows : []);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -820,20 +886,33 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
     }
     setBusy(true);
     setErr("");
+    // 数值校验：非法输入不得静默变 0（合法的 0 保留）
+    if (brForm.commission_pct !== "" && !Number.isFinite(Number(brForm.commission_pct))) {
+      toast.error(
+        t("page.charters.err_number", "{field} must be a valid number", {
+          field: t("page.charters.commission_pct", "Commission %"),
+        }),
+      );
+      setBusy(false);
+      return;
+    }
     try {
       await apiPost(`/api/v1/charters/${charter.id}/broker-rules`, {
         broker_party_id: brForm.broker_party_id,
         commission_type: brForm.commission_type,
-        commission_pct: Number(brForm.commission_pct) || 0,
+        commission_pct: brForm.commission_pct === "" ? 0 : Number(brForm.commission_pct),
         applies_to: brForm.applies_to,
       });
       toast.success(t("page.charters.broker_added", "Broker rule added"));
       setBrForm({ broker_party_id: "", commission_type: "brokerage", commission_pct: "", applies_to: "all" });
       setBrModalOpen(false);
-      const rows: BrokerRule[] = await apiGet(`/api/v1/charters/${charter.id}/broker-rules`).catch(() => []);
+      const rows: BrokerRule[] = await apiGet(`/api/v1/charters/${charter.id}/broker-rules`).catch((ex) => {
+        setSubErr(msgOf(ex));
+        return [] as BrokerRule[];
+      });
       setBrokerRules(Array.isArray(rows) ? rows : []);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -846,7 +925,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       await apiDelete(`/api/v1/broker-rules/${ruleId}`);
       setBrokerRules((prev) => prev.filter((r) => r.id !== ruleId));
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -872,16 +951,19 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       toast.success(t("page.charters.amend_ok", "变更单已提交，待批准"));
       setAmendForm(EMPTY_AMEND);
       setAmendModalOpen(false);
-      const rows: Amendment[] = await apiGet(`/api/v1/charters/${charter.id}/amendments`).catch(() => []);
+      const rows: Amendment[] = await apiGet(`/api/v1/charters/${charter.id}/amendments`).catch((ex) => {
+        setSubErr(msgOf(ex));
+        return [] as Amendment[];
+      });
       setAmendments(Array.isArray(rows) ? rows : []);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  async function amendTransition(amendmentId: string, action: "approve" | "reject") {
+  const amendTransition = useCallback(async (amendmentId: string, action: "approve" | "reject") => {
     setBusy(true);
     setErr("");
     try {
@@ -890,20 +972,20 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       await loadSide();
       await loadCharter();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
-  }
+  }, [loadCharter, loadSide, t, toast]);
 
-  function startLiftAction(id: string, kind: "nominate" | "fix" | "complete") {
+  const startLiftAction = useCallback((id: string, kind: "nominate" | "fix" | "complete") => {
     setLiftAction({ id, kind });
     setNomFrom("");
     setNomTo("");
     setFixVoyage(voyages[0]?.id || "");
     setDoneQty("");
     setErr("");
-  }
+  }, [voyages]);
 
   async function runLiftAction() {
     if (!liftAction || !charter) return;
@@ -929,34 +1011,22 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
         body = doneQty !== "" ? { actual_qty: Number(doneQty) } : {};
       }
       const updated: Lifting = await apiPost(`/api/v1/coa-liftings/${liftAction.id}/${liftAction.kind}`, body);
-      const rows: Lifting[] = await apiGet(`/api/v1/charters/${charter.id}/liftings`).catch(() => []);
+      const rows: Lifting[] = await apiGet(`/api/v1/charters/${charter.id}/liftings`).catch((ex) => {
+        setSubErr(msgOf(ex));
+        return [] as Lifting[];
+      });
       setLiftings(Array.isArray(rows) ? rows : []);
       toast.success(t("page.charters.lifting_moved", "Lifting → {status}", { status: updated.status || liftAction.kind }));
       setLiftAction(null);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  if (!charter && !notFound) {
-    return <SkeletonCard />;
-  }
-
-  if (notFound) {
-    return (
-      <div className="panel">
-        <p>{t("common.not_found", "Not found")}</p>
-        <Link href="/charters" className="btn">
-          {t("common.back", "返回")}
-        </Link>
-      </div>
-    );
-  }
-
   // P11 IMOS Fixture voyage calculator — 页脚合计：Miles / S Days / P Days / XPD / PortExp / LinerExp
-  const itinColumns: ColumnDef<ItinRow>[] = [
+  const itinColumns = useMemo<ColumnDef<ItinRow>[]>(() => [
     { key: "seq", title: "#", width: 46, align: "right", value: (r) => r.seq },
     { key: "port", title: t("page.fixtures.port", "Port"), minWidth: 130, value: (r) => r.port || "", render: (v) => (v == null || v === "" ? "—" : String(v)) },
     { key: "flag", title: t("page.fixtures.flag", "F"), width: 44, value: (r) => r.flag },
@@ -1063,14 +1133,25 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       title: "",
       width: 72,
       render: (_v, r) => (
-        <button className="btn btn-danger btn-sm" type="button" disabled={itinBusy} onClick={() => void delItinRow(r.id)}>
+        <button
+          className="btn btn-danger btn-sm"
+          type="button"
+          disabled={itinBusy}
+          onClick={() =>
+            setConfirm({
+              message: t("page.charters.confirm_delete_itin", "Delete this itinerary row? This cannot be undone."),
+              danger: true,
+              action: () => void delItinRow(r.id),
+            })
+          }
+        >
           {t("common.delete", "删除")}
         </button>
       ),
     },
-  ];
+  ], [delItinRow, itinBusy, t]);
 
-  const brokerRuleColumns: ColumnDef<BrokerRule>[] = [
+  const brokerRuleColumns = useMemo<ColumnDef<BrokerRule>[]>(() => [
     {
       key: "broker_party_id",
       title: t("page.estimates.counterparty", "对手方"),
@@ -1092,14 +1173,25 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       title: "",
       width: 90,
       render: (_v, r) => (
-        <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => removeBrokerRule(r.id)}>
+        <button
+          className="btn btn-danger btn-sm"
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            setConfirm({
+              message: t("page.charters.confirm_delete_broker", "Delete this broker rule? This cannot be undone."),
+              danger: true,
+              action: () => void removeBrokerRule(r.id),
+            })
+          }
+        >
           {t("common.delete", "删除")}
         </button>
       ),
     },
-  ];
+  ], [busy, parties, t]);
 
-  const liftingColumns: ColumnDef<Lifting>[] = [
+  const liftingColumns = useMemo<ColumnDef<Lifting>[]>(() => [
     { key: "period_label", title: t("page.charters.period", "Period"), minWidth: 110, value: (r) => r.period_label },
     {
       key: "planned_qty",
@@ -1139,9 +1231,9 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
         </div>
       ),
     },
-  ];
+  ], [busy, startLiftAction, t]);
 
-  const amendmentColumns: ColumnDef<Amendment>[] = [
+  const amendmentColumns = useMemo<ColumnDef<Amendment>[]>(() => [
     { key: "seq", title: "#", width: 50, value: (r) => r.seq },
     { key: "status", title: t("common.status", "状态"), width: 100, value: (r) => r.status },
     {
@@ -1181,7 +1273,23 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
           </div>
         ) : null,
     },
-  ];
+  ], [amendTransition, busy, locale, t]);
+
+  if (!charter && !notFound) {
+    return <SkeletonCard />;
+  }
+
+  if (notFound) {
+    return (
+      <div className="panel">
+        <p>{t("common.not_found", "Not found")}</p>
+        <Link href="/charters" className="btn">
+          {t("common.back", "返回")}
+        </Link>
+      </div>
+    );
+  }
+
 
   return (
     <>
@@ -1221,6 +1329,21 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       <StatusLegend statuses={["draft", "pending_approval", "active", "completed", "cancelled"]} />
 
       {err ? <p className="flash-err">{err}</p> : null}
+      {subErr ? (
+        <p className="flash-err">
+          {t("page.charters.sub_load_failed", "Some lists failed to load: {msg}", { msg: subErr })}
+        </p>
+      ) : null}
+      {refErr ? (
+        <p className="flash-err">
+          {t("page.charters.ref_load_failed", "Reference data failed to load: {msg}", { msg: refErr })}
+        </p>
+      ) : null}
+      {transitionErr ? (
+        <p className="flash-err">
+          {t("page.charters.transitions_load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
+        </p>
+      ) : null}
 
       <div className="panel">
         <Tabs
@@ -1436,11 +1559,13 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
               <div className="desk-toolbar mt-sm">
                 <input
                   type="number"
+                  aria-label={t("page.fixtures.seq", "Seq")}
                   placeholder={t("page.fixtures.seq", "Seq")}
                   value={itinForm.seq}
                   onChange={(e) => setItinForm((f) => ({ ...f, seq: e.target.value }))}
                 />
                 <input
+                  aria-label={t("page.fixtures.port", "Port")}
                   placeholder={t("page.fixtures.port", "Port")}
                   value={itinForm.port}
                   onChange={(e) => setItinForm((f) => ({ ...f, port: e.target.value }))}
@@ -1458,6 +1583,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                   <option value="Y">Y — Yard</option>
                 </select>
                 <input
+                  aria-label={t("page.fixtures.cargo", "Cargo")}
                   placeholder={t("page.fixtures.cargo", "Cargo")}
                   value={itinForm.cargo}
                   onChange={(e) => setItinForm((f) => ({ ...f, cargo: e.target.value }))}
@@ -1465,6 +1591,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.ld_qty", "L/D qty")}
                   placeholder={t("page.fixtures.ld_qty", "L/D qty")}
                   value={itinForm.ld_qty}
                   onChange={(e) => setItinForm((f) => ({ ...f, ld_qty: e.target.value }))}
@@ -1472,11 +1599,13 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.ld_rate", "L/D rate")}
                   placeholder={t("page.fixtures.ld_rate", "L/D rate")}
                   value={itinForm.ld_rate}
                   onChange={(e) => setItinForm((f) => ({ ...f, ld_rate: e.target.value }))}
                 />
                 <input
+                  aria-label={t("page.fixtures.terms", "Terms")}
                   placeholder={t("page.fixtures.terms", "Terms")}
                   value={itinForm.terms}
                   onChange={(e) => setItinForm((f) => ({ ...f, terms: e.target.value }))}
@@ -1484,6 +1613,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.miles", "Miles")}
                   placeholder={t("page.fixtures.miles", "Miles")}
                   value={itinForm.miles}
                   onChange={(e) => setItinForm((f) => ({ ...f, miles: e.target.value }))}
@@ -1491,6 +1621,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.speed", "Spd")}
                   placeholder={t("page.fixtures.speed", "Spd")}
                   value={itinForm.speed}
                   onChange={(e) => setItinForm((f) => ({ ...f, speed: e.target.value }))}
@@ -1498,6 +1629,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.sea_days", "S days")}
                   placeholder={t("page.fixtures.sea_days", "S days")}
                   value={itinForm.sea_days}
                   onChange={(e) => setItinForm((f) => ({ ...f, sea_days: e.target.value }))}
@@ -1505,6 +1637,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.xsd", "XSD")}
                   placeholder={t("page.fixtures.xsd", "XSD")}
                   value={itinForm.xsd}
                   onChange={(e) => setItinForm((f) => ({ ...f, xsd: e.target.value }))}
@@ -1512,6 +1645,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.port_days", "P days")}
                   placeholder={t("page.fixtures.port_days", "P days")}
                   value={itinForm.port_days}
                   onChange={(e) => setItinForm((f) => ({ ...f, port_days: e.target.value }))}
@@ -1519,6 +1653,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.xpd", "XPD")}
                   placeholder={t("page.fixtures.xpd", "XPD")}
                   value={itinForm.xpd}
                   onChange={(e) => setItinForm((f) => ({ ...f, xpd: e.target.value }))}
@@ -1526,6 +1661,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.port_exp", "Port exp")}
                   placeholder={t("page.fixtures.port_exp", "Port exp")}
                   value={itinForm.port_exp}
                   onChange={(e) => setItinForm((f) => ({ ...f, port_exp: e.target.value }))}
@@ -1533,6 +1669,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.fixtures.liner_exp", "Liner exp")}
                   placeholder={t("page.fixtures.liner_exp", "Liner exp")}
                   value={itinForm.liner_exp}
                   onChange={(e) => setItinForm((f) => ({ ...f, liner_exp: e.target.value }))}

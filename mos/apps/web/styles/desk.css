@@ -237,7 +237,7 @@
 
 /* 紧凑排版 / 告警工具类 —— 替代内联样式（inline-style 基线只降不升） */
 .panel-warn { border-color: var(--warn); }
-.flash-warn { color: var(--warn); font-weight: 600; margin: 0.25rem 0; }
+.flash-warn { color: var(--warn-text, var(--warn)); font-weight: 600; margin: 0.25rem 0; }
 .panel-gap-top { margin-top: 1rem; }
 .desk-section-tight { margin: 0.5rem 0; }
 .desk-section-tight > h3 { margin-top: 0; }

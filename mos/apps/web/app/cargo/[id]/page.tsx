@@ -14,10 +14,12 @@ import { DetailHeader } from "@/components/DetailHeader";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
 import { Num } from "@/components/Num";
 import { StateView } from "@/components/StateView";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Tabs, type TabItem } from "@/components/Tabs";
 import { useToast } from "@/components/ToastProvider";
-import { useStateActions } from "@/components/useTransitions";
+import { useStateActions, useTransitionTable } from "@/components/useTransitions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 type CargoDetail = {
@@ -172,6 +174,12 @@ export default function CargoDetailPage() {
   const [cargoNames, setCargoNames] = useState<RefItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  /** 参考数据（港口/对手方/船舶/货名）加载失败 */
+  const [refErr, setRefErr] = useState<string | null>(null);
+  /** 子列表（行程/装卸选项）加载失败 */
+  const [subErr, setSubErr] = useState<string | null>(null);
+  /** 待确认删除的行（行程/装卸选项） */
+  const [pendingDel, setPendingDel] = useState<{ kind: "itin" | "opt"; id: string; label: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<TabId>("terms");
 
@@ -182,6 +190,8 @@ export default function CargoDetailPage() {
   const [optBusy, setOptBusy] = useState(false);
   const [optForms, setOptForms] = useState({ load: EMPTY_OPT, disch: EMPTY_OPT });
 
+  // 转移表取数失败时不能静默地「没有可用动作」
+  const { error: transitionErr } = useTransitionTable();
   const nextStatuses = useStateActions("cargo", cargo?.status);
 
   const load = useCallback(async () => {
@@ -191,20 +201,24 @@ export default function CargoDetailPage() {
       const c = await apiGet(`/api/v1/cargo/${cargoId}`);
       setCargo(c);
       setDraft(toDraft(c));
-      apiGet("/api/v1/masterdata/ports")
-        .then((p: RefItem[]) => setPorts(Array.isArray(p) ? p : []))
-        .catch(() => setPorts([]));
-      apiGet("/api/v1/masterdata/counterparties")
-        .then((p: RefItem[]) => setParties(Array.isArray(p) ? p : []))
-        .catch(() => setParties([]));
-      apiGet("/api/v1/masterdata/vessels")
-        .then((v: RefItem[]) => setVessels(Array.isArray(v) ? v : []))
-        .catch(() => setVessels([]));
-      apiGet("/api/v1/masterdata/cargo-names")
-        .then((n: RefItem[]) => setCargoNames(Array.isArray(n) ? n : []))
-        .catch(() => setCargoNames([]));
+      // 参考数据（港口/对手方/船舶/货名）取数失败：局部提示，不整页报错
+      const [portsR, partiesR, vesselsR, namesR] = await Promise.allSettled([
+        apiGet("/api/v1/masterdata/ports/options"),
+        apiGet("/api/v1/masterdata/counterparties"),
+        apiGet("/api/v1/masterdata/vessels"),
+        apiGet("/api/v1/masterdata/cargo-names"),
+      ]);
+      if (portsR.status === "fulfilled") setPorts(Array.isArray(portsR.value) ? portsR.value : []);
+      if (partiesR.status === "fulfilled") setParties(Array.isArray(partiesR.value) ? partiesR.value : []);
+      if (vesselsR.status === "fulfilled") setVessels(Array.isArray(vesselsR.value) ? vesselsR.value : []);
+      if (namesR.status === "fulfilled") setCargoNames(Array.isArray(namesR.value) ? namesR.value : []);
+      const refFailed = [portsR, partiesR, vesselsR, namesR].filter(
+        (r) => r.status === "rejected",
+      ) as PromiseRejectedResult[];
+      if (refFailed.length) setRefErr(msgOf(refFailed[0].reason));
+      else setRefErr(null);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -219,8 +233,10 @@ export default function CargoDetailPage() {
     try {
       const res = await apiGet(`/api/v1/cargo/${cargoId}/itinerary`);
       setItinRows(Array.isArray(res) ? res : []);
-    } catch {
+    } catch (ex) {
+      // 取数失败 ≠ 没有行程
       setItinRows([]);
+      setSubErr(msgOf(ex));
     } finally {
       setItinBusy(false);
     }
@@ -232,8 +248,10 @@ export default function CargoDetailPage() {
       const res = await apiGet(`/api/v1/cargo/${cargoId}/options`);
       const all: CargoOptRow[] = Array.isArray(res) ? res : [];
       setOptRows(all);
-    } catch {
+    } catch (ex) {
+      // 取数失败 ≠ 没有选项
       setOptRows([]);
+      setSubErr(msgOf(ex));
     } finally {
       setOptBusy(false);
     }
@@ -257,14 +275,28 @@ export default function CargoDetailPage() {
         // datetime-local 是 naive 值 —— 按 UTC 存（IMOS 的 GMT 口径）
         payload[f] = v ? (v.includes("Z") || v.includes("+") ? v : `${v}Z`) : null;
       }
-      for (const f of NUM_FIELDS) payload[f] = draft[f] === "" ? null : Number(draft[f]);
+      for (const f of NUM_FIELDS) {
+        const raw = draft[f];
+        if (raw === "") {
+          payload[f] = null;
+          continue;
+        }
+        const n = Number(raw);
+        // 数值校验：非法输入不得静默变 0 / NaN，必须中止提交
+        if (!Number.isFinite(n)) {
+          toast.error(t("page.cargo_detail.err_number", "{field} must be a valid number", { field: f }));
+          setSaving(false);
+          return;
+        }
+        payload[f] = n;
+      }
       payload.laycan_confirmed = draft.laycan_confirmed === "1";
       const updated = await apiPatch(`/api/v1/cargo/${cargoId}`, payload);
       setCargo(updated);
       setDraft(toDraft(updated));
       toast.success(t("common.saved", "Saved"));
     } catch (ex) {
-      toast.error(ex instanceof Error ? ex.message : String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setSaving(false);
     }
@@ -276,11 +308,43 @@ export default function CargoDetailPage() {
       if (cargo) setCargo({ ...cargo, status: res.status });
       toast.success(t("page.cargo_detail.transitioned", "Status → {s}", { s: res.status }));
     } catch (ex) {
-      toast.error(ex instanceof Error ? ex.message : String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
+  /** 数值字段校验：空值放行，非法输入返回错误文案（调用方必须中止提交）。 */
+  function checkNumbers(
+    pairs: Array<[string, string]>,
+    errKey: string,
+  ): string | null {
+    for (const [label, raw] of pairs) {
+      if (raw === "" || raw === null || raw === undefined) continue;
+      if (!Number.isFinite(Number(raw))) {
+        return t(errKey, "{field} must be a valid number", { field: label });
+      }
+    }
+    return null;
+  }
+
   async function addItinRow() {
+    // 数值校验：非法输入不得静默变 0 / NaN，必须中止提交
+    const numErr = checkNumbers(
+      [
+        ["Seq", itinForm.seq],
+        ["Qty", itinForm.qty],
+        ["L/D Rate", itinForm.ld_rate],
+        ["PortExp", itinForm.port_exp],
+        ["OExp/t", itinForm.oexp_per_t],
+        ["LinerExp", itinForm.liner_exp],
+        ["Draft", itinForm.draft],
+        ["Salinity", itinForm.salinity],
+      ],
+      "page.cargo_detail.err_number",
+    );
+    if (numErr) {
+      toast.error(numErr);
+      return;
+    }
     setItinBusy(true);
     try {
       const port = ports.find((p) => p.id === itinForm.port_id);
@@ -305,7 +369,7 @@ export default function CargoDetailPage() {
       setItinForm(EMPTY_ITIN);
       await loadItinerary();
     } catch (ex) {
-      toast.error(ex instanceof Error ? ex.message : String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setItinBusy(false);
     }
@@ -317,13 +381,29 @@ export default function CargoDetailPage() {
       await apiDelete(`/api/v1/cargo/${cargoId}/itinerary/${rowId}`);
       await loadItinerary();
     } catch (ex) {
-      toast.error(ex instanceof Error ? ex.message : String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setItinBusy(false);
     }
   }
 
   async function addOptRow(kind: "load" | "disch") {
+    const f0 = optForms[kind];
+    // 数值校验：非法输入不得静默变 0 / NaN，必须中止提交
+    const numErr = checkNumbers(
+      [
+        ["Seq", f0.seq],
+        ["L/D Rate", f0.ld_rate],
+        ["TT Days", f0.tt_days],
+        ["PExp", f0.pexp],
+        ["Draft", f0.draft],
+      ],
+      "page.cargo_detail.err_number",
+    );
+    if (numErr) {
+      toast.error(numErr);
+      return;
+    }
     setOptBusy(true);
     try {
       const f = optForms[kind];
@@ -341,7 +421,7 @@ export default function CargoDetailPage() {
       setOptForms((s) => ({ ...s, [kind]: EMPTY_OPT }));
       await loadOptions();
     } catch (ex) {
-      toast.error(ex instanceof Error ? ex.message : String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setOptBusy(false);
     }
@@ -353,7 +433,7 @@ export default function CargoDetailPage() {
       await apiDelete(`/api/v1/cargo/${cargoId}/options/${rowId}`);
       await loadOptions();
     } catch (ex) {
-      toast.error(ex instanceof Error ? ex.message : String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setOptBusy(false);
     }
@@ -404,7 +484,12 @@ export default function CargoDetailPage() {
       {
         key: "actions", title: "", width: 72,
         render: (_v, r) => (
-          <button type="button" className="btn btn-danger btn-sm" disabled={itinBusy} onClick={() => void delItinRow(r.id)}>
+          <button
+            type="button"
+            className="btn btn-danger btn-sm"
+            disabled={itinBusy}
+            onClick={() => setPendingDel({ kind: "itin", id: r.id, label: r.port_name || r.flag || `#${r.seq}` })}
+          >
             {t("common.delete", "删除")}
           </button>
         ),
@@ -439,7 +524,12 @@ export default function CargoDetailPage() {
       {
         key: "actions", title: "", width: 72,
         render: (_v, r) => (
-          <button type="button" className="btn btn-danger btn-sm" disabled={optBusy} onClick={() => void delOptRow(r.id)}>
+          <button
+            type="button"
+            className="btn btn-danger btn-sm"
+            disabled={optBusy}
+            onClick={() => setPendingDel({ kind: "opt", id: r.id, label: r.port_area || `#${r.seq}` })}
+          >
             {t("common.delete", "删除")}
           </button>
         ),
@@ -532,6 +622,22 @@ export default function CargoDetailPage() {
       />
 
       <Tabs items={tabs} value={tab} onChange={(k) => setTab(k as TabId)} variant="line" />
+
+      {refErr ? (
+        <p className="flash-err">
+          {t("page.cargo_detail.ref_load_failed", "Reference data failed to load: {msg}", { msg: refErr })}
+        </p>
+      ) : null}
+      {transitionErr ? (
+        <p className="flash-err">
+          {t("page.transitions.load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
+        </p>
+      ) : null}
+      {subErr ? (
+        <p className="flash-err">
+          {t("page.cargo_detail.sub_load_failed", "Some lists failed to load: {msg}", { msg: subErr })}
+        </p>
+      ) : null}
 
       {tab === "terms" ? (
         <FormPanel columns={3}>
@@ -759,7 +865,7 @@ export default function CargoDetailPage() {
             emptyText={t("page.cargo_detail.itin_empty", "No itinerary rows — add the first leg below.")}
           />
           <div className="desk-toolbar mt-sm">
-            <input type="number" placeholder={t("page.fixtures.seq", "Seq")} value={itinForm.seq} onChange={(e) => setItinForm((f) => ({ ...f, seq: e.target.value }))} />
+            <input type="number" placeholder={t("page.fixtures.seq", "Seq")} aria-label={t("page.fixtures.seq", "Seq")} value={itinForm.seq} onChange={(e) => setItinForm((f) => ({ ...f, seq: e.target.value }))} />
             <select aria-label={t("page.cargo_detail.flag", "F")} value={itinForm.flag} onChange={(e) => setItinForm((f) => ({ ...f, flag: e.target.value }))}>
               <option value="L">L — Load</option>
               <option value="D">D — Discharge</option>
@@ -770,15 +876,15 @@ export default function CargoDetailPage() {
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
-            <input placeholder={t("page.cargo_detail.berth", "Berth")} value={itinForm.berth} onChange={(e) => setItinForm((f) => ({ ...f, berth: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.cargo_detail.qty", "Qty")} value={itinForm.qty} onChange={(e) => setItinForm((f) => ({ ...f, qty: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.cargo_detail.ld_rate", "L/D rate")} value={itinForm.ld_rate} onChange={(e) => setItinForm((f) => ({ ...f, ld_rate: e.target.value }))} />
-            <input placeholder={t("page.fixtures.terms", "Terms")} value={itinForm.terms} onChange={(e) => setItinForm((f) => ({ ...f, terms: e.target.value }))} />
-            <input placeholder={t("page.cargo_detail.incoterms", "Incoterms")} value={itinForm.incoterms} onChange={(e) => setItinForm((f) => ({ ...f, incoterms: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.cargo_detail.salinity", "Salinity")} value={itinForm.salinity} onChange={(e) => setItinForm((f) => ({ ...f, salinity: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.fixtures.port_exp", "PortExp")} value={itinForm.port_exp} onChange={(e) => setItinForm((f) => ({ ...f, port_exp: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.fixtures.liner_exp", "LinerExp")} value={itinForm.liner_exp} onChange={(e) => setItinForm((f) => ({ ...f, liner_exp: e.target.value }))} />
-            <input placeholder={t("page.cargo_detail.unit", "Unit")} value={itinForm.unit} onChange={(e) => setItinForm((f) => ({ ...f, unit: e.target.value }))} />
+            <input placeholder={t("page.cargo_detail.berth", "Berth")} aria-label={t("page.cargo_detail.berth", "Berth")} value={itinForm.berth} onChange={(e) => setItinForm((f) => ({ ...f, berth: e.target.value }))} />
+            <input type="number" step="any" placeholder={t("page.cargo_detail.qty", "Qty")} aria-label={t("page.cargo_detail.qty", "Qty")} value={itinForm.qty} onChange={(e) => setItinForm((f) => ({ ...f, qty: e.target.value }))} />
+            <input type="number" step="any" placeholder={t("page.cargo_detail.ld_rate", "L/D rate")} aria-label={t("page.cargo_detail.ld_rate", "L/D rate")} value={itinForm.ld_rate} onChange={(e) => setItinForm((f) => ({ ...f, ld_rate: e.target.value }))} />
+            <input placeholder={t("page.fixtures.terms", "Terms")} aria-label={t("page.fixtures.terms", "Terms")} value={itinForm.terms} onChange={(e) => setItinForm((f) => ({ ...f, terms: e.target.value }))} />
+            <input placeholder={t("page.cargo_detail.incoterms", "Incoterms")} aria-label={t("page.cargo_detail.incoterms", "Incoterms")} value={itinForm.incoterms} onChange={(e) => setItinForm((f) => ({ ...f, incoterms: e.target.value }))} />
+            <input type="number" step="any" placeholder={t("page.cargo_detail.salinity", "Salinity")} aria-label={t("page.cargo_detail.salinity", "Salinity")} value={itinForm.salinity} onChange={(e) => setItinForm((f) => ({ ...f, salinity: e.target.value }))} />
+            <input type="number" step="any" placeholder={t("page.fixtures.port_exp", "PortExp")} aria-label={t("page.fixtures.port_exp", "PortExp")} value={itinForm.port_exp} onChange={(e) => setItinForm((f) => ({ ...f, port_exp: e.target.value }))} />
+            <input type="number" step="any" placeholder={t("page.fixtures.liner_exp", "LinerExp")} aria-label={t("page.fixtures.liner_exp", "LinerExp")} value={itinForm.liner_exp} onChange={(e) => setItinForm((f) => ({ ...f, liner_exp: e.target.value }))} />
+            <input placeholder={t("page.cargo_detail.unit", "Unit")} aria-label={t("page.cargo_detail.unit", "Unit")} value={itinForm.unit} onChange={(e) => setItinForm((f) => ({ ...f, unit: e.target.value }))} />
             <button type="button" className="btn btn-primary" disabled={itinBusy} onClick={() => void addItinRow()}>
               {t("common.add", "Add")}
             </button>
@@ -812,11 +918,13 @@ export default function CargoDetailPage() {
               <div className="desk-toolbar mt-sm">
                 <input
                   type="number"
+                  aria-label={t("page.fixtures.seq", "Seq")}
                   placeholder={t("page.fixtures.seq", "Seq")}
                   value={optForms[kind].seq}
                   onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], seq: e.target.value } }))}
                 />
                 <input
+                  aria-label={t("page.cargo_detail.port_area", "Port / Area")}
                   placeholder={t("page.cargo_detail.port_area", "Port / Area")}
                   value={optForms[kind].port_area}
                   onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], port_area: e.target.value } }))}
@@ -824,11 +932,13 @@ export default function CargoDetailPage() {
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.cargo_detail.ld_rate", "L/D rate")}
                   placeholder={t("page.cargo_detail.ld_rate", "L/D rate")}
                   value={optForms[kind].ld_rate}
                   onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], ld_rate: e.target.value } }))}
                 />
                 <input
+                  aria-label={t("page.fixtures.terms", "Terms")}
                   placeholder={t("page.fixtures.terms", "Terms")}
                   value={optForms[kind].terms}
                   onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], terms: e.target.value } }))}
@@ -836,6 +946,7 @@ export default function CargoDetailPage() {
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.cargo_detail.tt_days", "TT days")}
                   placeholder={t("page.cargo_detail.tt_days", "TT days")}
                   value={optForms[kind].tt_days}
                   onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], tt_days: e.target.value } }))}
@@ -843,6 +954,7 @@ export default function CargoDetailPage() {
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.cargo_detail.pexp", "PExp")}
                   placeholder={t("page.cargo_detail.pexp", "PExp")}
                   value={optForms[kind].pexp}
                   onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], pexp: e.target.value } }))}
@@ -850,6 +962,7 @@ export default function CargoDetailPage() {
                 <input
                   type="number"
                   step="any"
+                  aria-label={t("page.cargo_detail.draft", "Draft")}
                   placeholder={t("page.cargo_detail.draft", "Draft")}
                   value={optForms[kind].draft}
                   onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], draft: e.target.value } }))}
@@ -862,6 +975,23 @@ export default function CargoDetailPage() {
           ))}
         </>
       ) : null}
+      <ConfirmDialog
+        open={pendingDel !== null}
+        title={t("common.confirm", "Confirm")}
+        message={t("page.cargo_detail.confirm_delete_row", 'Delete the row "{label}"? This cannot be undone.', {
+          label: pendingDel?.label ?? "",
+        })}
+        confirmLabel={t("common.delete", "Delete")}
+        danger
+        onConfirm={() => {
+          const p = pendingDel;
+          setPendingDel(null);
+          if (!p) return;
+          if (p.kind === "itin") void delItinRow(p.id);
+          else void delOptRow(p.id);
+        }}
+        onCancel={() => setPendingDel(null)}
+      />
     </AppShell>
   );
 }

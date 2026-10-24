@@ -22,6 +22,7 @@ from app.services.recycle import soft_delete
 from app.services.tenant_guard import scoped_get, scoped_query
 from app.services.rates import (
     list_rate_rows,
+    rate_value,
     resolve_pricing,
     resolve_rate_row,
     upsert_rate_row,
@@ -309,7 +310,8 @@ def update_row(
     if "dims" in data and data["dims"] is not None:
         row.dims = {str(k): v for k, v in data["dims"].items() if v is not None}
     if "value" in data and data["value"] is not None:
-        row.value = data["value"]
+        # Numeric(18,6) 列 —— 写入前量化，避免 SQLite / Postgres 舍入分叉（P1-B8）
+        row.value = rate_value(data["value"])
     for k in ("unit", "priority", "notes"):
         if k in data:
             setattr(row, k, data[k])

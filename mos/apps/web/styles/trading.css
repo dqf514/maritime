@@ -49,7 +49,7 @@
 }
 .trading-tab:hover { color: var(--ink); background: var(--foam); }
 .trading-tab.active {
-  color: var(--accent);
+  color: var(--accent-text);
   border-bottom-color: var(--accent);
   font-weight: 600;
 }

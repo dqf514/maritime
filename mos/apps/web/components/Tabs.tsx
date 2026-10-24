@@ -6,14 +6,20 @@
 // 变体：
 //   line （默认）：底边下划线式 — 详情页/工作区
 //   pill          ：药丸式 — 页内分段
+//
+// 无障碍：tab 按钮用 role="tab" + aria-selected；**只有当页面真的提供了
+// 对应的面板 id 时才写 aria-controls** —— 指向不存在的 id 比不写更糟
+// （审计项：aria-controls 指向不存在的 id）。
+// 页面要么用 `panels` 让本组件渲染面板，要么自己渲染面板并把真实 id 传给
+// `panelIdPrefix`。
 
 import { ReactNode, useCallback, useId, useRef } from "react";
 
 export type TabItem = {
   key: string;
   label: ReactNode;
-  /** 右上角计数徽标 */
-  badge?: number | string;
+  /** 右上角计数徽标。字符串/数字走默认徽标样式；ReactNode 原样渲染（自带样式）。 */
+  badge?: ReactNode;
   disabled?: boolean;
   title?: string;
 };
@@ -27,13 +33,37 @@ type Props = {
   size?: "sm" | "md";
   /** 右侧附加内容（如工具按钮），与 tab 条同行 */
   right?: ReactNode;
+  /**
+   * 面板容器 id 前缀。传入后 tab 按钮的 aria-controls 指向
+   * `${panelIdPrefix}-${key}-panel`（页面需自行渲染同名 id 的面板容器）。
+   */
+  panelIdPrefix?: string;
+  /** 由本组件直接渲染的面板（key → 内容）。传了它就不必再传 panelIdPrefix。 */
+  panels?: Record<string, ReactNode>;
+  /** 面板容器的额外 class（用于沿用宿主页面的面板样式）。 */
+  panelClassName?: string;
   className?: string;
   "aria-label"?: string;
 };
 
-export function Tabs({ items, value, onChange, variant = "line", size = "sm", right, className, ...rest }: Props) {
+export function Tabs({
+  items,
+  value,
+  onChange,
+  variant = "line",
+  size = "sm",
+  right,
+  panelIdPrefix,
+  panels,
+  panelClassName,
+  className,
+  ...rest
+}: Props) {
   const baseId = useId();
   const listRef = useRef<HTMLDivElement>(null);
+  const prefix = panelIdPrefix ?? (panels ? baseId : undefined);
+  const panelId = (key: string) => `${prefix}-${key}-panel`;
+  const tabId = (key: string) => `${baseId}-${key}`;
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -66,10 +96,10 @@ export function Tabs({ items, value, onChange, variant = "line", size = "sm", ri
               key={it.key}
               type="button"
               role="tab"
-              id={`${baseId}-${it.key}`}
+              id={tabId(it.key)}
               data-tab-key={it.key}
               aria-selected={active}
-              aria-controls={`${baseId}-${it.key}-panel`}
+              aria-controls={prefix ? panelId(it.key) : undefined}
               tabIndex={active ? 0 : -1}
               disabled={it.disabled}
               title={it.title}
@@ -77,21 +107,61 @@ export function Tabs({ items, value, onChange, variant = "line", size = "sm", ri
               onClick={() => onChange(it.key)}
             >
               <span className="ui-tab-label">{it.label}</span>
-              {it.badge != null && it.badge !== "" ? <span className="ui-tab-badge">{it.badge}</span> : null}
+              {it.badge != null && it.badge !== "" ? (
+                typeof it.badge === "string" || typeof it.badge === "number" ? (
+                  <span className="ui-tab-badge">{it.badge}</span>
+                ) : (
+                  it.badge
+                )
+              ) : null}
             </button>
           );
         })}
       </div>
       {right ? <div className="ui-tabs-right">{right}</div> : null}
+      {panels && prefix
+        ? items.map((it) => (
+            <TabPanel
+              key={it.key}
+              id={panelId(it.key)}
+              ariaLabelledBy={tabId(it.key)}
+              active={it.key === value}
+              className={panelClassName}
+            >
+              {panels[it.key]}
+            </TabPanel>
+          ))
+        : null}
     </div>
   );
 }
 
 /** Tab 内容面板：负责 id 关联与无障碍属性（简单场景可不用，直接条件渲染） */
-export function TabPanel({ tabKey, active, children, className }: { tabKey: string; active: boolean; children: ReactNode; className?: string }) {
+export function TabPanel({
+  tabKey,
+  active,
+  children,
+  className,
+  id,
+  ariaLabelledBy,
+}: {
+  tabKey?: string;
+  active: boolean;
+  children: ReactNode;
+  className?: string;
+  id?: string;
+  ariaLabelledBy?: string;
+}) {
   if (!active) return null;
   return (
-    <div role="tabpanel" data-tab-panel={tabKey} className={className} tabIndex={0}>
+    <div
+      role="tabpanel"
+      id={id}
+      aria-labelledby={ariaLabelledBy}
+      data-tab-panel={tabKey}
+      className={className}
+      tabIndex={0}
+    >
       {children}
     </div>
   );

@@ -2,11 +2,13 @@
 
 // 3.6：PDA/FDA 面板（自取数 + 创建/流转）。
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { msgOf, handled } from "@/lib/errors";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { LookupSelect } from "@/components/LookupSelect";
 import { Num } from "@/components/Num";
 import { RowActions } from "@/components/RowActions";
+import { StateView } from "@/components/StateView";
 import { useToast } from "@/components/ToastProvider";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
@@ -19,6 +21,14 @@ type Pda = { id: string; voyage_id: string | null; status: string; pda_amount: n
 // 与后端 _PDA_LOCKED_STATUSES 一致：金额已承诺后不可改/删
 const PDA_LOCKED = new Set(["approved", "fda", "closed"]);
 
+/** 数字输入解析：空串 → null；非法输入 → NaN（调用方必须报错，禁止静默转 0）。 */
+function numOrNull(raw: string): number | null {
+  const s = raw.trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 export function PdaPanel() {
   const { t } = useI18n();
   const toast = useToast();
@@ -29,36 +39,62 @@ export function PdaPanel() {
   const [fdaAmount, setFdaAmount] = useState("");
   const [currency, setCurrency] = useState("USD");
   const [busy, setBusy] = useState(false);
+  // P1-4：主列表失败 → 三态错误；航次参照失败 → 单独提示
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [refErr, setRefErr] = useState<string | null>(null);
+  // 首次成功加载后，后续刷新不再整表 spinner（避免卸载 DataGrid 丢失排序/列布局）
+  const loadedOnce = useRef(false);
   const ctx = useContextMenu<Pda>();
 
   const load = useCallback(async () => {
-    const [p, v] = await Promise.all([
-      apiGet("/api/v1/port-disbursements").catch(() => []),
-      apiGet("/api/v1/voyages").catch(() => []),
+    if (!loadedOnce.current) setLoading(true);
+    setErr(null);
+    const [p, v] = await Promise.allSettled([
+      apiGet("/api/v1/port-disbursements") as Promise<Pda[]>,
+      apiGet("/api/v1/voyages/options") as Promise<VoyageRef[]>,
     ]);
-    setPdas(p);
-    setVoyages(v);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (p.status === "fulfilled") {
+      setPdas(Array.isArray(p.value) ? p.value : []);
+      loadedOnce.current = true;
+    } else {
+      setPdas([]);
+      setErr(msgOf(p.reason));
+    }
+    if (v.status === "fulfilled") {
+      setVoyages(Array.isArray(v.value) ? v.value : []);
+      setRefErr(null);
+    } else {
+      setVoyages([]);
+      setRefErr(msgOf(v.reason));
+    }
+    setLoading(false);
   }, []);
 
   useEffect(() => {
-    load().catch(() => undefined);
+    load().catch(handled);
   }, [load]);
 
   async function create(e: FormEvent) {
     e.preventDefault();
+    // P1-24：非法数字必须报错并中止提交，不能静默转 0
+    const pda = numOrNull(pdaAmount);
+    if (pda === null || Number.isNaN(pda)) {
+      toast.error(t("page.finance.bad_number", "Enter a valid number"));
+      return;
+    }
     setBusy(true);
     try {
       await apiPost("/api/v1/port-disbursements", {
         voyage_id: voyage || null,
-        pda_amount: Number(pdaAmount) || 0,
+        pda_amount: pda,
         currency: currency || "USD",
         lines: {},
       });
       toast.success(t("page.finance.pda_ok", "PDA created"));
       await load();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -71,7 +107,10 @@ export function PdaPanel() {
     let payload: Record<string, unknown>;
     if (colKey === "pda_amount" || colKey === "fda_amount") {
       const n = value === null || value === "" ? null : Number(value);
-      if (n !== null && isNaN(n)) return;
+      if (n !== null && !Number.isFinite(n)) {
+        toast.error(t("page.finance.bad_number", "Enter a valid number"));
+        return;
+      }
       const prev = src[colKey];
       if ((prev ?? null) === n || (prev == null && n == null)) return;
       payload = { [colKey]: n };
@@ -87,7 +126,7 @@ export function PdaPanel() {
       toast.success(t("common.saved", "Saved"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -97,21 +136,29 @@ export function PdaPanel() {
       toast.success(t("common.recycled", "Moved to recycle bin"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
   async function transition(id: string, target: string) {
+    let fdaNum: number | null = null;
+    if (target === "fda" && fdaAmount.trim() !== "") {
+      fdaNum = numOrNull(fdaAmount);
+      if (fdaNum === null || Number.isNaN(fdaNum)) {
+        toast.error(t("page.finance.bad_number", "Enter a valid number"));
+        return;
+      }
+    }
     setBusy(true);
     try {
       const q = new URLSearchParams({ target });
-      if (target === "fda" && fdaAmount) q.set("fda_amount", String(Number(fdaAmount) || 0));
+      if (target === "fda" && fdaNum !== null) q.set("fda_amount", String(fdaNum));
       await apiPost(`/api/v1/port-disbursements/${id}/transition?${q.toString()}`);
       toast.success(t("page.finance.pda_moved", "PDA → {target}", { target }));
       setFdaAmount("");
       await load();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -246,6 +293,11 @@ export function PdaPanel() {
 
   return (
     <>
+      {refErr ? (
+        <p className="flash-err">
+          {t("page.finance.ref_load_failed", "Some reference lists could not be loaded")}: {refErr}
+        </p>
+      ) : null}
       <form className="panel" onSubmit={create}>
         <h3 style={{ marginTop: 0 }}>{t("page.finance.new_pda", "New PDA")}</h3>
         <div className="form-grid">
@@ -278,17 +330,25 @@ export function PdaPanel() {
         </button>
       </form>
       <div className="panel">
-        <DataGrid<Pda>
-          columns={cols}
-          data={pdas}
-          rowKey={(r) => r.id}
-          onRowContextMenu={(row, _i, e) => ctx.open(row)(e)}
-          storageKey="finance_pda_grid"
-          showFooter={false}
-          editable
-          onCellSave={onCellSave}
+        <StateView
+          loading={loading}
+          error={err ?? undefined}
+          empty={!pdas.length}
           emptyText={t("common.empty", "No records")}
-        />
+          onRetry={() => load()}
+        >
+          <DataGrid<Pda>
+            columns={cols}
+            data={pdas}
+            rowKey={(r) => r.id}
+            onRowContextMenu={(row, _i, e) => ctx.open(row)(e)}
+            storageKey="finance_pda_grid"
+            showFooter={false}
+            editable
+            onCellSave={onCellSave}
+            emptyText={t("common.empty", "No records")}
+          />
+        </StateView>
       </div>
       <ContextMenu controller={ctx} items={menuItems} />
     </>

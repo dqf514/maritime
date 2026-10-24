@@ -53,8 +53,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from app.services.money import CENT
 
-TWOPLACES = Decimal("0.01")
+
 FOUR = Decimal("0.0001")
 
 _FORMULAS = ("rolling_index", "range", "level", "offset")
@@ -272,7 +273,7 @@ def resolve_component(
     factor = _d(spec.get("factor") if spec.get("factor") is not None else 1)
     rate = value * factor
     amount = (rate * days) if basis == "per_day" else rate
-    amount = amount.quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+    amount = amount.quantize(CENT, rounding=ROUND_HALF_UP)
 
     row: dict[str, Any] = {
         "name": str(name),
@@ -319,4 +320,4 @@ def evaluate_unpriced_components(
         )
         total += Decimal(str(row["amount"]))
         rows.append(row)
-    return total.quantize(TWOPLACES, rounding=ROUND_HALF_UP), rows
+    return total.quantize(CENT, rounding=ROUND_HALF_UP), rows

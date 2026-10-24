@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 import uuid
 from datetime import datetime
 
@@ -65,18 +66,29 @@ class PeriodJournal(Base):
     """期间日记账 — batch of debit/credit entries for a given period."""
 
     __tablename__ = "period_journals"
+    __table_args__ = (
+        # 过账幂等：同一业务单据（invoice/accrual/voyage…）在同一账套下
+        # 只能有一张日记账。NULL 不参与唯一性（SQLite/PG 都视 NULL 互不相等），
+        # 所以手工建的日记账不受影响。
+        UniqueConstraint("tenant_id", "journal_type", "source_type", "source_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     period: Mapped[str] = mapped_column(String(7), nullable=False)  # YYYY-MM
-    journal_type: Mapped[str] = mapped_column(String(16), nullable=False)  # voyage|accrual|non_voyage|ic
+    journal_type: Mapped[str] = mapped_column(String(16), nullable=False)  # voyage|accrual|non_voyage|ic|invoice
     description: Mapped[str | None] = mapped_column(Text)
     entries: Mapped[dict] = mapped_column(JSON, default=list)  # [{account, debit, credit, reference, description}]
-    total_debit: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
-    total_credit: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    total_debit: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
+    total_credit: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
     status: Mapped[str] = mapped_column(Text, default="draft")  # draft|posted|reversed
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     posted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    # 日记账币种 —— 一律记本位币（USD 等），原币金额在 reference/description 里留痕。
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD", server_default="USD")
+    # 业务来源单据 —— 用于幂等过账与反查（source_type="invoice" + source_id=发票 id）
+    source_type: Mapped[str | None] = mapped_column(String(32))
+    source_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=func.now(), onupdate=func.now()

@@ -8,8 +8,8 @@
   min-width: 0;
 }
 .grid-wrapper:focus-visible {
-  outline: 1px solid var(--focus-ring);
-  outline-offset: -1px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .grid-scroll {
@@ -17,6 +17,11 @@
   overflow-y: auto;
   max-height: inherit;
   -webkit-overflow-scrolling: touch;
+}
+
+/* 虚拟滚动：行数超过阈值时容器必须有界，否则撑高页面反而看不到下面的行 */
+.grid-scroll--virtual {
+  max-height: calc(100vh - 240px);
 }
 
 .grid-table {
@@ -66,7 +71,7 @@
   background: var(--row-selected) !important;
 }
 .cell-focus {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
   z-index: 1;
   position: relative;
@@ -82,6 +87,56 @@
   background: var(--surface);
   color: var(--ink);
   outline: none;
+}
+.grid-cell-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* 单元格校验错误（P1-25：此前被静默吞掉，编辑后没有任何提示） */
+.grid-cell-error {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--font-label);
+  color: var(--danger);
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.25;
+}
+
+/* 行选择列（P1-27：DataGrid 需要有「选中行」的状态出口） */
+.dt-select-th,
+.dt-select-cell {
+  width: 28px;
+  min-width: 28px;
+  text-align: center;
+  cursor: default;
+}
+.dt-select-cell input,
+.dt-select-th input {
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+/* 轻量翻页条（DataTable 的 paginatable） */
+.dt-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+/* 虚拟滚动的上下占位行（高度由内联 CSS 变量 --vt / --vb 给出） */
+.grid-vspace td {
+  padding: 0;
+  border: none;
+  height: var(--vt, 0);
+  max-height: none;
+}
+.grid-vspace-bottom td {
+  height: var(--vb, 0);
+  max-height: none;
 }
 
 /* Grouping */
@@ -113,7 +168,7 @@
   height: 20px;
 }
 .grid-footer-selection {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 700;
 }
 

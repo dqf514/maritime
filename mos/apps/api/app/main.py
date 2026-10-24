@@ -12,6 +12,11 @@ from sqlalchemy import text
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
 from app.services.observability import RequestObservabilityMiddleware, configure_logging, install_slow_query_log
+from app.services.security_headers import SecurityHeadersMiddleware
+from app.services.error_envelope import install_error_handlers
+from app.services.audit_middleware import AuditTrailMiddleware
+from app.services.ratelimit import RateLimitMiddleware
+from app.services.readiness import collect_readiness
 import app.models  # noqa: F401
 import app.models_audit  # noqa: F401
 import app.models_wave1  # noqa: F401
@@ -308,11 +313,44 @@ def _apply_wording_patches() -> None:
         conn.commit()
 
 
+def _create_all_safe() -> None:
+    """建表 —— 多副本部署下不炸（P2-8）。
+
+    Postgres 上多个 API 副本同时启动会**并发 CREATE TABLE** → DuplicateTableError
+    → 整个副本起不来（"滚动发布时随机一个 pod 挂"）。
+
+    处理方式：
+
+    1. Postgres：先查关键表是否已存在 —— 存在说明 migrate 服务
+       （``alembic upgrade head``）已经建好 schema，**直接跳过 create_all**
+       （迁移是 schema 的唯一真源，不该被 create_all 覆盖）；
+    2. 表不存在才 create_all，并把 "DuplicateTable / already exists" 当成
+       "另一个副本抢先建好了"——不是错误；
+    3. 其它异常照旧抛出（不能把建表失败静默掉）。
+    """
+    try:
+        if not str(engine.url).startswith("sqlite"):
+            from sqlalchemy import inspect
+
+            insp = inspect(engine)
+            if insp.has_table("tenants") and insp.has_table("invoices"):
+                log.info("Postgres: schema 已存在（由 migrate 服务管理），跳过 create_all")
+                return
+        Base.metadata.create_all(bind=engine)
+    except Exception as exc:  # noqa: BLE001
+        text_repr = str(exc).lower()
+        if "duplicatetable" in type(exc).__name__.lower() or "already exists" in text_repr:
+            log.info("create_all: 表已由并发副本创建，跳过（%s）", type(exc).__name__)
+            return
+        log.exception("create_all 失败")
+        raise
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     if settings.slow_query_ms > 0:
         install_slow_query_log(settings.slow_query_ms)
-    Base.metadata.create_all(bind=engine)
+    _create_all_safe()
     try:
         _ensure_sqlite_user_identity_columns()
     except Exception:
@@ -326,35 +364,38 @@ async def lifespan(_app: FastAPI):
     except Exception:
         log.exception("Wording data patch failed")
     try:
-        with SessionLocal() as db:
-            # Catalog / reference data is required for the app to function
-            seed_saas_catalog(db)
-            seed_i18n(db)
-            bootstrap_ops_catalog(db)
-            seed_reference_catalog(db)
-            seed_clause_pack(db)
-            seed_report_datasets(db)
-            seed_config_flag_presets(db)
-            # 预置燃油区（ECA / EU ETS 多边形）—— estimate_enrich 的 ECA 天数
-            # 与 EU 份额推断依赖这些区划；幂等（按 zone_name 去重）。
-            from app.services.fuel_zone_service import seed_preset_zones
+        if not settings.startup_seed:
+            log.info("STARTUP_SEED=false — 跳过启动种子数据")
+        else:
+            with SessionLocal() as db:
+                # Catalog / reference data is required for the app to function
+                seed_saas_catalog(db)
+                seed_i18n(db)
+                bootstrap_ops_catalog(db)
+                seed_reference_catalog(db)
+                seed_clause_pack(db)
+                seed_report_datasets(db)
+                seed_config_flag_presets(db)
+                # 预置燃油区（ECA / EU ETS 多边形）—— estimate_enrich 的 ECA 天数
+                # 与 EU 份额推断依赖这些区划；幂等（按 zone_name 去重）。
+                from app.services.fuel_zone_service import seed_preset_zones
 
-            seed_preset_zones(db)
-            # Demo tenants & users only when explicitly enabled (SEED_DEMO=true)
-            if settings.seed_demo:
-                seed_if_empty(db)
-                seed_wave1_demo(db)
-                seed_full_demo_flow(db)
-                seed_masterdata_gaps(db)
-                # 演示数据补「创建人 / 修改人」—— 否则归属条永远显示「—」。
-                from sqlalchemy import select as _sel
+                seed_preset_zones(db)
+                # Demo tenants & users only when explicitly enabled (SEED_DEMO=true)
+                if settings.seed_demo:
+                    seed_if_empty(db)
+                    seed_wave1_demo(db)
+                    seed_full_demo_flow(db)
+                    seed_masterdata_gaps(db)
+                    # 演示数据补「创建人 / 修改人」—— 否则归属条永远显示「—」。
+                    from sqlalchemy import select as _sel
 
-                from app.models import Tenant as _Tenant
+                    from app.models import Tenant as _Tenant
 
-                demo_tenant = db.scalar(_sel(_Tenant).where(_Tenant.code == "demo"))
-                if demo_tenant is not None:
-                    stamp_demo_attribution(db, demo_tenant)
-            db.commit()
+                    demo_tenant = db.scalar(_sel(_Tenant).where(_Tenant.code == "demo"))
+                    if demo_tenant is not None:
+                        stamp_demo_attribution(db, demo_tenant)
+                db.commit()
     except Exception:
         log.exception("Startup seed failed")
     # Phase 0 后台作业 worker（webhook 投递等）；测试环境由 conftest 关闭
@@ -410,6 +451,14 @@ app.add_middleware(
 )
 # Outermost middleware (added last): request-id propagation + access logging.
 app.add_middleware(RequestObservabilityMiddleware)
+# 写操作自动留痕（审计 P1-19）—— 显式 audit() 之外的兜底全覆盖。
+app.add_middleware(AuditTrailMiddleware)
+# 路径级限流（审计 P1-20）—— 导出 / PDF / 报表 / AI 这些高成本端点原来无限流。
+app.add_middleware(RateLimitMiddleware)
+# 安全响应头（CSP / nosniff / HSTS…）—— 见 services/security_headers.py
+app.add_middleware(SecurityHeadersMiddleware)
+# 统一错误信封：403/409 的 detail 字典一律补人话 message（P1-3）
+install_error_handlers(app)
 
 app.include_router(platform_router, prefix="/api/v1")
 app.include_router(platform_ops_router, prefix="/api/v1")
@@ -484,15 +533,23 @@ app.mount("/uploads/branding", StaticFiles(directory=str(UPLOAD_ROOT / "branding
 
 @app.get("/healthz", tags=["Health"])
 def healthz():
+    """**存活**探针 —— 只回答"进程还在吗"，不探依赖。
+
+    故意不探数据库：依赖抖一下时如果这里也报 unhealthy，编排会把所有副本
+    同时重启，一次小故障就被放大成全站故障。依赖健康看 ``/readyz``。
+    """
     return {"status": "ok", "version": settings.app_version}
 
 
 @app.get("/readyz", tags=["Health"])
 def readyz():
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return {"status": "ready"}
-    except Exception:  # noqa: BLE001
-        log.exception("Readiness check failed")
-        return JSONResponse(status_code=503, content={"status": "not_ready", "error": "dependency check failed"})
+    """**就绪**探针 —— 真的探依赖（审计 P3-9 / P3-12）。
+
+    编排的 api 健康检查打的就是这个端点：数据库不通、迁移版本落后、
+    后台任务线程死了 → 503 → 编排摘流量/不再路由进来。
+    """
+    result = collect_readiness(engine)
+    if not result["ready"]:
+        log.warning("Readiness check failed: %s", result["checks"])
+        return JSONResponse(status_code=503, content={"status": "not_ready", **result})
+    return {"status": "ready", **result}

@@ -91,10 +91,10 @@
   padding: 0.3rem 0.55rem;
   background: #f7fafb;
 }
-.guide-flow-node.current { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.guide-flow-node.current { border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 .guide-flow-arrow { color: var(--muted); }
 .guide-links { display: grid; gap: 0.35rem; }
-.guide-link { font-size: 0.88rem; color: var(--accent); }
+.guide-link { font-size: 0.88rem; color: var(--accent-text); }
 
 .onboard-card { margin-bottom: 1rem; border-left: 4px solid var(--accent); }
 .onboard-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
@@ -541,3 +541,45 @@
   white-space: nowrap;
 }
 .pool-dist-row.muted { color: var(--muted); }
+
+/* ── 错误边界（ErrorBoundary） ── */
+.error-boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-sm);
+  padding: 3rem 1.5rem;
+  min-height: 50vh;
+  color: var(--ink);
+}
+.error-boundary-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #fde8e6;
+  color: var(--danger);
+  display: grid;
+  place-items: center;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+.error-boundary-title { margin: 0; font-size: 1.15rem; }
+.error-boundary-msg {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  max-width: 32rem;
+  text-align: center;
+}
+.error-boundary-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+
+/* ── My account / security ─────────────────────────────────────────────
+   P1-8/P1-24 修复需要类名（禁止新增 inline style）。 */
+.acct-inline-form {
+  display: flex;
+  gap: 0.5rem;
+}
+.acct-unlink-btn {
+  margin-left: 0.75rem;
+}

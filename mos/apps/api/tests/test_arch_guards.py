@@ -4,6 +4,10 @@
    凡函数体内既不出现 ``tenant_id`` 过滤也不使用 ``scoped_get/scoped_query``
    封装的，记为未保护点。基线（``arch_baseline.json``）之外**不允许新增**。
    跨租户是设计意图的平台路由显式豁免。
+   **全局参考数据豁免**：表里**根本没有 ``tenant_id`` 列**的模型
+   （港口、港口别���/泊位、Worldscale 费率表、节假日、货物品名 …）天然不是
+   "漏了租户过滤" —— 守卫改为按模型判定，这类查询点不再计入未保护清单。
+   这不是放水：漏写租户过滤的错误只在**有 tenant_id 的表**上才成立。
 2. ``test_alter_patches_frozen`` — ``app/main.py`` 的 SQLite ALTER 兼容补丁
    列表已冻结：schema 变更一律新增 Alembic revision（见 alembic/README.md），
    不再往补丁列表加列。确需更新基线时必须在评审中明示。
@@ -14,6 +18,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 import re
 from pathlib import Path
@@ -41,9 +46,62 @@ SESSION_HINTS = {"db", "session", "sess", "conn", "connection", "dao", "store", 
 PROTECT_MARKERS = ("tenant_id", "scoped_get", "scoped_query")
 
 
+def _global_reference_models() -> set[str]:
+    """返回所有**没有 tenant_id 列**的 ORM 模型名。
+
+    这些是全局参考数据（港口、港口别名/泊位、Worldscale 费率、节假日、
+    货物品名、参考包 …）—— 表里没有租户维度，查询它们不存在"漏租户过滤"
+    这类缺陷。若把它们和真正的租户表混在一起按字符串猜，会误伤/漏判，
+    所以这里直接读 ORM 元数据。
+    """
+    names: set[str] = set()
+    for mod_path in sorted(API_ROOT.glob("app/models*.py")):
+        mod_name = "app." + mod_path.stem
+        try:
+            mod = importlib.import_module(mod_name)
+        except Exception:  # noqa: BLE001 - 单个模块导入失败不应让守卫失效
+            continue
+        for obj in vars(mod).values():
+            table = getattr(obj, "__table__", None)
+            if table is None:
+                continue
+            if "tenant_id" not in {c.name for c in table.columns}:
+                names.add(obj.__name__)
+    return names
+
+
+_GLOBAL_REFERENCE_MODELS: set[str] | None = None
+
+
+def _global_models() -> set[str]:
+    global _GLOBAL_REFERENCE_MODELS
+    if _GLOBAL_REFERENCE_MODELS is None:
+        _GLOBAL_REFERENCE_MODELS = _global_reference_models()
+    return _GLOBAL_REFERENCE_MODELS
+
+
+def _queried_model_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """函数体内 ``select(Model)`` / ``Model.__table__`` 提到的模型名。"""
+    out: set[str] = set()
+    for stmt in fn.body:
+        for node in ast.walk(stmt):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if isinstance(f, ast.Name) and f.id in {"select", "update", "delete"}:
+                for arg in node.args:
+                    if isinstance(arg, ast.Name):
+                        out.add(arg.id)
+    return out
+
+
 def _func_protected(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     src = ast.dump(fn)
-    return any(marker in src for marker in PROTECT_MARKERS)
+    if any(marker in src for marker in PROTECT_MARKERS):
+        return True
+    # 只查全局参考数据的函数 → 结构上不可能漏租户过滤
+    models = _queried_model_names(fn)
+    return bool(models) and models <= _global_models()
 
 
 def _session_like(receiver: ast.AST) -> bool:

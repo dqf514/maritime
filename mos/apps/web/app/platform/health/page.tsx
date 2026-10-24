@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { StateView } from "@/components/StateView";
 import { apiGet } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { parseUtc } from "@/lib/datetime";
 
@@ -55,9 +57,23 @@ function formatTs(raw?: string): string {
 export default function PlatformHealthPage() {
   const { t } = useI18n();
   const [health, setHealth] = useState<Health | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setErr(null);
+    try {
+      setHealth(await apiGet("/api/v1/platform/health"));
+    } catch (ex) {
+      setErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    apiGet("/api/v1/platform/health").then(setHealth).catch(() => setHealth(null));
+    load();
   }, []);
 
   const res = health?.resources;
@@ -86,12 +102,9 @@ export default function PlatformHealthPage() {
         subtitle={t("page.health.sub", "Cross-tenant probes and estate status.")}
         breadcrumb={[{ label: t("page.platform.title", "Platform"), href: "/platform" }, { label: t("page.health.title", "Platform health") }]}
       />
-      {!health ? (
-        <div className="panel">
-          <p className="muted">{t("common.loading", "加载中…")}</p>
-        </div>
-      ) : (
-        <>
+      <StateView loading={loading} error={err ?? undefined} empty={false} onRetry={() => load()}>
+        {health ? (
+          <>
           <div className="wb-kpi-strip">
             {stats.map((s) => (
               <div key={s.key} className="wb-kpi-item">
@@ -148,7 +161,8 @@ export default function PlatformHealthPage() {
             )}
           </div>
         </>
-      )}
+        ) : null}
+      </StateView>
     </AppShell>
   );
 }

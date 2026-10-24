@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.security import AuthContext, require_module
+from app.security import AuthContext, require_roles
 from app.db import get_db
 from app.models_config import ConfigFlag, BusinessRuleDefinition, ConfigAlertRule, TaskRule, UdfDefinition, UdfValue
 from app.services.config_service import ConfigService
@@ -50,7 +50,7 @@ class ConfigFlagUpdate(BaseModel):
 @router.get("/flags", response_model=list[ConfigFlagOut])
 def list_config_flags(
     category: str | None = Query(None),
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """List configuration flags for current tenant + platform defaults."""
@@ -74,7 +74,7 @@ def list_config_flags(
 @router.get("/flags/{key}")
 def get_config_flag(
     key: str,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Get configuration value with scope fallback."""
@@ -85,7 +85,7 @@ def get_config_flag(
 @router.post("/flags", response_model=ConfigFlagOut, status_code=201)
 def set_config_flag(
     body: ConfigFlagIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Set configuration flag at tenant scope."""
@@ -126,7 +126,7 @@ def set_config_flag(
 def update_config_flag(
     flag_id: UUID,
     body: ConfigFlagUpdate,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Update configuration flag at tenant scope (partial)."""
@@ -163,7 +163,7 @@ def update_config_flag(
 @router.delete("/flags/{flag_id}")
 def delete_config_flag(
     flag_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Delete configuration flag."""
@@ -196,7 +196,7 @@ def list_config_presets():
 
 @router.post("/flags/seed-presets", status_code=201)
 def seed_config_flag_presets_endpoint(
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Seed platform-scope preset flags (idempotent; existing rows untouched)."""
@@ -260,7 +260,7 @@ def _business_rule_out(rule: BusinessRuleDefinition) -> BusinessRuleOut:
 def list_business_rules(
     rule_type: str | None = Query(None),
     entity_type: str | None = Query(None),
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """List business rules for current tenant."""
@@ -295,7 +295,7 @@ def list_business_rules(
 @router.post("/rules", response_model=BusinessRuleOut, status_code=201)
 def create_business_rule(
     body: BusinessRuleIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Create a new business rule."""
@@ -328,7 +328,7 @@ def create_business_rule(
 def update_business_rule(
     rule_id: UUID,
     body: BusinessRuleUpdate,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Update a business rule (partial)."""
@@ -361,7 +361,7 @@ def update_business_rule(
 @router.delete("/rules/{rule_id}")
 def delete_business_rule(
     rule_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Delete a business rule."""
@@ -378,7 +378,7 @@ def evaluate_business_rules(
     rule_type: str = Query(...),
     entity_type: str = Query(...),
     context: dict = {},
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Evaluate business rules against context."""
@@ -440,7 +440,7 @@ def _alert_rule_out(rule: ConfigAlertRule) -> AlertRuleOut:
 @router.get("/alert-rules", response_model=list[AlertRuleOut])
 def list_alert_rules(
     entity_type: str | None = Query(None),
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """List alert rules for current tenant."""
@@ -465,7 +465,7 @@ def list_alert_rules(
 @router.post("/alert-rules", response_model=AlertRuleOut, status_code=201)
 def create_alert_rule(
     body: AlertRuleIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Create a new alert rule."""
@@ -499,7 +499,7 @@ def create_alert_rule(
 def update_alert_rule(
     rule_id: UUID,
     body: AlertRuleUpdate,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Update an alert rule (partial)."""
@@ -532,7 +532,7 @@ def update_alert_rule(
 @router.delete("/alert-rules/{rule_id}")
 def delete_alert_rule(
     rule_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Delete an alert rule."""
@@ -548,7 +548,7 @@ def delete_alert_rule(
 def evaluate_alert_rules(
     entity_type: str = Query(...),
     context: dict = {},
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Evaluate alert rules and return triggered alerts."""
@@ -557,7 +557,7 @@ def evaluate_alert_rules(
 
 @router.post("/alert-rules/seed-presets", status_code=201)
 def seed_preset_alert_rules(
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Seed preset alert templates for current tenant."""
@@ -618,7 +618,7 @@ def _task_rule_out(rule: TaskRule) -> TaskRuleOut:
 @router.get("/task-rules", response_model=list[TaskRuleOut])
 def list_task_rules(
     trigger_entity_type: str | None = Query(None),
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """List task automation rules for current tenant."""
@@ -642,7 +642,7 @@ def list_task_rules(
 @router.post("/task-rules", response_model=TaskRuleOut, status_code=201)
 def create_task_rule(
     body: TaskRuleIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Create a new task automation rule."""
@@ -675,7 +675,7 @@ def create_task_rule(
 def update_task_rule(
     rule_id: UUID,
     body: TaskRuleUpdate,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Update a task automation rule (partial)."""
@@ -708,7 +708,7 @@ def update_task_rule(
 @router.delete("/task-rules/{rule_id}")
 def delete_task_rule(
     rule_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Delete a task automation rule."""
@@ -724,7 +724,7 @@ def delete_task_rule(
 def evaluate_task_rules(
     trigger_entity_type: str = Query(...),
     context: dict = {},
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Evaluate task rules and return tasks to create."""
@@ -764,7 +764,7 @@ class UdfValueIn(BaseModel):
 @router.get("/udf/{entity_type}", response_model=list[UdfDefinitionOut])
 def list_udf_definitions(
     entity_type: str,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """List UDF definitions for an entity type."""
@@ -799,7 +799,7 @@ def list_udf_definitions(
 def create_udf_definition(
     entity_type: str,
     body: UdfDefinitionIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Create a new UDF definition."""
@@ -835,7 +835,7 @@ def create_udf_definition(
 def get_udf_values(
     entity_type: str,
     entity_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Get UDF values for a specific entity."""
@@ -869,7 +869,7 @@ def set_udf_value(
     entity_id: UUID,
     field_key: str,
     body: UdfValueIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Set a UDF value for a specific entity."""

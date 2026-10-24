@@ -26,6 +26,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
+from app.security import assert_safe_outbound_url
 
 log = logging.getLogger("marios.llm_client")
 
@@ -118,6 +119,21 @@ def _ambient_anthropic_creds() -> bool:
 # ── provider resolution ──
 
 _SKILL_CODE_DEFAULTS = ("platform.assist.copilot",)
+
+
+def _assert_safe_provider_base_url(base_url: str | None) -> None:
+    """LLM provider 的 base_url 出网白名单校验（P0-18）。
+
+    ``AiProvider.base_url`` 是**租户可填**的字段（``routers/ai_hub.py`` 的
+    POST/PATCH），于是「把 base_url 指向 169.254.169.254 / 10.x / localhost」
+    就能让服务器替攻击者打内网（云元数据凭据、Redis、Postgres…）。
+
+    空 base_url = 用 SDK 默认端点，不校验（默认端点来自平台配置，不是租户输入）。
+    """
+    url = (base_url or "").strip()
+    if not url:
+        return
+    assert_safe_outbound_url(url, purpose="LLM provider request")
 
 
 def _config_from_row(row: Any) -> LLMProviderConfig:
@@ -473,6 +489,7 @@ def _chat_anthropic(
 ) -> LLMResponse:
     import anthropic
 
+    _assert_safe_provider_base_url(cfg.base_url)
     client = anthropic.Anthropic(
         api_key=cfg.api_key or None,
         base_url=cfg.base_url or None,
@@ -559,6 +576,7 @@ def _chat_openai(
         body["tools"] = oai_tools
         body["tool_choice"] = "auto"
     base = (cfg.base_url or "").rstrip("/")
+    _assert_safe_provider_base_url(base)
     start = time.time()
     try:
         resp = httpx.post(
@@ -629,6 +647,7 @@ def list_models(provider: LLMProviderConfig, *, limit: int = 50) -> list[str]:
         raise LLMNotConfigured("MARIOS_LLM_OFF=1 kill switch active")
     if provider.provider_type == "openai":
         base = (provider.base_url or "").rstrip("/")
+        _assert_safe_provider_base_url(base)
         try:
             resp = httpx.get(
                 f"{base}{OPENAI_MODELS_PATH}",
@@ -644,6 +663,7 @@ def list_models(provider: LLMProviderConfig, *, limit: int = 50) -> list[str]:
 
     import anthropic
 
+    _assert_safe_provider_base_url(provider.base_url)
     client = anthropic.Anthropic(
         api_key=provider.api_key or None,
         base_url=provider.base_url or None,

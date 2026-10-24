@@ -5,6 +5,7 @@
 
 import { useMemo, useState } from "react";
 import { formatInTz, parseUtc } from "@/lib/datetime";
+import { useI18n } from "@/lib/i18n";
 
 export type TimelinePortCall = {
   seq: number;
@@ -51,6 +52,7 @@ const DAY = 86400000;
 
 export function VoyageTimeline({ portCalls, events, width }: VoyageTimelineProps) {
   const [now] = useState(() => Date.now());
+  const { t } = useI18n();
   const model = useMemo(() => {
     const times: number[] = [];
     for (const pc of portCalls) {
@@ -65,8 +67,8 @@ export function VoyageTimeline({ portCalls, events, width }: VoyageTimelineProps
     }
     if (!times.length) return null;
 
-    const min = Math.min(...times);
-    const max = Math.max(...times);
+    const min = times.reduce((a, b) => (b < a ? b : a), times[0]);
+    const max = times.reduce((a, b) => (b > a ? b : a), times[0]);
     const pad = Math.max((max - min) * 0.04, DAY * 0.5);
     const t0 = min - pad;
     const t1 = max + pad;
@@ -124,6 +126,44 @@ export function VoyageTimeline({ portCalls, events, width }: VoyageTimelineProps
 
   return (
     <div className="ws-timeline">
+      {/* 无障碍：时间轴是纯视觉图形 —— 补一段可读的行程摘要（读屏用户不必猜图形） */}
+      <p className="sr-only">
+        {t(
+          "ws.timeline_summary",
+          {
+            en: "Voyage timeline: {ports} port calls and {events} events.",
+            zh: "航次时间轴：{ports} 次挂靠、{events} 个事件。",
+          },
+          { ports: model.ports.length, events: model.evs.length },
+        )}
+      </p>
+      <ol className="sr-only">
+        {model.ports.map((p, i) => (
+          <li key={`sr-port-${p.seq}-${i}`}>
+            {t(
+              "ws.timeline_port",
+              { en: "Port call {seq}: {name} on {day}", zh: "第 {seq} 次挂靠：{name}，{day}" },
+              {
+                seq: p.seq,
+                name: p.name,
+                day: p.arrive ? fmtDay(p.arrive) : "—",
+              },
+            )}
+          </li>
+        ))}
+        {model.evs.map((ev, i) => (
+          <li key={`sr-ev-${ev.type}-${i}`}>
+            {t(
+              "ws.timeline_event",
+              { en: "Event: {label} on {day}", zh: "事件：{label}，{day}" },
+              {
+                label: ev.label,
+                day: ev.at ? fmtDay(ev.at) : "—",
+              },
+            )}
+          </li>
+        ))}
+      </ol>
       <div className="ws-timeline-track" style={{ width: model.width }}>
         <div className="ws-timeline-axis" />
         {model.ticks.map((t) => (
@@ -136,7 +176,7 @@ export function VoyageTimeline({ portCalls, events, width }: VoyageTimelineProps
         ))}
         {model.showToday ? (
           <div className="ws-tl-today" style={{ left: `${model.pct(model.now)}%` }}>
-            <span>now</span>
+            <span>{t("ws.timeline_now", { en: "now", zh: "现在" })}</span>
           </div>
         ) : null}
         {model.ports.map((p, i) => (

@@ -1,9 +1,11 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { RefreshButton } from "@/components/RefreshButton";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
@@ -11,11 +13,13 @@ import type { ColumnDef } from "@/components/grid";
 import { LookupSelect } from "@/components/LookupSelect";
 import { RecordModal } from "@/components/RecordModal";
 import { SavedViews } from "@/components/SavedViews";
+import { StateView } from "@/components/StateView";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -55,22 +59,55 @@ function PortsPage() {
   const toast = useToast();
   const router = useRouter();
   const pathname = usePathname();
-  const { query, setQuery } = useListQuery();
+  const { query, setQuery, page, limit } = useListQuery();
   const q = query.q ?? "";
+  // 检索框本地草稿 + 防抖（服务端检索：每敲一个字发一次请求会把 API 打满）
+  const [qDraft, setQDraft] = useState(q);
+  useEffect(() => {
+    setQDraft(q);
+  }, [q]);
+  useEffect(() => {
+    if (qDraft === q) return;
+    const timer = setTimeout(() => setQuery({ q: qDraft || null }, { resetPage: true }), 300);
+    return () => clearTimeout(timer);
+  }, [qDraft, q, setQuery]);
   const [rows, setRows] = useState<Port[]>([]);
   const [open, setOpen] = useState<Port | null>(null);
   const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({ name: "", unlocode: "", country: "", timezone: "UTC", holidays: "", is_eu: false });
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [listErr, setListErr] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<{ run: () => void; name: string } | null>(null);
+  // P1-28：服务端分页 —— 后端支持 limit/offset；多取一条用来判断"还有更多"
+  const [hasMore, setHasMore] = useState(false);
   const rowCtx = useContextMenu<Port>();
 
-  async function load() {
-    setRows(await apiGet("/api/v1/masterdata/ports"));
-  }
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      // 服务端检索 + 服务端分页（limit+1 探测是否还有下一页）
+      const offset = (page - 1) * limit;
+      const qs = new URLSearchParams({ limit: String(limit + 1), offset: String(offset) });
+      if (q.trim()) qs.set("q", q.trim());
+      const data = await apiGet(`/api/v1/masterdata/ports?${qs.toString()}`);
+      const arr = Array.isArray(data) ? (data as Port[]) : [];
+      setHasMore(arr.length > limit);
+      setRows(arr.slice(0, limit));
+      setListErr("");
+    } catch (ex) {
+      // 列表取数失败必须走错误态，不能静默变成「No records」
+      setRows([]);
+      setHasMore(false);
+      setListErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
+  }, [page, limit, q]);
 
   useEffect(() => {
-    load().catch(() => setRows([]));
-  }, []);
+    void load();
+  }, [load]);
 
   function openCreate() {
     setCreating(true);
@@ -128,16 +165,12 @@ function PortsPage() {
       }
       closeModal();
       await load();
-    } catch {
-      toast.error(creating ? t("page.ports.create_fail", "Create failed") : t("common.failed", "Failed"));
+    } catch (ex) {
+      // 写入失败必须报错（此前 try/catch 无消息体，失败被吞成一句通用文案）
+      toast.error(msgOf(ex, creating ? t("page.ports.create_fail", "Create failed") : t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
-  }
-
-  async function remove() {
-    if (!open) return;
-    await removePort(open);
   }
 
   async function removePort(p: Port) {
@@ -147,9 +180,17 @@ function PortsPage() {
       toast.success(t("common.recycled", "Moved to recycle bin"));
       closeModal();
       await load();
+    } catch (ex) {
+      // 删除失败必须报错（此前 try/finally 无 catch，失败被静默吞掉）
+      toast.error(msgOf(ex));
     } finally {
       setSaving(false);
     }
+  }
+
+  /** 删除是不可逆动作 —— 走 ConfirmDialog，确认文案指名对象。 */
+  function requestDeletePort(p: Port) {
+    setPendingDelete({ run: () => void removePort(p), name: p.name });
   }
 
   function validateEdit(): ValidateIssue[] {
@@ -181,27 +222,16 @@ function PortsPage() {
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyId(r.id) },
     { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportPorts([r]) },
     { key: "d1", label: "", divider: true },
-    { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => void removePort(r) },
+    { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => requestDeletePort(r) },
   ];
 
-  const filtered = q
-    ? rows.filter((r) => {
-        const needle = q.toLowerCase();
-        return (
-          r.name.toLowerCase().includes(needle) ||
-          (r.unlocode || "").toLowerCase().includes(needle) ||
-          (r.country || "").toLowerCase().includes(needle) ||
-          (r.port_type || "").toLowerCase().includes(needle) ||
-          (r.region_code || "").toLowerCase().includes(needle) ||
-          (r.loadline_zone || "").toLowerCase().includes(needle) ||
-          (r.fuel_zone_default || "").toLowerCase().includes(needle)
-        );
-      })
-    : rows;
+  // 检索与分页都在服务端完成（后端 q 覆盖 name/unlocode/country/port_type/
+  // region_code/parent_country）—— 这里不再做客户端过滤，否则只会过滤当前页。
+  const filtered = rows;
 
   const dash = (v: string | null | undefined) => v || "—";
 
-  const columns: ColumnDef<Port>[] = [
+  const columns = useMemo<ColumnDef<Port>[]>(() => [
     {
       key: "name",
       title: t("common.name", "Name"),
@@ -316,7 +346,7 @@ function PortsPage() {
         </button>
       ),
     },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -338,8 +368,8 @@ function PortsPage() {
             <input
               className="input input-sm"
               type="search"
-              value={q}
-              onChange={(e) => setQuery({ q: e.target.value || null }, { resetPage: true })}
+              value={qDraft}
+              onChange={(e) => setQDraft(e.target.value)}
               placeholder={t("page.ports.search", "Search name / UN/LOCODE / country…")}
               aria-label={t("common.search", "Search")}
             />
@@ -350,20 +380,58 @@ function PortsPage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.ports.add", "New port")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => void load()} />
       </Toolbar>
       <div className="panel">
-        <DataGrid<Port>
-          columns={columns}
-          data={filtered}
-          rowKey={(r) => r.id}
-          onRowClick={(r) => router.push(`/masterdata/ports/${r.id}`)}
-          onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
-          storageKey="masterdata_ports_grid"
+        <StateView
+          loading={loading}
+          error={listErr || undefined}
+          empty={!filtered.length}
           emptyText={t("common.empty", "No records")}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid<Port>
+            columns={columns}
+            data={filtered}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => router.push(`/masterdata/ports/${r.id}`)}
+            onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
+            storageKey="masterdata_ports_grid"
+            emptyText={t("common.empty", "No records")}
+          />
+        </StateView>
+        {/* P1-28：分页 —— 截断必须对用户可见，且能翻到下一页 */}
+        {!listErr && filtered.length ? (
+          <p className="muted">
+            {t("list.count_total", "{n} records", { n: filtered.length })}
+            {hasMore ? t("page.ports.more", " (more available — use the pager below)") : ""}
+          </p>
+        ) : null}
+        {!listErr && filtered.length ? (
+          <div className="dt-pagination">
+            <span className="dt-page-info">
+              {t("page.ports.page_of", "Page {page}", { page })}
+            </span>
+            <span className="dt-page-btns">
+              <button
+                type="button"
+                onClick={() => setQuery({ page: page > 2 ? page - 1 : null })}
+                disabled={page <= 1}
+                aria-label="prev"
+              >
+                ‹
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuery({ page: page + 1 })}
+                disabled={!hasMore}
+                aria-label="next"
+              >
+                ›
+              </button>
+            </span>
+          </div>
+        ) : null}
         <ContextMenu controller={rowCtx} items={menuItems} />
       </div>
 
@@ -372,8 +440,6 @@ function PortsPage() {
         title={creating ? t("page.ports.add", "New port") : t("page.ports.edit", "Edit port")}
         onClose={closeModal}
         onSave={save}
-        onDelete={creating ? undefined : remove}
-        canDelete={!creating}
         saving={saving}
       >
         <label>
@@ -412,7 +478,35 @@ function PortsPage() {
         <div className="record-modal-validate">
           <ValidateButton onValidate={validateEdit} />
         </div>
+
+        {/* P1-8：删除港口是不可逆动作 —— 走指名对象的二次确认（RecordModal 内置文案无法指名对象）。 */}
+        {open ? (
+          <div className="desk-toolbar">
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={saving}
+              onClick={() => requestDeletePort(open)}
+            >
+              {t("common.delete", "Delete")}
+            </button>
+          </div>
+        ) : null}
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: pendingDelete?.name ?? "" })}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = pendingDelete;
+          setPendingDelete(null);
+          fn?.run();
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

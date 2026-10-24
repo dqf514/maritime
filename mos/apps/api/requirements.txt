@@ -8,12 +8,16 @@ pydantic==2.13.5
 pydantic-settings==2.15.0
 python-jose[cryptography]==3.5.0
 bcrypt==5.0.0
-redis==8.1.0
+# 说明：编排里的 Redis 服务与 redis 依赖已移除（系统全程不连 Redis ——
+# 限流走进程内滑动窗口，任务队列走数据库表）。要接分布式限流/缓存时再加回来。
 httpx==0.28.1
 python-multipart==0.0.32
 pytest==9.1.1
 openpyxl==3.1.5
 email-validator==2.3.0
+# XML 解析安全：defusedxml 禁掉 DTD / 外部实体 / 实体膨胀（XXE & billion laughs）。
+# 不用它的地方（生成 XML）仍走 stdlib ElementTree。
+defusedxml==0.7.1
 anthropic>=0.79.0
 # 单据模板：Jinja2 渲染（沙箱环境）+ Playwright 无头 Chromium 出 PDF。
 # Chromium 二进制需单独执行 `python -m playwright install chromium`；

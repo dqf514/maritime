@@ -1,8 +1,21 @@
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+# 主数据「键 / 名字」的长度上限（P0-22）。
+# 这些列在 DB 里都是 Text（SQLite/PG 都不限长），所以列宽给不出硬约束 ——
+# 这里按常见的 VARCHAR(255) 兜底：主数据名字超过 255 字符一定是垃圾行，
+# 选择器、导出列宽和唯一约束都读不动。
+# 真正有列宽的列（String(64) 等）按列宽单独写 max_length。
+_NAME_MAX_LEN = 255
+
+# 键字段类型：非空 + 长度封顶（去空白与空串判定由 _reject_empty 负责）
+MasterDataName = Annotated[str, Field(max_length=_NAME_MAX_LEN)]
+# 同上，但允许缺省（PATCH / Update body）
+OptionalMasterDataName = Annotated[str, Field(max_length=_NAME_MAX_LEN)] | None
 
 
 def _reject_null(field: str):
@@ -21,11 +34,36 @@ def _reject_null(field: str):
     return field_validator(field)(check)
 
 
+def _reject_empty(field: str):
+    """为键字段生成「非空」校验器（P0-22）。
+
+    主数据（对手方 / 船舶 / 港口 / 货物品名）允许空名字等于没有主数据：
+    列表里出现一行无名记录、开票时选对手方出现空白选项、导出时客户看到空列。
+    这里统一拒绝 ``""`` / ``"   "`` / 显式 null，并把首尾空白**剥掉**再落库
+    （" ACME " 与 "ACME " 是同一家公司，留着空格只会让去重和匹配失效）。
+
+    ``*Update`` / ``*Patch`` 里该字段可缺省（路由 ``exclude_unset`` 会跳过），
+    显式传 null 或空串 → 422。
+    """
+
+    def check(cls, v):
+        if v is None:
+            raise ValueError(f"{field} must not be empty")
+        v = str(v).strip()
+        if not v:
+            raise ValueError(f"{field} must not be empty")
+        return v
+
+    return field_validator(field)(check)
+
+
 class CompanyIn(BaseModel):
-    name: str
+    name: MasterDataName
     code: str
     base_currency: str = "USD"
     tax_no: str | None = None
+
+    _name_not_empty = _reject_empty("name")
 
 
 class CompanyOut(CompanyIn):
@@ -43,7 +81,7 @@ class VesselIn(BaseModel):
     makes the new fields manageable and importable without extra wiring.
     """
 
-    name: str
+    name: MasterDataName
     imo: str | None = None
     mmsi: str | None = None
     flag: str | None = None
@@ -53,6 +91,9 @@ class VesselIn(BaseModel):
     consumption_sea: Decimal | None = None
     consumption_port: Decimal | None = None
     status: str = "active"
+
+    # P0-22：空名字的船在列表/开票选择器/导出里都是一个无名幽灵行
+    _name_not_empty = _reject_empty("name")
     # IMOS 对齐业务分组：mother_vessel | ship_management | tugs_barges | flf | other
     fleet_group: str = "mother_vessel"
     # —— DWT / draft tab（载重吨/吃水表）——
@@ -118,7 +159,7 @@ class VesselUpdate(VesselIn):
     so it can never land in the ORM via ``**body.model_dump()`` / setattr loops.
     """
 
-    name: str | None = None  # PATCH 可缺省（路由 exclude_unset），显式 null 拒绝
+    name: OptionalMasterDataName = None  # PATCH 可缺省（路由 exclude_unset），显式 null 拒绝
     _name_not_null = _reject_null("name")
 
     expected_updated_at: str | None = Field(default=None, exclude=True)
@@ -152,7 +193,7 @@ _PORT_BOOL_FIELDS = (
 
 
 class PortIn(BaseModel):
-    name: str
+    name: MasterDataName
     unlocode: str | None = None
     country: str | None = None
     timezone: str = "UTC"
@@ -160,6 +201,9 @@ class PortIn(BaseModel):
     longitude: Decimal | None = None
     holidays: list[str] | None = None  # 港口节假日 ["YYYY-MM-DD"]
     is_eu: bool = False  # EU/EEA port — EU ETS eu_share inference
+
+    # P0-22：空港口名会让航线/挂港列表出现无名行
+    _name_not_empty = _reject_empty("name")
     # —— IMOS port classification（港口分类与地理归属）——
     port_type: str | None = None
     parent_country: str | None = None  # 属地与主权国分离（如直布罗陀/英国）
@@ -208,7 +252,7 @@ class PortOut(PortIn):
 class PortUpdate(PortIn):
     """PATCH body for ports — 同 VesselUpdate/CounterpartyUpdate，name 可缺省。"""
 
-    name: str | None = None  # PATCH 可缺省（路由 exclude_unset），显式 null 拒绝
+    name: OptionalMasterDataName = None  # PATCH 可缺省（路由 exclude_unset），显式 null 拒绝
     _name_not_null = _reject_null("name")
 
 
@@ -219,12 +263,14 @@ class CounterpartyIn(BaseModel):
     is IMOS's multi-role set (Agents + Brokers + Charterers + Owners + Company Info + Misc).
     """
 
-    name: str
+    name: MasterDataName
     type: str = "other"
     country: str | None = None
     credit_rating: str | None = None
     sanctions_status: str = "clear"
     address: str | None = None
+    # P0-22：空名字的对手方在开票/账龄/导出里都无法辨认
+    _name_not_empty = _reject_empty("name")
     tax_id: str | None = None
     swift_code: str | None = None
     registration_no: str | None = None
@@ -264,7 +310,7 @@ class CounterpartyIn(BaseModel):
 class CounterpartyUpdate(CounterpartyIn):
     """PATCH body for counterparties — carries the optimistic-lock token."""
 
-    name: str | None = None  # PATCH 可缺省（路由 exclude_unset），显式 null 拒绝
+    name: OptionalMasterDataName = None  # PATCH 可缺省（路由 exclude_unset），显式 null 拒绝
     _name_not_null = _reject_null("name")
 
     expected_updated_at: str | None = Field(default=None, exclude=True)
@@ -278,7 +324,7 @@ class CounterpartyOut(CounterpartyIn):
 
 
 class CounterpartyContactIn(BaseModel):
-    name: str
+    name: MasterDataName
     title: str | None = None
     email: str | None = None
     phone: str | None = None
@@ -286,6 +332,9 @@ class CounterpartyContactIn(BaseModel):
     department: str | None = None
     is_primary: bool = False
     notes: str | None = None
+
+    # P0-22：无名联系人无法辨认（询价/催款邮件里只有一个空收件人）
+    _name_not_empty = _reject_empty("name")
 
 
 class CounterpartyContactOut(CounterpartyContactIn):
@@ -302,9 +351,12 @@ class CounterpartyContactOut(CounterpartyContactIn):
 class PortBerthIn(BaseModel):
     """港口泊位（IMOS Port 详情页 Berth 子表）。港口是全局参照数据，泊位随之全局。"""
 
-    short_name: str
+    short_name: MasterDataName
     full_name: str | None = None
     inactive: bool = False
+
+    # P0-22：空泊位号 = 没有泊位（选泊位时出现一个空白选项）
+    _short_name_not_empty = _reject_empty("short_name")
 
 
 class PortBerthOut(PortBerthIn):
@@ -317,7 +369,10 @@ class PortBerthOut(PortBerthIn):
 class PortAliasIn(BaseModel):
     """港口别名/历史名 —— CP、代理报文、NOA 里的异写匹配到同一港口。"""
 
-    alias: str
+    alias: MasterDataName
+
+    # P0-22：空别名匹配不到任何港口，却会在别名表里留下一行
+    _alias_not_empty = _reject_empty("alias")
 
 
 class PortAliasOut(PortAliasIn):
@@ -330,8 +385,11 @@ class PortAliasOut(PortAliasIn):
 class CargoGroupIn(BaseModel):
     """商品大类 —— AGRI BULK / COAL / CEMENT / CONTAINER / Fertilizer ..."""
 
-    name: str
+    name: MasterDataName
     description: str | None = None
+
+    # P0-22：空大类名 = 没有品名归属（货物品名挂在一个无名分组下）
+    _name_not_empty = _reject_empty("name")
 
 
 class CargoGroupOut(CargoGroupIn):
@@ -344,10 +402,12 @@ class CargoGroupOut(CargoGroupIn):
 class CargoNameIn(BaseModel):
     """货物品名主数据（IMOS Data Center > Cargo Names）—— 见 models_cargo.CargoName。"""
 
-    short_name: str
+    short_name: MasterDataName
     full_name: str | None = None
     cargo_group_id: UUID | None = None
     cargo_class: str | None = None
+    # P0-22：空短名 = 没有品名
+    _short_name_not_empty = _reject_empty("short_name")
     # —— 危险品属性（IMSBC + IMDG）——
     imo_name: str | None = None
     ibc_code: str | None = None
@@ -380,8 +440,11 @@ class CargoNameOut(CargoNameIn):
 class TitleValueIn(BaseModel):
     """Title/Value 子表通用 body —— 对手方属性与品名属性结构相同。"""
 
-    title: str
+    title: MasterDataName
     value: str | None = None
+
+    # P0-22：空标题的属性行在详情页/导出里都是一行空白
+    _title_not_empty = _reject_empty("title")
 
 
 class CounterpartyPropertyOut(TitleValueIn):
@@ -401,7 +464,7 @@ class CargoNamePropertyOut(TitleValueIn):
 class VesselPortConsumptionIn(BaseModel):
     """In-port consumption matrix（IMOS In Port Consumption Table），按燃料牌号一行。"""
 
-    fuel_grade: str
+    fuel_grade: MasterDataName
     unit: str = "MT"
     inactive: bool = False
     gas_flag: str | None = None
@@ -421,6 +484,9 @@ class VesselPortConsumptionIn(BaseModel):
     cooling: Decimal | None = None
     boiler: Decimal | None = None
     incinerator: Decimal | None = None
+
+    # P0-22：空燃油牌号 = 这一行油耗没有归属（VLSFO / LSG / MGO …）
+    _fuel_grade_not_empty = _reject_empty("fuel_grade")
 
 
 class VesselPortConsumptionOut(VesselPortConsumptionIn):
@@ -457,37 +523,37 @@ class VesselSpeedConsumptionOut(VesselSpeedConsumptionIn):
 
 
 class CargoGroupPatch(CargoGroupIn):
-    name: str | None = None
+    name: OptionalMasterDataName = None
 
     _name_not_null = _reject_null("name")
 
 
 class CargoNamePatch(CargoNameIn):
-    short_name: str | None = None
+    short_name: OptionalMasterDataName = None
 
     _short_name_not_null = _reject_null("short_name")
 
 
 class PortBerthPatch(PortBerthIn):
-    short_name: str | None = None
+    short_name: OptionalMasterDataName = None
 
     _short_name_not_null = _reject_null("short_name")
 
 
 class PortAliasPatch(PortAliasIn):
-    alias: str | None = None
+    alias: OptionalMasterDataName = None
 
     _alias_not_null = _reject_null("alias")
 
 
 class VesselPortConsumptionPatch(VesselPortConsumptionIn):
-    fuel_grade: str | None = None
+    fuel_grade: OptionalMasterDataName = None
 
     _fuel_grade_not_null = _reject_null("fuel_grade")
 
 
 class TitleValuePatch(TitleValueIn):
-    title: str | None = None
+    title: OptionalMasterDataName = None
 
     _title_not_null = _reject_null("title")
 

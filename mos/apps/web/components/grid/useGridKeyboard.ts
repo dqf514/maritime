@@ -19,6 +19,8 @@ type KeyboardContext = {
   onDelete: () => void;
   onFillDown: () => void;
   onFillRight: () => void;
+  /** 撤销上一次批量清空（P1-11）。可选，缺省则 Ctrl+Z 无副作用。 */
+  onUndo?: () => void;
 };
 
 export function useGridKeyboard(ctx: KeyboardContext) {
@@ -40,9 +42,8 @@ export function useGridKeyboard(ctx: KeyboardContext) {
           return;
         }
         if (e.key === "Tab") {
-          e.preventDefault();
-          commitEdit();
-          moveFocus(0, e.shiftKey ? -1 : 1);
+          // WCAG 2.1.2（No Keyboard Trap）：Tab / Shift+Tab **不**拦截默认行为，
+          // 焦点直接离开网格。编辑中的值由 input 的 onBlur → commitEdit 落库。
           return;
         }
         return; // 其他按键交给输入框
@@ -70,8 +71,8 @@ export function useGridKeyboard(ctx: KeyboardContext) {
           moveFocus(0, 1, { shift });
           break;
         case "Tab":
-          e.preventDefault();
-          moveFocus(0, shift ? -1 : 1);
+          // WCAG 2.1.2（No Keyboard Trap）：Tab / Shift+Tab 放行浏览器默认行为，
+          // 焦点离开网格到下一个可聚焦元素。网格内的单元格移动一律用方向键。
           break;
         case "Home":
           e.preventDefault();
@@ -137,6 +138,18 @@ export function useGridKeyboard(ctx: KeyboardContext) {
         case "Backspace":
           e.preventDefault();
           ctx.onDelete();
+          break;
+        case "z":
+        case "Z":
+          // Ctrl+Z = 撤销上一次批量清空（P1-11）。没有可撤销的内容时不做任何事。
+          if (ctrl) {
+            e.preventDefault();
+            ctx.onUndo?.();
+            break;
+          }
+          // 不带 Ctrl 时按普通字符处理：直接进入编辑（与 default 分支一致）
+          e.preventDefault();
+          startEdit(selection.focus);
           break;
         case "d":
         case "D":

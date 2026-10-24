@@ -4,6 +4,7 @@
 // 公式注入防护：预览阶段由 API 拒绝 = + @ 制表符/回车 或非纯数字 - 开头的单元格。
 // 提交阶段剥离前导 `'` 守卫符；全程不 eval。
 
+import { msgOf } from "@/lib/errors";
 import { ChangeEvent, useCallback, useMemo, useRef, useState } from "react";
 import { RecordModal } from "@/components/RecordModal";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -127,7 +128,7 @@ export function ImportWizard({ entity, onDone }: Props) {
       } else if (detail?.code === "CONTENT_TOO_LARGE") {
         toast.error(t("imp.too_large", "File too large (max 2MB)"));
       } else {
-        toast.error(t("imp.preview_fail", "Preview failed: {err}", { err: String(err) }));
+        toast.error(t("imp.preview_fail", "Preview failed: {err}", { err: msgOf(err) }));
       }
     } finally {
       setBusy(false);
@@ -148,7 +149,7 @@ export function ImportWizard({ entity, onDone }: Props) {
       );
       onDone?.();
     } catch (err) {
-      toast.error(t("imp.commit_fail", "Import failed: {err}", { err: String(err) }));
+      toast.error(t("imp.commit_fail", "Import failed: {err}", { err: msgOf(err) }));
     } finally {
       setBusy(false);
     }

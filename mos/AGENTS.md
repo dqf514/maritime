@@ -76,7 +76,7 @@ $env:LICENSE_DEV_UNLOCK="all"
 ## 部署
 
 - `deploy/compose/docker-compose.yml`，API 构建上下文**必须是 `mos/` 根**（fixtures 在 `mos/fixtures`，SelfCheck 依赖此布局）。
-- **不要**挂载 `docs/ddl.sql` 做数据库初始化——该文件已与模型漂移；空库由 API 启动时 `create_all` 建表，再 `alembic stamp head` 登记基线。
+- **不要**挂载 `docs/internal/legacy_ddl.sql` 做数据库初始化——该文件已与模型漂移（且已移出客户可见目录）；空库由 API 启动时 `create_all` 建表，再 `alembic stamp head` 登记基线。
 
 ## 后端架构（`apps/api/app`）
 

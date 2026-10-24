@@ -46,15 +46,37 @@ export function NotificationBell() {
   }, []);
 
   useEffect(() => {
+    // 页面不可见时停掉轮询（后台标签页没必要每分钟打一次 API），
+    // 回到前台再补一次 —— 避免无谓请求，也避免标签页堆积时后端被轮询打满。
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer === null) timer = setInterval(load, POLL_MS);
+    };
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        stop();
+      } else {
+        load();
+        start();
+      }
+    };
     load();
-    const timer = setInterval(load, POLL_MS);
+    if (document.visibilityState !== "hidden") start();
     function onFocus() {
       load();
     }
     window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      clearInterval(timer);
+      stop();
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [load]);
 

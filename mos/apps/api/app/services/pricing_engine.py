@@ -8,11 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models_reference import PortDistance, WorldscaleRate
+from app.services.money import CENT
 
 _D = Decimal
 _ZERO = _D("0")
-_CENT = _D("0.01")
-
 
 def _f(val) -> _D:
     if val is None:
@@ -30,7 +29,7 @@ class WorldscaleCalculator:
         ws_pct: Decimal,
     ) -> Decimal:
         return (_f(cargo_qty_mt) * _f(ws_flat) * _f(ws_pct) / _D("100")).quantize(
-            _CENT, ROUND_HALF_UP
+            CENT, ROUND_HALF_UP
         )
 
     @staticmethod
@@ -60,7 +59,7 @@ class DifferentialFreightCalculator:
         cargo_qty_mt: Decimal,
     ) -> Decimal:
         return ((_f(actual_rate) - _f(base_rate)) * _f(cargo_qty_mt)).quantize(
-            _CENT, ROUND_HALF_UP
+            CENT, ROUND_HALF_UP
         )
 
 
@@ -81,7 +80,7 @@ class FreightRateScale:
             lo = _f(min_q) if min_q is not None else _ZERO
             hi = _f(max_q) if max_q is not None else None
             if qty >= lo and (hi is None or qty <= hi):
-                return (qty * _f(rate)).quantize(_CENT, ROUND_HALF_UP)
+                return (qty * _f(rate)).quantize(CENT, ROUND_HALF_UP)
         return _ZERO
 
 
@@ -97,7 +96,7 @@ class DeadfreightCalculator:
         shortfall = _f(nominal_qty) - _f(loaded_qty)
         if shortfall <= _ZERO:
             return _ZERO
-        return (shortfall * _f(freight_rate)).quantize(_CENT, ROUND_HALF_UP)
+        return (shortfall * _f(freight_rate)).quantize(CENT, ROUND_HALF_UP)
 
 
 class AdvancedPricingEngine:
@@ -132,7 +131,7 @@ class AdvancedPricingEngine:
             else:
                 result["error"] = "No worldscale rate found for this port pair/year"
         elif freight_basis == "per_mt" and freight_rate is not None:
-            freight = (qty * _f(freight_rate)).quantize(_CENT, ROUND_HALF_UP)
+            freight = (qty * _f(freight_rate)).quantize(CENT, ROUND_HALF_UP)
             result.update({"rate": float(_f(freight_rate)), "freight": float(freight)})
         elif freight_basis == "lumpsum" and freight_rate is not None:
             result.update({"freight": float(_f(freight_rate))})

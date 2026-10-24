@@ -32,6 +32,8 @@ export function VideoDemos() {
   const [activeId, setActiveId] = useState<VideoDemoId>(defaultId);
   const [currentTime, setCurrentTime] = useState(0);
   const [failed, setFailed] = useState(false);
+  /** 自动播放被浏览器拦截（不是取数失败）——给出可见提示 */
+  const [playBlocked, setPlayBlocked] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const demo = VIDEO_DEMOS[activeId];
@@ -55,7 +57,7 @@ export function VideoDemos() {
     if (!v) return;
     v.currentTime = sec;
     // 用户点击章节/讲解行即视为想看该段——静音失败（自动播放策略）不影响页面
-    v.play().catch(() => {});
+    v.play().catch(() => setPlayBlocked(true));
   }
 
   return (
@@ -81,8 +83,14 @@ export function VideoDemos() {
             preload="metadata"
             onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
             onError={() => setFailed(true)}
+            onPlay={() => setPlayBlocked(false)}
           />
         )}
+        {playBlocked ? (
+          <p className="vd-hint" role="status">
+            {t("help.video.play_blocked", "Playback was blocked by the browser — press the play button to start the video.")}
+          </p>
+        ) : null}
         <p className="vd-hint">
           {t("help.video.seek_hint", "Click any chapter or transcript line to jump to that moment.")}{" "}
           <a href={demo.srt} download>

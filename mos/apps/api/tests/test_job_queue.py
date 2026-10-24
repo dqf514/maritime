@@ -119,6 +119,12 @@ def test_webhook_dispatch_enqueues_and_delivers(db_session, monkeypatch):
         return _Resp()
 
     monkeypatch.setattr("httpx.post", _fake_post)
+    # P0-18 的出网白名单在投递前会**解析 DNS**；``example.invalid`` 解析不了
+    # → fail-closed 拦下。本用例测的是投递/HMAC/幂等，所以把白名单短路掉；
+    # 白名单本身由 test_webhook_delivery_blocks_internal_targets 单独覆盖。
+    monkeypatch.setattr(
+        "app.services.webhook_service.assert_safe_outbound_url", lambda *a, **k: None
+    )
     assert process_pending(db_session) == 1
     d = db_session.get(WebhookDelivery, uuid.UUID(str(deliveries[0].id)))
     assert d.status == "delivered"
@@ -136,3 +142,34 @@ def test_webhook_dispatch_enqueues_and_delivers(db_session, monkeypatch):
     monkeypatch.setattr("httpx.post", lambda *a, **k: calls.append(1) or _Resp())
     assert process_pending(db_session) == 1
     assert calls == []
+
+
+def test_webhook_delivery_blocks_internal_targets(db_session, monkeypatch):
+    """P0-18：投递前再校验一次出网地址 —— 环回 / 元数据地址一律不发出去。
+
+    登记时校验过一次不够：域名可能在登记后被改指向内网（DNS rebinding），
+    地址也可能在两次投递之间被改过。
+    """
+    tid = _tenant_id(db_session)
+    sub = WebhookEndpoint(
+        tenant_id=tid,
+        name="internal",
+        target_url="http://169.254.169.254/latest/meta-data/",
+        secret="s3cret",
+        events=["voyage.*"],
+        status="active",
+    )
+    db_session.add(sub)
+    db_session.commit()
+
+    deliveries = dispatch_event(db_session, tid, "voyage.started", {"id": "v2"})
+    assert len(deliveries) == 1
+
+    calls = []
+    monkeypatch.setattr("httpx.post", lambda *a, **k: calls.append(1))
+    # 投递被拦 → 作业重试到死信，不产生任何出网请求
+    process_pending(db_session)
+    assert calls == [], "内网/元数据地址绝不能真的发出去"
+
+    d = db_session.get(WebhookDelivery, uuid.UUID(str(deliveries[0].id)))
+    assert d.status == "failed"

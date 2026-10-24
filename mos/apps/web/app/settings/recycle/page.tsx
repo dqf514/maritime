@@ -1,14 +1,17 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { SavedViews } from "@/components/SavedViews";
 import { Toolbar } from "@/components/Toolbar";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { formatInTz } from "@/lib/datetime";
 import { useListQuery } from "@/lib/useListQuery";
@@ -31,32 +34,58 @@ function RecycleBinPage() {
   const { query, setQuery } = useListQuery();
   const filterType = query.type ?? "";
   const [rows, setRows] = useState<Item[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  // 永久清除不可逆 → 输入确认（要求键入条目标题）
+  const [purgeTarget, setPurgeTarget] = useState<Item | null>(null);
+  const [purgeText, setPurgeText] = useState("");
 
-  async function load() {
-    setRows(await apiGet("/api/v1/recycle-bin"));
-  }
-
-  useEffect(() => {
-    load().catch(() => toast.error(t("page.recycle.load_fail", "Unable to load recycle bin (sign-in required)")));
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const list = await apiGet("/api/v1/recycle-bin");
+      setRows(Array.isArray(list) ? list : []);
+    } catch (ex) {
+      setErr(msgOf(ex, t("page.recycle.load_fail", "Unable to load recycle bin (sign-in required)")));
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
   }, [t]);
 
-  async function restore(id: string) {
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const restore = useCallback(async (id: string) => {
     await apiPost(`/api/v1/recycle-bin/${id}/restore`);
     toast.success(t("page.recycle.restored", "Restored"));
     await load();
-  }
+  }, [load, t, toast]);
 
-  async function purge(id: string) {
-    if (!window.confirm(t("page.recycle.purge_confirm", "Permanently purge this recycle entry? This cannot be undone."))) return;
-    await apiDelete(`/api/v1/recycle-bin/${id}`);
-    toast.success(t("page.recycle.purged", "Permanently purged"));
-    await load();
-  }
+  const purge = useCallback(async (id: string) => {
+    try {
+      await apiDelete(`/api/v1/recycle-bin/${id}`);
+      toast.success(t("page.recycle.purged", "Permanently purged"));
+      await load();
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
+    }
+  }, [load, t, toast]);
+
+  /** 永久清除不可逆 → 输入确认（键入条目标题） */
+  const askPurge = useCallback((r: Item) => {
+    setPurgeTarget(r);
+    setPurgeText("");
+  }, []);
+
+  const purgeKeyword = purgeTarget ? purgeTarget.title || purgeTarget.entity_type : "";
 
   const typeOptions = Array.from(new Set(rows.map((r) => r.entity_type))).sort();
   const filtered = filterType ? rows.filter((r) => r.entity_type === filterType) : rows;
 
-  const columns: ColumnDef<Item>[] = [
+  const columns = useMemo<ColumnDef<Item>[]>(() => [
     {
       key: "entity_type",
       title: t("page.recycle.type", "Type"),
@@ -112,14 +141,14 @@ function RecycleBinPage() {
             >
               {t("page.recycle.restore", "Restore")}
             </button>
-            <button className="btn btn-danger" type="button" onClick={() => purge(r.id).catch(() => toast.error(t("common.failed", "Failed")))}>
+            <button className="btn btn-danger" type="button" onClick={() => askPurge(r)}>
               {t("page.recycle.purge", "Purge")}
             </button>
           </span>
         );
       },
     },
-  ];
+  ], [t, locale, restore, askPurge, toast]);
 
   return (
     <AppShell>
@@ -159,20 +188,62 @@ function RecycleBinPage() {
           </select>
         }
       >
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load()} />
         <span className="muted">
           {filtered.length} / {rows.length}
         </span>
       </Toolbar>
-      <DataGrid<Item>
-        columns={columns}
-        data={filtered}
-        rowKey={(r) => r.id}
-        storageKey="settings_recycle_grid"
+      <StateView
+        loading={loading}
+        error={err ?? undefined}
+        empty={!filtered.length}
+        onRetry={() => load()}
         emptyText={t("page.recycle.empty", "Recycle bin is empty")}
-      />
+      >
+        <DataGrid<Item>
+          columns={columns}
+          data={filtered}
+          rowKey={(r) => r.id}
+          storageKey="settings_recycle_grid"
+          emptyText={t("page.recycle.empty", "Recycle bin is empty")}
+        />
+      </StateView>
+      {purgeTarget ? (
+        <div className="panel" style={{ marginTop: "0.75rem", borderColor: "var(--danger)" }}>
+          <p style={{ marginTop: 0 }}>
+            {t(
+              "page.recycle.purge_confirm",
+              "永久清除回收站条目 {title}？此操作不可撤销。请输入条目标题以确认：",
+              { title: purgeKeyword },
+            )}
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              value={purgeText}
+              onChange={(e) => setPurgeText(e.target.value)}
+              aria-label={t("page.recycle.purge_confirm_input", "Type the item title to confirm")}
+              placeholder={purgeKeyword}
+              style={{ maxWidth: 240 }}
+            />
+            <button
+              className="btn btn-danger"
+              type="button"
+              disabled={!purgeKeyword || purgeText !== purgeKeyword}
+              onClick={() => {
+                const id = purgeTarget.id;
+                setPurgeTarget(null);
+                setPurgeText("");
+                purge(id).catch(handled);
+              }}
+            >
+              {t("page.recycle.purge_run", "确认永久清除")}
+            </button>
+            <button className="btn btn-ghost" type="button" onClick={() => { setPurgeTarget(null); setPurgeText(""); }}>
+              {t("common.cancel", "取消")}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 }

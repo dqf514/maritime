@@ -69,13 +69,26 @@ const DICT: Record<string, Msg> = {
 };
 
 const BY_STATUS: Record<number, Msg> = {
+  400: { en: "The request was rejected — check the values you entered.", zh: "请求被拒绝，请检查填写的内容。" },
   401: { en: "Session expired — please sign in again.", zh: "登录已过期，请重新登录。" },
+  402: { en: "Payment is required for this action.", zh: "该操作需要先完成付款。" },
   403: { en: "Access denied for your role or module license.", zh: "当前角色或许可无权访问。" },
   404: { en: "Not found.", zh: "未找到对应记录。" },
+  405: { en: "This action is not allowed here.", zh: "此处不允许该操作。" },
+  406: { en: "The requested format is not acceptable.", zh: "不支持请求的数据格式。" },
+  408: { en: "The request timed out — try again.", zh: "请求超时，请重试。" },
   409: { en: "The record changed — refresh and retry.", zh: "记录状态已变化，请刷新后重试。" },
+  410: { en: "This record has been removed.", zh: "该记录已被删除。" },
+  412: { en: "A precondition failed — refresh and retry.", zh: "前置条件不满足，请刷新后重试。" },
+  413: { en: "The uploaded file is too large.", zh: "上传的文件过大。" },
+  415: { en: "Unsupported file type.", zh: "不支持的文件类型。" },
   422: { en: "Validation failed — check the form.", zh: "校验失败，请检查表单。" },
   429: { en: "Too many requests — try again shortly.", zh: "请求过于频繁，请稍后再试。" },
   500: { en: "Server error — try again or contact support.", zh: "服务器错误，请重试或联系支持。" },
+  501: { en: "This operation is not implemented yet.", zh: "该功能尚未实现。" },
+  502: { en: "Upstream service error — try again shortly.", zh: "上游服务异常，请稍后重试。" },
+  503: { en: "Service temporarily unavailable — try again shortly.", zh: "服务暂时不可用，请稍后重试。" },
+  504: { en: "The server took too long to respond — try again.", zh: "服务器响应超时，请重试。" },
 };
 
 function currentLocale(): string {
@@ -87,7 +100,8 @@ function currentLocale(): string {
   }
 }
 
-function pick(msg: Msg): string {
+function pick(msg?: Msg): string | undefined {
+  if (!msg) return undefined;
   return currentLocale().startsWith("zh") ? msg.zh : msg.en;
 }
 
@@ -96,15 +110,21 @@ export function humanizeDetail(detail: unknown): string | null {
   if (typeof detail === "string" && detail) return detail;
   if (detail && typeof detail === "object") {
     const d = detail as { code?: string; message?: string };
-    if (d.code && DICT[d.code]) return pick(DICT[d.code]);
+    if (d.code && DICT[d.code]) return pick(DICT[d.code]) ?? null;
     if (d.message) return d.message;
     if (d.code && d.code.startsWith("HTTP_")) {
       const n = Number(d.code.slice(5));
-      if (BY_STATUS[n]) return pick(BY_STATUS[n]);
+      if (BY_STATUS[n]) return pick(BY_STATUS[n]) ?? null;
     }
   }
   return null;
 }
+
+/** 未入典状态的兜底文案（不再把 "POST /api/v1/xxx failed" 抛给用户）。 */
+const GENERIC: Msg = {
+  en: "The operation failed — try again or contact support.",
+  zh: "操作失败，请重试或联系支持。",
+};
 
 /**
  * 统一构造 API 错误：err.message 为人话，err.code / err.status / err.detail 保留原始信息。
@@ -114,10 +134,47 @@ export function apiError(method: string, path: string, status: number, body: unk
   const detail = (body as { detail?: unknown } | null)?.detail;
   const code =
     detail && typeof detail === "object" ? (detail as { code?: string }).code : undefined;
-  const message = humanizeDetail(detail) ?? pick(BY_STATUS[status]) ?? `${method} ${path} failed`;
+  const message = humanizeDetail(detail) ?? pick(BY_STATUS[status]) ?? pick(GENERIC) ?? "Request failed.";
   const err: any = new Error(message);
   err.status = status;
   err.code = code ?? (BY_STATUS[status] ? `HTTP_${status}` : undefined);
   err.detail = detail;
   return err;
 }
+
+/**
+ * 取错误的人话文案。
+ *
+ * 页面里请一律用 `toast.error(msgOf(err))`，**不要**用 `String(err)` ——
+ * 后者会把 "Error: " 前缀和 "HTTP 500" 之类的原始串直接显示给用户。
+ */
+export function msgOf(err: unknown, fallback?: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === "string" && err.trim()) return err;
+  if (typeof err === "object" && err !== null) {
+    const e = err as { message?: unknown; detail?: unknown };
+    if (typeof e.message === "string" && e.message) return e.message;
+    const d = humanizeDetail(e.detail);
+    if (d) return d;
+  }
+  return fallback ?? pick(GENERIC) ?? "The operation failed — try again.";
+}
+
+/**
+ * 「这个错误已经在别处处理过了」的**显式**标记（审计 P1-4 · 一致性门禁）。
+ *
+ * 以前到处写 `loadList().catch(() => undefined)` —— 看代码的人分不清
+ * 两种情况：
+ *
+ *   a) `loadList()` 内部已经 `setErr(msgOf(ex))`，外面这层只是防止
+ *      unhandled rejection；
+ *   b) 错误被**真的吞掉**了，界面上一片"暂无数据"，用户完全不知道
+ *      刚才那次取数失败了。
+ *
+ * (b) 正是 P1-4 的病灶。现在这种"已处理"必须写成 `.catch(handled)`，
+ * 一眼可辨；而 `scripts/lint-consistency.mjs` 的 `silent-catch` 规则会
+ * 把 `catch(() => …)` / `catch(() => undefined)` 全部判为违规 —— 新代码
+ * 只能二选一：`.catch(handled)`（错误已在别处处理）或
+ * `.catch((ex) => toast.error(msgOf(ex)))`（就地报错）。
+ */
+export const handled = (): undefined => undefined;

@@ -34,8 +34,12 @@ def test_secure_config_defaults():
     assert fields["license_dev_unlock"].default == "none"
     assert fields["seed_demo"].default is False
     assert fields["jwt_secret"].default == ""
-    assert fields["s3_access_key"].default == ""
-    assert fields["s3_secret_key"].default == ""
+    # S3 / MinIO 已被从编排里移除（死服务：全仓没有 boto3 客户端）——
+    # 配置项一并删掉，避免"配了也没人用"的假开关。
+    assert "s3_access_key" not in fields
+    assert "s3_secret_key" not in fields
+    # 自定义 SQL 报表默认关闭（原始 SQL 报表是跨租户读写的高危面）。
+    assert fields["allow_custom_sql_reports"].default is False
 
 
 def test_random_jwt_secret_generated_with_warning():

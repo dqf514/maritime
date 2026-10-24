@@ -7,8 +7,9 @@
 //   <ContextMenu controller={ctx} items={makeItems} />
 // items 是回调：打开时按当前行生成动作列表，与工具栏共用同一 action 函数源。
 
-import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useFocusTrap } from "@/components/useFocusTrap";
 
 export type ContextMenuItem = {
   key: string;
@@ -61,15 +62,19 @@ type Props<T> = {
 };
 
 export function ContextMenu<T>({ controller, items, width = 180 }: Props<T>) {
-  const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
 
   const st = controller.state;
 
+  // 上下文菜单不是模态层：复用共享 hook 只做「打开时移入焦点 / 关闭时归还焦点」，
+  // 不设 aria-modal；Tab 由 hook 在菜单内循环，方向键在菜单项之间移动。
+  const { ref: menuRef, onKeyDown: trapKeyDown, skipRestoreRef } =
+    useFocusTrap<HTMLDivElement>(!!st);
+
   useEffect(() => {
     if (!st) return;
     // 首次渲染后按实际尺寸翻转，避免超出视口
-    const el = ref.current;
+    const el = menuRef.current;
     if (el) {
       const r = el.getBoundingClientRect();
       const x = st.x + r.width > window.innerWidth - 4 ? Math.max(4, st.x - r.width) : st.x;
@@ -77,7 +82,11 @@ export function ContextMenu<T>({ controller, items, width = 180 }: Props<T>) {
       setPos({ x, y });
     }
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) controller.close();
+      if (!menuRef.current?.contains(e.target as Node)) {
+        // 用户已经点了别处，别再把焦点抢回菜单触发点
+        skipRestoreRef.current = true;
+        controller.close();
+      }
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") controller.close();
@@ -91,7 +100,33 @@ export function ContextMenu<T>({ controller, items, width = 180 }: Props<T>) {
       document.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", onScroll, true);
     };
-  }, [st, controller]);
+  }, [st, controller, menuRef, skipRestoreRef]);
+
+  // 方向键在菜单项之间漫游（ARIA menu 模式）
+  const onMenuKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
+        const root = menuRef.current;
+        if (!root) return;
+        const nodes = Array.from(
+          root.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])'),
+        ).filter((n) => n.offsetParent !== null || n === document.activeElement);
+        if (!nodes.length) return;
+        e.preventDefault();
+        const active = document.activeElement as HTMLElement | null;
+        const idx = active ? nodes.indexOf(active) : -1;
+        let next = 0;
+        if (e.key === "Home") next = 0;
+        else if (e.key === "End") next = nodes.length - 1;
+        else if (e.key === "ArrowDown") next = idx < 0 ? 0 : (idx + 1) % nodes.length;
+        else next = idx < 0 ? nodes.length - 1 : (idx - 1 + nodes.length) % nodes.length;
+        nodes[next].focus();
+        return;
+      }
+      trapKeyDown(e);
+    },
+    [menuRef, trapKeyDown],
+  );
 
   if (!st) return null;
 
@@ -100,9 +135,11 @@ export function ContextMenu<T>({ controller, items, width = 180 }: Props<T>) {
 
   return createPortal(
     <div
-      ref={ref}
+      ref={menuRef}
       className="context-menu"
       role="menu"
+      tabIndex={-1}
+      onKeyDown={onMenuKeyDown}
       // 打开瞬间可能超出视口，先隐藏一帧
       style={{ left: at.x, top: at.y, width, visibility: pos ? "visible" : "hidden" }}
     >

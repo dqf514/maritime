@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models_report import ReportDefinition, ReportSchedule
 from app.security import AuthContext, require_module
+from app.services.audit import audit
 from app.services.report_builder import (
     ReportSpecError,
     get_dataset_row,
@@ -57,7 +58,9 @@ router = APIRouter(prefix="/reports", tags=["Reports"])
 class ReportCreateIn(BaseModel):
     report_name: str
     report_type: str = "custom"
-    data_source: str = "sql"
+    # 默认走声明式构造器（spec）—— 原来的默认值是 "sql"，等于「建报表即默认
+    # 落一条自定义 SQL」，而自定义 SQL 默认是**关闭**的（P0-1）。
+    data_source: str = "spec"
     query: str | None = None
     parameters: dict | None = None
     columns: list | None = None
@@ -137,6 +140,23 @@ def _ensure_datasets(db: Session) -> None:
     """(Re)seed the dataset catalog — idempotent upsert, keeps catalog fresh."""
     seed_report_datasets(db)
     db.commit()
+
+
+def _assert_custom_sql_allowed(data: dict) -> None:
+    """自定义 SQL 报表默认关闭（P0-1）—— 落库前就拦，别等执行时才失败。"""
+    from app.config import get_settings
+
+    if data.get("data_source") != "sql":
+        return
+    if get_settings().allow_custom_sql_reports:
+        return
+    raise HTTPException(
+        403,
+        detail={
+            "code": "CUSTOM_SQL_DISABLED",
+            "message": "custom SQL reports are disabled; use the declarative report builder",
+        },
+    )
 
 
 @router.get("/datasets")
@@ -238,6 +258,7 @@ def create_new_report(
     db: Session = Depends(get_db),
 ):
     data = body.model_dump(exclude_none=True)
+    _assert_custom_sql_allowed(data)
     if data.get("query_spec") is not None:
         errors = validate_spec(data["query_spec"])
         if errors:
@@ -245,6 +266,15 @@ def create_new_report(
         _ensure_datasets(db)
     r = create_report(db, auth.tenant_id, data)
     db.commit()
+    audit(
+        db,
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        action="report.created",
+        entity_type="report",
+        entity_id=r.id,
+        detail={"report_name": r.report_name, "data_source": r.data_source},
+    )
     return {"id": str(r.id), "report_name": r.report_name, "spec_version": r.spec_version}
 
 
@@ -286,6 +316,7 @@ def patch_report(
     if not r:
         raise HTTPException(404, "Report not found")
     data = body.model_dump(exclude_none=True)
+    _assert_custom_sql_allowed({**{"data_source": r.data_source}, **data})
     if data.get("query_spec") is not None:
         errors = validate_spec(data["query_spec"])
         if errors:
@@ -293,6 +324,15 @@ def patch_report(
         _ensure_datasets(db)
     r = update_report(db, r, data)
     db.commit()
+    audit(
+        db,
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        action="report.updated",
+        entity_type="report",
+        entity_id=r.id,
+        detail={"report_name": r.report_name, "data_source": r.data_source},
+    )
     return {"id": str(r.id), "updated": True}
 
 
@@ -308,6 +348,7 @@ def put_report(
     if not r:
         raise HTTPException(404, "Report not found")
     data = body.model_dump(exclude_none=True)
+    _assert_custom_sql_allowed({**{"data_source": r.data_source}, **data})
     if data.get("query_spec") is not None:
         errors = validate_spec(data["query_spec"])
         if errors:
@@ -315,6 +356,15 @@ def put_report(
         _ensure_datasets(db)
     r = update_report(db, r, data)
     db.commit()
+    audit(
+        db,
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        action="report.updated",
+        entity_type="report",
+        entity_id=r.id,
+        detail={"report_name": r.report_name, "data_source": r.data_source},
+    )
     return {"id": str(r.id), "updated": True, "spec_version": r.spec_version}
 
 

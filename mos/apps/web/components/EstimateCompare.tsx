@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { useFocusTrap } from "@/components/useFocusTrap";
 
 export type CompareVariant = {
   id: string;
@@ -73,6 +74,20 @@ export function EstimateCompare({ variants, fields, highlightBest = true }: Prop
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
 
+  // 全屏对比是真正的模态弹层：焦点陷阱 + Escape 关闭 + 关闭后焦点归还
+  const { ref: fullscreenRef, onKeyDown: trapKeyDown } = useFocusTrap<HTMLDivElement>(fullscreen);
+  const onFullscreenKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setFullscreen(false);
+        return;
+      }
+      trapKeyDown(e);
+    },
+    [trapKeyDown],
+  );
+
   // 按 colOrder 排序的变体列表
   const orderedVariants = useMemo(
     () => colOrder.map((id) => variants.find((v) => v.id === id)).filter(Boolean) as CompareVariant[],
@@ -100,7 +115,12 @@ export function EstimateCompare({ variants, fields, highlightBest = true }: Prop
         .map((v) => Number(v.values[f.key]))
         .filter((n) => isFinite(n));
       if (nums.length < 2) continue;
-      map.set(f.key, f.preference === "higher" ? Math.max(...nums) : Math.min(...nums));
+      map.set(
+        f.key,
+        f.preference === "higher"
+          ? nums.reduce((a, b) => (b > a ? b : a), nums[0])
+          : nums.reduce((a, b) => (b < a ? b : a), nums[0]),
+      );
     }
     return map;
   }, [fields, variants, highlightBest]);
@@ -212,6 +232,7 @@ export function EstimateCompare({ variants, fields, highlightBest = true }: Prop
             className="btn btn-sm btn-ghost"
             onClick={() => setFullscreen(true)}
             title={t("compare.fullscreen", "全屏对比")}
+            aria-label={t("compare.fullscreen", "全屏对比")}
           >
             ⛶
           </button>
@@ -223,6 +244,12 @@ export function EstimateCompare({ variants, fields, highlightBest = true }: Prop
         <div className="compare-fullscreen-backdrop" onClick={() => setFullscreen(false)}>
           <div
             className="compare-fullscreen-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("compare.title", "方案对比")}
+            tabIndex={-1}
+            ref={fullscreenRef}
+            onKeyDown={onFullscreenKeyDown}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="compare-fullscreen-head">

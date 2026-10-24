@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import BackupJob, BackupSchedule
+from app.security import redact_sensitive_fields
 
 log = logging.getLogger("marios.backup_scheduler")
 
@@ -90,6 +91,10 @@ def run_due_schedules(db: Session) -> int:
     for schedule in due:
         try:
             payload = dump_tenant(db, schedule.tenant_id, trigger="auto")
+            # P0-21：自动备份与手动备份同一套脱敏 —— 剔除 ``password_hash`` /
+            # ``secret_ref`` / 明文密钥等敏感列（``security.redact_sensitive_fields``），
+            # 否则定时任务落盘的仍是**全量口令哈希 + 明文 API Key**。
+            redact_sensitive_fields(payload)
             write_backup_file(db, schedule.tenant_id, payload)
             _prune_old_auto_backups(db, schedule.tenant_id, schedule.keep_last or 14)
             schedule.last_run_at = now

@@ -2,6 +2,7 @@
 
 import { ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useFocusTrap } from "@/components/useFocusTrap";
 import { useI18n } from "@/lib/i18n";
 
 type Props = {
@@ -17,6 +18,8 @@ type Props = {
 export function DeskSection({ title, children, className }: Props) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  // 模态放大层：焦点陷阱 + 关闭后焦点归还
+  const { ref: modalRef, onKeyDown: trapKeyDown } = useFocusTrap<HTMLDivElement>(open);
 
   useEffect(() => {
     if (!open) return;
@@ -50,6 +53,8 @@ export function DeskSection({ title, children, className }: Props) {
                 role="dialog"
                 aria-modal="true"
                 aria-label={title}
+                ref={modalRef}
+                onKeyDown={trapKeyDown}
                 onClick={(e) => e.stopPropagation()}
               >
                 <header className="record-modal-head">

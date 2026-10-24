@@ -35,6 +35,7 @@ from app.models_saas import (
 from app.models import User
 from app.routers.admin_platform import require_roles
 from app.security import AuthContext, get_current_auth
+from app.services.data_scope import DATA_SCOPE_MODULES, canonical_module
 from app.services.recycle import soft_delete
 from app.services.upload_policy import get_upload_policy
 from app.services.saas_engine import (
@@ -986,6 +987,29 @@ class OrgUnitIn(BaseModel):
     manager_user_id: UUID | None = None
 
 
+def _assert_org_refs(
+    db: Session,
+    tenant_id: UUID,
+    *,
+    manager_user_id: UUID | None = None,
+    parent_id: UUID | None = None,
+) -> None:
+    """组织单元引用的经理 / 上级必须属于本租户（P1-17）。
+
+    旧实现两个外键都不校验：可以把**外租户的用户**设为本租户组织的经理，
+    组织列表再把对方的姓名 join 出来 —— 等于跨租户泄漏人员信息。
+    按 IDOR 约定：不存在与跨租户一律 404。
+    """
+    if manager_user_id is not None:
+        mgr = db.get(User, manager_user_id)
+        if not mgr or mgr.tenant_id != tenant_id or mgr.status == "deleted":
+            raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "User not found"})
+    if parent_id is not None:
+        parent = db.get(OrgUnit, parent_id)
+        if not parent or parent.tenant_id != tenant_id or parent.status == "deleted":
+            raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "Org unit not found"})
+
+
 @router.get("/admin/org-units")
 def list_org_units(auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
     rows = db.scalars(
@@ -1001,6 +1025,9 @@ def list_org_units(auth: AuthContext = Depends(require_roles("tenant_admin")), d
             ).all()
         )
         manager = db.get(User, r.manager_user_id) if r.manager_user_id else None
+        # 经理必须是本租户的用户 —— 否则这里会把外租户姓名 join 出来（P1-17）
+        if manager is not None and manager.tenant_id != auth.tenant_id:
+            manager = None
         out.append(
             {
                 "id": str(r.id),
@@ -1019,6 +1046,9 @@ def list_org_units(auth: AuthContext = Depends(require_roles("tenant_admin")), d
 
 @router.post("/admin/org-units")
 def create_org_unit(body: OrgUnitIn, auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
+    _assert_org_refs(
+        db, auth.tenant_id, manager_user_id=body.manager_user_id, parent_id=body.parent_id
+    )
     row = OrgUnit(tenant_id=auth.tenant_id, **body.model_dump())
     db.add(row)
     db.commit()
@@ -1047,6 +1077,12 @@ def update_org_unit(
     data = body.model_dump(exclude_unset=True)
     if "status" in data and data["status"] == "deleted":
         data.pop("status")
+    _assert_org_refs(
+        db,
+        auth.tenant_id,
+        manager_user_id=data.get("manager_user_id"),
+        parent_id=data.get("parent_id"),
+    )
     for k, v in data.items():
         setattr(row, k, v)
     db.commit()
@@ -1190,7 +1226,8 @@ def set_feature(body: FeatureSetIn, auth: AuthContext = Depends(require_roles("t
 # ───────── Row-level data scope (行级数据权限) ─────────
 # Modules a role's data scope can be tightened on. "own" = only rows the user
 # created; "all" (default) = whole tenant. Supervisors always see all.
-DATA_SCOPE_MODULES = ["operations", "finance", "chartering", "commercial", "bunker", "masterdata", "ship"]
+# 模块清单与归一化规则统一放在 services/data_scope.py —— 两边各写一份
+# 必然漂移（管理端能配的模块名与后端实际查的模块名对不上，收窄就静默失效）。
 
 
 @router.get("/admin/data-scopes")
@@ -1212,17 +1249,18 @@ class DataScopeIn(BaseModel):
 def set_data_scope(body: DataScopeIn, auth: AuthContext = Depends(require_roles("tenant_admin")), db: Session = Depends(get_db)):
     if body.scope not in {"own", "all"}:
         raise HTTPException(400, detail={"code": "INVALID_SCOPE", "allowed": ["own", "all"]})
-    if body.module not in DATA_SCOPE_MODULES:
+    module = canonical_module(body.module)
+    if module not in DATA_SCOPE_MODULES:
         raise HTTPException(400, detail={"code": "INVALID_MODULE", "allowed": DATA_SCOPE_MODULES})
     row = db.scalar(
         select(RoleDataScope).where(
             RoleDataScope.tenant_id == auth.tenant_id,
             RoleDataScope.role_code == body.role_code,
-            RoleDataScope.module == body.module,
+            RoleDataScope.module == module,
         )
     )
     if not row:
-        db.add(RoleDataScope(tenant_id=auth.tenant_id, role_code=body.role_code, module=body.module, scope=body.scope))
+        db.add(RoleDataScope(tenant_id=auth.tenant_id, role_code=body.role_code, module=module, scope=body.scope))
     else:
         row.scope = body.scope
     db.commit()
@@ -1390,9 +1428,49 @@ def workflow_decide(
     )
     # side effects on entity when fully approved
     if inst.status == "approved":
+        # P1-B7：工作流签发发票**同样要过审批额度**。正常签发路径
+        # （routers/invoices.py 的 transition=issued）会调 assert_within_limit；
+        # 工作流路径以前直接改状态签发，于是「走工作流」成了绕过额度的后门。
+        try:
+            _assert_workflow_approval_limit(db, inst, auth)
+        except HTTPException:
+            # advance_workflow 已经 flush 了工作流推进 —— 回滚，实例保持 running
+            db.rollback()
+            raise
         _apply_approved_entity(db, inst)
     db.commit()
     return {"id": str(inst.id), "status": inst.status, "current_step": inst.current_step}
+
+
+def _assert_workflow_approval_limit(db: Session, inst: WorkflowInstance, approver) -> None:
+    """工作流签发发票时执行审批额度校验（P1-B7）。
+
+    复用 ``services/approval_limits.assert_within_limit``（不另写一套）：
+    金额口径与正常签发路径完全一致（amount + tax_amount），报错也是同一个
+    409 ``APPROVAL_LIMIT`` / ``APPROVAL_LIMIT_FX``。
+    """
+    if inst.entity_type != "invoice":
+        return
+    from app.models_domain import Invoice
+    from app.services.approval_limits import assert_within_limit
+
+    row = db.get(Invoice, inst.entity_id)
+    if row is None or row.status != "pending_approval":
+        return
+    amount = Decimal(str(row.amount)) + Decimal(str(row.tax_amount or 0))
+    # 取价日 = 单据日期（发票创建日）——折算额度用的汇率按规则取，不取「最新」
+    created = row.created_at
+    doc_date = created.date() if isinstance(created, datetime) else date.today()
+    assert_within_limit(
+        db,
+        row.tenant_id,
+        approver,
+        "invoice",
+        amount,
+        row.currency or "USD",
+        context_date=doc_date,
+        invoice_type=row.invoice_type,
+    )
 
 
 def _apply_approved_entity(db: Session, inst: WorkflowInstance) -> None:

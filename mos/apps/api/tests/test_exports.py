@@ -64,6 +64,7 @@ def test_export_all_entities_headers_bilingual(client, auth_headers):
 
 def test_export_voyages_contains_seeded_rows(client, auth_headers):
     voyages = client.get("/api/v1/voyages", headers=auth_headers).json()
+    voyages = voyages["items"] if isinstance(voyages, dict) else voyages
     assert voyages
     text = _get_csv(client, "voyages", auth_headers)
     for v in voyages:
@@ -74,8 +75,17 @@ def test_export_invoices_contains_seeded_rows(client, auth_headers):
     invoices = client.get("/api/v1/invoices", headers=auth_headers).json()["items"]
     assert invoices
     text = _get_csv(client, "invoices", auth_headers)
-    for inv in invoices:
+    # P2-B10：默认导出的是**应收口径**（已签发），草稿不在里面。
+    # 旧实现只过滤 `status != "deleted"`，草稿被当成应收导出。
+    issued = [i for i in invoices if i.get("status") in ("issued", "partially_paid", "paid")]
+    assert issued, "seed data should contain issued invoices"
+    for inv in issued:
         assert inv["invoice_no"] in text
+    for inv in invoices:
+        if inv.get("status") not in ("issued", "partially_paid", "paid"):
+            assert inv["invoice_no"] not in text, "draft invoices must not be exported as receivables"
+    # 税额必须在 CSV 里（P1-B12）
+    assert "Tax" in text.splitlines()[0] or "税额" in text.splitlines()[0]
 
 
 def test_export_certificates_contains_seeded_rows(client, auth_headers):

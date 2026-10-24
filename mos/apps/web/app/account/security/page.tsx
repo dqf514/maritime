@@ -1,10 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Toolbar } from "@/components/Toolbar";
+import { StateView } from "@/components/StateView";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -15,47 +19,94 @@ export default function AccountSecurityPage() {
   const [cur, setCur] = useState("");
   const [next, setNext] = useState("");
   const [demoToken, setDemoToken] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  /** 待确认解绑的身份提供方 */
+  const [pendingUnlink, setPendingUnlink] = useState<string | null>(null);
 
-  async function load() {
-    setSec(await apiGet("/api/v1/me/security"));
-  }
-
-  useEffect(() => {
-    load().catch(() => toast.error(t("page.account.signin_required", "Sign in required")));
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      setSec(await apiGet("/api/v1/me/security"));
+    } catch (ex) {
+      // 取数失败 ≠ 一直「加载中」
+      setErr(msgOf(ex, t("page.account.signin_required", "Sign in required")));
+    } finally {
+      setLoading(false);
+    }
   }, [t]);
 
+  useEffect(() => {
+    void load();
+  }, [load]);
+
   async function requestVerify() {
-    const data = await apiPost("/api/v1/auth/email/verify/request", {});
-    setDemoToken(data.demo_token || "");
-    toast.success(t("page.account.verify_queued", "Verification email queued (console channel)."));
+    try {
+      const data = await apiPost("/api/v1/auth/email/verify/request", {});
+      setDemoToken(data.demo_token || "");
+      toast.success(t("page.account.verify_queued", "Verification email queued (console channel)."));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
+    }
   }
 
   async function confirmVerify(e: FormEvent) {
     e.preventDefault();
-    await apiPost("/api/v1/auth/email/verify/confirm", { token: demoToken });
-    toast.success(t("page.account.email_verified", "Email verified."));
-    await load();
+    try {
+      await apiPost("/api/v1/auth/email/verify/confirm", { token: demoToken });
+      toast.success(t("page.account.email_verified", "Email verified."));
+      await load();
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.account.confirm_fail", "Confirm failed")));
+    }
   }
 
   async function changePassword(e: FormEvent) {
     e.preventDefault();
-    await apiPost("/api/v1/me/security/password", { current_password: cur || null, new_password: next });
-    toast.success(t("page.account.pw_updated", "Password updated."));
-    setCur("");
-    setNext("");
-    await load();
+    try {
+      await apiPost("/api/v1/me/security/password", { current_password: cur || null, new_password: next });
+      toast.success(t("page.account.pw_updated", "Password updated."));
+      setCur("");
+      setNext("");
+      await load();
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.account.pw_fail", "Password change failed")));
+    }
   }
 
   async function unlink(provider: string) {
-    await apiDelete(`/api/v1/me/identities/${provider}`);
-    toast.success(t("page.account.unlinked", "Unlinked {provider}", { provider }));
-    await load();
+    try {
+      await apiDelete(`/api/v1/me/identities/${provider}`);
+      toast.success(t("page.account.unlinked", "Unlinked {provider}", { provider }));
+      await load();
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.account.unlink_fail", "Unlink failed")));
+    }
   }
 
-  if (!sec) {
+  if (loading) {
     return (
       <AppShell>
-        <p>{t("common.loading", "Loading…")}</p>
+        <StateView loading error="" empty={false} emptyText="" onRetry={() => void load()}>
+          <span />
+        </StateView>
+      </AppShell>
+    );
+  }
+
+  if (err || !sec) {
+    return (
+      <AppShell>
+        <StateView
+          loading={false}
+          error={err || t("page.account.signin_required", "Sign in required")}
+          empty={false}
+          emptyText=""
+          onRetry={() => void load()}
+        >
+          <span />
+        </StateView>
       </AppShell>
     );
   }
@@ -68,9 +119,7 @@ export default function AccountSecurityPage() {
         subtitle={t("page.account.sub", "Verify email, manage password, and linked Microsoft / Google identities.")}
       />
       <Toolbar>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => void load()} />
       </Toolbar>
 
       <div className="panel">
@@ -85,11 +134,11 @@ export default function AccountSecurityPage() {
         </p>
         {!sec.email_verified ? (
           <div className="quick-row">
-            <button type="button" className="btn btn-primary" onClick={() => requestVerify().catch(() => toast.error(t("common.failed", "Failed")))}>
+            <button type="button" className="btn btn-primary" onClick={() => void requestVerify()}>
               {t("page.account.send_verify", "Send verification email")}
             </button>
             {demoToken ? (
-              <form onSubmit={(e) => confirmVerify(e).catch(() => toast.error(t("page.account.confirm_fail", "Confirm failed")))} style={{ display: "flex", gap: "0.5rem" }}>
+              <form onSubmit={(e) => void confirmVerify(e)} className="acct-inline-form">
                 <input value={demoToken} onChange={(e) => setDemoToken(e.target.value)} />
                 <button className="btn btn-ghost" type="submit">
                   {t("page.account.confirm_token", "Confirm token")}
@@ -100,7 +149,7 @@ export default function AccountSecurityPage() {
         ) : null}
       </div>
 
-      <form className="panel" onSubmit={(e) => changePassword(e).catch(() => toast.error(t("page.account.pw_fail", "Password change failed")))}>
+      <form className="panel" onSubmit={(e) => void changePassword(e)}>
         <h2>{t("page.account.password", "Password")}</h2>
         {sec.has_password ? (
           <label>
@@ -127,9 +176,8 @@ export default function AccountSecurityPage() {
               <strong>{i.provider}</strong> · {i.email || "—"}
               <button
                 type="button"
-                className="btn btn-ghost"
-                style={{ marginLeft: "0.75rem" }}
-                onClick={() => unlink(i.provider).catch(() => toast.error(t("page.account.unlink_fail", "Unlink failed")))}
+                className="btn btn-ghost acct-unlink-btn"
+                onClick={() => setPendingUnlink(i.provider)}
               >
                 {t("page.account.unlink", "Unlink")}
               </button>
@@ -140,6 +188,20 @@ export default function AccountSecurityPage() {
           ) : null}
         </ul>
       </div>
+
+      <ConfirmDialog
+        open={pendingUnlink !== null}
+        title={t("page.account.unlink_title", "Unlink identity")}
+        message={t("page.account.unlink_confirm", "Unlink the {provider} identity from your account? You will sign in with your password instead.", { provider: pendingUnlink ?? "" })}
+        confirmLabel={t("page.account.unlink", "Unlink")}
+        danger
+        onConfirm={() => {
+          const provider = pendingUnlink;
+          setPendingUnlink(null);
+          if (provider) void unlink(provider);
+        }}
+        onCancel={() => setPendingUnlink(null)}
+      />
     </AppShell>
   );
 }

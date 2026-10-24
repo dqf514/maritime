@@ -1,6 +1,7 @@
 "use client";
 
 import { PointerEvent, useEffect, useRef, useState } from "react";
+import { useFocusTrap } from "@/components/useFocusTrap";
 import { useI18n } from "@/lib/i18n";
 
 export type CropKind = "logo" | "icon" | "favicon";
@@ -40,6 +41,8 @@ function clampPan(x: number, y: number, scale: number, imgW: number, imgH: numbe
 export function ImageCropModal({ open, kind, file, busy, error, onCancel, onConfirm }: Props) {
   const { t } = useI18n();
   const spec = SPECS[kind];
+  // 模态对话框：焦点陷阱 + 关闭后焦点归还
+  const { ref: modalRef, onKeyDown: trapKeyDown } = useFocusTrap<HTMLDivElement>(open);
   const [frameW, setFrameW] = useState(() => defaultFrameW(kind));
   const boxW = frameW;
   const boxH = Math.round(frameW / spec.ratio);
@@ -154,6 +157,8 @@ export function ImageCropModal({ open, kind, file, busy, error, onCancel, onConf
         role="dialog"
         aria-modal="true"
         aria-label={t("crop.title", "裁剪 {kind}", { kind: kindLabel })}
+        ref={modalRef}
+        onKeyDown={trapKeyDown}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="record-modal-head">

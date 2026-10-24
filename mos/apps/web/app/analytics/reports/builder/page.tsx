@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -85,6 +86,8 @@ export default function ReportBuilderPage() {
 
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [err, setErr] = useState("");
+  /** 数据集目录加载失败 —— 与「没有可用数据集」区分 */
+  const [dsErr, setDsErr] = useState("");
   const [loading, setLoading] = useState(true);
 
   // query spec state
@@ -106,8 +109,9 @@ export default function ReportBuilderPage() {
     apiGet("/api/v1/reports/datasets")
       .then((raw) => {
         setDatasets(normalizeDatasets(raw));
+        setDsErr("");
       })
-      .catch((ex) => setErr(String(ex)))
+      .catch((ex) => setDsErr(msgOf(ex)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -155,7 +159,7 @@ export default function ReportBuilderPage() {
           ((spec.group_by || []) as { dataset: string; field: string }[]).map((g) => `${g.dataset}.${g.field}`),
         );
       })
-      .catch((ex) => setErr(String(ex)));
+      .catch((ex) => setErr(msgOf(ex)));
   }, []);
 
   const dsByEntity = useMemo(() => {
@@ -272,8 +276,8 @@ export default function ReportBuilderPage() {
       setPreview(res);
       toast.success(t("page.rb.previewed", "Preview updated ({n} rows)", { n: res?.total_rows ?? 0 }));
     } catch (ex) {
-      setErr(String(ex));
-      toast.error(String(ex));
+      setErr(msgOf(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -306,7 +310,7 @@ export default function ReportBuilderPage() {
       }
       toast.success(t("page.rb.saved", "Report saved"));
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -356,12 +360,14 @@ export default function ReportBuilderPage() {
           type="text"
           value={reportName}
           onChange={(e) => setReportName(e.target.value)}
+          aria-label={t("page.rb.report_name", "Report name")}
           placeholder={t("page.rb.report_name", "Report name")}
         />
         <input
           type="text"
           value={reportDesc}
           onChange={(e) => setReportDesc(e.target.value)}
+          aria-label={t("page.rb.report_desc", "Description (optional)")}
           placeholder={t("page.rb.report_desc", "Description (optional)")}
         />
         <button type="button" className="btn btn-primary" onClick={runPreview} disabled={busy || loading}>
@@ -395,7 +401,12 @@ export default function ReportBuilderPage() {
           </div>
           <div className="rb-panel-body">
             {loading ? <p className="muted">{t("common.loading", "Loading…")}</p> : null}
-            {!loading && !datasets.length ? (
+            {!loading && dsErr ? (
+              <p className="state-view-error" role="alert">
+                {t("page.rb.datasets_fail", "Datasets could not be loaded: {err}", { err: dsErr })}
+              </p>
+            ) : null}
+            {!loading && !dsErr && !datasets.length ? (
               <p className="muted">{t("page.rb.no_datasets", "No datasets available.")}</p>
             ) : null}
             {datasets.map((ds) => {
@@ -562,6 +573,7 @@ export default function ReportBuilderPage() {
                             type="button"
                             className="rb-row-del"
                             onClick={() => setJoins((prev) => prev.filter((_, k) => k !== i))}
+                            aria-label={t("page.rb.remove_join", "Remove join")}
                           >
                             ×
                           </button>
@@ -634,7 +646,7 @@ export default function ReportBuilderPage() {
                             {a || t("page.rb.agg_none", "none")}
                           </option>
                         ))}
-                      </select>
+   </select>
                       <select
                         value={fieldState[key]?.format || ""}
                         onChange={(e) =>
@@ -697,12 +709,14 @@ export default function ReportBuilderPage() {
                       type="text"
                       value={f.value}
                       onChange={(e) => setFilters((prev) => prev.map((x, k) => (k === i ? { ...x, value: e.target.value } : x)))}
+                      aria-label={t("page.rb.value", "Value")}
                       placeholder={t("page.rb.value", "Value")}
                     />
                     <button
                       type="button"
                       className="rb-row-del"
                       onClick={() => setFilters((prev) => prev.filter((_, k) => k !== i))}
+                      aria-label={t("page.rb.remove_filter", "Remove filter")}
                     >
                       ×
                     </button>
@@ -753,7 +767,14 @@ export default function ReportBuilderPage() {
           <div className="rb-panel-head">
             <h3>{t("page.rb.preview", "Preview")}</h3>
             <span className="rb-preview-meta">
-              {preview ? t("page.rb.n_rows", "{n} rows", { n: preview.total_rows }) : t("page.rb.not_run", "Not run")}
+              {preview
+                ? preview.rows.length < preview.total_rows
+                  ? t("page.rb.preview_rows", "Showing {shown} of {total} rows", {
+                      shown: preview.rows.length,
+                      total: preview.total_rows,
+                    })
+                  : t("page.rb.n_rows", "{n} rows", { n: preview.total_rows })
+                : t("page.rb.not_run", "Not run")}
             </span>
           </div>
           <div className="rb-panel-body">

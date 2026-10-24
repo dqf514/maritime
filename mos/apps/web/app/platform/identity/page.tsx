@@ -3,7 +3,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { StateView } from "@/components/StateView";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -25,11 +27,11 @@ type Identity = {
   default_allowed_domains: string[];
   notes: string | null;
   runtime: any;
-  secret_guidance?: Record<string, string>;
+  secret_guidance?: Record<string, { en: string; zh: string } | string>;
 };
 
 export default function PlatformIdentityPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const [form, setForm] = useState<Identity | null>(null);
   const [domains, setDomains] = useState("");
@@ -38,17 +40,36 @@ export default function PlatformIdentityPage() {
   const [smtpPwClear, setSmtpPwClear] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testTo, setTestTo] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [logsErr, setLogsErr] = useState<string | null>(null);
 
   async function load() {
-    const data = await apiGet("/api/v1/platform/identity");
-    setForm(data);
-    setDomains((data.default_allowed_domains || []).join(", "));
-    setLogs(await apiGet("/api/v1/platform/identity/mail-logs"));
+    setLoading(true);
+    setErr(null);
+    setLogsErr(null);
+    try {
+      const data = await apiGet("/api/v1/platform/identity");
+      setForm(data);
+      setDomains((data.default_allowed_domains || []).join(", "));
+    } catch (ex) {
+      setErr(msgOf(ex, t("page.identity.admin_required", "Platform admin required")));
+      setLoading(false);
+      return;
+    }
+    try {
+      setLogs(await apiGet("/api/v1/platform/identity/mail-logs"));
+    } catch (ex) {
+      setLogsErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch(() => toast.error(t("page.identity.admin_required", "Platform admin required")));
-  }, [t]);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -79,17 +100,32 @@ export default function PlatformIdentityPage() {
       const res = await apiPost("/api/v1/platform/identity/smtp-test", testTo ? { to_email: testTo } : {});
       if (res.ok) toast.success(t("page.identity.smtp_test_ok", "Test mail delivered to the SMTP relay."));
       else toast.error(t("page.identity.smtp_test_fail", "SMTP test failed: {msg}").replace("{msg}", res.message || ""));
-    } catch (err: any) {
-      toast.error(err?.message || t("common.failed", "Failed"));
+    } catch (err) {
+      toast.error(msgOf(err, t("common.failed", "Failed")));
     } finally {
       setTesting(false);
     }
   }
 
-  if (!form) {
+  if (loading || (!form && !err)) {
     return (
       <AppShell>
         <p>{t("common.loading", "Loading…")}</p>
+      </AppShell>
+    );
+  }
+
+  if (err || !form) {
+    return (
+      <AppShell>
+        <PageHeader
+          title={t("page.identity.title", "Identity & verification (Platform)")}
+          subtitle={t("page.identity.sub", "Platform owns global OAuth apps, email delivery channel, and default policy templates.")}
+          breadcrumb={[{ label: t("page.platform.title", "Platform"), href: "/platform" }, { label: t("page.identity.title", "Identity & verification (Platform)") }]}
+        />
+        <StateView loading={false} error={err ?? undefined} empty={false} onRetry={() => load()}>
+          <span />
+        </StateView>
       </AppShell>
     );
   }
@@ -325,7 +361,8 @@ export default function PlatformIdentityPage() {
         <ul className="compact-list">
           {Object.entries(form.secret_guidance || {}).map(([k, v]) => (
             <li key={k}>
-              <strong>{k}</strong>: {v}
+              <strong>{k}</strong>:{" "}
+              {typeof v === "string" ? v : locale?.startsWith("zh") ? v.zh : v.en}
             </li>
           ))}
         </ul>
@@ -337,6 +374,7 @@ export default function PlatformIdentityPage() {
 
       <div className="panel">
         <h2>{t("page.identity.mail_logs", "Recent verification / invite emails")}</h2>
+        {logsErr ? <p className="text-danger">{logsErr}</p> : null}
         <ul className="compact-list">
           {logs.map((l) => (
             <li key={l.id}>

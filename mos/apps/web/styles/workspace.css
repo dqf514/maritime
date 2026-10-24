@@ -67,7 +67,7 @@
   font-size: var(--font-label);
 }
 .ws-crumb a { color: var(--muted); }
-.ws-crumb a:hover { color: var(--accent); }
+.ws-crumb a:hover { color: var(--accent-text); }
 
 /* —— scrollable panel area —— */
 .ws-body {
@@ -178,7 +178,7 @@
   border-radius: var(--radius-sm);
   padding: 0;
 }
-.ws-panel-toggle:hover { background: var(--accent-bg); color: var(--accent); }
+.ws-panel-toggle:hover { background: var(--accent-bg); color: var(--accent-text); }
 .ws-panel-toggle svg { transition: transform 0.12s ease; }
 .ws-panel.collapsed .ws-panel-toggle svg { transform: rotate(-90deg); }
 .ws-panel-body {
@@ -223,6 +223,25 @@
   outline-offset: -2px;
 }
 .ws-tab-body { padding: 0.65rem 0 0; min-width: 0; }
+
+/* —— 工作区标签条复用全站统一 Tabs 组件，但保留工作区原本的紧凑外观 —— */
+.ws-tabs-wrap .ui-tabs {
+  background: var(--surface);
+  padding: 0 0.35rem;
+  gap: 2px;
+  margin-bottom: 0;
+}
+.ws-tabs-wrap .ui-tabs-list { gap: 2px; }
+.ws-tabs-wrap .ui-tab {
+  height: 28px;
+  padding: 0 0.75rem;
+  font-size: var(--font-ui);
+}
+.ws-tabs-wrap .ui-tab:hover:not(:disabled) { background: var(--accent-bg); }
+.ws-tabs-wrap .ui-tab.active {
+  color: var(--sea-deep);
+  background: var(--accent-bg-strong);
+}
 
 /* —— tab 数字上标（有数据=中性计数；未读=醒目红标） —— */
 .ws-tab-badge {
@@ -360,7 +379,7 @@
   top: 8px;
   transform: translateX(-50%);
   font-size: 10px;
-  color: var(--warn);
+  color: var(--warn-text);
   white-space: nowrap;
 }
 .ws-tl-event-label.alt { top: 104px; color: var(--sea-mid); }

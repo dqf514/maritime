@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -29,21 +29,20 @@ from sqlalchemy.orm import Session
 
 from app.models_domain import MarketQuote
 from app.models_trading import MtMResult, Trade, TradeLeg
+from app.services.money import CENT
 
 PAPER_KINDS = ("ffa", "swap", "option", "paper")
 OPEN_STATUSES = ("draft", "confirmed")
 MARKABLE_STATUSES = ("draft", "confirmed", "settled")
 
 ZERO = Decimal("0")
-PENNY = Decimal("0.01")
-
 
 def _f(v) -> float:
     return float(v) if v is not None else 0.0
 
 
 def _q(v: Decimal) -> Decimal:
-    return v.quantize(PENNY)
+    return v.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 def _side_sign(buy_sell: str) -> Decimal:

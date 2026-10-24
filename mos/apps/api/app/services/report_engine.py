@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -46,9 +47,17 @@ from app.models_report import (
 )
 from app.models_time_charter import HireStatement, TimeCharterContract
 from app.models_wave1 import Counterparty, Port, Vessel
+from app.services.csv_safety import force_text_cell, guard_csv_cell
 from app.services.report_builder import (
     ReportSpecError,
     execute_query as builder_execute_query,
+)
+from app.services.money import (
+    REVENUE_STATUSES,
+    invoice_base_gross,
+    invoice_base_open,
+    invoice_to_base,
+    money,
 )
 
 
@@ -606,7 +615,7 @@ def _spec_age_days() -> dict:
             {"dataset": "i", "field": "amount", "label": "Amount", "format": "currency"},
             {
                 "dataset": "i",
-                "expression": "amount - paid_amount",
+                "expression": "amount + coalesce(tax_amount, 0) - coalesce(paid_amount, 0)",
                 "label": "Outstanding",
                 "format": "currency",
             },
@@ -832,7 +841,7 @@ def _spec_statement_of_account() -> dict:
             {"dataset": "i", "field": "paid_amount", "label": "Paid", "format": "currency"},
             {
                 "dataset": "i",
-                "expression": "amount - paid_amount",
+                "expression": "amount + coalesce(tax_amount, 0) - coalesce(paid_amount, 0)",
                 "label": "Outstanding",
                 "format": "currency",
             },
@@ -1234,6 +1243,24 @@ def _safe_decimal(val: Any) -> float:
         return 0.0
 
 
+def _safe_decimal_dec(val: Any) -> Decimal:
+    """Decimal 版 ``_safe_decimal`` —— 金额累加必须走这里（P2-B3 同族）。
+
+    float 累加再 ``round(x, 2)`` 会用二进制银行家舍入，与写路径的
+    ROUND_HALF_UP 口径差 1 分；这里全程 Decimal。
+    """
+    if val is None:
+        return Decimal("0")
+    if isinstance(val, Decimal):
+        return val
+    if isinstance(val, bool):
+        return Decimal("0")
+    try:
+        return Decimal(str(val))
+    except (TypeError, ValueError, ArithmeticError):
+        return Decimal("0")
+
+
 def _fmt_date(val: Any) -> str:
     return str(val)[:10] if val else ""
 
@@ -1559,14 +1586,21 @@ def execute_fleet_performance(db: Session, tenant_id: uuid.UUID, params: dict) -
 
 def execute_counterparty_summary(db: Session, tenant_id: uuid.UUID, params: dict) -> dict:
     inv_stats: dict[Any, dict[str, Any]] = {}
+    # 口径：总额 = 金额 + 税（P0-B4 家族：漏税会让「未收」大于「总额」），
+    # 且只统计**已签发**的发票（草稿不是应收 —— P0-B6）。
+    gross_expr = func.coalesce(Invoice.amount, 0) + func.coalesce(Invoice.tax_amount, 0)
     for cid, total, outstanding, last in db.execute(
         select(
             Invoice.counterparty_id,
-            func.coalesce(func.sum(Invoice.amount), 0),
-            func.coalesce(func.sum(Invoice.amount - func.coalesce(Invoice.paid_amount, 0)), 0),
+            func.coalesce(func.sum(gross_expr), 0),
+            func.coalesce(func.sum(gross_expr - func.coalesce(Invoice.paid_amount, 0)), 0),
             func.max(Invoice.issued_at),
         )
-        .where(Invoice.tenant_id == tenant_id, Invoice.counterparty_id.is_not(None))
+        .where(
+            Invoice.tenant_id == tenant_id,
+            Invoice.counterparty_id.is_not(None),
+            Invoice.status.in_(REVENUE_STATUSES),
+        )
         .group_by(Invoice.counterparty_id)
     ).all():
         inv_stats[cid] = {
@@ -1627,8 +1661,8 @@ def execute_age_days(db: Session, tenant_id: uuid.UUID, params: dict) -> dict:
     for row in db.execute(q):
         inv = row[0]
         party_name = row[1]
-        amount = _safe_decimal(inv.base_amount if inv.base_amount is not None else inv.amount)
-        outstanding = amount - _safe_decimal(inv.paid_amount)
+        amount = float(invoice_base_gross(inv))
+        outstanding = float(invoice_base_open(inv))
         ref = _naive(inv.issued_at) or _naive(inv.due_date)
         days = 0
         if ref is not None:
@@ -2102,8 +2136,14 @@ def execute_fixture_recap(db: Session, tenant_id: uuid.UUID, params: dict) -> di
 
 
 def execute_trial_balance(db: Session, tenant_id: uuid.UUID, params: dict) -> dict:
-    """GL trial balance: posted journal entries aggregated per account."""
-    totals: dict[str, dict[str, float]] = {}
+    """GL trial balance: posted journal entries aggregated per account.
+
+    P2-B3 的同族问题：这里原本用 **float** 累加再 ``round(x, 2)``（二进制
+    银行家舍入），与写路径（``gl_engine`` 的 Decimal 精确口径）对不上 ——
+    差 1 分的科目在总账页会显示成"平衡"。现在全程 Decimal，最后统一
+    ``money()``（ROUND_HALF_UP）量化到分。
+    """
+    totals: dict[str, dict[str, Decimal]] = {}
     for period, entries, status in db.execute(
         select(PeriodJournal.period, PeriodJournal.entries, PeriodJournal.status).where(
             PeriodJournal.tenant_id == tenant_id, PeriodJournal.status == "posted"
@@ -2115,9 +2155,9 @@ def execute_trial_balance(db: Session, tenant_id: uuid.UUID, params: dict) -> di
             acct = str(e.get("account") or e.get("account_code") or "").strip()
             if not acct:
                 continue
-            slot = totals.setdefault(acct, {"debit": 0.0, "credit": 0.0})
-            slot["debit"] += _safe_decimal(e.get("debit"))
-            slot["credit"] += _safe_decimal(e.get("credit"))
+            slot = totals.setdefault(acct, {"debit": Decimal("0"), "credit": Decimal("0")})
+            slot["debit"] += _safe_decimal_dec(e.get("debit"))
+            slot["credit"] += _safe_decimal_dec(e.get("credit"))
 
     accounts = {
         a.account_code: a
@@ -2129,16 +2169,16 @@ def execute_trial_balance(db: Session, tenant_id: uuid.UUID, params: dict) -> di
     data = []
     for code in codes:
         acct = accounts.get(code)
-        slot = totals.get(code, {"debit": 0.0, "credit": 0.0})
+        slot = totals.get(code, {"debit": Decimal("0"), "credit": Decimal("0")})
         if slot["debit"] == 0 and slot["credit"] == 0 and acct is None:
             continue
         data.append({
             "account_code": code,
             "account_name": (acct.account_name if acct else "") or "",
             "account_type": (acct.account_type if acct else "") or "",
-            "debit_total": round(slot["debit"], 2),
-            "credit_total": round(slot["credit"], 2),
-            "balance": round(slot["debit"] - slot["credit"], 2),
+            "debit_total": float(money(slot["debit"])),
+            "credit_total": float(money(slot["credit"])),
+            "balance": float(money(slot["debit"] - slot["credit"])),
         })
     return {"columns": _columns_for("trial_balance"), "rows": data, "total_rows": len(data)}
 
@@ -2205,7 +2245,10 @@ def execute_statement_of_account(db: Session, tenant_id: uuid.UUID, params: dict
         db.execute(
             select(Invoice, Counterparty.name.label("party_name"))
             .outerjoin(Counterparty, Invoice.counterparty_id == Counterparty.id)
-            .where(Invoice.tenant_id == tenant_id, Invoice.status != "deleted")
+            .where(
+                Invoice.tenant_id == tenant_id,
+                Invoice.status.in_(REVENUE_STATUSES),
+            )
             .order_by(Counterparty.name, Invoice.issued_at.asc().nullslast())
             .limit(1000)
         )
@@ -2213,8 +2256,13 @@ def execute_statement_of_account(db: Session, tenant_id: uuid.UUID, params: dict
     )
     data = []
     for inv, party_name in rows:
-        amount = _safe_decimal(inv.base_amount if inv.base_amount is not None else inv.amount)
-        paid = paid_by_inv.get(inv.id, _safe_decimal(inv.paid_amount))
+        # 口径与账龄端点一致：总额含税，未收 = 总额 − 已收（P0-B4 家族）。
+        # 已收取**台账**（Payment 行，含冲销的负数行）为准，老数据回落到
+        # ``Invoice.paid_amount``；两者都按发票汇率折成本位币。
+        ledger = paid_by_inv.get(inv.id)
+        paid_orig = _safe_decimal(ledger) if ledger is not None else _safe_decimal(inv.paid_amount)
+        amount = float(invoice_base_gross(inv))
+        paid = float(invoice_to_base(inv, paid_orig))
         data.append({
             "party_name": party_name or "",
             "invoice_no": inv.invoice_no or "",
@@ -2222,7 +2270,7 @@ def execute_statement_of_account(db: Session, tenant_id: uuid.UUID, params: dict
             "invoice_type": inv.invoice_type or "",
             "amount": amount,
             "paid": paid,
-            "outstanding": round(amount - paid, 2),
+            "outstanding": float(money(amount - paid)),
             "status": inv.status or "",
         })
     return {"columns": _columns_for("statement_of_account"), "rows": data, "total_rows": len(data)}
@@ -2288,9 +2336,9 @@ def execute_credit_exposure(db: Session, tenant_id: uuid.UUID, params: dict) -> 
         )
         .group_by(Invoice.counterparty_id)
     ).all():
-        stats[cid] = {"open_invoices": int(cnt or 0), "total_exposure": _safe_decimal(exposure)}
+        stats[cid] = {"open_invoices": int(cnt or 0), "total_exposure": _safe_decimal_dec(exposure)}
 
-    limits: dict[str, float] = {}
+    limits: dict[str, Decimal] = {}
     for scope, amount in db.execute(
         select(RiskLimit.scope, RiskLimit.amount).where(
             RiskLimit.tenant_id == tenant_id,
@@ -2298,7 +2346,7 @@ def execute_credit_exposure(db: Session, tenant_id: uuid.UUID, params: dict) -> 
             RiskLimit.active.is_(True),
         )
     ).all():
-        limits[str(scope)] = _safe_decimal(amount)
+        limits[str(scope)] = _safe_decimal_dec(amount)
 
     rows = (
         db.execute(
@@ -2312,15 +2360,17 @@ def execute_credit_exposure(db: Session, tenant_id: uuid.UUID, params: dict) -> 
     )
     data = []
     for cp in rows:
-        slot = stats.get(cp.id, {"open_invoices": 0, "total_exposure": 0.0})
+        slot = stats.get(cp.id, {"open_invoices": 0, "total_exposure": Decimal("0")})
         limit = limits.get(f"counterparty:{cp.id}")
         exposure = slot["total_exposure"]
         data.append({
             "party_name": cp.name or "Unknown",
             "open_invoices": slot["open_invoices"],
-            "total_exposure": round(exposure, 2),
-            "credit_limit": limit,
-            "utilization_pct": round(exposure / limit * 100, 1) if limit else 0.0,
+            "total_exposure": float(money(exposure)),
+            "credit_limit": float(limit) if limit is not None else None,
+            "utilization_pct": float((exposure / limit * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+            if limit
+            else 0.0,
             "breach": bool(limit is not None and exposure > limit),
         })
     return {"columns": _columns_for("credit_exposure"), "rows": data, "total_rows": len(data)}
@@ -2698,12 +2748,51 @@ def execute_report(
 
 
 def _execute_sql_report(db: Session, tenant_id: uuid.UUID, sql_text: str, params: dict) -> dict:
-    """Execute a custom SQL report with tenant isolation."""
+    """执行自定义 SQL 报表 —— **默认禁用**（P0-1）。
+
+    审计原话：原实现只检查 ``":tid" in sql_text``（子串检查），于是
+    ``SELECT id,email,password_hash FROM users WHERE tenant_id <> :tid``
+    直接读到**全库**（含其他租户的 password_hash）；而且
+    ``safe_params = {"tid": ..., **params}`` 允许请求参数覆盖 ``:tid``
+    （``?tid=<别人的 uuid>``）—— 这是二次放大。
+
+    现在：
+    - **默认关闭**：``ALLOW_CUSTOM_SQL_REPORTS``（默认 false）为真才允许；
+    - 开启后仍然**强制**租户过滤：用真正的绑定参数 ``:tid`` +
+      **解析后的 WHERE 谓词校验**（必须存在 ``tenant_id = :tid`` 这类
+      **等值**比较，且禁止 ``<>`` / ``!=`` / ``OR`` 绕过），
+      而不是子串检查；
+    - 请求参数**不得**覆盖 ``:tid``（绑定值永远由服务端给出）。
+
+    审计还建议「删除 raw-SQL 特性」—— 声明式构造器（``query_spec``）
+    才是受支持的路径；这里的开关只是给确需自定义 SQL 的部署留的口子。
+    """
     from sqlalchemy import text
 
-    safe_params = {"tid": str(tenant_id), **params}
-    if ":tid" not in sql_text:
-        return {"columns": [], "rows": [], "total_rows": 0, "error": "SQL must include WHERE tenant_id = :tid"}
+    from app.config import get_settings
+
+    if not get_settings().allow_custom_sql_reports:
+        return {
+            "columns": [],
+            "rows": [],
+            "total_rows": 0,
+            "error": (
+                "custom SQL reports are disabled "
+                "(set ALLOW_CUSTOM_SQL_REPORTS=true to enable)"
+            ),
+        }
+
+    sql_text = (sql_text or "").strip()
+    problem = _validate_tenant_scoped_sql(sql_text)
+    if problem:
+        return {"columns": [], "rows": [], "total_rows": 0, "error": problem}
+
+    # 绑定值永远由服务端给出 —— 请求参数不得覆盖 :tid
+    safe_params: dict[str, Any] = {"tid": str(tenant_id)}
+    for k, v in (params or {}).items():
+        if k == "tid":
+            continue
+        safe_params[str(k)] = v
     try:
         result = db.execute(text(sql_text), safe_params)
         columns = [{"key": c, "label": c.replace("_", " ").title()} for c in result.keys()]
@@ -2715,19 +2804,368 @@ def _execute_sql_report(db: Session, tenant_id: uuid.UUID, sql_text: str, params
                 elif hasattr(v, "isoformat"):
                     row[k] = str(v)
         return {"columns": columns, "rows": rows, "total_rows": len(rows)}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — 错误信息回传给报表作者
         return {"columns": [], "rows": [], "total_rows": 0, "error": str(e)}
 
 
+#: 自定义 SQL 里允许出现的谓词运算符（等值 / 比较 / 范围）
+_SQL_PREDICATE_OPS = ("=", "<", ">", "<=", ">=", "!=", "<>")
+
+
+# —— 自定义 SQL 校验用的词法常量（见 ``_validate_tenant_scoped_sql``）——
+
+#: 自定义 SQL 里**禁止**出现的语句关键字（按**词元**匹配，不是子串）。
+#:
+#: 旧实现用 ``"update "`` 这种「关键字 + 尾随空格」的子串检查 ——
+#: ``UPDATE\\nusers SET ...``（换行代替空格）直接绕过，语句会真的执行并提交。
+#: 词元匹配把 ``UPDATE`` / ``update\\t`` / ``update(`` 全部命中。
+_SQL_FORBIDDEN_TOKENS = frozenset({
+    "insert", "update", "delete", "drop", "alter", "create", "truncate",
+    "merge", "upsert", "grant", "revoke", "attach", "detach", "vacuum",
+    "pragma", "reindex", "cluster", "listen", "notify", "discard",
+    "unload", "execute", "exec", "call", "into",
+})
+
+#: 集合运算 —— 第二个 SELECT 不受 WHERE 谓词约束。
+_SQL_SET_OPERATORS = frozenset({"union", "intersect", "except"})
+
+_SQL_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+#: FROM / JOIN 之后的第一段：``[schema.]table [alias]``
+_SQL_LEAD_TABLE_RE = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?"
+    r"(?:\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*))?",
+)
+
+#: 这些词跟在表名后面时是关键字，不是别名
+_SQL_NOT_ALIAS = frozenset({
+    "where", "on", "group", "order", "by", "limit", "offset", "having",
+    "join", "inner", "left", "right", "full", "cross", "natural", "outer",
+    "union", "intersect", "except", "and", "or", "as", "select", "from",
+    "set", "values", "using", "window", "returning", "fetch", "for", "is",
+    "not", "null", "like", "in", "between", "asc", "desc", "lateral",
+})
+
+#: JOIN 前缀词（``left outer join x`` 里的 ``left`` / ``outer``）
+_SQL_JOIN_PREFIX = frozenset({
+    "left", "right", "full", "inner", "outer", "cross", "natural", "lateral",
+})
+
+#: ``tenant_id = :tid`` 的等值谓词（允许表限定）
+_SQL_TENANT_EQ_RE = re.compile(
+    r"(?:([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*)?tenant_id\s*=\s*:tid\b",
+    re.IGNORECASE,
+)
+
+#: 租户表名缓存的「未初始化」哨兵
+_UNSET = object()
+_TENANT_TABLE_CACHE: frozenset[str] | None | object = _UNSET
+
+
+def _validate_tenant_scoped_sql(sql_text: str) -> str | None:
+    """校验自定义 SQL 的租户隔离 —— 返回错误描述，None 表示通过。
+
+    规则（全部基于**词法解析**而非子串存在性）：
+
+    1. 必须是**单条** SELECT —— 语句首词元必须是 ``select``，且全文只允许
+       出现**一个** ``select``（子查询 / CTE 一律拒绝：子查询里的 WHERE
+       不受本函数的谓词约束，是跨租户读取的口子）；
+    2. 全文**不允许** DML / DDL 词元（``insert`` / ``update`` / ``delete`` /
+       ``drop`` / …）。旧实现是「关键字 + 尾随空格」的子串检查，
+       ``UPDATE\\nusers SET ...``（换行代替空格）直接绕过并且**真的提交**；
+       现在按**词元**匹配，换行 / 制表符 / 括号分隔一律命中；
+    3. 全文**不允许** ``UNION`` / ``INTERSECT`` / ``EXCEPT``（旧实现只在
+       WHERE 尾巴里找 ``" union "``，把 UNION 放在第一个 WHERE **之前**
+       就能把别的租户的行并进来），也不允许 ``OR``（``A OR B`` 可绕过
+       AND 链）；
+    4. 必须存在 ``tenant_id = :tid`` 形式的**等值**谓词（允许
+       ``t.tenant_id = :tid`` 这种带表限定），**不接受** ``<>`` / ``!=``；
+    5. SQL 里引用的**每一个租户表**都要被 ``tenant_id = :tid`` 守住 ——
+       只守主表不够，``JOIN`` 出去的租户表同样会漏数据；
+    6. 不允许注释符（``--`` / ``/*``）与分号 —— 避免「注释掉谓词」。
+    """
+    if not sql_text:
+        return "SQL is empty"
+
+    # 1) 单语句 + 无注释
+    if ";" in sql_text:
+        return "Multiple SQL statements are not allowed"
+    if "--" in sql_text or "/*" in sql_text or "*/" in sql_text:
+        return "SQL comments are not allowed"
+
+    # 引号里的内容先抹掉 —— `'please update'` 不是 DML，但 `UPDATE` 是。
+    masked = _mask_sql_literals(sql_text).lower()
+    tokens = _scan_sql_tokens(masked)
+    # 限定符后面的词元是列名，不是语句关键字（``t.update`` ≠ DML）。
+    words = [w for w, pos, _d in tokens if not (pos > 0 and masked[pos - 1] == ".")]
+
+    # 2) 必须是单条 SELECT
+    if not words or words[0] != "select":
+        return "Only SELECT statements are allowed"
+
+    # 3) DML / DDL 词元（全文）
+    for bad in _SQL_FORBIDDEN_TOKENS:
+        if bad in words:
+            return "Only SELECT statements are allowed"
+
+    # 4) 集合运算与 OR —— 全文（不再只看 WHERE 尾巴）
+    for op in _SQL_SET_OPERATORS:
+        if op in words:
+            return (
+                "UNION / INTERSECT / EXCEPT are not allowed in a custom SQL report"
+            )
+    if "or" in words:
+        return "OR is not allowed in a custom SQL report (use IN instead)"
+
+    # 5) 只能有一个 SELECT —— 子查询 / CTE 里的 WHERE 不受本函数约束
+    if words.count("select") != 1:
+        return (
+            "Sub-queries and CTEs are not allowed in a custom SQL report "
+            "(a nested SELECT is not bound by the tenant predicate)"
+        )
+
+    # 5) 解析顶层 WHERE 子句
+    where_start = _find_top_level_where_token(masked)
+    if where_start is None:
+        return "SQL must filter on tenant_id = :tid"
+    where_clause = masked[where_start:]
+
+    # 6) 必须存在 tenant_id 与 :tid 的**等值**比较
+    if not _has_equality_on_tenant_id(where_clause):
+        return "SQL must include an equality filter on tenant_id = :tid"
+
+    # 7) :tid 必须真的被引用（防止「有谓词但没用绑定值」）
+    if ":tid" not in where_clause:
+        return "SQL must bind :tid in the tenant_id filter"
+
+    # 8) 每个被引用的租户表都要守住
+    return _check_tenant_guarded_tables(masked, where_clause)
+
+
+def _mask_sql_literals(sql: str) -> str:
+    """把字符串字面量整体抹成空格 —— 关键字扫描必须忽略引号里的内容。
+
+    ``'please update'`` 不是 DML；但 ``UPDATE`` 是。两者只能靠「抹掉引号」
+    区分开。``''``（SQL 里的转义引号）也要当成引号内容处理。
+    """
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(" ")
+            i += 1
+            while i < n:
+                if sql[i] == quote:
+                    if i + 1 < n and sql[i + 1] == quote:  # '' 转义
+                        out.append("  ")
+                        i += 2
+                        continue
+                    out.append(" ")
+                    i += 1
+                    break
+                out.append(" ")
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _scan_sql_tokens(text: str) -> list[tuple[str, int, int]]:
+    """扫描词元 —— 返回 ``(词元小写, 起始位置, 括号深度)``。
+
+    已经过 ``_mask_sql_literals`` 的文本里不再有引号，只需要跟括号深度。
+    """
+    out: list[tuple[str, int, int]] = []
+    depth = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            depth = max(0, depth - 1)
+            i += 1
+            continue
+        m = _SQL_TOKEN_RE.match(text, i)
+        if m:
+            out.append((m.group(0).lower(), i, depth))
+            i = m.end()
+            continue
+        i += 1
+    return out
+
+
+def _find_top_level_where_token(masked: str) -> int | None:
+    """顶层 ``where`` 词元**之后**的字符位置（找不到返回 None）。
+
+    旧实现只认 ``"where "``（关键字 + 尾随空格）—— ``WHERE\\ntenant_id = :tid``
+    会被误判成「没有租户过滤」而直接报错。这里按词元认，空白怎么写都行。
+    """
+    for word, pos, depth in _scan_sql_tokens(masked):
+        if word == "where" and depth == 0:
+            return pos + len("where")
+    return None
+
+
+def _from_clause_region(masked: str) -> str | None:
+    """顶层 ``FROM ... WHERE`` 之间的片段（用于识别引用的表）。"""
+    start = None
+    for word, pos, depth in _scan_sql_tokens(masked):
+        if depth != 0:
+            continue
+        if word == "from":
+            start = pos
+            break
+    if start is None:
+        return None
+    end = len(masked)
+    for word, pos, depth in _scan_sql_tokens(masked):
+        if depth == 0 and word == "where" and pos > start:
+            end = pos
+            break
+    return masked[start:end]
+
+
+def _split_top_level(text: str, sep: str) -> list[str]:
+    """按顶层分隔符切分（括号内不切）。"""
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if depth == 0 and ch == sep:
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    parts.append("".join(buf))
+    return parts
+
+
+def _parse_table_refs(masked: str) -> dict[str, str]:
+    """从 FROM / JOIN 子句里抽出「别名 → 表名」映射。
+
+    句点连接（``FROM invoices i, users u``）和 ``JOIN`` 都要认 —— 只认
+    第一个 FROM 的话，逗号连接出去的租户表就看不见了。
+    """
+    refs: dict[str, str] = {}
+    region = _from_clause_region(masked)
+    if region is None:
+        return refs
+    segments: list[str] = []
+    for part in _split_top_level(region, ","):
+        # 再按顶层 JOIN 关键字切开
+        for piece in re.split(r"\bjoin\b", part):
+            segments.append(piece)
+    for seg in segments:
+        m = _SQL_LEAD_TABLE_RE.match(seg)
+        if not m:
+            continue
+        first, second, alias = m.group(1), m.group(2), m.group(3)
+        head = first.lower()
+        if head in _SQL_JOIN_PREFIX:
+            continue
+        table = (second or first).lower()
+        refs.setdefault(table, table)
+        if alias and alias.lower() not in _SQL_NOT_ALIAS:
+            refs.setdefault(alias.lower(), table)
+    return refs
+
+
+def _tenant_scoped_table_names() -> frozenset[str] | None:
+    """元数据里带 ``tenant_id`` 的表名集合（``None`` = 元数据不可用）。"""
+    global _TENANT_TABLE_CACHE
+    if _TENANT_TABLE_CACHE is not _UNSET:
+        return _TENANT_TABLE_CACHE
+    try:
+        import importlib
+        import pkgutil
+
+        import app as app_pkg
+        from app.db import Base
+
+        for mod in pkgutil.iter_modules(app_pkg.__path__):
+            if mod.name.startswith("models"):
+                importlib.import_module(f"app.{mod.name}")
+        _TENANT_TABLE_CACHE = frozenset(
+            t.name for t in Base.metadata.tables.values() if "tenant_id" in t.columns
+        )
+    except Exception:  # noqa: BLE001 — 元数据不可用时退化为「只查主表」
+        _TENANT_TABLE_CACHE = None
+    return _TENANT_TABLE_CACHE
+
+
+def _check_tenant_guarded_tables(masked: str, where_clause: str) -> str | None:
+    """每个被引用的**租户表**都要被 ``tenant_id = :tid`` 守住。
+
+    只检查主表是不够的：``FROM invoices i JOIN users u ON 1=1 WHERE
+    i.tenant_id = :tid`` 里，JOIN 出去的 ``users`` 不受 WHERE 约束 ——
+    别的租户的用户行会被带出来。这里按元数据找出 SQL 引用的所有带
+    ``tenant_id`` 的表，逐一要求谓词覆盖。
+    """
+    tenant_tables = _tenant_scoped_table_names()
+    if not tenant_tables:
+        return None
+    refs = _parse_table_refs(masked)
+    referenced = {t for t in refs.values() if t in tenant_tables}
+    if not referenced:
+        return None
+    quals = [q.lower() for q in _SQL_TENANT_EQ_RE.findall(where_clause)]
+    if not quals:
+        return None  # 前面已经报过「没有等值谓词」
+    if any(not q for q in quals):
+        # 不带表限定的 ``tenant_id = :tid``：多表时数据库本身会报
+        # 「ambiguous column」，能跑到这里的多半是单表 —— 视为已守住。
+        return None
+    guarded = {refs.get(q, q) for q in quals}
+    missing = sorted(referenced - guarded)
+    if missing:
+        return (
+            "SQL must filter tenant_id = :tid for every tenant-scoped table "
+            f"(missing: {', '.join(missing)})"
+        )
+    return None
+
+
+def _has_equality_on_tenant_id(clause: str) -> bool:
+    """WHERE 子句里是否有 ``tenant_id = :tid``（可带表限定）等值比较。
+
+    **不接受** ``<>`` / ``!=``（那是「排除本租户」，正好是攻击手法）。
+    """
+    pattern = re.compile(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)?tenant_id\s*(=)\s*:tid\b",
+        re.IGNORECASE,
+    )
+    return bool(pattern.search(clause))
+
+
 def export_report_csv(result: dict) -> str:
-    """Export report result to CSV string."""
+    """Export report result to CSV string.
+
+    P0-16：单元格必须过**公式注入防护**。对手方名 / 备注 / 货名都是租户自由
+    输入的，`=HYPERLINK("http://evil","点我")` 这类内容落到 CSV 里，客户用
+    Excel 打开就会被当成公式执行。旧的 ``routers/exports.py`` 里有防护，
+    报表设计器这条导出路径绕过了它 —— 现在统一走 ``services/csv_safety``。
+    """
     output = io.StringIO()
     columns = result.get("columns", [])
     rows = result.get("rows", [])
     writer = csv.writer(output)
     writer.writerow([c.get("label", c.get("key", "")) for c in columns])
     for row in rows:
-        writer.writerow([row.get(c.get("key", ""), "") for c in columns])
+        writer.writerow(
+            [guard_csv_cell(row.get(c.get("key", ""), "")) for c in columns]
+        )
     return output.getvalue()
 
 
@@ -2769,6 +3207,11 @@ def export_report_xlsx(result: dict) -> bytes:
             if hasattr(raw, "isoformat"):
                 raw = str(raw)
             cell = ws.cell(row=r_idx, column=c_idx, value=raw)
+            # P0-16：openpyxl 见到 "=..." 会自己把 data_type 设成 'f'（公式）。
+            # 字符串单元格一律强制写成文本，避免对手方名 / 备注在 Excel 里被
+            # 当成公式执行。
+            if isinstance(raw, str):
+                force_text_cell(cell)
             fmt = col.get("format")
             if fmt == "currency":
                 cell.number_format = '#,##0.00'

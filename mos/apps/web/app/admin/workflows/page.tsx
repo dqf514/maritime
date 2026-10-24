@@ -1,5 +1,6 @@
 "use client";
 
+import { RefreshButton } from "@/components/RefreshButton";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
@@ -11,7 +12,9 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { RowActions } from "@/components/RowActions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { StateView } from "@/components/StateView";
 import { useToast } from "@/components/ToastProvider";
 
 type Step = { name: string; role_code: string };
@@ -48,15 +51,36 @@ export default function WorkflowsAdminPage() {
     steps: [{ name: "Review", role_code: "management" }] as Step[],
   });
   const [saving, setSaving] = useState(false);
+  // 主列表加载态 / 错误态（P1-4）：失败不能静默变成「无数据」
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
+  // 角色列表是下拉参考数据，失败要可见但不能整页报错
+  const [refWarn, setRefWarn] = useState("");
 
   async function load() {
-    const [w, r] = await Promise.all([apiGet("/api/v1/admin/workflows"), apiGet("/api/v1/admin/roles")]);
-    setRows(w);
-    setRoles(r.filter((x: RoleRow) => x.code !== "platform_admin"));
+    setLoading(true);
+    setLoadErr("");
+    try {
+      const [w, r] = await Promise.all([
+        apiGet("/api/v1/admin/workflows"),
+        apiGet("/api/v1/admin/roles").catch((e) => {
+          setRefWarn(msgOf(e, t("common.failed", "失败")));
+          return [];
+        }),
+      ]);
+      setRows(w);
+      setRoles(r.filter((x: RoleRow) => x.code !== "platform_admin"));
+    } catch (e) {
+      setRows([]);
+      setLoadErr(msgOf(e, t("page.wf.admin_required", "需要租户管理员")));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch(() => toast.error(t("page.wf.admin_required", "需要租户管理员")));
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
   function openCreate() {
@@ -221,21 +245,28 @@ export default function WorkflowsAdminPage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.wf.create", "新建工作流")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load().catch(handled)} />
       </Toolbar>
+      {refWarn ? <p className="flash-err">{refWarn}</p> : null}
       <div className="panel">
-        <DataGrid<Wf>
-          columns={columns}
-          data={rows}
-          rowKey={(r) => r.id}
-          storageKey="admin_workflows_grid"
+        <StateView
+          loading={loading}
+          error={loadErr || undefined}
+          empty={!loadErr && !rows.length}
           emptyText={t("common.none", "无")}
-          showFooter={false}
-          onRowClick={(r) => openRow(r)}
-          onRowDoubleClick={(r) => openRow(r)}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid<Wf>
+            columns={columns}
+            data={rows}
+            rowKey={(r) => r.id}
+            storageKey="admin_workflows_grid"
+            emptyText={t("common.none", "无")}
+            showFooter={false}
+            onRowClick={(r) => openRow(r)}
+            onRowDoubleClick={(r) => openRow(r)}
+          />
+        </StateView>
       </div>
 
       <RecordModal
@@ -299,6 +330,7 @@ export default function WorkflowsAdminPage() {
           {edit.steps.map((s, i) => (
             <div key={i} style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
               <input
+                aria-label={t("page.wf.step_name", "步骤名称")}
                 placeholder={t("page.wf.step_name", "步骤名称")}
                 value={s.name}
                 onChange={(e) => updateStep(i, { name: e.target.value })}
@@ -316,6 +348,7 @@ export default function WorkflowsAdminPage() {
                 className="btn btn-ghost"
                 disabled={edit.steps.length <= 1}
                 onClick={() => setEdit({ ...edit, steps: edit.steps.filter((_, idx) => idx !== i) })}
+                aria-label={t("page.wf.remove_step", "Remove step")}
               >
                 ×
               </button>

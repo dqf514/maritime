@@ -16,6 +16,7 @@ import { StateView } from "@/components/StateView";
 import { NavIcon, resolveIconId } from "@/components/NavIcon";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { formatInTz, parseUtc, utcDayDiff } from "@/lib/datetime";
+import { msgOf } from "@/lib/errors";
 import { apiGet, apiMe, apiPost, apiPatch, type HomeSummary, type TaskOut, type TaskAssignee } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -79,6 +80,10 @@ function WorkbenchPageInner() {
   const [fullName, setFullName] = useState("");
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
+  /** 动态流（次级列表）加载失败 —— 局部提示，不影响主面板 */
+  const [activityErr, setActivityErr] = useState<string | null>(null);
+  /** 顶栏用户信息（参考数据）加载失败 */
+  const [meErr, setMeErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
@@ -95,24 +100,35 @@ function WorkbenchPageInner() {
   const loadSummary = useCallback(async () => {
     setLoading(true);
     setError("");
-    try {
-      const [sum, act] = await Promise.all([
-        apiGet("/api/v1/home/summary"),
-        apiGet("/api/v1/activity/feed?limit=12").catch(() => ({ items: [] })),
-      ]);
-      setSummary(sum);
-      setActivity((act as any)?.items || []);
-    } catch (e: any) {
-      setError(e?.message || t("common.failed", "Failed"));
-    } finally {
-      setLoading(false);
+    // 主面板（summary）与动态流（次级列表）分别成败 —— 动态流失败只做局部提示
+    const [sumR, actR] = await Promise.allSettled([
+      apiGet("/api/v1/home/summary"),
+      apiGet("/api/v1/activity/feed?limit=12"),
+    ]);
+    if (sumR.status === "fulfilled") {
+      setSummary(sumR.value as HomeSummary);
+      setError("");
+    } else {
+      setError(msgOf(sumR.reason, t("common.failed", "Failed")));
     }
+    if (actR.status === "fulfilled") {
+      setActivity((actR.value as any)?.items || []);
+      setActivityErr(null);
+    } else {
+      setActivity([]);
+      setActivityErr(msgOf(actR.reason));
+    }
+    setLoading(false);
   }, [t]);
 
   useEffect(() => {
     apiMe()
-      .then((m) => setFullName(m.user.full_name || m.user.email))
-      .catch(() => undefined);
+      .then((m) => {
+        setFullName(m.user.full_name || m.user.email);
+        setMeErr(null);
+      })
+      // 顶栏用户名取不到时给出提示，不能静默显示为空
+      .catch((ex) => setMeErr(msgOf(ex)));
   }, []);
 
   useEffect(() => {
@@ -203,6 +219,11 @@ function WorkbenchPageInner() {
       <div className="wb-statusbar">
         <div className="wb-statusbar-left">
           <span className="wb-greet">{fullName}</span>
+          {meErr ? (
+            <span className="muted">
+              {t("page.home.me_fail", "Profile unavailable: {err}", { err: meErr })}
+            </span>
+          ) : null}
           <span className="wb-date">{todayText}</span>
         </div>
         <div className="wb-statusbar-kpis">
@@ -297,6 +318,7 @@ function WorkbenchPageInner() {
                 <input
                   type="text"
                   className="wb-new-task-input"
+                  aria-label={t("page.home.task_title_ph", "Task title…")}
                   placeholder={t("page.home.task_title_ph", "Task title…")}
                   value={newTaskTitle}
                   onChange={(e) => setNewTaskTitle(e.target.value)}
@@ -382,6 +404,11 @@ function WorkbenchPageInner() {
                 </h2>
               </div>
               <div className="wb-alert-list">
+                {activityErr ? (
+                  <div className="wb-empty" role="alert">
+                    {t("page.home.activity_fail", "Activity feed could not be loaded: {err}", { err: activityErr })}
+                  </div>
+                ) : null}
                 {activity.length ? (
                   activity.slice(0, 8).map((a) => {
                     const body = (
@@ -405,9 +432,16 @@ function WorkbenchPageInner() {
                     );
                   })
                 ) : (
-                  <div className="wb-empty">{t("page.home.no_activity", "No recent activity")}</div>
+                  <div className="wb-empty">{activityErr ? "" : t("page.home.no_activity", "No recent activity")}</div>
                 )}
               </div>
+              {activity.length > 8 ? (
+                <div className="wb-panel-foot">
+                  <span className="muted">
+                    {t("page.home.activity_count", "共 {n} 条动态（显示前 8 条）", { n: activity.length })}
+                  </span>
+                </div>
+              ) : null}
             </div>
 
             {/* Alerts & Approvals */}
@@ -453,6 +487,16 @@ function WorkbenchPageInner() {
                   <div className="wb-empty">{t("page.home.no_alerts", "No alerts")}</div>
                 ) : null}
               </div>
+              {(summary?.approvals.items || []).length > 3 || (summary?.alerts || []).length > 4 ? (
+                <div className="wb-panel-foot">
+                  <span className="muted">
+                    {t("page.home.alerts_count", "待审批 {approvals} 条 · 预警 {alerts} 条（仅显示前几条）", {
+                      approvals: (summary?.approvals.items || []).length,
+                      alerts: (summary?.alerts || []).length,
+                    })}
+                  </span>
+                </div>
+              ) : null}
             </div>
 
             {/* Schedule */}
@@ -492,6 +536,13 @@ function WorkbenchPageInner() {
                   <div className="wb-empty">{t("page.home.no_schedule", "No schedule")}</div>
                 )}
               </div>
+              {(summary?.schedule.length || 0) > 6 ? (
+                <div className="wb-panel-foot">
+                  <span className="muted">
+                    {t("page.home.schedule_count", "共 {n} 条日程（显示前 6 条）", { n: summary?.schedule.length ?? 0 })}
+                  </span>
+                </div>
+              ) : null}
             </div>
 
             {/* Work queues */}
@@ -516,7 +567,7 @@ function WorkbenchPageInner() {
                           <Link
                             key={it.id}
                             href={it.href}
-                            className={`wb-queue-item ${it.urgency === "critical" ? "wb-queue-critical" : it.urgency === "warning" ? "wb-queue-warning" : ""}`}
+                  className={`wb-queue-item ${it.urgency === "critical" ? "wb-queue-critical" : it.urgency === "warning" ? "wb-queue-warning" : ""}`}
                           >
                             <span className="wb-queue-title">{it.title}</span>
                             {it.meta ? <span className="wb-queue-meta">{it.meta}</span> : null}

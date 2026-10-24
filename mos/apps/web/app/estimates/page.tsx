@@ -1,5 +1,6 @@
 "use client";
 
+import { msgOf } from "@/lib/errors";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -21,6 +22,7 @@ import { PageGuide } from "@/components/PageGuide";
 import { AiFill } from "@/components/ai/AiFill";
 import { useAiContextBinder } from "@/components/ai/aiContextStore";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
+import { StateView } from "@/components/StateView";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -357,6 +359,11 @@ function EstimatesPage() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [sensitivity, setSensitivity] = useState<SensitivityRow[]>([]);
   const [err, setErr] = useState("");
+  /** 主列表加载失败 */
+  const [listErr, setListErr] = useState<string | null>(null);
+  /** 参考数据（船/对手方）加载失败 */
+  const [refErr, setRefErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const rowCtx = useContextMenu<Estimate>();
@@ -369,14 +376,20 @@ function EstimatesPage() {
   });
 
   const loadMaster = useCallback(async () => {
-    const [v, p] = await Promise.all([
+    // 参考数据（船/对手方）取数失败不能连累主列表：逐项结算，只做局部提示
+    const [vR, pR] = await Promise.allSettled([
       apiGet("/api/v1/masterdata/vessels"),
       apiGet("/api/v1/masterdata/counterparties"),
     ]);
+    const v = vR.status === "fulfilled" ? (vR.value as RefItem[]) : [];
+    const p = pR.status === "fulfilled" ? (pR.value as RefItem[]) : [];
     setVessels(v);
     setParties(p);
     if (!vesselId && v[0]?.id) setVesselId(v[0].id);
     if (!partyId && p[0]?.id) setPartyId(p[0].id);
+    const failed = [vR, pR].filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    if (failed.length) setRefErr(msgOf(failed[0].reason));
+    else setRefErr(null);
   }, [vesselId, partyId]);
 
   const load = useCallback(async () => {
@@ -385,14 +398,36 @@ function EstimatesPage() {
     return data;
   }, []);
 
+  /** 主列表重新加载（失败 → 错误态，可重试） */
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      await load();
+      setListErr(null);
+    } catch (ex) {
+      setListErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
+  }, [load]);
+
   useEffect(() => {
     const urlId = typeof query.id === "string" ? query.id : null;
-    Promise.all([loadMaster(), load()])
-      .then(([, data]) => {
-        const preferred = (urlId && data.find((r) => r.id === urlId)) || data[0];
-        if (preferred) selectEstimate(preferred);
+    setLoading(true);
+    Promise.allSettled([loadMaster(), load()])
+      .then(([masterR, listR]) => {
+        if (listR.status === "fulfilled") {
+          setListErr(null);
+          const data = listR.value;
+          const preferred = (urlId && data.find((r) => r.id === urlId)) || data[0];
+          if (preferred) selectEstimate(preferred);
+        } else {
+          // 主列表失败 → 错误态（不能伪装成空列表）
+          setListErr(msgOf(listR.reason));
+        }
+        if (masterR.status === "rejected") setRefErr(msgOf(masterR.reason));
       })
-      .catch(() => setErr(t("common.failed", "Failed")));
+      .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -512,7 +547,7 @@ function EstimatesPage() {
       const fresh = data.find((r) => r.id === est.id) || est;
       selectEstimate(fresh);
     } catch (e) {
-      setErr(String(e));
+      setErr(msgOf(e));
     } finally {
       setBusy(false);
     }
@@ -534,7 +569,7 @@ function EstimatesPage() {
       toast.success(t("page.estimates.saved", "Saved"));
       await load();
     } catch (e) {
-      setErr(String(e));
+      setErr(msgOf(e));
     } finally {
       setBusy(false);
     }
@@ -557,7 +592,7 @@ function EstimatesPage() {
       toast.success(t("page.estimates.calculated", "Calculated TCE {tce}", { tce: fmt(est.results?.tce) }));
       await load();
     } catch (e) {
-      setErr(String(e));
+      setErr(msgOf(e));
     } finally {
       setBusy(false);
     }
@@ -574,7 +609,7 @@ function EstimatesPage() {
       const fresh = data.find((r) => r.id === est.id) || est;
       selectEstimate(fresh);
     } catch (e) {
-      setErr(String(e));
+      setErr(msgOf(e));
     } finally {
       setBusy(false);
     }
@@ -732,7 +767,7 @@ function EstimatesPage() {
       setCompareOpen(true);
       toast.success(t("page.estimates.compare_ok", "Compare ready"));
     } catch (e) {
-      setErr(String(e));
+      setErr(msgOf(e));
     } finally {
       setBusy(false);
     }
@@ -746,7 +781,7 @@ function EstimatesPage() {
       toast.success(t("page.estimates.cp_msg", "Created charter {no}", { no: cp.charter_no }));
       await load();
     } catch (e) {
-      setErr(String(e));
+      setErr(msgOf(e));
     } finally {
       setBusy(false);
     }
@@ -761,7 +796,7 @@ function EstimatesPage() {
       toast.success(t("common.recycled", "已移入回收站"));
       await load();
     } catch (e) {
-      setErr(String(e));
+      setErr(msgOf(e));
     } finally {
       setBusy(false);
     }
@@ -800,7 +835,7 @@ function EstimatesPage() {
     { key: "other_income", label: t("page.estimates.other_income", "Other income") },
   ];
 
-  const sensitivityColumns: ColumnDef<SensitivityRow>[] = [
+  const sensitivityColumns = useMemo<ColumnDef<SensitivityRow>[]>(() => [
     {
       key: "delta_pct",
       title: t("page.estimates.delta", "Delta %"),
@@ -816,7 +851,7 @@ function EstimatesPage() {
       value: (s) => s.tce,
       render: (v) => <Num v={Number(v)} digits={2} />,
     },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -842,6 +877,11 @@ function EstimatesPage() {
       />
 
       {err ? <p className="flash-err">{err}</p> : null}
+      {refErr ? (
+        <p className="flash-err">
+          {t("page.estimates.ref_load_failed", "Reference data failed to load: {msg}", { msg: refErr })}
+        </p>
+      ) : null}
 
       <div className="desk-split">
         <div className="panel desk-list">
@@ -881,26 +921,33 @@ function EstimatesPage() {
             </button>
           </Toolbar>
           <StatusLegend statuses={ESTIMATE_STATUSES} />
-          <ul className="desk-item-list">
-            {filteredRows.map((r) => (
-              <li key={r.id} className={r.id === selectedId ? "selected" : ""} onContextMenu={rowCtx.open(r)}>
-                <label className="desk-item-check" onClick={(e) => e.stopPropagation()} title={t("page.estimates.compare", "对比")}>
-                  <input type="checkbox" checked={compareIds.includes(r.id)} onChange={() => toggleCompare(r.id)} />
-                </label>
-                <button type="button" className="desk-item-main" onClick={() => selectEstimate(r)}>
-                  <span className="desk-item-title">{r.title}</span>
-                  <span className="desk-item-meta">
-                    <span>{t(`status.${r.status}`, r.status)}</span>
-                    <span>
-                      TCE <Num v={r.results?.tce} digits={2} />
+          <StateView
+            loading={loading}
+            error={listErr ?? undefined}
+            empty={!loading && !listErr && filteredRows.length === 0}
+            emptyText={t("common.empty", "暂无记录")}
+            onRetry={() => void reload()}
+          >
+            <ul className="desk-item-list">
+              {filteredRows.map((r) => (
+                <li key={r.id} className={r.id === selectedId ? "selected" : ""} onContextMenu={rowCtx.open(r)}>
+                  <label className="desk-item-check" onClick={(e) => e.stopPropagation()} title={t("page.estimates.compare", "对比")}>
+                    <input type="checkbox" checked={compareIds.includes(r.id)} onChange={() => toggleCompare(r.id)} />
+                  </label>
+                  <button type="button" className="desk-item-main" onClick={() => selectEstimate(r)}>
+                    <span className="desk-item-title">{r.title}</span>
+                    <span className="desk-item-meta">
+                      <span>{t(`status.${r.status}`, r.status)}</span>
+                      <span>
+                        TCE <Num v={r.results?.tce} digits={2} />
+                      </span>
+                      <span>v{r.version}</span>
                     </span>
-                    <span>v{r.version}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-            {!filteredRows.length ? <li className="desk-item-empty muted">{t("common.empty", "暂无记录")}</li> : null}
-          </ul>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </StateView>
           <ContextMenu controller={rowCtx} items={rowMenuItems} />
         </div>
 
@@ -1291,7 +1338,7 @@ function EstimatesPage() {
             {results.warnings?.length ? (
               <div style={{ marginTop: "0.75rem" }}>
                 {results.warnings.map((w, i) => (
-                  <p key={i} style={{ color: "var(--warn)", fontWeight: 600, margin: "0.25rem 0" }}>
+                  <p key={i} style={{ color: "var(--warn-text)", fontWeight: 600, margin: "0.25rem 0" }}>
                     <span className="badge badge-warn" style={{ marginRight: "0.4rem" }}>{w.code}</span>
                     {w.message}
                   </p>

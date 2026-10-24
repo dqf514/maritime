@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -10,7 +11,9 @@ import { useListHotkeys } from "@/components/useListHotkeys";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { StateView } from "@/components/StateView";
 import { useToast } from "@/components/ToastProvider";
 
 type Unit = {
@@ -44,14 +47,29 @@ export default function OrgStructurePage() {
   });
   const [members, setMembers] = useState<Member[]>([]);
   const [saving, setSaving] = useState(false);
+  // 主列表加载态 / 错误态（P1-4）：失败不能静默变成「无数据」
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
+  // 成员列表属于附属数据，失败要有可见提示但不能整页报错
+  const [membersErr, setMembersErr] = useState("");
 
   async function load() {
-    const [units, us] = await Promise.all([apiGet("/api/v1/admin/org-units"), apiGet("/api/v1/admin/users")]);
-    setRows(units);
-    setUsers(us);
+    setLoading(true);
+    setLoadErr("");
+    try {
+      const [units, us] = await Promise.all([apiGet("/api/v1/admin/org-units"), apiGet("/api/v1/admin/users")]);
+      setRows(units);
+      setUsers(us);
+    } catch (e) {
+      setRows([]);
+      setLoadErr(msgOf(e, t("page.org.admin_required", "需要租户管理员")));
+    } finally {
+      setLoading(false);
+    }
   }
   useEffect(() => {
-    load().catch(() => toast.error(t("page.org.admin_required", "需要租户管理员")));
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
   function openCreate() {
@@ -87,9 +105,11 @@ export default function OrgStructurePage() {
       manager_user_id: r.manager_user_id || "",
     });
     try {
+      setMembersErr("");
       setMembers(await apiGet(`/api/v1/admin/org-units/${r.id}/members`));
-    } catch {
+    } catch (e) {
       setMembers([]);
+      setMembersErr(msgOf(e, t("common.failed", "失败")));
     }
   }
 
@@ -133,42 +153,50 @@ export default function OrgStructurePage() {
       toast.success(t("common.recycled", "已移入回收站"));
       closeModal();
       await load();
+    } catch (e) {
+      toast.error(msgOf(e, t("common.failed", "失败")));
     } finally {
       setSaving(false);
     }
   }
 
-  function parentLabel(id: string | null) {
-    if (!id) return "—";
-    const p = rows.find((r) => r.id === id);
-    return p ? `${p.code} · ${p.name}` : id.slice(0, 8);
-  }
+  const parentLabel = useCallback(
+    (id: string | null) => {
+      if (!id) return "—";
+      const p = rows.find((r) => r.id === id);
+      return p ? `${p.code} · ${p.name}` : id.slice(0, 8);
+    },
+    [rows],
+  );
 
-  const columns: ColumnDef<Unit>[] = [
-    { key: "code", title: t("common.code", "编码"), width: 120, value: (r) => r.code },
-    { key: "name", title: t("common.name", "名称"), minWidth: 160, value: (r) => r.name },
-    { key: "unit_type", title: t("common.type", "类型"), width: 100, value: (r) => r.unit_type },
-    {
-      key: "parent",
-      title: t("page.org.parent", "上级"),
-      minWidth: 180,
-      value: (r) => parentLabel(r.parent_id),
-    },
-    {
-      key: "manager",
-      title: t("page.org.manager", "负责人"),
-      width: 140,
-      value: (r) => r.manager_name || "",
-      render: (_v, r) => <span>{r.manager_name || "—"}</span>,
-    },
-    {
-      key: "member_count",
-      title: t("page.org.members", "成员数"),
-      width: 90,
-      align: "right",
-      value: (r) => r.member_count ?? 0,
-    },
-  ];
+  const columns = useMemo<ColumnDef<Unit>[]>(
+    () => [
+      { key: "code", title: t("common.code", "编码"), width: 120, value: (r) => r.code },
+      { key: "name", title: t("common.name", "名称"), minWidth: 160, value: (r) => r.name },
+      { key: "unit_type", title: t("common.type", "类型"), width: 100, value: (r) => r.unit_type },
+      {
+        key: "parent",
+        title: t("page.org.parent", "上级"),
+        minWidth: 180,
+        value: (r) => parentLabel(r.parent_id),
+      },
+      {
+        key: "manager",
+        title: t("page.org.manager", "负责人"),
+        width: 140,
+        value: (r) => r.manager_name || "",
+        render: (_v, r) => <span>{r.manager_name || "—"}</span>,
+      },
+      {
+        key: "member_count",
+        title: t("page.org.members", "成员数"),
+        width: 90,
+        align: "right",
+        value: (r) => r.member_count ?? 0,
+      },
+    ],
+    [t, parentLabel],
+  );
 
   return (
     <AppShell>
@@ -191,21 +219,27 @@ export default function OrgStructurePage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.org.add_dept", "新建部门")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load().catch(handled)} />
       </Toolbar>
       <div className="panel">
-        <DataGrid<Unit>
-          columns={columns}
-          data={rows}
-          rowKey={(r) => r.id}
-          storageKey="admin_org_units_grid"
+        <StateView
+          loading={loading}
+          error={loadErr || undefined}
+          empty={!loadErr && !rows.length}
           emptyText={t("common.none", "无")}
-          showFooter={false}
-          onRowClick={(r) => openRow(r)}
-          onRowDoubleClick={(r) => openRow(r)}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid<Unit>
+            columns={columns}
+            data={rows}
+            rowKey={(r) => r.id}
+            storageKey="admin_org_units_grid"
+            emptyText={t("common.none", "无")}
+            showFooter={false}
+            onRowClick={(r) => openRow(r)}
+            onRowDoubleClick={(r) => openRow(r)}
+          />
+        </StateView>
       </div>
 
       <RecordModal
@@ -281,7 +315,8 @@ export default function OrgStructurePage() {
                   {m.is_manager ? ` · ${t("page.org.manager", "负责人")}` : ""}
                 </li>
               ))}
-              {!members.length ? <li className="muted">{t("page.org.no_members", "暂无成员 — 请在用户管理中分配部门")}</li> : null}
+              {membersErr ? <li className="flash-err">{membersErr}</li> : null}
+              {!members.length && !membersErr ? <li className="muted">{t("page.org.no_members", "暂无成员 — 请在用户管理中分配部门")}</li> : null}
             </ul>
           </div>
         ) : null}

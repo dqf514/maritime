@@ -1,6 +1,7 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { msgOf } from "@/lib/errors";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -10,6 +11,8 @@ import { SavedViews } from "@/components/SavedViews";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { clearLookupCache } from "@/components/LookupSelect";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -58,29 +61,49 @@ function ReferenceAdminPage() {
     sort_order: "0",
     active: true,
   });
+  // 数据集（下拉/参考数据）失败 → 局部提示；条目列表失败 → 列表级 error
+  const [datasetsErr, setDatasetsErr] = useState<string | null>(null);
+  const [itemsErr, setItemsErr] = useState<string | null>(null);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [pending, setPending] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
 
   const loadDatasets = useCallback(async () => {
-    const rows = await apiGet(`/api/v1/reference/datasets?locale=${loc}`);
-    setDatasets(rows);
-    if (rows.length && !rows.find((d: Dataset) => d.code === selected)) {
-      setQuery({ ds: rows[0].code }, { resetPage: true });
+    setDatasetsErr(null);
+    try {
+      const rows = await apiGet(`/api/v1/reference/datasets?locale=${loc}`);
+      setDatasets(Array.isArray(rows) ? rows : []);
+      if (rows.length && !rows.find((d: Dataset) => d.code === selected)) {
+        setQuery({ ds: rows[0].code }, { resetPage: true });
+      }
+    } catch (ex) {
+      setDatasetsErr(msgOf(ex));
+      setDatasets([]);
     }
   }, [loc, selected, setQuery]);
 
   const loadItems = useCallback(async () => {
     if (!selected) return;
-    const qs = new URLSearchParams({ locale: loc });
-    if (q.trim()) qs.set("q", q.trim());
-    const rows = await apiGet(`/api/v1/reference/${encodeURIComponent(selected)}/admin/items?${qs}`);
-    setItems(rows);
+    setItemsLoading(true);
+    setItemsErr(null);
+    try {
+      const qs = new URLSearchParams({ locale: loc });
+      if (q.trim()) qs.set("q", q.trim());
+      const rows = await apiGet(`/api/v1/reference/${encodeURIComponent(selected)}/admin/items?${qs}`);
+      setItems(Array.isArray(rows) ? rows : []);
+    } catch (ex) {
+      setItemsErr(msgOf(ex));
+      setItems([]);
+    } finally {
+      setItemsLoading(false);
+    }
   }, [selected, loc, q]);
 
   useEffect(() => {
-    loadDatasets().catch(() => setDatasets([]));
+    loadDatasets();
   }, [loadDatasets]);
 
   useEffect(() => {
-    loadItems().catch(() => setItems([]));
+    loadItems();
   }, [loadItems]);
 
   const current = datasets.find((d) => d.code === selected);
@@ -94,14 +117,13 @@ function ReferenceAdminPage() {
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      toast.error(t("page.ref.clone_fail", "Failed to clone system pack: {err}", { err: String(e) }));
+      toast.error(t("page.ref.clone_fail", "Failed to clone system pack: {err}", { err: msgOf(e) }));
     } finally {
       setBusy(false);
     }
   }
 
   async function reset() {
-    if (!window.confirm(t("page.ref.confirm_reset", "Delete the local copy and switch back to the system pack?"))) return;
     setBusy(true);
     try {
       await apiPost(`/api/v1/reference/${selected}/reset`);
@@ -110,10 +132,25 @@ function ReferenceAdminPage() {
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      toast.error(t("page.ref.reset_fail", "Failed to restore system pack: {err}", { err: String(e) }));
+      toast.error(t("page.ref.reset_fail", "Failed to restore system pack: {err}", { err: msgOf(e) }));
     } finally {
       setBusy(false);
     }
+  }
+
+  /** 恢复系统包会删除本地副本 → ConfirmDialog 二次确认（指名数据集） */
+  function askReset() {
+    setPending({
+      message: t(
+        "page.ref.confirm_reset",
+        "删除数据集 {ds} 的本地副本并切回系统包？本地新增/修改的条目将丢失。",
+        { ds: current?.name || selected },
+      ),
+      danger: true,
+      action: () => {
+        reset().catch((ex) => toast.error(t("page.ref.reset_fail", "Failed to restore system pack: {err}", { err: msgOf(ex) })));
+      },
+    });
   }
 
   function openCreate() {
@@ -137,6 +174,13 @@ function ReferenceAdminPage() {
   }
 
   async function save() {
+    // 数值校验：sort_order 非法输入 → 中止提交（不静默变 0；0 本身合法）
+    const sortOrderRaw = String(edit.sort_order ?? "").trim();
+    const sortOrder = sortOrderRaw === "" ? 0 : Number(sortOrderRaw);
+    if (!Number.isFinite(sortOrder)) {
+      toast.error(t("page.ref.invalid_sort_order", "Sort order must be a number."));
+      return;
+    }
     setBusy(true);
     try {
       if (creating) {
@@ -144,7 +188,7 @@ function ReferenceAdminPage() {
           code: edit.code,
           label_en: edit.label_en,
           label_zh: edit.label_zh,
-          sort_order: Number(edit.sort_order) || 0,
+          sort_order: sortOrder,
           active: edit.active,
         });
         toast.success(t("common.created", "Created"));
@@ -153,7 +197,7 @@ function ReferenceAdminPage() {
           code: edit.code,
           label_en: edit.label_en,
           label_zh: edit.label_zh,
-          sort_order: Number(edit.sort_order) || 0,
+          sort_order: sortOrder,
           active: edit.active,
         });
         toast.success(t("common.saved", "Saved"));
@@ -164,7 +208,7 @@ function ReferenceAdminPage() {
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      toast.error(t("page.ref.save_fail", "Failed to save item: {err}", { err: String(e) }));
+      toast.error(t("page.ref.save_fail", "Failed to save item: {err}", { err: msgOf(e) }));
     } finally {
       setBusy(false);
     }
@@ -181,13 +225,13 @@ function ReferenceAdminPage() {
       await loadDatasets();
       await loadItems();
     } catch (e) {
-      toast.error(t("page.ref.delete_fail", "Failed to delete item: {err}", { err: String(e) }));
+      toast.error(t("page.ref.delete_fail", "Failed to delete item: {err}", { err: msgOf(e) }));
     } finally {
       setBusy(false);
     }
   }
 
-  const itemColumns: ColumnDef<Item>[] = [
+  const itemColumns = useMemo<ColumnDef<Item>[]>(() => [
     {
       key: "code",
       title: t("common.code", "Code"),
@@ -212,7 +256,7 @@ function ReferenceAdminPage() {
       render: (v) => (v ? t("common.active", "Active") : t("common.inactive", "Inactive")),
     },
     { key: "source", title: t("page.ref.source", "Source"), width: 100, value: (r) => r.source },
-  ];
+  ], [current?.mode, t]);
 
   return (
     <AppShell>
@@ -269,7 +313,7 @@ function ReferenceAdminPage() {
         <button type="button" className="btn btn-primary" disabled={busy} onClick={clone}>
           {t("page.ref.clone", "Clone system pack")}
         </button>
-        <button type="button" className="btn" disabled={busy || current?.mode !== "local"} onClick={reset}>
+        <button type="button" className="btn" disabled={busy || current?.mode !== "local"} onClick={askReset}>
           {t("page.ref.reset", "Restore system pack")}
         </button>
         <button type="button" className="btn" disabled={busy} onClick={openCreate}>
@@ -286,21 +330,34 @@ function ReferenceAdminPage() {
         </p>
       ) : null}
 
+      {datasetsErr ? <p className="text-danger">{datasetsErr}</p> : null}
       <div className="panel" style={{ marginTop: "1rem" }}>
-        <DataGrid<Item>
-          columns={itemColumns}
-          data={items}
-          rowKey={(r) => r.id}
-          storageKey="settings_reference_items_grid"
-          onRowDoubleClick={(r) => {
-            if (current?.mode === "local") openEdit(r);
-          }}
+        <StateView
+          loading={itemsLoading}
+          error={itemsErr ?? undefined}
+          empty={!items.length}
+          onRetry={() => loadItems()}
           emptyText={
             current?.mode === "system"
               ? t("page.ref.system_hint", "Using system pack (read-only). Clone to edit.")
               : t("common.empty", "No records")
           }
-        />
+        >
+          <DataGrid<Item>
+            columns={itemColumns}
+            data={items}
+            rowKey={(r) => r.id}
+            storageKey="settings_reference_items_grid"
+            onRowDoubleClick={(r) => {
+              if (current?.mode === "local") openEdit(r);
+            }}
+            emptyText={
+              current?.mode === "system"
+                ? t("page.ref.system_hint", "Using system pack (read-only). Clone to edit.")
+                : t("common.empty", "No records")
+            }
+          />
+        </StateView>
       </div>
 
       <RecordModal
@@ -339,6 +396,19 @@ function ReferenceAdminPage() {
           {t("common.active", "Active")}
         </label>
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pending)}
+        title={t("common.confirm", "Confirm")}
+        message={pending?.message || ""}
+        danger={pending?.danger}
+        onConfirm={() => {
+          const fn = pending?.action;
+          setPending(null);
+          fn?.();
+        }}
+        onCancel={() => setPending(null)}
+      />
     </AppShell>
   );
 }

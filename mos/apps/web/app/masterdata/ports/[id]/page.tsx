@@ -4,19 +4,21 @@
 // Tabs: Details · Berths · Aliases。
 // Details = 分类 / 位置与时区 / 燃油与作业 / 合规开关族（14 项 IMOS compliance flags）。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordAttribution } from "@/components/RecordAttribution";
+import { StateView } from "@/components/StateView";
 import { Tabs } from "@/components/Tabs";
 import { FormSection } from "@/components/form/FormPanel";
 import { LookupSelect } from "@/components/LookupSelect";
-import { VesselCrudGrid } from "@/components/ship/VesselCrudGrid";
+import { VesselCrudGrid, type ColumnDef, type FieldDef } from "@/components/ship/VesselCrudGrid";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 
 type Tab = "details" | "berths" | "aliases";
 
@@ -92,8 +94,11 @@ export default function PortDetailPage() {
   const [bools, setBools] = useState<Record<string, boolean>>({});
   const [boolInit, setBoolInit] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       const data = await apiGet(`/api/v1/masterdata/ports/${portId}`);
       setPort(data);
@@ -111,10 +116,15 @@ export default function PortDetailPage() {
       for (const fl of PORT_FLAGS) b[fl.key] = Boolean(data?.[fl.key]);
       setBools(b);
       setBoolInit({ ...b });
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+      setLoadErr("");
+    } catch (ex) {
+      // 取数失败必须显性报错，不能静默留空表单
+      setPort(null);
+      setLoadErr(msgOf(ex, t("common.failed", "Failed")));
+    } finally {
+      setLoading(false);
     }
-  }, [portId, t, toast]);
+  }, [portId, t]);
 
   useEffect(() => {
     void load();
@@ -138,7 +148,18 @@ export default function PortDetailPage() {
       }
       for (const f of PORT_NUM_FIELDS) {
         if (form[f.key] === init[f.key]) continue;
-        payload[f.key] = form[f.key] === "" ? null : Number(form[f.key]);
+        if (form[f.key] === "") {
+          payload[f.key] = null;
+          continue;
+        }
+        // P1-24：非法数字必须中止提交（不能静默变成 NaN）
+        const n = Number(form[f.key]);
+        if (!Number.isFinite(n)) {
+          toast.error(t("page.port.err_numeric", "{field} must be a valid number", { field: f.label }));
+          setBusy(false);
+          return;
+        }
+        payload[f.key] = n;
       }
       for (const fl of PORT_FLAGS) {
         if (bools[fl.key] === boolInit[fl.key]) continue;
@@ -152,8 +173,8 @@ export default function PortDetailPage() {
       await apiPatch(`/api/v1/masterdata/ports/${portId}`, payload);
       toast.success(t("common.saved", "Saved"));
       await load();
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setBusy(false);
     }
@@ -165,6 +186,40 @@ export default function PortDetailPage() {
     { key: "location", labelKey: "page.port.grp_location", label: "Location & time" },
     { key: "ops", labelKey: "page.port.grp_ops", label: "Fuel, ops & remarks" },
   ];
+
+  const berthColumns = useMemo<ColumnDef[]>(
+    () => [
+      { key: "short_name", label: t("page.port.short_name", "Short name"), width: 160 },
+      { key: "full_name", label: t("page.port.full_name", "Full name") },
+      {
+        key: "inactive",
+        label: t("common.inactive", "Inactive"),
+        width: 110,
+        render: (r) => (r.inactive ? t("common.inactive", "Inactive") : "—"),
+      },
+    ],
+    [t],
+  );
+
+  const aliasColumns = useMemo<ColumnDef[]>(
+    () => [{ key: "alias", label: t("page.port.alias", "Alias"), minWidth: 200 }],
+    [t],
+  );
+
+  // CRUD 弹窗字段定义：每次渲染都换身份会让 VesselCrudGrid 的列模型缓存失效
+  const berthFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "short_name", label: t("page.port.short_name", "Short name"), type: "text", required: true },
+      { key: "full_name", label: t("page.port.full_name", "Full name"), type: "text", span: true },
+      { key: "inactive", label: t("common.inactive", "Inactive"), type: "checkbox" },
+    ],
+    [t],
+  );
+
+  const aliasFields = useMemo<FieldDef[]>(
+    () => [{ key: "alias", label: t("page.port.alias", "Alias"), type: "text", required: true }],
+    [t],
+  );
 
   function renderText(f: (typeof PORT_TEXT_FIELDS)[number]) {
     const label = t(`page.port.f_${f.key}`, f.label);
@@ -236,6 +291,7 @@ export default function PortDetailPage() {
 
       {tab === "details" ? (
         <div className="panel">
+          <StateView loading={loading} error={loadErr || undefined} empty={false} onRetry={() => void load()}>
           {groups.map((g) => (
             <FormSection key={g.key} title={t(g.labelKey, g.label)}>
               {g.key === "basics" ? (
@@ -320,6 +376,7 @@ export default function PortDetailPage() {
               ))}
             </div>
           </FormSection>
+          </StateView>
         </div>
       ) : null}
 
@@ -331,21 +388,8 @@ export default function PortDetailPage() {
           title={t("page.port.tab_berths", "Berths")}
           addLabel={t("page.port.add_berth", "Add berth")}
           emptyText={t("page.port.no_berths", "No berths yet")}
-          columns={[
-            { key: "short_name", label: t("page.port.short_name", "Short name"), width: 160 },
-            { key: "full_name", label: t("page.port.full_name", "Full name") },
-            {
-              key: "inactive",
-              label: t("common.inactive", "Inactive"),
-              width: 110,
-              render: (r) => (r.inactive ? t("common.inactive", "Inactive") : "—"),
-            },
-          ]}
-          fields={[
-            { key: "short_name", label: t("page.port.short_name", "Short name"), type: "text", required: true },
-            { key: "full_name", label: t("page.port.full_name", "Full name"), type: "text", span: true },
-            { key: "inactive", label: t("common.inactive", "Inactive"), type: "checkbox" },
-          ]}
+          columns={berthColumns}
+          fields={berthFields}
         />
       ) : null}
 
@@ -357,8 +401,8 @@ export default function PortDetailPage() {
           title={t("page.port.tab_aliases", "Aliases")}
           addLabel={t("page.port.add_alias", "Add alias")}
           emptyText={t("page.port.no_aliases", "No aliases yet")}
-          columns={[{ key: "alias", label: t("page.port.alias", "Alias"), minWidth: 200 }]}
-          fields={[{ key: "alias", label: t("page.port.alias", "Alias"), type: "text", required: true }]}
+          columns={aliasColumns}
+          fields={aliasFields}
         />
       ) : null}
     </AppShell>

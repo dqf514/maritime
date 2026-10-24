@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
@@ -97,7 +97,7 @@ export function CertOverview({ onOpenVessel }: { onOpenVessel: (vesselId: string
     load();
   }, [load]);
 
-  const certColumns: GridColumnDef<VesselCert>[] = [
+  const certColumns = useMemo<GridColumnDef<VesselCert>[]>(() => [
     { key: "vessel_name", title: t("ship.cert.col_vessel", "Vessel"), width: 140, value: (c) => c.vessel_name || "—" },
     {
       key: "cert",
@@ -147,7 +147,7 @@ export function CertOverview({ onOpenVessel }: { onOpenVessel: (vesselId: string
           <span className="muted">{t("ship.cert.no_file", "Not uploaded")}</span>
         ),
     },
-  ];
+  ], [t]);
 
   return (
     <div className="panel">

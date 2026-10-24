@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { msgOf } from "@/lib/errors";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { BunkerRequirementsPanel } from "@/components/BunkerRequirementsPanel";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { PartyPicker } from "@/components/DataPicker";
 import { DataGrid } from "@/components/grid";
@@ -13,6 +15,7 @@ import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
+import { StateView } from "@/components/StateView";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
@@ -41,6 +44,9 @@ type Order = {
 
 type Inquiry = { id: string; supplier: string; quoted_price: number; status: string; updated_at?: string | null };
 
+/** 交付告警 —— 后端返回 {code, message} 对象，不可直接 String()（会变成 [object Object]）。 */
+type BunkerWarning = { code: string; message: string; orderNo?: string };
+
 const EMPTY_FORM = {
   vessel_id: "",
   voyage_id: "",
@@ -52,6 +58,36 @@ const EMPTY_FORM = {
   price_differential: "",
 };
 
+/** 把后端告警对象结构化：优先 code/message/severity，未知结构退回 JSON。 */
+function readWarning(w: unknown, orderNo?: string): BunkerWarning {
+  if (typeof w === "string") return { code: "", message: w, orderNo };
+  if (w && typeof w === "object") {
+    const o = w as Record<string, unknown>;
+    const code = typeof o.code === "string" ? o.code : "";
+    const severity = typeof o.severity === "string" ? o.severity : "";
+    const message = typeof o.message === "string" ? o.message : "";
+    if (!code && !severity && !message) {
+      try {
+        return { code: "", message: JSON.stringify(o), orderNo };
+      } catch {
+        return { code: "", message: String(w), orderNo };
+      }
+    }
+    return { code: [code, severity].filter(Boolean).join(" · "), message, orderNo };
+  }
+  return { code: "", message: String(w), orderNo };
+}
+
+/** 数字字段解析结果：ok(合法数值) | empty(空串) | bad(非法输入，不可静默转 0)。 */
+type NumParse = { kind: "ok"; value: number } | { kind: "empty" } | { kind: "bad" };
+
+function parseNum(raw: string): NumParse {
+  const s = (raw ?? "").trim();
+  if (s === "") return { kind: "empty" };
+  const n = Number(s);
+  return Number.isFinite(n) ? { kind: "ok", value: n } : { kind: "bad" };
+}
+
 export default function BunkerDeskPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -59,6 +95,9 @@ export default function BunkerDeskPage() {
   const [vessels, setVessels] = useState<Ref[]>([]);
   const [voyages, setVoyages] = useState<Ref[]>([]);
   const [err, setErr] = useState("");
+  const [listErr, setListErr] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refLoadFailed, setRefLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<Order | null>(null);
   const [creating, setCreating] = useState(false);
@@ -66,11 +105,16 @@ export default function BunkerDeskPage() {
   const [deliverQty, setDeliverQty] = useState("");
   const [bdnQty, setBdnQty] = useState("");
   const [consumption, setConsumption] = useState("");
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<BunkerWarning[]>([]);
   const [inquiries, setInquiries] = useState<Inquiry[]>([]);
+  const [inqErr, setInqErr] = useState("");
   const [inqSupplier, setInqSupplier] = useState("");
   const [inqPrice, setInqPrice] = useState("");
   const [alloc, setAlloc] = useState<Record<string, unknown> | null>(null);
+  // 破坏性操作（确认交付）二次确认：pending 存待执行动作 + 被指名的订单
+  const [pendingDelivery, setPendingDelivery] = useState<{ run: () => void; orderNo: string } | null>(null);
+  // 删除订单同样不可逆 —— 走指名对象的二次确认。
+  const [pendingDelete, setPendingDelete] = useState<{ run: () => void; orderNo: string } | null>(null);
 
   useListHotkeys(openCreate);
 
@@ -110,7 +154,7 @@ export default function BunkerDeskPage() {
         ? [{ key: "ord", label: t("page.bunker.order", "Place order"), onClick: () => move(target.id, "ordered") } as ContextMenuItem]
         : []),
       ...(target.status === "ordered"
-        ? [{ key: "del", label: t("page.bunker.confirm_delivery", "Confirm delivery"), onClick: () => move(target.id, "delivered") } as ContextMenuItem]
+        ? [{ key: "del", label: t("page.bunker.confirm_delivery", "Confirm delivery"), onClick: () => requestDelivery(target) } as ContextMenuItem]
         : []),
       ...(target.status === "delivered"
         ? [{ key: "close", label: t("common.close", "Close"), onClick: () => move(target.id, "closed") } as ContextMenuItem]
@@ -128,19 +172,30 @@ export default function BunkerDeskPage() {
   }
 
   const load = useCallback(async () => {
-    const [b, v, voy] = await Promise.all([
-      apiGet("/api/v1/bunker-orders"),
-      apiGet("/api/v1/masterdata/vessels").catch(() => []),
-      apiGet("/api/v1/voyages").catch(() => []),
+    setLoading(true);
+    // 主列表：失败必须显性报错（StateView 错误态），不得静默变空列表
+    try {
+      const b = await apiGet("/api/v1/bunker-orders");
+      setRows(Array.isArray(b) ? b : []);
+      setListErr("");
+    } catch (ex) {
+      setRows([]);
+      setListErr(msgOf(ex));
+    }
+    // 参考数据（船舶 / 航次下拉）：失败不让整页报错，但也不能完全静默
+    const [v, voy] = await Promise.allSettled([
+      apiGet("/api/v1/masterdata/vessels"),
+      apiGet("/api/v1/voyages/options"),
     ]);
-    setRows(b);
-    setVessels(v);
-    setVoyages(voy);
+    setVessels(v.status === "fulfilled" ? (v.value as Ref[]) : []);
+    setVoyages(voy.status === "fulfilled" ? (voy.value as Ref[]) : []);
+    setRefLoadFailed(v.status === "rejected" || voy.status === "rejected");
+    setLoading(false);
   }, []);
 
   useEffect(() => {
-    load().catch(() => setErr(t("common.failed", "Failed")));
-  }, [load, t]);
+    void load();
+  }, [load]);
 
   function openCreate() {
     setCreating(true);
@@ -151,21 +206,29 @@ export default function BunkerDeskPage() {
     setConsumption("");
     setWarnings([]);
     setInquiries([]);
+    setInqErr("");
     setInqSupplier("");
     setInqPrice("");
     setAlloc(null);
     setErr("");
   }
 
-  function closeModal() {
+  const closeModal = useCallback(() => {
     setOpen(null);
     setCreating(false);
-  }
+  }, []);
 
-  async function loadInquiries(orderId: string) {
-    const rows: Inquiry[] = await apiGet(`/api/v1/bunker-orders/${orderId}/inquiries`).catch(() => []);
-    setInquiries(Array.isArray(rows) ? rows : []);
-  }
+  const loadInquiries = useCallback(async (orderId: string) => {
+    // 询价列表失败：不让整页报错，但必须可见（不能静默变成「暂无报价」）
+    try {
+      const rows: Inquiry[] = await apiGet(`/api/v1/bunker-orders/${orderId}/inquiries`);
+      setInquiries(Array.isArray(rows) ? rows : []);
+      setInqErr("");
+    } catch (ex) {
+      setInquiries([]);
+      setInqErr(msgOf(ex));
+    }
+  }, []);
 
   async function addInquiry() {
     if (!open) return;
@@ -173,41 +236,49 @@ export default function BunkerDeskPage() {
       setErr(t("page.bunker.inq_need", "Enter supplier and quote"));
       return;
     }
+    const price = parseNum(inqPrice);
+    if (price.kind !== "ok") {
+      setErr(t("page.bunker.err_quoted_price", "Quoted price must be a valid number"));
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
       await apiPost(`/api/v1/bunker-orders/${open.id}/inquiries`, {
         supplier: inqSupplier.trim(),
-        quoted_price: Number(inqPrice),
+        quoted_price: price.value,
       });
       await loadInquiries(open.id);
       setInqSupplier("");
       setInqPrice("");
       toast.success(t("page.bunker.inq_ok", "Quote logged"));
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  async function acceptInquiry(id: string) {
-    if (!open) return;
-    setBusy(true);
-    setErr("");
-    try {
-      const res = await apiPost(`/api/v1/bunker-inquiries/${id}/accept`);
-      await loadInquiries(open.id);
-      setOpen({ ...open, unit_price: res.unit_price });
-      setForm((f) => ({ ...f, unit_price: String(res.unit_price) }));
-      toast.success(t("page.bunker.inq_accepted", "Quote accepted and order price updated"));
-      await load();
-    } catch (ex) {
-      setErr(String(ex));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const acceptInquiry = useCallback(
+    async (id: string) => {
+      if (!open) return;
+      setBusy(true);
+      setErr("");
+      try {
+        const res = await apiPost(`/api/v1/bunker-inquiries/${id}/accept`);
+        await loadInquiries(open.id);
+        setOpen({ ...open, unit_price: res.unit_price });
+        setForm((f) => ({ ...f, unit_price: String(res.unit_price) }));
+        toast.success(t("page.bunker.inq_accepted", "Quote accepted and order price updated"));
+        await load();
+      } catch (ex) {
+        setErr(msgOf(ex));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [open, loadInquiries, toast, t, load],
+  );
 
   async function loadAllocation() {
     if (!open?.voyage_id) return;
@@ -216,47 +287,103 @@ export default function BunkerDeskPage() {
     try {
       setAlloc(await apiGet(`/api/v1/voyages/${open.voyage_id}/bunker-allocation`));
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  async function move(id: string, target: string) {
+  async function move(id: string, target: string, qty?: { deliver?: string; bdn?: string; cons?: string }) {
+    const dq = qty?.deliver ?? deliverQty;
+    const bq = qty?.bdn ?? bdnQty;
+    const cq = qty?.cons ?? consumption;
+    // 交付量 / 消耗量：非法输入必须拦下（不能把 "abc" 送给后端，也不能静默变 0）
+    const numericInputs: { key: string; raw: string; label: string }[] = [
+      { key: "qty_delivered", raw: dq, label: t("page.bunker.deliver_qty", "Delivered qty") },
+      { key: "bdn_qty", raw: bq, label: t("page.bunker.bdn_qty", "BDN qty") },
+      { key: "consumption", raw: cq, label: t("page.bunker.consumption", "Consumption") },
+    ];
+    for (const inp of numericInputs) {
+      if (inp.key === "bdn_qty" && target !== "delivered") continue;
+      const parsed = parseNum(inp.raw);
+      if (parsed.kind === "bad") {
+        toast.error(t("page.bunker.err_numeric", "{field} must be a valid number", { field: inp.label }));
+        return;
+      }
+    }
     setBusy(true);
     setWarnings([]);
     try {
       const q = new URLSearchParams({ target });
-      if (deliverQty) q.set("qty_delivered", deliverQty);
-      if (target === "delivered" && bdnQty) q.set("bdn_qty", bdnQty);
-      if (consumption) q.set("consumption", consumption);
+      if (dq) q.set("qty_delivered", dq);
+      if (target === "delivered" && bq) q.set("bdn_qty", bq);
+      if (cq) q.set("consumption", cq);
       const res = await apiPost(`/api/v1/bunker-orders/${id}/transition?${q.toString()}`);
-      if (Array.isArray(res?.warnings) && res.warnings.length) setWarnings(res.warnings.map((w: unknown) => String(w)));
+      if (Array.isArray(res?.warnings) && res.warnings.length) {
+        const orderNo = rows.find((r) => r.id === id)?.order_no;
+        setWarnings((res.warnings as unknown[]).map((w) => readWarning(w, orderNo)));
+      }
       toast.success(t("page.bunker.moved", "Status → {target}", { target }));
       closeModal();
       await load();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
   async function save() {
+    // 数值校验：非法输入必须中止提交，不得用 || 0 把垃圾输入静默变成 0
+    const qty = parseNum(form.qty_ordered);
+    if (qty.kind !== "ok") {
+      toast.error(t("page.bunker.err_qty", "Ordered quantity must be a valid number"));
+      return;
+    }
+    if (qty.value < 0) {
+      toast.error(t("page.bunker.err_qty_negative", "Ordered quantity must not be negative"));
+      return;
+    }
+    const useIndex = form.index_symbol.trim() !== "";
+    let unitPrice = 0;
+    let priceDiff = 0;
+    if (useIndex) {
+      const pd = parseNum(form.price_differential);
+      if (pd.kind === "bad") {
+        toast.error(t("page.bunker.err_price_diff", "Price differential must be a valid number"));
+        return;
+      }
+      priceDiff = pd.kind === "ok" ? pd.value : 0;
+    } else {
+      const up = parseNum(form.unit_price);
+      if (up.kind !== "ok") {
+        toast.error(t("page.bunker.err_unit_price", "Unit price must be a valid number"));
+        return;
+      }
+      if (up.value < 0) {
+        toast.error(t("page.bunker.err_unit_price_negative", "Unit price must not be negative"));
+        return;
+      }
+      unitPrice = up.value;
+    }
+    const rob = parseNum(form.rob_before);
+    if (rob.kind === "bad") {
+      toast.error(t("page.bunker.err_rob", "ROB before must be a valid number"));
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
       if (creating || !open) {
-        const useIndex = form.index_symbol.trim() !== "";
         await apiPost("/api/v1/bunker-orders", {
           vessel_id: form.vessel_id || null,
           voyage_id: form.voyage_id || null,
           grade: form.grade,
-          qty_ordered: Number(form.qty_ordered) || 0,
+          qty_ordered: qty.value,
           ...(useIndex
-            ? { index_symbol: form.index_symbol.trim(), price_differential: Number(form.price_differential) || 0 }
-            : { unit_price: Number(form.unit_price) || 0 }),
-          rob_before: form.rob_before === "" ? null : Number(form.rob_before),
+            ? { index_symbol: form.index_symbol.trim(), price_differential: priceDiff }
+            : { unit_price: unitPrice }),
+          rob_before: rob.kind === "ok" ? rob.value : null,
         });
         toast.success(t("page.bunker.created", "Bunker order created"));
         closeModal();
@@ -267,9 +394,9 @@ export default function BunkerDeskPage() {
         }
         await apiPatch(`/api/v1/bunker-orders/${open.id}`, {
           grade: form.grade,
-          qty_ordered: Number(form.qty_ordered) || 0,
-          unit_price: Number(form.unit_price) || 0,
-          rob_before: form.rob_before === "" ? null : Number(form.rob_before),
+          qty_ordered: qty.value,
+          unit_price: unitPrice,
+          rob_before: rob.kind === "ok" ? rob.value : null,
           vessel_id: form.vessel_id || null,
           voyage_id: form.voyage_id || null,
         });
@@ -277,54 +404,72 @@ export default function BunkerDeskPage() {
         closeModal();
       }
       await load();
-    } catch (ex: any) {
-      if (ex?.status === 422 && ex?.detail?.code === "NO_INDEX_QUOTE") {
+    } catch (ex) {
+      const anyEx = ex as { status?: number; detail?: { code?: string } };
+      if (anyEx?.status === 422 && anyEx?.detail?.code === "NO_INDEX_QUOTE") {
         setErr(t("page.bunker.no_index_quote", "No market quote for this index (NO_INDEX_QUOTE). Configure pricing in Integration Hub or use a fixed unit price."));
       } else {
-        setErr(String(ex));
+        setErr(msgOf(ex));
       }
     } finally {
       setBusy(false);
     }
   }
 
-  function openRow(r: Order) {
-    setCreating(false);
-    setOpen(r);
-    setForm({
-      vessel_id: r.vessel_id || "",
-      voyage_id: r.voyage_id || "",
-      grade: r.grade,
-      qty_ordered: String(r.qty_ordered),
-      unit_price: String(r.unit_price),
-      rob_before: r.rob_before != null ? String(r.rob_before) : "",
-      index_symbol: "",
-      price_differential: "",
-    });
-    setDeliverQty(r.qty_delivered != null ? String(r.qty_delivered) : String(r.qty_ordered));
-    setBdnQty("");
-    setConsumption("");
-    setWarnings([]);
-    setInquiries([]);
-    setInqSupplier("");
-    setInqPrice("");
-    setAlloc(null);
-    loadInquiries(r.id).catch(() => undefined);
+  const openRow = useCallback(
+    (r: Order) => {
+      setCreating(false);
+      setOpen(r);
+      setForm({
+        vessel_id: r.vessel_id || "",
+        voyage_id: r.voyage_id || "",
+        grade: r.grade,
+        qty_ordered: String(r.qty_ordered),
+        unit_price: String(r.unit_price),
+        rob_before: r.rob_before != null ? String(r.rob_before) : "",
+        index_symbol: "",
+        price_differential: "",
+      });
+      setDeliverQty(r.qty_delivered != null ? String(r.qty_delivered) : String(r.qty_ordered));
+      setBdnQty("");
+      setConsumption("");
+      // 交付告警不清空：ROB 守恒告警必须在页面级持续可见
+      setInquiries([]);
+      setInqErr("");
+      setInqSupplier("");
+      setInqPrice("");
+      setAlloc(null);
+      void loadInquiries(r.id);
+    },
+    [loadInquiries],
+  );
+
+  const orderLocked = useCallback((r: Order) => r.status === "delivered" || r.status === "closed", []);
+
+  /** 确认交付是不可逆动作 —— 走 ConfirmDialog 二次确认，且确认文案指名订单。 */
+  function requestDelivery(order: Order, over?: { deliver?: string; bdn?: string; cons?: string }) {
+    const deliver = over?.deliver ?? (order.qty_delivered != null ? String(order.qty_delivered) : String(order.qty_ordered));
+    const run = () => move(order.id, "delivered", { deliver, bdn: over?.bdn ?? "", cons: over?.cons ?? "" });
+    setPendingDelivery({ run, orderNo: order.order_no });
   }
 
-  function orderLocked(r: Order) {
-    return r.status === "delivered" || r.status === "closed";
-  }
+  const deleteOrder = useCallback(
+    async (id: string) => {
+      try {
+        await apiDelete(`/api/v1/bunker-orders/${id}`);
+        toast.success(t("common.recycled", "Moved to recycle bin"));
+        closeModal();
+        await load();
+      } catch (ex) {
+        toast.error(msgOf(ex));
+      }
+    },
+    [t, toast, closeModal, load],
+  );
 
-  async function deleteOrder(id: string) {
-    try {
-      await apiDelete(`/api/v1/bunker-orders/${id}`);
-      toast.success(t("common.recycled", "Moved to recycle bin"));
-      closeModal();
-      await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
-    }
+  /** 删除订单不可逆 —— 确认文案指名订单号。 */
+  function requestDeleteOrder(order: Order) {
+    setPendingDelete({ run: () => void deleteOrder(order.id), orderNo: order.order_no });
   }
 
   // ── 行内编辑（失焦/回车保存；值未变化不发请求，避免 blur→reload 打断输入） ──
@@ -337,7 +482,13 @@ export default function BunkerDeskPage() {
     let payload: Record<string, unknown>;
     if (numFields.includes(colKey)) {
       const n = Number(value);
-      if (value === null || value === "" || isNaN(n)) return;
+      if (value === null || value === "" || !Number.isFinite(n)) {
+        // 非法数字不能静默丢弃 —— 明确告诉用户这一格没写进去
+        if (value !== null && value !== "" && !Number.isFinite(n)) {
+          toast.error(t("page.bunker.err_numeric", "{field} must be a valid number", { field: colKey }));
+        }
+        return;
+      }
       const prev = Number((row as unknown as Record<string, unknown>)[colKey]);
       if (n === prev) return;
       payload = { [colKey]: n };
@@ -349,138 +500,144 @@ export default function BunkerDeskPage() {
       await apiPatch(`/api/v1/bunker-orders/${rowId}`, payload);
       toast.success(t("common.saved", "Saved"));
       await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+    } catch (ex) {
+      toast.error(msgOf(ex));
     }
   }
 
-  const columns: ColumnDef<Order>[] = [
-    { key: "order_no", title: t("page.finance.number", "No."), width: 130, value: (r) => r.order_no },
-    { key: "grade", title: t("page.bunker.grade", "Grade"), width: 110, value: (r) => r.grade, editor: { type: "text" } },
-    {
-      key: "status",
-      title: t("common.status", "Status"),
-      width: 110,
-      value: (r) => r.status,
-      render: (v) => <span className={`badge badge-${v === "delivered" || v === "closed" ? "ok" : "info"}`}>{t(`status.${v}`, String(v))}</span>,
-    },
-    {
-      key: "qty_ordered",
-      title: t("page.bunker.qty", "Ordered qty (mt)"),
-      width: 130,
-      align: "right",
-      value: (r) => r.qty_ordered,
-      render: (v) => <Num v={v as number} digits={2} />,
-      editor: { type: "number", min: 0 },
-    },
-    {
-      key: "unit_price",
-      title: t("page.bunker.price", "Unit price"),
-      width: 110,
-      align: "right",
-      value: (r) => r.unit_price,
-      render: (v) => <Num v={v as number} digits={2} />,
-      editor: { type: "number", min: 0 },
-    },
-    {
-      key: "amount",
-      title: t("common.amount", "Amount"),
-      width: 120,
-      align: "right",
-      value: (r) => r.amount,
-      render: (v) => <Num v={v as number} digits={2} />,
-    },
-    {
-      key: "rob_before",
-      title: t("page.bunker.rob_before", "ROB before"),
-      width: 110,
-      align: "right",
-      value: (r) => r.rob_before,
-      render: (v) => <Num v={v as number | null} digits={2} />,
-      editor: { type: "number", min: 0 },
-    },
-    {
-      key: "rob_after",
-      title: t("page.bunker.rob_after", "ROB after"),
-      width: 110,
-      align: "right",
-      value: (r) => r.rob_after,
-      render: (v) => <Num v={v as number | null} digits={2} />,
-    },
-    {
-      key: "updated_at",
-      title: t("list.last_modified", "Last modified"),
-      width: 135,
-      value: (r) => r.updated_at ?? null,
-      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
-    },
-    {
-      key: "_actions",
-      title: "",
-      width: 64,
-      align: "center",
-      render: (_v, r) => (
-        <span title={orderLocked(r) ? t("page.bunker.order_locked", "Delivered/closed orders cannot be edited or deleted") : undefined}>
-          <RowActions
-            onEdit={() => openRow(r)}
-            onDelete={() => deleteOrder(r.id)}
-            canEdit={!orderLocked(r)}
-            canDelete={!orderLocked(r)}
-            label={r.order_no}
-          />
-        </span>
-      ),
-    },
-  ];
+  const columns = useMemo<ColumnDef<Order>[]>(
+    () => [
+      { key: "order_no", title: t("page.finance.number", "No."), width: 130, value: (r) => r.order_no },
+      { key: "grade", title: t("page.bunker.grade", "Grade"), width: 110, value: (r) => r.grade, editor: { type: "text" } },
+      {
+        key: "status",
+        title: t("common.status", "Status"),
+        width: 110,
+        value: (r) => r.status,
+        render: (v) => <span className={`badge badge-${v === "delivered" || v === "closed" ? "ok" : "info"}`}>{t(`status.${v}`, String(v))}</span>,
+      },
+      {
+        key: "qty_ordered",
+        title: t("page.bunker.qty", "Ordered qty (mt)"),
+        width: 130,
+        align: "right",
+        value: (r) => r.qty_ordered,
+        render: (v) => <Num v={v as number} digits={2} />,
+        editor: { type: "number", min: 0 },
+      },
+      {
+        key: "unit_price",
+        title: t("page.bunker.price", "Unit price"),
+        width: 110,
+        align: "right",
+        value: (r) => r.unit_price,
+        render: (v) => <Num v={v as number} digits={2} />,
+        editor: { type: "number", min: 0 },
+      },
+      {
+        key: "amount",
+        title: t("common.amount", "Amount"),
+        width: 120,
+        align: "right",
+        value: (r) => r.amount,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "rob_before",
+        title: t("page.bunker.rob_before", "ROB before"),
+        width: 110,
+        align: "right",
+        value: (r) => r.rob_before,
+        render: (v) => <Num v={v as number | null} digits={2} />,
+        editor: { type: "number", min: 0 },
+      },
+      {
+        key: "rob_after",
+        title: t("page.bunker.rob_after", "ROB after"),
+        width: 110,
+        align: "right",
+        value: (r) => r.rob_after,
+        render: (v) => <Num v={v as number | null} digits={2} />,
+      },
+      {
+        key: "updated_at",
+        title: t("list.last_modified", "Last modified"),
+        width: 135,
+        value: (r) => r.updated_at ?? null,
+        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
+      {
+        key: "_actions",
+        title: "",
+        width: 64,
+        align: "center",
+        render: (_v, r) => (
+          <span title={orderLocked(r) ? t("page.bunker.order_locked", "Delivered/closed orders cannot be edited or deleted") : undefined}>
+            <RowActions
+              onEdit={() => openRow(r)}
+              onDelete={() => deleteOrder(r.id)}
+              canEdit={!orderLocked(r)}
+              canDelete={!orderLocked(r)}
+              label={r.order_no}
+            />
+          </span>
+        ),
+      },
+    ],
+    [t, orderLocked, openRow, deleteOrder],
+  );
 
-  const inquiryColumns: ColumnDef<Inquiry>[] = [
-    { key: "supplier", title: t("page.bunker.supplier", "Supplier"), minWidth: 120, value: (r) => r.supplier },
-    {
-      key: "quoted_price",
-      title: t("page.bunker.quoted_price", "Quoted price"),
-      width: 110,
-      align: "right",
-      value: (r) => r.quoted_price,
-      render: (v) => <Num v={v as number} digits={2} />,
-    },
-    {
-      key: "status",
-      title: t("common.status", "Status"),
-      width: 100,
-      value: (r) => r.status,
-      render: (_v, r) => (
-        <span className={`badge ${r.status === "accepted" ? "badge-pass" : r.status === "rejected" ? "badge-fail" : "badge-warn"}`}>
-          {t(`status.${r.status}`, r.status)}
-        </span>
-      ),
-    },
-    {
-      key: "updated_at",
-      title: t("list.last_modified", "Last modified"),
-      width: 135,
-      value: (r) => r.updated_at ?? null,
-      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
-    },
-    {
-      key: "actions",
-      title: "",
-      width: 90,
-      render: (_v, r) =>
-        r.status === "quoted" ? (
-          <button
-            className="btn btn-primary btn-sm"
-            type="button"
-            disabled={busy}
-            onClick={(e) => {
-              e.stopPropagation();
-              acceptInquiry(r.id);
-            }}
-          >
-            {t("page.bunker.accept", "Accept")}
-          </button>
-        ) : null,
-    },
-  ];
+  const inquiryColumns = useMemo<ColumnDef<Inquiry>[]>(
+    () => [
+      { key: "supplier", title: t("page.bunker.supplier", "Supplier"), minWidth: 120, value: (r) => r.supplier },
+      {
+        key: "quoted_price",
+        title: t("page.bunker.quoted_price", "Quoted price"),
+        width: 110,
+        align: "right",
+        value: (r) => r.quoted_price,
+        render: (v) => <Num v={v as number} digits={2} />,
+      },
+      {
+        key: "status",
+        title: t("common.status", "Status"),
+        width: 100,
+        value: (r) => r.status,
+        render: (_v, r) => (
+          <span className={`badge ${r.status === "accepted" ? "badge-pass" : r.status === "rejected" ? "badge-fail" : "badge-warn"}`}>
+            {t(`status.${r.status}`, r.status)}
+          </span>
+        ),
+      },
+      {
+        key: "updated_at",
+        title: t("list.last_modified", "Last modified"),
+        width: 135,
+        value: (r) => r.updated_at ?? null,
+        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
+      {
+        key: "actions",
+        title: "",
+        width: 90,
+        render: (_v, r) =>
+          r.status === "quoted" ? (
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                acceptInquiry(r.id);
+              }}
+            >
+              {t("page.bunker.accept", "Accept")}
+            </button>
+          ) : null,
+      },
+    ],
+    [t, busy, acceptInquiry],
+  );
 
   return (
     <AppShell>
@@ -498,11 +655,24 @@ export default function BunkerDeskPage() {
         </Link>
       </Toolbar>
       {err ? <p className="flash-err">{err}</p> : null}
+      {refLoadFailed ? (
+        <p className="flash-warn">
+          {t("page.bunker.ref_load_failed", "Vessel / voyage reference data could not be loaded — the pickers may be incomplete.")}
+        </p>
+      ) : null}
+      {/* P1-28：列表总数必须可见（该接口无服务端分页，条数一次性返回） */}
+      {!listErr && rows.length ? (
+        <p className="muted">
+          {t("list.count_total", "{n} records", { n: rows.length })}
+        </p>
+      ) : null}
       {warnings.length ? (
         <div className="panel panel-warn">
           {warnings.map((w, i) => (
             <p key={i} className="flash-warn">
-              {w}
+              {w.code ? `[${w.code}] ` : ""}
+              {w.message}
+              {w.orderNo ? ` — ${w.orderNo}` : ""}
             </p>
           ))}
         </div>
@@ -510,17 +680,25 @@ export default function BunkerDeskPage() {
 
       <div className="panel panel-gap-top">
         <StatusLegend statuses={["planned", "inquiry", "ordered", "delivered", "closed"]} />
-        <DataGrid<Order>
-          columns={columns}
-          data={rows}
-          rowKey={(r) => r.id}
-          editable
-          onCellSave={onOrderCellSave}
-          onRowClick={(r) => openRow(r)}
-          onRowContextMenu={(row, _i, e) => orderCtx.open(row)(e)}
-          storageKey="bunker_orders_grid"
+        <StateView
+          loading={loading}
+          error={listErr || undefined}
+          empty={!rows.length}
           emptyText={t("common.empty", "No records")}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid<Order>
+            columns={columns}
+            data={rows}
+            rowKey={(r) => r.id}
+            editable
+            onCellSave={onOrderCellSave}
+            onRowClick={(r) => openRow(r)}
+            onRowContextMenu={(row, _i, e) => orderCtx.open(row)(e)}
+            storageKey="bunker_orders_grid"
+            emptyText={t("common.empty", "No records")}
+          />
+        </StateView>
       </div>
 
       <BunkerRequirementsPanel />
@@ -537,8 +715,6 @@ export default function BunkerDeskPage() {
         onClose={closeModal}
         onSave={save}
         canEdit={!open || !orderLocked(open)}
-        canDelete={open ? !orderLocked(open) : false}
-        onDelete={open ? () => deleteOrder(open.id) : undefined}
         saving={busy}
       >
         {!creating && open ? (
@@ -626,6 +802,11 @@ export default function BunkerDeskPage() {
             </label>
             <div className="desk-section desk-section-tight">
               <h3>{t("page.bunker.inquiries", "Inquiries")}</h3>
+              {inqErr ? (
+                <p className="flash-err">
+                  {t("page.bunker.inquiries_load_failed", "Quotes could not be loaded.")} {inqErr}
+                </p>
+              ) : null}
               {inquiries.length ? (
                 <DataGrid<Inquiry>
                   columns={inquiryColumns}
@@ -685,6 +866,16 @@ export default function BunkerDeskPage() {
               </div>
             ) : null}
             <div className="desk-toolbar">
+              {open && !orderLocked(open) ? (
+                <button
+                  type="button"
+                  className="btn btn-danger btn-sm"
+                  disabled={busy}
+                  onClick={() => requestDeleteOrder(open)}
+                >
+                  {t("common.delete", "Delete")}
+                </button>
+              ) : null}
               {open.status === "planned" ? (
                 <button type="button" className="btn btn-sm" onClick={() => move(open.id, "inquiry")}>
                   {t("page.bunker.inquiry", "Inquiry")}
@@ -696,7 +887,7 @@ export default function BunkerDeskPage() {
                 </button>
               ) : null}
               {open.status === "ordered" ? (
-                <button type="button" className="btn btn-primary btn-sm" onClick={() => move(open.id, "delivered")}>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => requestDelivery(open, { deliver: deliverQty, bdn: bdnQty, cons: consumption })}>
                   {t("page.bunker.confirm_delivery", "Confirm delivery")}
                 </button>
               ) : null}
@@ -712,6 +903,38 @@ export default function BunkerDeskPage() {
 
       <ContextMenu controller={orderCtx} items={orderMenuItems} />
       <ContextMenu controller={inqCtx} items={inqMenuItems} />
+
+      <ConfirmDialog
+        open={Boolean(pendingDelivery)}
+        title={t("page.bunker.confirm_delivery", "Confirm delivery")}
+        message={t(
+          "page.bunker.confirm_delivery_msg",
+          'Confirm delivery for "{name}"? The ROB balance will be recalculated and this cannot be undone.',
+          { name: pendingDelivery?.orderNo ?? "" },
+        )}
+        danger
+        confirmLabel={t("page.bunker.confirm_delivery", "Confirm delivery")}
+        onConfirm={() => {
+          const fn = pendingDelivery;
+          setPendingDelivery(null);
+          fn?.run();
+        }}
+        onCancel={() => setPendingDelivery(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: pendingDelete?.orderNo ?? "" })}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = pendingDelete;
+          setPendingDelete(null);
+          fn?.run();
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

@@ -7,14 +7,19 @@
 - ``invoice``   — invoice date
 - ``posted``    — posting / GMT date
 
-Additive only: when no active ``FxDateRule`` row exists for an invoice type the
-conversion keeps its historical behaviour (latest rate). See
-:func:`resolve_fx_rate`.
+Additive only in the *configuration* sense: when no active ``FxDateRule`` row
+exists for an invoice type the default basis (``invoice``) applies. The rate
+**date** itself is always honoured — see :func:`resolve_fx_rate` (P1-B9).
+
+取价日的解析入口是 :func:`resolve_rate_date`（读规则 → :func:`pick_rate_date`
+→ 具体日期）；调用方把它算出的日期作为 ``context_date`` 传给
+:func:`resolve_fx_rate`。规则表为空时的默认口径：**单据日期（basis=invoice）**，
+绝不退回「绝对最新汇率」。
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -51,6 +56,28 @@ def _canonical_type(invoice_type: str) -> str:
     return (invoice_type or "").strip().upper()
 
 
+def _as_date(value) -> date | None:
+    """Coerce a context value into a ``date``.
+
+    ``datetime`` 取其日期部分（旧实现直接返回 datetime 对象，
+    拿去跟 ``ExchangeRate.rate_date`` 比较会串类型）；字符串取 ISO 前 10 位；
+    认不出来的值返回 ``None``（由调用方的 fallback 兜底，而不是抛 500）。
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
 def get_rule(db: Session, tenant_id: UUID, invoice_type: str) -> FxDateRule | None:
     """Active rule row for the (canonical) invoice type, or ``None``."""
     return db.scalar(
@@ -73,20 +100,50 @@ def effective_basis(db: Session, tenant_id: UUID, invoice_type: str) -> str:
     return row.rate_date_basis if row else DEFAULT_RATE_DATE_BASIS
 
 
-def pick_rate_date(basis: str, context: dict | None) -> date | None:
+def pick_rate_date(basis: str, context: dict | None, *, fallback: date | None = None) -> date | None:
     """Map a basis onto a concrete date from a caller-supplied context dict.
 
-    Accepts flexible keys (e.g. ``departure`` / ``departure_date``). Returns
-    ``None`` when the context carries no date for the basis.
+    Accepts flexible keys (e.g. ``departure`` / ``departure_date``).
+
+    P1-B9：**不静默退回「绝对最新汇率」**。旧实现拿不到日期时返回 ``None``，
+    调用方于是把 ``context_date=None`` 传给 :func:`resolve_fx_rate` —— 后者
+    只能取「绝对最新汇率」，同一张历史单据过几个月重算会得到另一个数。
+    现在拿不到日期时返回显式的 ``fallback``（通常是**单据/交易日**），
+    没有 fallback 才返回 ``None``（调用方必须自己决定取价日）。
+
+    未知 basis（脏配置）按默认 basis（``invoice``）处理，保证行为确定。
     """
-    if not context:
-        return None
     key = (basis or "").strip().lower()
-    for name in _CONTEXT_KEYS.get(key, (key,)):
-        if name in context and context[name] is not None:
-            value = context[name]
-            return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
-    return None
+    if key not in RATE_DATE_BASES:
+        key = DEFAULT_RATE_DATE_BASIS
+    if not context:
+        return fallback
+    for name in _CONTEXT_KEYS[key]:
+        if name not in context:
+            continue
+        picked = _as_date(context[name])
+        if picked is not None:
+            return picked
+    return fallback
+
+
+def resolve_rate_date(
+    db: Session,
+    tenant_id: UUID,
+    invoice_type: str | None,
+    context: dict | None,
+    *,
+    fallback: date | None = None,
+) -> date | None:
+    """取价日 —— 按租户配置的 ``FxDateRule`` 解析成具体日期。
+
+    没有配置规则行时用默认 basis（``invoice``，见 :data:`DEFAULT_RATE_DATE_BASIS`）；
+    规则选的 basis 在上下文里没有对应日期时退回 ``fallback``（通常是单据日期）。
+    这是「汇率取数日规则」唯一的入口 —— 调用方拿它算出的日期传给
+    :func:`resolve_fx_rate`，规则才真正生效（P1-B9）。
+    """
+    basis = effective_basis(db, tenant_id, invoice_type) if invoice_type else DEFAULT_RATE_DATE_BASIS
+    return pick_rate_date(basis, context, fallback=fallback)
 
 
 def upsert_rule(
@@ -132,22 +189,33 @@ def resolve_fx_rate(
 ) -> Decimal | None:
     """FX rate converting 1 unit of ``currency`` into ``base_ccy``.
 
-    When an active ``FxDateRule`` exists for ``invoice_type`` **and** a
-    ``context_date`` is provided, the rate is taken as of that date (latest
-    ``rate_date <= context_date``). Otherwise — including when no rule row
-    exists — the historical default applies: the absolute latest rate.
+    P1-B9：**取价日必须生效，不管租户有没有配置 FxDateRule**。旧实现只在存在
+    规则行时才用 ``context_date``，其余一律取「绝对最新汇率」—— 于是租户后来
+    改了汇率，再算一遍历史发票就变成另一个数，报表不可复现。现在只要调用方
+    给了 ``context_date``，就取「该日期当时有效的最新汇率」
+    （``rate_date <= context_date``）；该日期之前一条汇率都没有时，才退回
+    绝对最新汇率（此时没有更早的可用值，退回不会把旧值换掉）。
+
+    ``invoice_type`` 仍用于查规则（规则决定调用方该传哪个日期），但不再决定
+    取价日是否生效。
+
+    调用方应先用 :func:`resolve_rate_date`（或 :func:`pick_rate_date`）算出
+    取价日再传进来；``context_date=None`` 表示调用方**明确放弃**取价日规则
+    （退化成「绝对最新汇率」），P1-B9 起所有生产调用点都不再这么用。
     """
     if currency == base_ccy:
         return Decimal("1")
-    as_of: date | None = None
-    if invoice_type is not None and context_date is not None and rule_applies(db, tenant_id, invoice_type):
-        as_of = context_date
-    q = select(ExchangeRate).where(
+    base_q = (
         ExchangeRate.base_currency == currency,
         ExchangeRate.quote_currency == base_ccy,
         (ExchangeRate.tenant_id == tenant_id) | (ExchangeRate.tenant_id.is_(None)),
     )
-    if as_of is not None:
-        q = q.where(ExchangeRate.rate_date <= as_of)
+    q = select(ExchangeRate).where(*base_q)
+    if context_date is not None:
+        q = q.where(ExchangeRate.rate_date <= context_date)
     row = db.scalars(q.order_by(ExchangeRate.rate_date.desc()).limit(1)).first()
+    if row is None and context_date is not None:
+        # 该日期之前没有可用汇率 —— 退回绝对最新（只有这一档可用，不会覆盖旧值）
+        q = select(ExchangeRate).where(*base_q)
+        row = db.scalars(q.order_by(ExchangeRate.rate_date.desc()).limit(1)).first()
     return Decimal(str(row.rate)) if row else None

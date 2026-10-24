@@ -1,5 +1,6 @@
 "use client";
 
+import { RefreshButton } from "@/components/RefreshButton";
 import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -9,11 +10,14 @@ import { SavedViews } from "@/components/SavedViews";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { Tabs } from "@/components/Tabs";
+import { StateView } from "@/components/StateView";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { RowActions } from "@/components/RowActions";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch, apiPost, apiDelete } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 
@@ -68,6 +72,14 @@ function PlatformOpsPage() {
   const [profileOpen, setProfileOpen] = useState<ProfileRow | null>(null);
   const [profileEdit, setProfileEdit] = useState({ name: "", kind: "", cloud_provider: "", region: "", description: "" });
   const [profileSaving, setProfileSaving] = useState(false);
+  // 取数错误（不得静默变空数组 —— 空列表与「后端挂了」必须区分）
+  const [coreLoading, setCoreLoading] = useState(true);
+  const [coreErr, setCoreErr] = useState<string | null>(null);
+  const [stepsErr, setStepsErr] = useState<string | null>(null);
+  const [profilesErr, setProfilesErr] = useState<string | null>(null);
+  const [monitorErr, setMonitorErr] = useState<string | null>(null);
+  // 破坏性操作二次确认（待执行动作）
+  const [pending, setPending] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
 
   const [form, setForm] = useState({
     tenant_id: "",
@@ -80,39 +92,68 @@ function PlatformOpsPage() {
   });
 
   const loadCore = useCallback(async () => {
-    const [ov, ds, tn] = await Promise.all([
-      apiGet("/api/v1/platform/ops/overview"),
-      apiGet("/api/v1/platform/ops/datastores"),
-      apiGet("/api/v1/platform/tenants"),
-    ]);
-    setOverview(ov);
-    setBindings(ds);
-    setTenants(tn);
-    if (!form.tenant_id && tn?.[0]?.id) {
-      setForm((f) => ({ ...f, tenant_id: String(tn[0].id) }));
+    setCoreLoading(true);
+    setCoreErr(null);
+    try {
+      const [ov, ds, tn] = await Promise.all([
+        apiGet("/api/v1/platform/ops/overview"),
+        apiGet("/api/v1/platform/ops/datastores"),
+        apiGet("/api/v1/platform/tenants"),
+      ]);
+      setOverview(ov);
+      setBindings(ds);
+      setTenants(tn);
+      if (!form.tenant_id && tn?.[0]?.id) {
+        setForm((f) => ({ ...f, tenant_id: String(tn[0].id) }));
+      }
+    } catch (ex) {
+      setCoreErr(msgOf(ex));
+    } finally {
+      setCoreLoading(false);
     }
   }, [form.tenant_id]);
 
   useEffect(() => {
-    loadCore().catch((e) => setMsg(String(e.message || e)));
+    loadCore();
   }, [loadCore]);
 
+  const loadSteps = useCallback(async () => {
+    setStepsErr(null);
+    try {
+      setSteps(await apiGet("/api/v1/platform/ops/init/steps"));
+    } catch (ex) {
+      setStepsErr(msgOf(ex));
+    }
+  }, []);
+
+  const loadProfiles = useCallback(async () => {
+    setProfilesErr(null);
+    try {
+      setProfiles(await apiGet("/api/v1/platform/ops/deploy/profiles"));
+    } catch (ex) {
+      setProfilesErr(msgOf(ex));
+    }
+  }, []);
+
+  const loadMonitor = useCallback(async () => {
+    setMonitorErr(null);
+    try {
+      const [a, s] = await Promise.all([
+        apiGet("/api/v1/platform/ops/monitor/alerts"),
+        apiGet("/api/v1/platform/ops/monitor/snapshot"),
+      ]);
+      setAlerts(a);
+      setSnapshot(s);
+    } catch (ex) {
+      setMonitorErr(msgOf(ex));
+    }
+  }, []);
+
   useEffect(() => {
-    if (tab === "init") {
-      apiGet("/api/v1/platform/ops/init/steps").then(setSteps).catch(() => setSteps([]));
-    }
-    if (tab === "deploy") {
-      apiGet("/api/v1/platform/ops/deploy/profiles").then(setProfiles).catch(() => setProfiles([]));
-    }
-    if (tab === "monitor") {
-      Promise.all([apiGet("/api/v1/platform/ops/monitor/alerts"), apiGet("/api/v1/platform/ops/monitor/snapshot")])
-        .then(([a, s]) => {
-          setAlerts(a);
-          setSnapshot(s);
-        })
-        .catch(() => undefined);
-    }
-  }, [tab]);
+    if (tab === "init") loadSteps();
+    if (tab === "deploy") loadProfiles();
+    if (tab === "monitor") loadMonitor();
+  }, [tab, loadSteps, loadProfiles, loadMonitor]);
 
   const tabs = useMemo(
     () => [
@@ -150,14 +191,14 @@ function PlatformOpsPage() {
       setMsg(t("page.ops.saved", "Binding saved (connection string stored encrypted)"));
       setBindingOpen(false);
       await loadCore();
-    } catch (err: any) {
-      setMsg(err?.detail?.message || err.message || t("page.ops.save_fail", "Save failed"));
+    } catch (err) {
+      setMsg(msgOf(err, t("page.ops.save_fail", "Save failed")));
     } finally {
       setBusy(false);
     }
   }
 
-  async function testBinding(id: string) {
+  const testBinding = useCallback(async (id: string) => {
     setBusy(true);
     try {
       const r = await apiPost(`/api/v1/platform/ops/datastores/${id}/test`);
@@ -167,24 +208,54 @@ function PlatformOpsPage() {
           : t("page.ops.test_fail", "Failed: {msg}", { msg: r.message }),
       );
       await loadCore();
-    } catch (err: any) {
-      setMsg(err?.detail?.message || err.message || t("page.ops.test_fail_generic", "Test failed"));
+    } catch (err) {
+      setMsg(msgOf(err, t("page.ops.test_fail_generic", "Test failed")));
     } finally {
       setBusy(false);
     }
-  }
+  }, [loadCore, t]);
 
-  async function removeBinding(id: string) {
+  const removeBinding = useCallback(async (id: string) => {
     setBusy(true);
     try {
       await apiDelete(`/api/v1/platform/ops/datastores/${id}`);
       setMsg(t("page.ops.deleted", "Binding deleted"));
       await loadCore();
-    } catch (err: any) {
-      setMsg(err.message || t("page.ops.delete_fail", "Delete failed"));
+    } catch (err) {
+      setMsg(msgOf(err, t("page.ops.delete_fail", "Delete failed")));
     } finally {
       setBusy(false);
     }
+  }, [loadCore, t]);
+
+  /** 删除租户 DB 绑定 —— 不可逆，先二次确认（指名对象） */
+  const askRemoveBinding = useCallback((row: Record<string, unknown>) => {
+    setPending({
+      message: t(
+        "page.ops.confirm_delete_binding",
+        "删除租户 DB 绑定「{name}」？该绑定将被解除，删除后不可恢复。",
+        { name: String(row.display_name || row.id) },
+      ),
+      danger: true,
+      action: () => {
+        removeBinding(String(row.id)).catch((ex) => setMsg(msgOf(ex, t("page.ops.delete_fail", "Delete failed"))));
+      },
+    });
+  }, [removeBinding, t]);
+
+  /** 执行初始化步骤 —— 会写库，先二次确认（指名步骤） */
+  function askRunStep(step: Record<string, unknown>) {
+    setPending({
+      message: t(
+        "page.ops.confirm_run_step",
+        "执行初始化步骤「{title}」？该步骤会在平台库执行写操作，可能改动现有对象。",
+        { title: String(step.title || step.id) },
+      ),
+      danger: true,
+      action: () => {
+        runStep(String(step.id)).catch((ex) => setMsg(msgOf(ex, t("page.ops.run_fail", "Run failed"))));
+      },
+    });
   }
 
   async function runStep(id: string) {
@@ -193,8 +264,8 @@ function PlatformOpsPage() {
       const r = await apiPost(`/api/v1/platform/ops/init/steps/${id}/run`);
       setMsg(`${r.title}: ${r.last_result?.message || r.status}`);
       setSteps(await apiGet("/api/v1/platform/ops/init/steps"));
-    } catch (err: any) {
-      setMsg(err?.detail?.message || err.message || t("page.ops.run_fail", "Run failed"));
+    } catch (err) {
+      setMsg(msgOf(err, t("page.ops.run_fail", "Run failed")));
     } finally {
       setBusy(false);
     }
@@ -206,8 +277,8 @@ function PlatformOpsPage() {
       const r = await apiPost(`/api/v1/platform/ops/deploy/profiles/${id}/apply`);
       setMsg(r.apply_log?.message || t("page.ops.deploy_guide", "Deployment guide generated"));
       setProfiles(await apiGet("/api/v1/platform/ops/deploy/profiles"));
-    } catch (err: any) {
-      setMsg(err?.detail?.message || err.message || t("page.ops.apply_fail", "Apply failed"));
+    } catch (err) {
+      setMsg(msgOf(err, t("page.ops.apply_fail", "Apply failed")));
     } finally {
       setBusy(false);
     }
@@ -220,21 +291,21 @@ function PlatformOpsPage() {
       setSnapshot(s);
       setAlerts(await apiGet("/api/v1/platform/ops/monitor/alerts"));
       setMsg(t("page.ops.monitor_refreshed", "Monitor snapshot refreshed"));
-    } catch (err: any) {
-      setMsg(err.message || t("page.ops.refresh_fail", "Refresh failed"));
+    } catch (err) {
+      setMsg(msgOf(err, t("page.ops.refresh_fail", "Refresh failed")));
     } finally {
       setBusy(false);
     }
   }
 
-  async function toggleAlert(id: string, enabled: boolean) {
+  const toggleAlert = useCallback(async (id: string, enabled: boolean) => {
     try {
       await apiPatch(`/api/v1/platform/ops/monitor/alerts/${id}`, { enabled: !enabled });
       setAlerts(await apiGet("/api/v1/platform/ops/monitor/alerts"));
-    } catch (err: any) {
-      setMsg(err.message || t("page.ops.update_fail", "Update failed"));
+    } catch (err) {
+      setMsg(msgOf(err, t("page.ops.update_fail", "Update failed")));
     }
-  }
+  }, [t]);
 
   // ── 告警行内编辑：值未变化不发请求 ──
   async function onAlertCellSave(rowId: string, colKey: string, value: unknown, row: AlertRow) {
@@ -242,7 +313,15 @@ function PlatformOpsPage() {
     let payload: Record<string, unknown>;
     if (colKey === "threshold") {
       const next = value === null || value === "" ? null : Number(value);
-      if (next === null || isNaN(next)) return;
+      // P1-24：非法输入不能静默丢弃 —— 明确告诉用户这一格没写进去
+      if (next !== null && !Number.isFinite(next)) {
+        toast.error(t("page.ops.err_numeric", {
+          en: "{field} must be a valid number",
+          zh: "{field} 必须是有效数字",
+        }, { field: colKey }));
+        return;
+      }
+      if (next === null) return;
       if (Number(src[colKey]) === next) return;
       payload = { threshold: next };
     } else {
@@ -254,20 +333,20 @@ function PlatformOpsPage() {
       await apiPatch(`/api/v1/platform/ops/monitor/alerts/${rowId}`, payload);
       toast.success(t("common.saved", "Saved"));
       setAlerts(await apiGet("/api/v1/platform/ops/monitor/alerts"));
-    } catch (ex: any) {
-      toast.error(ex?.message || t("page.ops.update_fail", "Update failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.ops.update_fail", "Update failed")));
     }
   }
 
-  async function deleteAlert(row: AlertRow) {
+  const deleteAlert = useCallback(async (row: AlertRow) => {
     try {
       await apiDelete(`/api/v1/platform/ops/monitor/alerts/${row.id}`);
       toast.success(t("common.deleted", "Deleted"));
       setAlerts(await apiGet("/api/v1/platform/ops/monitor/alerts"));
-    } catch (ex: any) {
-      toast.error(ex?.message || t("page.ops.delete_fail", "Delete failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.ops.delete_fail", "Delete failed")));
     }
-  }
+  }, [t, toast]);
 
   // ── 部署档案：表单编辑 + 删除（内置档案不可删） ──
   function openProfile(p: ProfileRow) {
@@ -296,8 +375,8 @@ function PlatformOpsPage() {
       toast.success(t("common.saved", "Saved"));
       setProfileOpen(null);
       setProfiles(await apiGet("/api/v1/platform/ops/deploy/profiles"));
-    } catch (ex: any) {
-      toast.error(ex?.message || t("page.ops.save_fail", "Save failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.ops.save_fail", "Save failed")));
     } finally {
       setProfileSaving(false);
     }
@@ -309,8 +388,8 @@ function PlatformOpsPage() {
       toast.success(t("common.deleted", "Deleted"));
       setProfileOpen(null);
       setProfiles(await apiGet("/api/v1/platform/ops/deploy/profiles"));
-    } catch (ex: any) {
-      toast.error(ex?.message || t("page.ops.delete_fail", "Delete failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.ops.delete_fail", "Delete failed")));
     }
   }
 
@@ -319,7 +398,7 @@ function PlatformOpsPage() {
 
   type OpsRow = Record<string, unknown>;
 
-  const bindingColumns: ColumnDef<OpsRow>[] = [
+  const bindingColumns = useMemo<ColumnDef<OpsRow>[]>(() => [
     { key: "display_name", title: t("page.ops.col.name", "Name"), value: (r) => r.display_name },
     {
       key: "engine",
@@ -353,22 +432,22 @@ function PlatformOpsPage() {
           <button type="button" className="btn" disabled={busy} onClick={() => testBinding(String(row.id))}>
             {t("common.test", "Test")}
           </button>{" "}
-          <button type="button" className="btn" disabled={busy} onClick={() => removeBinding(String(row.id))}>
+          <button type="button" className="btn" disabled={busy} onClick={() => askRemoveBinding(row)}>
             {t("common.delete", "Delete")}
           </button>
         </span>
       ),
     },
-  ];
+  ], [t, busy, testBinding, askRemoveBinding]);
 
-  const metricColumns: ColumnDef<OpsRow>[] = [
+  const metricColumns = useMemo<ColumnDef<OpsRow>[]>(() => [
     { key: "name", title: t("page.ops.col.metric", "Metric"), value: (r) => r.name },
     { key: "category", title: t("common.category", "Category"), value: (r) => r.category },
     { key: "value", title: t("common.value", "Value"), value: (r) => r.value, align: "right" },
     { key: "unit", title: t("page.ops.col.unit", "Unit"), value: (r) => r.unit },
-  ];
+  ], [t]);
 
-  const alertColumns: ColumnDef<AlertRow>[] = [
+  const alertColumns = useMemo<ColumnDef<AlertRow>[]>(() => [
     {
       key: "name",
       title: t("page.ops.col.name", "Name"),
@@ -422,7 +501,7 @@ function PlatformOpsPage() {
       align: "center",
       render: (_v, r) => <RowActions onDelete={() => deleteAlert(r)} label={r.name} />,
     },
-  ];
+  ], [t, toggleAlert, deleteAlert]);
 
   return (
     <AppShell>
@@ -440,9 +519,7 @@ function PlatformOpsPage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.ops.bind_new", "New tenant DB binding")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => loadCore().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => loadCore()} />
       </Toolbar>
 
       <Tabs
@@ -461,6 +538,7 @@ function PlatformOpsPage() {
       {tab === "datasource" && (
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.ops.runtime", "Current runtime")}</h3>
+          {coreErr ? <p className="text-danger">{coreErr}</p> : null}
           <dl className="kv-grid">
             <div>
               <dt>{t("page.ops.dialect", "Dialect")}</dt>
@@ -507,8 +585,8 @@ function PlatformOpsPage() {
                     ? t("page.ops.primary_ok", "Primary DB connected ({ms} ms)", { ms: r.elapsed_ms })
                     : t("page.ops.primary_fail", "Primary DB probe failed: {msg}", { msg: r.message }),
                 );
-              } catch (err: any) {
-                setMsg(err?.detail?.message || err.message);
+              } catch (err) {
+                setMsg(msgOf(err, t("page.ops.update_fail", "Update failed")));
               } finally {
                 setBusy(false);
               }
@@ -523,9 +601,13 @@ function PlatformOpsPage() {
         <div style={{ display: "grid", gap: 16 }}>
           <div className="panel">
             <h3 style={{ marginTop: 0 }}>{t("page.ops.existing_bindings", "Existing bindings")}</h3>
-            {bindings.length === 0 ? (
-              <p className="page-sub">{t("page.ops.no_bindings", "No tenant DB bindings yet.")}</p>
-            ) : (
+            <StateView
+              loading={coreLoading}
+              error={coreErr ?? undefined}
+              empty={!bindings.length}
+              onRetry={() => loadCore()}
+              emptyText={t("page.ops.no_bindings", "No tenant DB bindings yet.")}
+            >
               <DataGrid
                 columns={bindingColumns}
                 data={bindings}
@@ -533,7 +615,7 @@ function PlatformOpsPage() {
                 storageKey="platform_ops_bindings"
                 emptyText={t("common.empty", "No records")}
               />
-            )}
+            </StateView>
           </div>
         </div>
       )}
@@ -542,57 +624,80 @@ function PlatformOpsPage() {
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.ops.init_title", "Init wizard")}</h3>
           <p className="page-sub">{t("page.ops.init_sub", "Run schema create, catalog seed, demo data and readiness checks step by step.")}</p>
-          <ol style={{ paddingLeft: 18 }}>
-            {steps.map((s) => (
-              <li key={String(s.id)} style={{ marginBottom: 12 }}>
-                <strong>{String(s.title)}</strong>{" "}
-                <span style={{ opacity: 0.75 }}>
-                  [{String(s.status)}] {s.required ? t("page.ops.step_required", "required") : t("page.ops.step_optional", "optional")}
-                </span>
-                <div style={{ fontSize: 13 }}>{String(s.description || "")}</div>
-                {s.last_result && (s.last_result as any).message ? (
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>{t("page.ops.step_last", "Last")}: {String((s.last_result as any).message)}</div>
-                ) : null}
-                <button type="button" className="btn primary" disabled={busy} onClick={() => runStep(String(s.id))} style={{ marginTop: 6 }}>
-                  {t("page.ops.step_run", "Run")}
-                </button>
-              </li>
-            ))}
-          </ol>
+          <StateView
+            loading={false}
+            error={stepsErr ?? undefined}
+            empty={!steps.length}
+            onRetry={() => loadSteps()}
+            emptyText={t("page.ops.no_steps", "No init steps available.")}
+          >
+            <ol style={{ paddingLeft: 18 }}>
+              {steps.map((s) => (
+                <li key={String(s.id)} style={{ marginBottom: 12 }}>
+                  <strong>{String(s.title)}</strong>{" "}
+                  <span style={{ opacity: 0.75 }}>
+                    [{String(s.status)}] {s.required ? t("page.ops.step_required", "required") : t("page.ops.step_optional", "optional")}
+                  </span>
+                  <div style={{ fontSize: 13 }}>{String(s.description || "")}</div>
+                  {s.last_result && (s.last_result as any).message ? (
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>{t("page.ops.step_last", "Last")}: {String((s.last_result as any).message)}</div>
+                  ) : null}
+                  <button type="button" className="btn primary" disabled={busy} onClick={() => askRunStep(s)} style={{ marginTop: 6 }}>
+                    {t("page.ops.step_run", "Run")}
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </StateView>
         </div>
       )}
 
       {tab === "deploy" && (
-        <div className="workbench-grid">
-          {profiles.map((p) => (
-            <div key={String(p.id)} className="wb-tile" style={{ cursor: "default" }}>
-              <h3>{String(p.name)}</h3>
-              <p>{String(p.description || "")}</p>
-              <div style={{ fontSize: 12, opacity: 0.8 }}>
-                {String(p.kind)}
-                {p.cloud_provider ? ` · ${String(p.cloud_provider)}` : ""}
-                {p.region ? ` · ${String(p.region)}` : ""}
-                {p.is_builtin ? ` · ${t("page.ops.builtin", "built-in")}` : ""}
+        <StateView
+          loading={false}
+          error={profilesErr ?? undefined}
+          empty={!profiles.length}
+          onRetry={() => loadProfiles()}
+          emptyText={t("page.ops.no_profiles", "No deploy profiles available.")}
+        >
+          <div className="workbench-grid">
+            {profiles.map((p) => (
+              <div key={String(p.id)} className="wb-tile" style={{ cursor: "default" }}>
+                <h3>{String(p.name)}</h3>
+                <p>{String(p.description || "")}</p>
+                <div style={{ fontSize: 12, opacity: 0.8 }}>
+                  {String(p.kind)}
+                  {p.cloud_provider ? ` · ${String(p.cloud_provider)}` : ""}
+                  {p.region ? ` · ${String(p.region)}` : ""}
+                  {p.is_builtin ? ` · ${t("page.ops.builtin", "built-in")}` : ""}
+                </div>
+                <ul style={{ fontSize: 13, paddingLeft: 18 }}>
+                  {(((p.template as any)?.steps as string[]) || []).slice(0, 4).map((step, i) => (
+                    <li key={i}>{step}</li>
+                  ))}
+                  {(((p.template as any)?.steps as string[]) || []).length > 4 ? (
+                    <li className="muted">
+                      {t("page.ops.more_steps", "+{n} more steps", {
+                        n: String((((p.template as any)?.steps as string[]) || []).length - 4),
+                      })}
+                    </li>
+                  ) : null}
+                </ul>
+                <div className="form-actions">
+                  <button type="button" className="btn primary" disabled={busy} onClick={() => applyProfile(p.id)}>
+                    {t("page.ops.gen_guide", "Generate deploy guide")}
+                  </button>
+                  <button type="button" className="btn" onClick={() => openProfile(p)}>
+                    {t("common.edit", "Edit")}
+                  </button>
+                </div>
+                {p.last_applied_at ? (
+                  <div style={{ fontSize: 12, marginTop: 8 }}>{t("page.ops.step_last", "Last")}: {String(p.last_applied_at)}</div>
+                ) : null}
               </div>
-              <ul style={{ fontSize: 13, paddingLeft: 18 }}>
-                {(((p.template as any)?.steps as string[]) || []).slice(0, 4).map((step, i) => (
-                  <li key={i}>{step}</li>
-                ))}
-              </ul>
-              <div className="form-actions">
-                <button type="button" className="btn primary" disabled={busy} onClick={() => applyProfile(p.id)}>
-                  {t("page.ops.gen_guide", "Generate deploy guide")}
-                </button>
-                <button type="button" className="btn" onClick={() => openProfile(p)}>
-                  {t("common.edit", "Edit")}
-                </button>
-              </div>
-              {p.last_applied_at ? (
-                <div style={{ fontSize: 12, marginTop: 8 }}>{t("page.ops.step_last", "Last")}: {String(p.last_applied_at)}</div>
-              ) : null}
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </StateView>
       )}
 
       {tab === "monitor" && (
@@ -631,15 +736,23 @@ function PlatformOpsPage() {
           </div>
           <div className="panel">
             <h3 style={{ marginTop: 0 }}>{t("page.ops.alert_rules", "Alert rules")}</h3>
-            <DataGrid
-              columns={alertColumns}
-              data={alerts}
-              rowKey={(r) => String(r.id)}
-              storageKey="platform_ops_alerts"
-              emptyText={t("common.empty", "No records")}
-              editable
-              onCellSave={onAlertCellSave}
-            />
+            <StateView
+              loading={false}
+              error={monitorErr ?? undefined}
+              empty={!alerts.length}
+              onRetry={() => loadMonitor()}
+              emptyText={t("page.ops.no_alerts", "No alert rules.")}
+            >
+              <DataGrid
+                columns={alertColumns}
+                data={alerts}
+                rowKey={(r) => String(r.id)}
+                storageKey="platform_ops_alerts"
+                emptyText={t("common.empty", "No records")}
+                editable
+                onCellSave={onAlertCellSave}
+              />
+            </StateView>
           </div>
         </div>
       )}
@@ -763,6 +876,19 @@ function PlatformOpsPage() {
           </label>
         </div>
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pending)}
+        title={t("common.confirm", "Confirm")}
+        message={pending?.message || ""}
+        danger={pending?.danger}
+        onConfirm={() => {
+          const fn = pending?.action;
+          setPending(null);
+          fn?.();
+        }}
+        onCancel={() => setPending(null)}
+      />
     </AppShell>
   );
 }

@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Toolbar } from "@/components/Toolbar";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { RowActions } from "@/components/RowActions";
 import { apiCreateBackup, apiDelete, apiGet, apiListBackups, apiPatch, apiPut } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { formatInTz } from "@/lib/datetime";
 import { useToast } from "@/components/ToastProvider";
@@ -41,23 +44,48 @@ const DEFAULT_SCHEDULE: Schedule = {
   next_run_at: null,
 };
 
+/** 备份调度星期几的兜底文案（i18n key `page.backup.weekday.<0-6>` 缺失时用）。 */
+const WEEKDAY_FALLBACK = [
+  { en: "Monday", zh: "周一" },
+  { en: "Tuesday", zh: "周二" },
+  { en: "Wednesday", zh: "周三" },
+  { en: "Thursday", zh: "周四" },
+  { en: "Friday", zh: "周五" },
+  { en: "Saturday", zh: "周六" },
+  { en: "Sunday", zh: "周日" },
+];
+
 export default function BackupPage() {
   const { t, locale } = useI18n();
   const toast = useToast();
   const [rows, setRows] = useState<Backup[]>([]);
   const [sched, setSched] = useState<Schedule>(DEFAULT_SCHEDULE);
   const [schedBusy, setSchedBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  // 计划（参考数据）失败：局部提示，不阻断备份列表
+  const [schedErr, setSchedErr] = useState<string | null>(null);
 
-  async function refresh() {
-    const data = await apiListBackups();
-    setRows(data);
-  }
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const data = await apiListBackups();
+      setRows(Array.isArray(data) ? data : []);
+    } catch (ex) {
+      setErr(msgOf(ex, t("page.backup.load_fail", "Unable to load backups")));
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [t]);
 
   useEffect(() => {
-    refresh().catch(() => toast.error(t("page.backup.load_fail", "Unable to load backups")));
+    refresh();
+    setSchedErr(null);
     apiGet("/api/v1/settings/dataops/backup-schedule")
       .then((s: Schedule) => setSched({ ...DEFAULT_SCHEDULE, ...s }))
-      .catch(() => undefined);
+      .catch((ex) => setSchedErr(msgOf(ex)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -67,12 +95,17 @@ export default function BackupPage() {
       await apiCreateBackup();
       await refresh();
       toast.success(t("page.backup.done", "Backup completed (full tenant data snapshot)."));
-    } catch {
-      toast.error(t("page.backup.failed", "Backup failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.backup.failed", "Backup failed")));
     }
   }
 
   async function saveSchedule() {
+    // 数值校验：非法输入中止提交，不静默变 0
+    if (!Number.isFinite(Number(sched.hour_utc)) || !Number.isFinite(Number(sched.keep_last))) {
+      toast.error(t("page.backup.sched_invalid", "Hour / keep-last must be numbers."));
+      return;
+    }
     setSchedBusy(true);
     try {
       const saved: Schedule = await apiPut("/api/v1/settings/dataops/backup-schedule", {
@@ -84,8 +117,8 @@ export default function BackupPage() {
       });
       setSched({ ...DEFAULT_SCHEDULE, ...saved });
       toast.success(t("page.backup.sched_saved", "Auto-backup schedule saved."));
-    } catch {
-      toast.error(t("page.backup.sched_failed", "Failed to save schedule"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.backup.sched_failed", "Failed to save schedule")));
     } finally {
       setSchedBusy(false);
     }
@@ -101,22 +134,22 @@ export default function BackupPage() {
       await apiPatch(`/api/v1/settings/dataops/backups/${rowId}`, { error: next || null });
       toast.success(t("common.saved", "Saved"));
       await refresh();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
   }
 
-  async function deleteBackup(row: Backup) {
+  const deleteBackup = useCallback(async (row: Backup) => {
     try {
       await apiDelete(`/api/v1/settings/dataops/backups/${row.id}`);
       toast.success(t("common.deleted", "Deleted"));
       await refresh();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
-  }
+  }, [refresh, t, toast]);
 
-  const columns: ColumnDef<Backup>[] = [
+  const columns = useMemo<ColumnDef<Backup>[]>(() => [
     {
       key: "created_at",
       title: t("page.backup.when", "When"),
@@ -164,7 +197,7 @@ export default function BackupPage() {
         />
       ),
     },
-  ];
+  ], [t, locale, deleteBackup]);
 
   return (
     <AppShell>
@@ -180,14 +213,13 @@ export default function BackupPage() {
         <button className="btn btn-primary" type="button" onClick={backup}>
           {t("page.backup.now", "Backup now")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => refresh().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => refresh()} />
       </Toolbar>
 
       <div className="panel">
         <div className="panel-header">{t("page.backup.sched_title", "Auto-backup schedule 自动备份计划")}</div>
         <div className="panel-body">
+          {schedErr ? <p className="text-danger">{schedErr}</p> : null}
           <div
             className="form-grid"
             style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: "0.75rem" }}
@@ -213,7 +245,7 @@ export default function BackupPage() {
                 <select value={sched.weekday} onChange={(e) => setSched({ ...sched, weekday: Number(e.target.value) })}>
                   {[0, 1, 2, 3, 4, 5, 6].map((d) => (
                     <option key={d} value={d}>
-                      {["周一", "周二", "周三", "周四", "周五", "周六", "周日"][d]}
+                      {t(`page.backup.weekday.${d}`, WEEKDAY_FALLBACK[d])}
                     </option>
                   ))}
                 </select>
@@ -252,15 +284,23 @@ export default function BackupPage() {
         </div>
       </div>
 
-      <DataGrid<Backup>
-        columns={columns}
-        data={rows}
-        rowKey={(r) => r.id}
-        storageKey="settings_dataops_backup_grid"
+      <StateView
+        loading={loading}
+        error={err ?? undefined}
+        empty={!rows.length}
+        onRetry={() => refresh()}
         emptyText={t("common.no_data", "No data")}
-        editable
-        onCellSave={onCellSave}
-      />
+      >
+        <DataGrid<Backup>
+          columns={columns}
+          data={rows}
+          rowKey={(r) => r.id}
+          storageKey="settings_dataops_backup_grid"
+          emptyText={t("common.no_data", "No data")}
+          editable
+          onCellSave={onCellSave}
+        />
+      </StateView>
     </AppShell>
   );
 }

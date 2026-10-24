@@ -1,8 +1,18 @@
 uploads/
 *.db
+*.db-shm
+*.db-wal
+*.db.bak_*
 __pycache__/
 .pytest_cache/
 .venv/
 
 # Runtime backup exports (PII)
 app/data/backups/
+
+# 一次性脚本 / 生成物（本地排查用，不入库）
+/_*.py
+/_*.txt
+/_*.json
+/openapi.json
+/routes_dump.txt

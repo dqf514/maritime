@@ -1,6 +1,7 @@
 "use client";
 
 import { Component, ReactNode } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type Props = {
   children: ReactNode;
@@ -11,8 +12,16 @@ type State = {
   error: Error | null;
 };
 
-export class ErrorBoundary extends Component<Props, State> {
-  constructor(props: Props) {
+/** 内层类组件额外接收外层从词表取好的文案（类组件里不能用 hook）。 */
+type InnerProps = Props & {
+  title: string;
+  detail: string;
+  retryLabel: string;
+  homeLabel: string;
+};
+
+class ErrorBoundaryInner extends Component<InnerProps, State> {
+  constructor(props: InnerProps) {
     super(props);
     this.state = { error: null };
   }
@@ -41,40 +50,15 @@ export class ErrorBoundary extends Component<Props, State> {
     }
 
     return (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: "1rem",
-          padding: "3rem 1.5rem",
-          minHeight: "50vh",
-          color: "var(--ink)",
-        }}
-      >
-        <div
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: "50%",
-            background: "#fde8e6",
-            color: "var(--danger)",
-            display: "grid",
-            placeItems: "center",
-            fontSize: "1.4rem",
-            fontWeight: 700,
-          }}
-        >
+      <div className="error-boundary">
+        <div className="error-boundary-icon" aria-hidden="true">
           ✕
         </div>
-        <h2 style={{ margin: 0, fontSize: "1.15rem" }}>Something went wrong</h2>
-        <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.92rem", maxWidth: "32rem", textAlign: "center" }}>
-          {error.message || "An unexpected error occurred."}
-        </p>
-        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+        <h2 className="error-boundary-title">{this.props.title}</h2>
+        <p className="error-boundary-msg">{error.message || this.props.detail}</p>
+        <div className="error-boundary-actions">
           <button type="button" className="btn btn-primary" onClick={this.retry}>
-            Retry
+            {this.props.retryLabel}
           </button>
           <button
             type="button"
@@ -83,10 +67,32 @@ export class ErrorBoundary extends Component<Props, State> {
               window.location.href = "/home";
             }}
           >
-            Go Home
+            {this.props.homeLabel}
           </button>
         </div>
       </div>
     );
   }
+}
+
+/**
+ * 错误边界。
+ *
+ * 必须挂在 I18nProvider **内部**（见 app/providers.tsx），否则这里拿不到词表、
+ * 只能显示硬编码英文（审计项：ErrorBoundary 在 I18nProvider 之外无法 t()）。
+ * 放在内部后仍能兜住 I18nProvider 以下的整棵树。
+ */
+export function ErrorBoundary({ children, fallback }: Props) {
+  const { t } = useI18n();
+  return (
+    <ErrorBoundaryInner
+      fallback={fallback}
+      title={t("error.boundary_title", "Something went wrong")}
+      detail={t("error.boundary_detail", "An unexpected error occurred.")}
+      retryLabel={t("common.retry", "Retry")}
+      homeLabel={t("error.go_home", "Go Home")}
+    >
+      {children}
+    </ErrorBoundaryInner>
+  );
 }

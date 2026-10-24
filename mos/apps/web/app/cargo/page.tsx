@@ -1,5 +1,7 @@
 "use client";
 
+import { RefreshButton } from "@/components/RefreshButton";
+import { msgOf } from "@/lib/errors";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -46,12 +48,13 @@ const STATUS_OPTIONS = ["open", "booked", "nominated", "fixed", "completed", "ca
 function CargoBookWorkspace() {
   const { t } = useI18n();
   const router = useRouter();
-  const { query, setQuery } = useListQuery();
+  const { query, setQuery, page, limit } = useListQuery();
   const statusFilter = typeof query.status === "string" ? query.status : "";
 
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
   const [rows, setRows] = useState<CargoBookRow[]>([]);
+  const [total, setTotal] = useState(0);
   const rowCtx = useContextMenu<CargoBookRow>();
   const todo = useTodoAdd();
 
@@ -109,11 +112,13 @@ function CargoBookWorkspace() {
     setLoading(true);
     setLoadErr("");
     try {
-      const params: Record<string, string | number> = { limit: 200 };
+      // P1-28：分页取数，不再静默截断到 200 条
+      const params: Record<string, string | number> = { limit, offset: (page - 1) * limit };
       if (statusFilter) params.status = statusFilter;
-      const page = await apiList<CargoBookRow>("/api/v1/cargo-book", params);
+      const res = await apiList<CargoBookRow>("/api/v1/cargo-book", params);
+      setTotal(res.total);
       setRows(
-        page.items.map((r) => ({
+        res.items.map((r) => ({
           id: String(r.id),
           cargo_ref: String(r.cargo_ref ?? ""),
           charter_id: r.charter_id ? String(r.charter_id) : null,
@@ -135,17 +140,17 @@ function CargoBookWorkspace() {
         })),
       );
     } catch (ex) {
-      setLoadErr(String(ex));
+      setLoadErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, page, limit]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const setStatus = (s: string) => setQuery({ status: s || null });
+  const setStatus = (s: string) => setQuery({ status: s || null }, { resetPage: true });
 
   const statusCounts = useMemo(() => {
     const m = new Map<string, number>();
@@ -237,11 +242,13 @@ function CargoBookWorkspace() {
       <Toolbar
         filterCount={statusFilter ? 1 : 0}
         onClearFilters={() => setStatus("")}
-        right={<span className="hint">{t("page.cargo.count", "{n} rows", { n: rows.length })}</span>}
+        right={
+          <span className="hint">
+            {t("page.cargo.total", "共 {total} 条", { total })}
+          </span>
+        }
       >
-        <button type="button" className="btn btn-sm" onClick={load} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={load} />
       </Toolbar>
 
       <Tabs items={tabs} value={statusFilter} onChange={setStatus} variant="pill" />
@@ -259,6 +266,44 @@ function CargoBookWorkspace() {
             storageKey="cargo_book"
             emptyText={t("common.empty", "No records")}
           />
+        </div>
+        <div className="dt-pager">
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            disabled={page <= 1}
+            onClick={() => setQuery({ page: page - 1 })}
+            aria-label={t("common.prev_page", "Previous page")}
+          >
+            ←
+          </button>
+          <span className="muted">
+            {t("page.cargo.page_of", "第 {page} / {pages} 页", {
+              page,
+              pages: Math.max(1, Math.ceil(total / limit)),
+            })}
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            disabled={page >= Math.max(1, Math.ceil(total / limit))}
+            onClick={() => setQuery({ page: page + 1 })}
+            aria-label={t("common.next_page", "Next page")}
+          >
+            →
+          </button>
+          <select
+            className="input input-sm"
+            value={limit}
+            onChange={(e) => setQuery({ limit: e.target.value, page: 1 })}
+            aria-label={t("common.page_size", "Rows per page")}
+          >
+            {[10, 25, 50, 100].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
         </div>
       </StateView>
 

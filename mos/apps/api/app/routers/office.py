@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db
 from app.models_office import OfficeAddonInstall, OfficeResourceLink, OfficeSyncJob, WebhookEndpoint
-from app.security import AuthContext, get_current_auth, require_api_scope, require_module
+from app.security import AuthContext, get_current_auth, require_api_scope, require_module_role
 from app.services.graph_client import GraphError, admin_consent_url, exchange_code_for_tokens, graph_mode_resolved
 from app.services.identity import soft_sign_state, verify_signed_state
 from app.services.ms_config import resolve_ms_config
@@ -106,7 +106,7 @@ def _graph_http(exc: GraphError) -> HTTPException:
 
 @router.get("/status")
 def office_status(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     return hub.office_status(db, auth.tenant_id)
@@ -114,7 +114,7 @@ def office_status(
 
 @router.get("/connect")
 def office_connect(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     """Return consent URL (live) or auto-connect stub."""
@@ -134,7 +134,7 @@ def office_connect(
 @router.post("/connect/stub")
 def office_connect_stub(
     body: ConnectStubIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     cfg = resolve_ms_config(db, auth.tenant_id)
@@ -182,7 +182,7 @@ def office_oauth_callback(
 
 @router.post("/disconnect")
 def office_disconnect(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     link = hub.ensure_office_link(db, auth.tenant_id)
@@ -198,7 +198,7 @@ def office_disconnect(
 @router.patch("/settings")
 def office_patch_settings(
     body: OfficeSettingsIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     link = hub.ensure_office_link(db, auth.tenant_id)
@@ -216,7 +216,7 @@ def office_patch_settings(
 @router.post("/sync")
 def office_sync(
     body: SyncIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -238,7 +238,7 @@ def office_sync(
 
 @router.get("/sync/jobs")
 def list_sync_jobs(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
 ):
@@ -264,7 +264,7 @@ def list_sync_jobs(
 
 @router.get("/mail")
 def list_mail(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
     top: int = Query(25, ge=1, le=50),
 ):
@@ -279,7 +279,7 @@ def list_mail(
 @router.post("/mail/send")
 def send_mail(
     body: MailSendIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -294,7 +294,7 @@ def send_mail(
 
 @router.get("/drives")
 def list_drives(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -308,7 +308,7 @@ def list_drives(
 @router.get("/drives/{drive_id}/children")
 def list_drive_children(
     drive_id: str,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -322,7 +322,7 @@ def list_drive_children(
 @router.post("/resources/link")
 def create_resource_link(
     body: ResourceLinkIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     row = hub.link_resource(db, auth.tenant_id, **body.model_dump())
@@ -340,7 +340,7 @@ def create_resource_link(
 
 @router.get("/resources")
 def list_resources(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
     entity_type: str | None = None,
     entity_id: UUID | None = None,
@@ -369,7 +369,7 @@ def list_resources(
 @router.post("/resources/provision-folder")
 def provision_folder(
     body: ProvisionFolderIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -385,7 +385,7 @@ def provision_folder(
 @router.post("/archive")
 def archive_document(
     body: ArchiveIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     """把系统生成的凭据/表单/单证推送到租户 OneDrive（MariOS 文件夹）并建立实体关联。"""
@@ -411,7 +411,7 @@ def archive_document(
 
 @router.get("/teams")
 def list_teams(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -426,7 +426,7 @@ def list_teams(
 @router.get("/teams/{team_id}/channels")
 def list_channels(
     team_id: str,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -440,7 +440,7 @@ def list_channels(
 @router.post("/teams/notify")
 def teams_notify(
     body: TeamsNotifyIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -457,7 +457,7 @@ def teams_notify(
 
 @router.get("/webhooks")
 def list_webhooks(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     rows = db.scalars(
@@ -483,7 +483,7 @@ def list_webhooks(
 @router.post("/webhooks")
 def create_webhook(
     body: WebhookIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     row = hub.create_webhook(db, auth.tenant_id, name=body.name, target_url=body.target_url, events=body.events)
@@ -501,7 +501,7 @@ def create_webhook(
 @router.post("/webhooks/{webhook_id}/test")
 def test_webhook(
     webhook_id: UUID,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     row = db.get(WebhookEndpoint, webhook_id)
@@ -528,7 +528,7 @@ class WebhookUpdateIn(BaseModel):
 def update_webhook(
     webhook_id: UUID,
     body: WebhookUpdateIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     """Partial update — only explicitly provided fields (model_fields_set). Secret not patchable (rotate separately)."""
@@ -562,7 +562,7 @@ def update_webhook(
 @router.delete("/webhooks/{webhook_id}")
 def delete_webhook(
     webhook_id: UUID,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     """Soft-delete a webhook endpoint (recycle bin). Config row — in-use delivery history is fine."""
@@ -583,7 +583,7 @@ def delete_webhook(
 
 @router.get("/addons")
 def list_addons(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     status = hub.office_status(db, auth.tenant_id)
@@ -594,7 +594,7 @@ def list_addons(
 def set_addon_status(
     addon_id: str,
     body: AddonStatusIn,
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     hub.ensure_office_link(db, auth.tenant_id)
@@ -616,7 +616,7 @@ def set_addon_status(
 
 @router.get("/health")
 def office_health(
-    auth: AuthContext = Depends(require_module("integration")),
+    auth: AuthContext = Depends(require_module_role("integration")),
     db: Session = Depends(get_db),
 ):
     try:

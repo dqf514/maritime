@@ -11,9 +11,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { Tabs } from "@/components/Tabs";
 import { apiGet, apiPost, apiPut, readStorage, TOKEN_STORAGE_KEY } from "@/lib/api";
+import { apiError, msgOf, handled } from "@/lib/errors";
+import { stripActiveContent } from "@/lib/sanitize";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -70,18 +73,30 @@ export default function DocTemplatesPage() {
   const [busy, setBusy] = useState(false);
   const [previewHtml, setPreviewHtml] = useState<string>("");
   const [previewErr, setPreviewErr] = useState<string | null>(null);
+  const [pendingReset, setPendingReset] = useState(false);
+  // 目录 / 详情加载失败：显式报错，不静默退化为空
+  const [catalogErr, setCatalogErr] = useState<string | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
 
   const zh = (uiLocale || "en").toLowerCase().startsWith("zh");
 
   const loadCatalog = useCallback(async () => {
-    const data = (await apiGet("/api/v1/documents/templates")) as Catalog;
-    setCatalog(data);
-    return data;
+    setCatalogErr(null);
+    try {
+      const data = (await apiGet("/api/v1/documents/templates")) as Catalog;
+      setCatalog(data);
+      return data;
+    } catch (ex) {
+      setCatalogErr(msgOf(ex));
+      setCatalog(null);
+      throw ex;
+    }
   }, []);
 
   const loadDetail = useCallback(async (entityType: string, loc: string) => {
+    setDetailErr(null);
     // 模板按 (entity_type, code, locale) 唯一 —— 先列表定位 id 再取详情
     const list = (await apiGet(
       `/api/v1/documents/templates?entity_type=${encodeURIComponent(entityType)}`,
@@ -101,13 +116,26 @@ export default function DocTemplatesPage() {
     setDirty(false);
   }, []);
 
+  /** 详情加载失败 → 记录错误（不静默清空） */
+  const loadDetailSafe = useCallback(
+    async (entityType: string, loc: string) => {
+      try {
+        await loadDetail(entityType, loc);
+      } catch (ex) {
+        setDetailErr(msgOf(ex));
+        setDetail(null);
+      }
+    },
+    [loadDetail],
+  );
+
   useEffect(() => {
-    loadCatalog().catch(() => setCatalog(null));
+    loadCatalog().catch(handled);
   }, [loadCatalog]);
 
   useEffect(() => {
-    loadDetail(activeType, locale).catch(() => setDetail(null));
-  }, [activeType, locale, loadDetail]);
+    loadDetailSafe(activeType, locale);
+  }, [activeType, locale, loadDetailSafe]);
 
   // 草稿变化 → 防抖 400ms 后请求预览（预览用后端沙箱渲染，前端不解析 Jinja）
   useEffect(() => {
@@ -124,7 +152,7 @@ export default function DocTemplatesPage() {
           setPreviewErr(null);
         })
         .catch((err: unknown) => {
-          setPreviewErr(String(err));
+          setPreviewErr(msgOf(err));
           setPreviewHtml("");
         });
     }, 400);
@@ -167,7 +195,7 @@ export default function DocTemplatesPage() {
       await loadCatalog();
       await loadDetail(activeType, locale);
     } catch (err) {
-      toast.error(t("page.templates.save_fail", "Failed to save: {err}", { err: String(err) }));
+      toast.error(t("page.templates.save_fail", "Failed to save: {err}", { err: msgOf(err) }));
     } finally {
       setBusy(false);
     }
@@ -175,13 +203,11 @@ export default function DocTemplatesPage() {
 
   async function resetToDefault() {
     if (!detail) return;
-    if (
-      !window.confirm(
-        t("page.templates.reset_confirm", "Restore the built-in layout for this template?"),
-      )
-    ) {
-      return;
-    }
+    setPendingReset(true);
+  }
+
+  async function doResetToDefault() {
+    if (!detail) return;
     setBusy(true);
     try {
       const res = (await apiPost(`/api/v1/documents/templates/${detail.id}/reset`, {})) as {
@@ -194,7 +220,7 @@ export default function DocTemplatesPage() {
       toast.success(t("page.templates.reset_ok", "Restored built-in layout"));
       await loadCatalog();
     } catch (err) {
-      toast.error(t("page.templates.reset_fail", "Failed to restore: {err}", { err: String(err) }));
+      toast.error(t("page.templates.reset_fail", "Failed to restore: {err}", { err: msgOf(err) }));
     } finally {
       setBusy(false);
     }
@@ -225,7 +251,8 @@ export default function DocTemplatesPage() {
       });
       if (!res.ok) {
         const j = await res.json().catch(() => null);
-        throw new Error(j?.detail?.code || j?.detail?.message || `HTTP ${res.status}`);
+        // 走统一的 apiError：状态码 → 人话文案（不要把 "HTTP 500" 抛给用户）
+        throw apiError("POST", `/api/v1/documents/templates/${detail.id}/preview/pdf`, res.status, j);
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -234,7 +261,7 @@ export default function DocTemplatesPage() {
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (err) {
       if (win) win.close();
-      toast.error(t("page.templates.pdf_failed", "PDF preview failed: {err}", { err: String(err) }));
+      toast.error(t("page.templates.pdf_failed", "PDF preview failed: {err}", { err: msgOf(err) }));
     } finally {
       setBusy(false);
     }
@@ -319,6 +346,15 @@ export default function DocTemplatesPage() {
         }
       />
 
+      {catalogErr ? (
+        <div className="error">
+          {catalogErr}{" "}
+          <button type="button" className="btn btn-sm" onClick={() => loadCatalog().catch(handled)}>
+            {t("common.retry", "重试")}
+          </button>
+        </div>
+      ) : null}
+
       <div className="tpl-layout">
         {/* 左：单据类型 */}
         <nav className="tpl-types" aria-label={t("page.templates.types", "Document types")}>
@@ -347,6 +383,7 @@ export default function DocTemplatesPage() {
 
         {/* 中：代码编辑 */}
         <section className="tpl-editor">
+          {detailErr ? <p className="text-danger">{detailErr}</p> : null}
           <Tabs
             variant="pill"
             items={[
@@ -414,8 +451,13 @@ export default function DocTemplatesPage() {
                 ref={frameRef}
                 className="tpl-frame"
                 title={t("page.templates.preview_title", "Template preview")}
-                // 预览 HTML 由后端沙箱渲染后原样返回，直接塞进 srcDoc
-                srcDoc={previewHtml}
+                // P0-5：srcDoc 里的 HTML 来自租户可编辑的模板 + 用户可编辑的主数据，
+                // 没有 sandbox 时是存储型 XSS 的同源执行入口（可读 cookie / 打 API）。
+                // sandbox="" = 完全隔离：不脚本、不表单、不同源、不顶层导航。
+                sandbox=""
+                referrerPolicy="no-referrer"
+                // 预览 HTML 由后端沙箱渲染后返回；前端再剥一层可执行内容兜底。
+                srcDoc={stripActiveContent(previewHtml)}
               />
             ) : (
               <div className="tpl-empty">
@@ -464,6 +506,21 @@ export default function DocTemplatesPage() {
           </p>
         </aside>
       </div>
+      <ConfirmDialog
+        open={pendingReset}
+        title={t("common.confirm", "Confirm")}
+        message={t(
+          "page.templates.reset_confirm",
+          "Restore the built-in layout for this template? Your current layout will be replaced.",
+        )}
+        danger
+        confirmLabel={t("common.confirm", "Confirm")}
+        onConfirm={() => {
+          setPendingReset(false);
+          void doResetToDefault();
+        }}
+        onCancel={() => setPendingReset(false)}
+      />
     </AppShell>
   );
 }

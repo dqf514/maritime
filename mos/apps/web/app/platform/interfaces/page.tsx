@@ -3,13 +3,16 @@
 // Interface Messages console — IMOS Data Center 标配。
 // Integration exchange log: inbound/outbound tabs + stats, retry with stub processor.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { msgOf, handled } from "@/lib/errors";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Tabs } from "@/components/Tabs";
 import { Toolbar } from "@/components/Toolbar";
 import { StatusBadge } from "@/components/StatusBadge";
 import { RecordModal } from "@/components/RecordModal";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost } from "@/lib/api";
@@ -39,6 +42,9 @@ type Stats = {
 
 type Tab = "in" | "out" | "stats";
 
+/** 端点单次上限 200 条；按 100 一页递增加载，末尾显示「已加载 N 条」并提供「加载更多」 */
+const PAGE_SIZE = 100;
+
 function fmtTime(v: string | null | undefined) {
   return v ? String(v).replace("T", " ").slice(0, 19) : "—";
 }
@@ -63,29 +69,43 @@ export default function InterfaceMessagesPage() {
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<Msg | null>(null);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const offsetRef = useRef(0);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      if (tab === "stats") {
-        setStats((await apiGet("/api/v1/interface/messages/stats")) as Stats);
-        return;
+  const load = useCallback(
+    async (append = false) => {
+      setLoading(true);
+      setErr(null);
+      try {
+        if (tab === "stats") {
+          setStats((await apiGet("/api/v1/interface/messages/stats")) as Stats);
+          return;
+        }
+        const direction = tab === "in" ? "inbound" : "outbound";
+        const qs = new URLSearchParams({ direction });
+        if (statusFilter) qs.set("status", statusFilter);
+        const off = append ? offsetRef.current : 0;
+        qs.set("limit", String(PAGE_SIZE));
+        qs.set("offset", String(off));
+        const got = (await apiGet(`/api/v1/interface/messages?${qs.toString()}`)) as Msg[];
+        setRows((prev) => (append ? [...prev, ...got] : got));
+        offsetRef.current = off + got.length;
+        setHasMore(got.length >= PAGE_SIZE);
+      } catch (ex) {
+        setErr(msgOf(ex));
+      } finally {
+        setLoading(false);
       }
-      const direction = tab === "in" ? "inbound" : "outbound";
-      const qs = new URLSearchParams({ direction });
-      if (statusFilter) qs.set("status", statusFilter);
-      qs.set("limit", "100");
-      setRows((await apiGet(`/api/v1/interface/messages?${qs.toString()}`)) as Msg[]);
-    } catch (err) {
-      toast.error(t("iface.load_fail", "Failed to load interface messages: {err}", { err: String(err) }));
-    } finally {
-      setLoading(false);
-    }
-  }, [tab, statusFilter, t, toast]);
+    },
+    [tab, statusFilter],
+  );
 
   useEffect(() => {
+    offsetRef.current = 0;
+    setHasMore(false);
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    load().catch(() => undefined);
+    load(false).catch(handled);
   }, [load]);
 
   const openDetail = useCallback(
@@ -93,7 +113,7 @@ export default function InterfaceMessagesPage() {
       try {
         setDetail((await apiGet(`/api/v1/interface/messages/${row.id}`)) as Msg);
       } catch (err) {
-        toast.error(t("iface.detail_fail", "Failed to load message detail: {err}", { err: String(err) }));
+        toast.error(t("iface.detail_fail", "Failed to load message detail: {err}", { err: msgOf(err) }));
       }
     },
     [t, toast],
@@ -108,7 +128,7 @@ export default function InterfaceMessagesPage() {
         if (detail && detail.id === updated.id) setDetail(updated);
         await load();
       } catch (err) {
-        toast.error(t("iface.retry_fail", "Retry failed: {err}", { err: String(err) }));
+        toast.error(t("iface.retry_fail", "Retry failed: {err}", { err: msgOf(err) }));
       } finally {
         setBusy(false);
       }
@@ -125,7 +145,7 @@ export default function InterfaceMessagesPage() {
     [t],
   );
 
-  const columns: ColumnDef<Msg>[] = [
+  const columns = useMemo<ColumnDef<Msg>[]>(() => [
     {
       key: "created_at",
       title: t("iface.col_time", "Time"),
@@ -195,7 +215,7 @@ export default function InterfaceMessagesPage() {
         </span>
       ),
     },
-  ];
+  ], [busy, openDetail, retry, t]);
 
   const filterCount = statusFilter ? 1 : 0;
 
@@ -213,8 +233,15 @@ export default function InterfaceMessagesPage() {
       <Tabs items={tabs} value={tab} onChange={(k) => setTab(k as Tab)} variant="pill" />
 
       {tab === "stats" ? (
-        stats ? (
-          <div className="form-grid" style={{ marginTop: "1rem" }}>
+        <StateView
+          loading={loading}
+          error={err ?? undefined}
+          empty={!stats}
+          onRetry={() => load(false)}
+          emptyText={t("iface.empty_stats", "No statistics yet")}
+        >
+          {stats ? (
+            <div className="form-grid" style={{ marginTop: "1rem" }}>
             <div className="card">
               <h3 className="muted">{t("iface.stats_total", "Total")}</h3>
               <p style={{ fontSize: "1.5rem", margin: 0 }}>{stats.total}</p>
@@ -234,11 +261,8 @@ export default function InterfaceMessagesPage() {
               </p>
             </div>
           </div>
-        ) : (
-          <p className="muted" style={{ marginTop: "1rem" }}>
-            {t("iface.empty_stats", "No statistics yet")}
-          </p>
-        )
+          ) : null}
+        </StateView>
       ) : (
         <>
           <Toolbar
@@ -258,23 +282,39 @@ export default function InterfaceMessagesPage() {
               </select>
             }
           >
-            <button type="button" className="btn btn-sm" onClick={() => load()} title={t("iface.refresh", "Refresh")}>
-              ↻
-            </button>
+            <RefreshButton label={t("iface.refresh", "Refresh")} className="btn btn-sm" onClick={() => load(false)} />
             <span className="muted" style={{ fontSize: "var(--font-label)" }}>
-              {rows.length}
+              {t("common.count_total", "共 {n} 条", { n: rows.length })}
             </span>
           </Toolbar>
 
-          <DataGrid<Msg>
-            columns={columns}
-            data={rows}
-            rowKey={(r) => r.id}
-            storageKey="platform_interfaces"
+          <StateView
             loading={loading}
-            onRowDoubleClick={(r) => openDetail(r)}
+            error={err ?? undefined}
+            empty={!rows.length}
+            onRetry={() => load(false)}
             emptyText={t("iface.empty", "No interface messages")}
-          />
+          >
+            <DataGrid<Msg>
+              columns={columns}
+              data={rows}
+              rowKey={(r) => r.id}
+              storageKey="platform_interfaces"
+              loading={loading}
+              onRowDoubleClick={(r) => openDetail(r)}
+              emptyText={t("iface.empty", "No interface messages")}
+            />
+          </StateView>
+          <div className="dt-pager">
+            <span className="muted">
+              {t("iface.loaded_hint", "已加载 {n} 条（每次 {size} 条）", { n: rows.length, size: PAGE_SIZE })}
+            </span>
+            {hasMore ? (
+              <button type="button" className="btn btn-sm" disabled={loading} onClick={() => load(true)}>
+                {t("common.load_more", "加载更多")}
+              </button>
+            ) : null}
+          </div>
         </>
       )}
 

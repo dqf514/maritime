@@ -34,6 +34,16 @@ def _uniq() -> str:
     return uuid4().hex[:8]
 
 
+def _rows(payload) -> list:
+    """航次列表现在返回 U1 分页信封 {items,total,limit,offset}（P1-28）。
+
+    旧断言直接对数组取下标 —— 这里统一拆信封，避免测试与实现两套形状。
+    """
+    if isinstance(payload, dict):
+        return payload["items"]
+    return payload
+
+
 def _mk_voyage(client, h, suffix: str = "") -> dict:
     r = client.post(f"{API}/voyages", headers=h, json={"voyage_no": f"VB-{_uniq()}{suffix}"})
     assert r.status_code == 200, r.text
@@ -74,7 +84,7 @@ def test_batch_close_happy_path(client, auth_headers):
     assert body["failed"] == []
 
     for vid in (v1["id"], v2["id"]):
-        row = client.get(f"{API}/voyages", headers=h).json()
+        row = _rows(client.get(f"{API}/voyages", headers=h).json())
         hit = next(x for x in row if x["id"] == vid)
         assert hit["status"] == "completed"
 
@@ -99,7 +109,7 @@ def test_batch_mixed_legal_illegal_partial(client, auth_headers):
     assert fail["id"] == bad["id"]
     assert fail["code"] == "INVALID_STATE"
 
-    listed = client.get(f"{API}/voyages", headers=h).json()
+    listed = _rows(client.get(f"{API}/voyages", headers=h).json())
     assert next(x for x in listed if x["id"] == good["id"])["status"] == "completed"
     assert next(x for x in listed if x["id"] == bad["id"])["status"] == "planned"
 
@@ -137,7 +147,7 @@ def test_batch_foreign_id_reported_not_leaked(client, auth_headers, db_session):
     assert fail["id"] == foreign["id"]
     assert fail["code"] == "NOT_FOUND"
     # 他租户航次状态不受影响（未被关闭）
-    rows = client.get(f"{API}/voyages", headers=h2).json()
+    rows = _rows(client.get(f"{API}/voyages", headers=h2).json())
     assert next(x for x in rows if x["id"] == foreign["id"])["status"] == "planned"
 
 
@@ -159,7 +169,7 @@ def test_batch_close_role_forbidden(client, auth_headers):
     assert r2.status_code == 403, r2.text
     assert r2.json()["detail"]["code"] == "FORBIDDEN"
     # 航次未被关闭
-    listed = client.get(f"{API}/voyages", headers=h).json()
+    listed = _rows(client.get(f"{API}/voyages", headers=h).json())
     assert next(x for x in listed if x["id"] == v["id"])["status"] == "in_progress"
 
 
@@ -271,7 +281,7 @@ def test_copy_itinerary_tenant_isolation(client, auth_headers, db_session):
     assert r.status_code == 404, r.text
 
     # 本租户没有产生副本
-    rows = client.get(f"{API}/voyages", headers=auth_headers).json()
+    rows = _rows(client.get(f"{API}/voyages", headers=auth_headers).json())
     assert not any(x["voyage_no"].startswith(foreign["voyage_no"]) for x in rows)
 
 

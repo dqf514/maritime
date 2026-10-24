@@ -47,14 +47,19 @@ def create_invoice_mirror(
 
     existing = invoice_mirror.find_mirror(db, source.id)
     if existing is not None:
-        raise HTTPException(
-            409,
-            detail={
-                "code": "MIRROR_EXISTS",
-                "message": "Invoice already has a mirror",
-                "mirror_id": str(existing.id),
-            },
+        # P1-17：镜像在**别的租户**时，只有开了公司间镜像才回显它的 id ——
+        # 否则 409 的 detail 就把外租户的单据 id 送出去了。
+        cross_ok = (
+            existing.tenant_id == auth.tenant_id
+            or invoice_mirror.intercompany_enabled(db, auth.tenant_id, auth.user_id)
         )
+        detail: dict = {
+            "code": "MIRROR_EXISTS",
+            "message": "Invoice already has a mirror",
+        }
+        if cross_ok:
+            detail["mirror_id"] = str(existing.id)
+        raise HTTPException(409, detail=detail)
 
     target_tenant_id = (body.target_tenant_id if body else None) or auth.tenant_id
     if target_tenant_id != auth.tenant_id:
@@ -97,8 +102,8 @@ def get_invoice_mirror_chain(
     # Pull-sync from the source side (源改镜像跟) before assembling the chain.
     source = inv if inv.mirror_of_id is None else db.get(Invoice, inv.mirror_of_id)
     if source is not None:
-        invoice_mirror.sync_mirrors(db, source)
+        invoice_mirror.sync_mirrors(db, source, user_id=auth.user_id)
         db.commit()
 
-    chain = invoice_mirror.get_mirror_chain(db, invoice_id, auth.tenant_id)
+    chain = invoice_mirror.get_mirror_chain(db, invoice_id, auth.tenant_id, user_id=auth.user_id)
     return {"items": chain, "count": len(chain)}

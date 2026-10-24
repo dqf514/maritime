@@ -1,15 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -34,19 +37,50 @@ export default function ApiKeysPage() {
   const toast = useToast();
   const [rows, setRows] = useState<KeyRow[]>([]);
   const [err, setErr] = useState("");
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [rawOnce, setRawOnce] = useState("");
+  // 密钥默认脱敏；明文仅在用户主动点「显示」时渲染，复制走剪贴板
+  const [revealKey, setRevealKey] = useState(false);
   const [open, setOpen] = useState<KeyRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({ name: "", status: "active", scopes: "read,write" });
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    setRows(await apiGet("/api/v1/settings/api-keys"));
+    setLoading(true);
+    setLoadErr(null);
+    try {
+      const rows = await apiGet("/api/v1/settings/api-keys");
+      setRows(Array.isArray(rows) ? rows : []);
+    } catch (ex) {
+      setLoadErr(msgOf(ex));
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch((e) => setErr(String(e?.message || e)));
+    load();
   }, []);
+
+  /** 脱敏显示：仅首尾片段可见 */
+  function maskKey(raw: string): string {
+    if (!raw) return "";
+    if (raw.length <= 8) return raw.slice(0, 2) + "…";
+    return `${raw.slice(0, 4)}…${raw.slice(-4)}`;
+  }
+
+  async function copyRawKey() {
+    if (!rawOnce) return;
+    try {
+      await navigator.clipboard.writeText(rawOnce);
+      toast.success(t("common.copied", "已复制"));
+    } catch {
+      toast.error(t("page.apikeys.copy_fail", "复制失败，请显示密钥后手动复制。"));
+    }
+  }
 
   function openCreate() {
     setCreating(true);
@@ -82,6 +116,7 @@ export default function ApiKeysPage() {
           scopes: parseScopes(edit.scopes).length ? parseScopes(edit.scopes) : ["read", "write"],
         });
         setRawOnce(created.raw_key || "");
+        setRevealKey(false);
         toast.success(t("page.apikeys.created", "API 密钥已创建 — 请立即复制密钥，之后不会再显示。"));
       } else {
         await apiPatch(`/api/v1/settings/api-keys/${open.id}`, {
@@ -93,11 +128,11 @@ export default function ApiKeysPage() {
       }
       closeModal();
       await load();
-    } catch (ex: any) {
+    } catch (ex) {
       if (creating) {
-        setErr(ex?.message || t("common.failed", "失败"));
+        setErr(msgOf(ex, t("common.failed", "失败")));
       } else {
-        toast.error(t("common.failed", "失败"));
+        toast.error(msgOf(ex, t("common.failed", "失败")));
       }
     } finally {
       setSaving(false);
@@ -117,7 +152,7 @@ export default function ApiKeysPage() {
     }
   }
 
-  const columns: ColumnDef<KeyRow>[] = [
+  const columns = useMemo<ColumnDef<KeyRow>[]>(() => [
     {
       key: "name",
       title: t("common.name", "Name"),
@@ -143,7 +178,7 @@ export default function ApiKeysPage() {
       value: (r) => (r.scopes || []).join(", "),
     },
     { key: "status", title: t("common.status", "Status"), width: 100, value: (r) => r.status },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -164,25 +199,57 @@ export default function ApiKeysPage() {
       {rawOnce ? (
         <div className="panel" style={{ borderLeft: "4px solid var(--accent)" }}>
           <strong>{t("page.apikeys.secret", "Secret (shown once)")}</strong>
-          <code style={{ display: "block", marginTop: "0.5rem", wordBreak: "break-all" }}>{rawOnce}</code>
+          <code style={{ display: "block", marginTop: "0.5rem", wordBreak: "break-all" }}>
+            {revealKey ? rawOnce : maskKey(rawOnce)}
+          </code>
+          <div className="row-actions">
+            <button type="button" className="btn btn-ghost" onClick={() => copyRawKey().catch(handled)}>
+              {t("page.apikeys.copy_key", "复制密钥")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              aria-expanded={revealKey}
+              aria-label={t("page.apikeys.reveal_key", "显示密钥")}
+              onClick={() => setRevealKey((v) => !v)}
+            >
+              {revealKey ? t("page.apikeys.hide_key", "隐藏密钥") : t("page.apikeys.reveal_key", "显示密钥")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setRawOnce("");
+                setRevealKey(false);
+              }}
+            >
+              {t("common.close", "关闭")}
+            </button>
+          </div>
         </div>
       ) : null}
       <Toolbar>
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.apikeys.create", "New API key")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load()} />
       </Toolbar>
-      <DataGrid<KeyRow>
-        columns={columns}
-        data={rows}
-        rowKey={(r) => r.id}
-        storageKey="settings_api_keys_grid"
-        onRowDoubleClick={(r) => openRow(r)}
+      <StateView
+        loading={loading}
+        error={loadErr ?? undefined}
+        empty={!rows.length}
+        onRetry={() => load()}
         emptyText={t("common.no_data", "No data")}
-      />
+      >
+        <DataGrid<KeyRow>
+          columns={columns}
+          data={rows}
+          rowKey={(r) => r.id}
+          storageKey="settings_api_keys_grid"
+          onRowDoubleClick={(r) => openRow(r)}
+          emptyText={t("common.no_data", "No data")}
+        />
+      </StateView>
 
       <RecordModal
         open={creating || Boolean(open)}

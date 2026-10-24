@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -27,17 +27,66 @@ from app.models_domain import (
 )
 from app.models_finance_ext import BunkerInquiry
 from app.services.bunker_procurement import next_requirement_no
+from app.services.money import money
 from app.services.recycle import soft_delete
 from app.services.state_machine import BUNKER_REQUIREMENT_TRANSITIONS, BUNKER_TRANSITIONS, transition
 
-from app.routers._finance_common import _alive
+from app.routers._finance_common import _alive, _base_currency
 
 from app.models_domain import NoonReport
 from app.models_wave1 import Counterparty, Port, Vessel
 from app.services.sanctions import assert_not_sanctioned
 from app.services.tenant_guard import scoped_get
+from app.services.data_scope import apply_module_scope
 
 router = APIRouter()
+
+
+# —— 币种归一（P2-B6）—————————————————————————————————————————
+# 加油链上的每一笔金额（加油单 / 供应商报价 / 询比价 / 上限下限价）都必须带币种 ——
+# 450 USD 与 450 EUR 不是一回事，以前这些单据只存金额，币种靠猜。
+#
+# 取值优先级：显式传入 > 上下文默认（如询比价回落加油单的币种）> 租户本位币
+# （公司档案 base_currency），再兜底 USD。
+
+def _clean_currency(value: str | None) -> str | None:
+    """库内已有币种值清洗（不抛错，只认 3 位字母码）。"""
+    code = (value or "").strip().upper()
+    return code if len(code) == 3 and code.isalpha() else None
+
+
+def _parse_currency(value: str | None) -> str | None:
+    """用户传入币种 → 3 位大写码；未传/空白返回 None；非法码 422。"""
+    if value is None:
+        return None
+    code = value.strip().upper()
+    if not code:
+        return None
+    if len(code) != 3 or not code.isalpha():
+        raise HTTPException(
+            422,
+            detail={
+                "code": "INVALID_CURRENCY",
+                "message": "currency must be a 3-letter code (e.g. USD, EUR)",
+            },
+        )
+    return code
+
+
+def _resolve_currency(
+    db: Session,
+    tenant_id: UUID,
+    requested: str | None,
+    fallback: str | None = None,
+) -> str:
+    """币种取值：显式传入 > 上下文默认 > 租户本位币 > USD。"""
+    code = _parse_currency(requested)
+    if code:
+        return code
+    ctx = _clean_currency(fallback)
+    if ctx:
+        return ctx
+    return _clean_currency(_base_currency(db, tenant_id)) or "USD"
 
 
 # —— Bunker ——
@@ -52,6 +101,9 @@ class BunkerIn(BaseModel):
     supplier: str | None = None
     index_symbol: str | None = None  # e.g. SIN380 — price = latest quote + differential
     price_differential: float = 0
+    # 加油单计价币种 —— 以前输入端不接受币种、输出写死 USD，EUR 租约的加油费
+    # 被记成美元（P2-B6）；现在不传就回落租户本位币
+    currency: str | None = None
 
 
 def _latest_quote(db: Session, tenant_id: UUID, symbol: str) -> MarketQuote | None:
@@ -78,7 +130,7 @@ def create_bunker(body: BunkerIn, auth: AuthContext = Depends(require_module("bu
     if body.voyage_id is not None and scoped_get(db, Voyage, body.voyage_id, auth.tenant_id) is None:
         raise HTTPException(404, "Voyage not found")
     index_quote: MarketQuote | None = None
-    unit_price = body.unit_price
+    unit_price: Decimal | None = None
     if body.index_symbol:
         # Index-linked pricing: unit price = latest market quote + differential (e.g. SIN380+12).
         index_quote = _latest_quote(db, auth.tenant_id, body.index_symbol)
@@ -87,9 +139,13 @@ def create_bunker(body: BunkerIn, auth: AuthContext = Depends(require_module("bu
                 status_code=422,
                 detail={"code": "NO_INDEX_QUOTE", "message": f"No market quote available for index '{body.index_symbol}'"},
             )
-        unit_price = float(
-            (Decimal(str(index_quote.value)) + Decimal(str(body.price_differential))).quantize(Decimal("0.01"))
+        unit_price = (
+            (Decimal(str(index_quote.value)) + Decimal(str(body.price_differential)))
+            .quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         )
+    elif body.unit_price is not None:
+        # Numeric(12,2) 列 —— 写入前量化，float 进 Numeric 会让 SQLite / Postgres 分叉（P1-B8）
+        unit_price = Decimal(str(body.unit_price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if unit_price is None:
         raise HTTPException(
             status_code=422,
@@ -97,13 +153,20 @@ def create_bunker(body: BunkerIn, auth: AuthContext = Depends(require_module("bu
         )
     row = BunkerOrder(
         tenant_id=auth.tenant_id,
+     created_by=auth.user_id,
         order_no=f"BNK-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:5].upper()}",
         vessel_id=body.vessel_id,
         voyage_id=body.voyage_id,
         grade=body.grade,
-        qty_ordered=body.qty_ordered,
+        # Numeric(12,3) 列 —— 同样在写入边界量化
+        qty_ordered=Decimal(str(body.qty_ordered)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP),
         unit_price=unit_price,
-        rob_before=body.rob_before,
+        rob_before=(
+            Decimal(str(body.rob_before)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+            if body.rob_before is not None
+            else None
+        ),
+        currency=_resolve_currency(db, auth.tenant_id, body.currency),
         counterparty_id=body.counterparty_id,
     )
     if body.supplier is not None:
@@ -126,6 +189,8 @@ def create_bunker(body: BunkerIn, auth: AuthContext = Depends(require_module("bu
                 order_id=row.id,
                 supplier=f"INDEX:{body.index_symbol}",
                 quoted_price=Decimal(str(unit_price)),
+                # 指数定价行跟随加油单的币种（P2-B6）
+                currency=row.currency,
                 status="accepted",
                 meta=pricing_meta,
             )
@@ -136,6 +201,7 @@ def create_bunker(body: BunkerIn, auth: AuthContext = Depends(require_module("bu
         "order_no": row.order_no,
         "status": row.status,
         "unit_price": float(row.unit_price or 0),
+        "currency": row.currency,
         "pricing": pricing_meta,
     }
 
@@ -161,10 +227,15 @@ def bunker_transition(
     row.status = transition("bunker_order", row.status, target, BUNKER_TRANSITIONS)
     if bdn_qty is not None and qty_delivered is None:
         qty_delivered = bdn_qty
+    # 数量类统一量化到 0.001 —— 未量化会让 SQLite / Postgres 表现分叉（审计 P1-B8）
     if qty_delivered is not None:
-        row.qty_delivered = Decimal(str(qty_delivered))
+        row.qty_delivered = Decimal(str(qty_delivered)).quantize(
+            Decimal("0.001"), rounding=ROUND_HALF_UP
+        )
     if consumption is not None:
-        row.consumption = Decimal(str(consumption))
+        row.consumption = Decimal(str(consumption)).quantize(
+            Decimal("0.001"), rounding=ROUND_HALF_UP
+        )
     warnings: list[dict] = []
     if target == "delivered":
         before = Decimal(str(row.rob_before or 0))
@@ -214,7 +285,13 @@ def bunker_transition(
 @router.get("/bunker-orders")
 def list_bunker(auth: AuthContext = Depends(require_module("bunker")), db: Session = Depends(get_db)):
     rows = db.scalars(
-        select(BunkerOrder).where(BunkerOrder.tenant_id == auth.tenant_id, BunkerOrder.status != "deleted")
+        apply_module_scope(
+            db,
+            select(BunkerOrder).where(BunkerOrder.tenant_id == auth.tenant_id, BunkerOrder.status != "deleted"),
+            BunkerOrder,
+            auth,
+            "bunker",
+        )
     ).all()
     return [
         {
@@ -231,7 +308,12 @@ def list_bunker(auth: AuthContext = Depends(require_module("bunker")), db: Sessi
             "rob_after": float(r.rob_after or 0) if r.rob_after is not None else None,
             "consumption": float(r.consumption or 0) if r.consumption is not None else None,
             "currency": r.currency,
-            "amount": float(r.qty_ordered or 0) * float(r.unit_price or 0),
+            # 金额用 Decimal 算（float 相乘会带二进制尾数，P1-B8）
+            "amount": float(
+                (Decimal(str(r.qty_ordered or 0)) * Decimal(str(r.unit_price or 0))).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+            ),
             "supplier": r.supplier,
             "counterparty_id": str(r.counterparty_id) if r.counterparty_id else None,
         }
@@ -248,6 +330,7 @@ class BunkerUpdate(BaseModel):
     voyage_id: UUID | None = None
     supplier: str | None = None
     counterparty_id: UUID | None = None
+    currency: str | None = None  # 计价币种（P2-B6）
 
 
 @router.patch("/bunker-orders/{order_id}")
@@ -262,12 +345,19 @@ def update_bunker(
         raise HTTPException(404, "Bunker order not found")
     if body.grade is not None:
         row.grade = body.grade
+    # PATCH 路径同样要量化 —— 以前直接把 float 写进 Numeric 列（审计 P1-B8）
     if body.qty_ordered is not None:
-        row.qty_ordered = body.qty_ordered
+        row.qty_ordered = Decimal(str(body.qty_ordered)).quantize(
+            Decimal("0.001"), rounding=ROUND_HALF_UP
+        )
     if body.unit_price is not None:
-        row.unit_price = body.unit_price
+        row.unit_price = Decimal(str(body.unit_price)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
     if body.rob_before is not None:
-        row.rob_before = body.rob_before
+        row.rob_before = Decimal(str(body.rob_before)).quantize(
+            Decimal("0.001"), rounding=ROUND_HALF_UP
+        )
     if body.vessel_id is not None:
         if scoped_get(db, Vessel, body.vessel_id, auth.tenant_id) is None:
             raise HTTPException(404, "Vessel not found")
@@ -283,8 +373,11 @@ def update_bunker(
         if not party or party.tenant_id != auth.tenant_id or party.deleted_at:
             raise HTTPException(404, "Counterparty not found")
         row.counterparty_id = body.counterparty_id
+    if body.currency is not None:
+        # 币种必须跟着金额走 —— 改币种等于改单价口径（P2-B6）
+        row.currency = _resolve_currency(db, auth.tenant_id, body.currency, fallback=row.currency)
     db.commit()
-    return {"id": str(row.id), "order_no": row.order_no, "status": row.status}
+    return {"id": str(row.id), "order_no": row.order_no, "status": row.status, "currency": row.currency}
 
 
 @router.delete("/bunker-orders/{order_id}")
@@ -317,6 +410,8 @@ def delete_bunker(
 class BunkerInquiryIn(BaseModel):
     supplier: str
     quoted_price: float
+    # 报价币种 —— 不传则跟随加油单的币种（P2-B6）
+    currency: str | None = None
 
 
 @router.post("/bunker-orders/{order_id}/inquiries")
@@ -335,13 +430,20 @@ def create_bunker_inquiry(
         tenant_id=auth.tenant_id,
         order_id=order.id,
         supplier=body.supplier,
-        quoted_price=Decimal(str(body.quoted_price)).quantize(Decimal("0.01")),
+        quoted_price=Decimal(str(body.quoted_price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        currency=_resolve_currency(db, auth.tenant_id, body.currency, fallback=order.currency),
         status="quoted",
     )
     db.add(row)
     db.commit()
     db.refresh(row)
-    return {"id": str(row.id), "order_id": str(order.id), "status": row.status, "quoted_price": float(row.quoted_price)}
+    return {
+        "id": str(row.id),
+        "order_id": str(order.id),
+        "status": row.status,
+        "quoted_price": float(row.quoted_price),
+        "currency": row.currency,
+    }
 
 
 @router.get("/bunker-orders/{order_id}/inquiries")
@@ -361,6 +463,7 @@ def list_bunker_inquiries(order_id: UUID, auth: AuthContext = Depends(require_mo
             "order_id": str(r.order_id),
             "supplier": r.supplier,
             "quoted_price": float(r.quoted_price or 0),
+            "currency": r.currency,
             "status": r.status,
             "quoted_at": r.quoted_at.isoformat() if r.quoted_at else None,
             "meta": r.meta or {},
@@ -390,6 +493,8 @@ def accept_bunker_inquiry(
         raise HTTPException(404, "Bunker order not found")
     row.status = "accepted"
     order.unit_price = row.quoted_price
+    # 单价来自报价行，币种必须跟着走 —— 报价币种与加油单币种不一致时以报价为准（P2-B6）
+    order.currency = _clean_currency(row.currency) or _clean_currency(order.currency) or "USD"
     if row.supplier:
         order.supplier = row.supplier
     others = db.scalars(
@@ -407,6 +512,7 @@ def accept_bunker_inquiry(
         "status": row.status,
         "order_id": str(order.id),
         "unit_price": float(order.unit_price or 0),
+        "currency": order.currency,
         "supplier": order.supplier,
     }
 
@@ -444,23 +550,28 @@ def bunker_allocation(voyage_id: UUID, auth: AuthContext = Depends(require_modul
     ).all()
     total_qty = Decimal("0")
     total_value = Decimal("0")
+    currencies: set[str] = set()
     for o in orders:
         qty = Decimal(str(o.qty_delivered or 0))
         if qty > 0:
             total_qty += qty
             total_value += qty * Decimal(str(o.unit_price or 0))
-    wavg = (total_value / total_qty).quantize(Decimal("0.01")) if total_qty > 0 else None
-    allocated = (consumption * wavg).quantize(Decimal("0.01")) if wavg is not None else None
+            currencies.add((o.currency or "USD").upper())
+    wavg = (total_value / total_qty).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if total_qty > 0 else None
+    allocated = (consumption * wavg).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if wavg is not None else None
+    # 币种取自加油单本身 —— 以前写死 USD，EUR 租约的加油费被记成美元（P2-B6）
+    currency = next(iter(currencies)) if len(currencies) == 1 else ("MIXED" if currencies else "USD")
     return {
         "voyage_id": str(voyage.id),
         "voyage_no": voyage.voyage_no,
-        "consumption_mt": float(consumption.quantize(Decimal("0.001"))),
+        "consumption_mt": float(consumption.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)),
         "weighted_avg_price": float(wavg) if wavg is not None else None,
         "allocated_amount": float(allocated) if allocated is not None else None,
-        "currency": "USD",
+        "currency": currency,
         "noon_reports": len(noons),
         "delivered_orders": len(orders),
         "basis": "noon ROB(FO+DO) drops x qty-weighted price of delivered bunker orders (simplified)",
+        **({"currencies": sorted(currencies)} if len(currencies) > 1 else {}),
     }
 
 
@@ -506,7 +617,10 @@ def _option_payload(o: BunkerOption) -> dict:
         "fuel_type": o.fuel_type,
         "qty": float(o.qty or 0),
         "price_per_mt": float(o.price_per_mt or 0),
-        "amount": float(o.qty or 0) * float(o.price_per_mt or 0),
+        # 报价总额必须用 Decimal 算 —— float 相乘会带二进制尾数（1686.781 × 390.51
+        # 会变成 658704.8483099999），统一走 money() 的显式 ROUND_HALF_UP（P2-B6）
+        "amount": float(money(Decimal(str(o.qty or 0)) * Decimal(str(o.price_per_mt or 0)))),
+        "currency": o.currency,
         "delivery_date": o.delivery_date.isoformat() if o.delivery_date else None,
         "status": o.status,
         "notes": o.notes,
@@ -546,7 +660,7 @@ def create_bunker_requirement(
         vessel_id=body.vessel_id,
         voyage_id=body.voyage_id,
         fuel_type=body.fuel_type,
-        qty_required=Decimal(str(body.qty_required)).quantize(Decimal("0.001")),
+        qty_required=Decimal(str(body.qty_required)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP),
         port_id=body.port_id,
         window_from=body.window_from,
         window_to=body.window_to,
@@ -662,7 +776,7 @@ def update_bunker_requirement(
     if "qty_required" in fields:
         if body.qty_required is None or body.qty_required <= 0:
             raise HTTPException(422, detail={"code": "INVALID_QTY", "message": "qty_required must be > 0"})
-        row.qty_required = Decimal(str(body.qty_required)).quantize(Decimal("0.001"))
+        row.qty_required = Decimal(str(body.qty_required)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
     if "port_id" in fields:
         if body.port_id is not None:
             _port = db.get(Port, body.port_id)
@@ -724,6 +838,8 @@ class BunkerOptionIn(BaseModel):
     fuel_type: str | None = None
     qty: float | None = None
     price_per_mt: float
+    # 报价币种 —— 不传则取租户本位币（P2-B6）
+    currency: str | None = None
     delivery_date: date | None = None
     notes: str | None = None
 
@@ -763,8 +879,9 @@ def create_bunker_option(
         supplier_id=body.supplier_id,
         port_id=port_id,
         fuel_type=body.fuel_type or req.fuel_type,
-        qty=Decimal(str(qty)).quantize(Decimal("0.001")),
-        price_per_mt=Decimal(str(body.price_per_mt)).quantize(Decimal("0.01")),
+        qty=Decimal(str(qty)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP),
+        price_per_mt=Decimal(str(body.price_per_mt)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        currency=_resolve_currency(db, auth.tenant_id, body.currency),
         delivery_date=body.delivery_date,
         status="offered",
         notes=body.notes,
@@ -838,6 +955,7 @@ def select_bunker_option(
         "requirement_status": req.status,
         "supplier_id": str(opt.supplier_id),
         "price_per_mt": float(opt.price_per_mt or 0),
+        "currency": opt.currency,
         "rejected_options": len(others),
     }
 
@@ -849,6 +967,7 @@ class BunkerOptionUpdate(BaseModel):
     fuel_type: str | None = None
     qty: float | None = None
     price_per_mt: float | None = None
+    currency: str | None = None  # 计价币种（P2-B6）
     delivery_date: date | None = None
     notes: str | None = None
 
@@ -904,11 +1023,13 @@ def update_bunker_option(
     if "qty" in fields and body.qty is not None:
         if body.qty <= 0:
             raise HTTPException(422, detail={"code": "INVALID_QTY", "message": "qty must be > 0"})
-        opt.qty = Decimal(str(body.qty)).quantize(Decimal("0.001"))
+        opt.qty = Decimal(str(body.qty)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
     if "price_per_mt" in fields:
         if body.price_per_mt is None or body.price_per_mt <= 0:
             raise HTTPException(422, detail={"code": "INVALID_PRICE", "message": "price_per_mt must be > 0"})
-        opt.price_per_mt = Decimal(str(body.price_per_mt)).quantize(Decimal("0.01"))
+        opt.price_per_mt = Decimal(str(body.price_per_mt)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if "currency" in fields and body.currency is not None:
+        opt.currency = _resolve_currency(db, auth.tenant_id, body.currency, fallback=opt.currency)
     if "delivery_date" in fields:
         opt.delivery_date = body.delivery_date
     if "notes" in fields:
@@ -953,6 +1074,8 @@ class BunkerCapCollarIn(BaseModel):
     fuel_type: str
     cap_price: float | None = None
     collar_price: float | None = None
+    # 上限/下限价的计价币种 —— 不传则取租户本位币（P2-B6）
+    currency: str | None = None
     index_symbol: str | None = None
     effective_from: date
     effective_to: date | None = None
@@ -989,8 +1112,9 @@ def create_bunker_cap_collar(
         tenant_id=auth.tenant_id,
         charter_id=body.charter_id,
         fuel_type=body.fuel_type,
-        cap_price=Decimal(str(body.cap_price)).quantize(Decimal("0.01")) if body.cap_price is not None else None,
-        collar_price=Decimal(str(body.collar_price)).quantize(Decimal("0.01")) if body.collar_price is not None else None,
+        cap_price=Decimal(str(body.cap_price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if body.cap_price is not None else None,
+        collar_price=Decimal(str(body.collar_price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if body.collar_price is not None else None,
+        currency=_resolve_currency(db, auth.tenant_id, body.currency),
         index_symbol=body.index_symbol,
         effective_from=body.effective_from,
         effective_to=body.effective_to,
@@ -1026,6 +1150,7 @@ def _cap_collar_payload(r: BunkerCapCollar) -> dict:
         "fuel_type": r.fuel_type,
         "cap_price": float(r.cap_price) if r.cap_price is not None else None,
         "collar_price": float(r.collar_price) if r.collar_price is not None else None,
+        "currency": r.currency,
         "index_symbol": r.index_symbol,
         "effective_from": r.effective_from.isoformat() if r.effective_from else None,
         "effective_to": r.effective_to.isoformat() if r.effective_to else None,
@@ -1037,6 +1162,7 @@ class BunkerCapCollarUpdate(BaseModel):
     fuel_type: str | None = None
     cap_price: float | None = None
     collar_price: float | None = None
+    currency: str | None = None  # 计价币种（P2-B6）
     index_symbol: str | None = None
     effective_from: date | None = None
     effective_to: date | None = None
@@ -1086,9 +1212,11 @@ def update_bunker_cap_collar(
     if "fuel_type" in fields and not body.fuel_type:
         raise HTTPException(422, detail={"code": "INVALID_FUEL_TYPE", "message": "fuel_type is required"})
     if "cap_price" in fields:
-        row.cap_price = Decimal(str(cap_price)).quantize(Decimal("0.01")) if cap_price is not None else None
+        row.cap_price = Decimal(str(cap_price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if cap_price is not None else None
     if "collar_price" in fields:
-        row.collar_price = Decimal(str(collar_price)).quantize(Decimal("0.01")) if collar_price is not None else None
+        row.collar_price = Decimal(str(collar_price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if collar_price is not None else None
+    if "currency" in fields and body.currency is not None:
+        row.currency = _resolve_currency(db, auth.tenant_id, body.currency, fallback=row.currency)
     if "charter_id" in fields:
         row.charter_id = body.charter_id
     if "fuel_type" in fields:
@@ -1149,7 +1277,7 @@ def create_consumption_category(
         vessel_id=body.vessel_id,
         category=body.category,
         fuel_type=body.fuel_type,
-        consumption_per_day=Decimal(str(body.consumption_per_day)).quantize(Decimal("0.001")),
+        consumption_per_day=Decimal(str(body.consumption_per_day)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP),
         notes=body.notes,
     )
     db.add(row)
@@ -1223,7 +1351,7 @@ def update_consumption_category(
     if "consumption_per_day" in fields:
         if body.consumption_per_day is None or body.consumption_per_day < 0:
             raise HTTPException(422, detail={"code": "INVALID_CONSUMPTION", "message": "consumption_per_day must be >= 0"})
-        row.consumption_per_day = Decimal(str(body.consumption_per_day)).quantize(Decimal("0.001"))
+        row.consumption_per_day = Decimal(str(body.consumption_per_day)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
     if "fuel_type" in fields:
         row.fuel_type = body.fuel_type
     if "notes" in fields:

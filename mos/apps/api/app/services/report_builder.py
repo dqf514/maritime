@@ -233,6 +233,9 @@ JOIN_TYPES = frozenset({"inner", "left", "right"})
 
 MAX_EXPRESSION_LEN = 200
 
+#: alias 是**原样拼进 SQL 标识符位置**的（P0-2）—— 只允许安全标识符。
+_SAFE_ALIAS_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
 #: Forbidden anywhere inside an expression (comment / statement markers).
 _FORBIDDEN_SUBSTRINGS = ("--", "/*", "*/", ";", "'", '"', "`", "\\")
 
@@ -247,6 +250,7 @@ _TOKEN_RE = re.compile(
 
 class ReportSpecError(ValueError):
     """Raised when a declarative spec fails validation or cannot be built."""
+
 
     def __init__(self, errors: list[str]):
         self.errors = errors
@@ -267,19 +271,32 @@ def _tokenize_expression(expr: str) -> list[str] | None:
 
 
 def _qualified_ident(tok: str, col_map: dict[str, tuple[str, str]]) -> str | None:
-    """Resolve an identifier token to a quoted ``alias"."col`` reference."""
+    """Resolve an identifier token to a quoted ``alias"."col`` reference.
+
+    拼出来的两个片段必须都命中 :data:`_SAFE_ALIAS_RE`（P0-2）—— 这是最后
+    一道闸：即便上游漏了校验，含引号的 alias 也无法闭合标识符。
+    """
     if "." in tok:
         alias, _, name = tok.partition(".")
         key = f"{alias}.{name}"
         if key in col_map:
             a, c = col_map[key]
-            return f'"{a}"."{c}"'
+            return _quote_ident_pair(a, c)
         return None
     matches = {k: v for k, v in col_map.items() if k.split(".", 1)[1] == tok}
     if len(matches) == 1:
         a, c = next(iter(matches.values()))
-        return f'"{a}"."{c}"'
+        return _quote_ident_pair(a, c)
     return None  # unknown or ambiguous
+
+
+def _quote_ident_pair(alias: str, column: str) -> str | None:
+    """安全标识符 → ``"alias"."column"``；不合法则返回 None（拒绝出 SQL）。"""
+    if not _SAFE_ALIAS_RE.match(alias):
+        return None
+    if not _SAFE_ALIAS_RE.match(column):
+        return None
+    return f'"{alias}"."{column}"'
 
 
 def compile_expression(expr: str, col_map: dict[str, tuple[str, str]]) -> str:
@@ -359,7 +376,22 @@ def _field_name(entry: Any) -> str | None:
 
 
 def _dataset_entries(spec: dict) -> list[tuple[str, DatasetDef]]:
-    """Return [(alias, DatasetDef), ...] for spec["datasets"]."""
+    """Return [(alias, DatasetDef), ...] for spec["datasets"].
+
+    **alias 必须命中已注册数据集白名单**（P0-2）：
+
+    审计复现的注入载荷是
+    ``alias = 'x" , (select group_concat(password_hash) from users) as leak --'``，
+    它经 :func:`_qualified_ident` 被拼成 ``"alias"."col"`` 塞进
+    ``literal_column()`` —— 双引号一闭合就跳出标识符，随即注入子查询。
+
+    所以这里做两层约束：
+
+    1. 数据集名必须解析到**已注册**的数据集目录（``get_dataset``），
+       拼不出来的数据集直接拒；
+    2. alias 必须是**安全标识符**（``^[A-Za-z_][A-Za-z0-9_]{0,63}$``）——
+       它会被原样拼进 SQL 标识符位置，不能带任何标点或空白。
+    """
     out: list[tuple[str, DatasetDef]] = []
     for entry in _as_list(spec.get("datasets")):
         key = _ds_key(entry)
@@ -372,6 +404,11 @@ def _dataset_entries(spec: dict) -> list[tuple[str, DatasetDef]]:
         if isinstance(entry, dict):
             alias = entry.get("alias") or entry.get("table_alias")
         alias = str(alias) if alias else ds.entity
+        if not _SAFE_ALIAS_RE.match(alias):
+            raise ReportSpecError(
+                [f"dataset alias {alias!r} is not a valid identifier "
+                 f"(letters/digits/underscore only, max 64 chars)"]
+            )
         out.append((alias, ds))
     return out
 

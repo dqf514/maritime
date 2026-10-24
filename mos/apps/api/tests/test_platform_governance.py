@@ -138,7 +138,9 @@ def test_data_scope_own_narrows_voyage_list(client, auth_headers, db_session):
     oh = _make_ops_user(client, auth_headers)
     r = client.get(f"{API}/voyages", headers=oh)
     assert r.status_code == 200, r.text
-    assert admin_voyage in [v["id"] for v in r.json()]
+    _payload = r.json()
+    _rows = _payload["items"] if isinstance(_payload, dict) else _payload
+    assert admin_voyage in [v["id"] for v in _rows]
 
     # admin 把 operations 角色收窄到 own
     r = client.put(f"{API}/admin/data-scopes", headers=auth_headers, json={
@@ -149,7 +151,9 @@ def test_data_scope_own_narrows_voyage_list(client, auth_headers, db_session):
     # ops 现在只看得到自己创建的（看不到 admin 的）
     r = client.get(f"{API}/voyages", headers=oh)
     assert r.status_code == 200, r.text
-    ids = [v["id"] for v in r.json()]
+    _p = r.json()
+    _rows = _p["items"] if isinstance(_p, dict) else _p
+    ids = [v["id"] for v in _rows]
     assert admin_voyage not in ids
 
     # ops 自己建一个 → 只看得到它
@@ -157,12 +161,16 @@ def test_data_scope_own_narrows_voyage_list(client, auth_headers, db_session):
     assert r.status_code == 200, r.text
     own = r.json()["id"]
     r = client.get(f"{API}/voyages", headers=oh)
-    ids = [v["id"] for v in r.json()]
+    _p = r.json()
+    _rows = _p["items"] if isinstance(_p, dict) else _p
+    ids = [v["id"] for v in _rows]
     assert own in ids and admin_voyage not in ids
 
     # admin（supervisor）不受影响：仍看得到全部
     r = client.get(f"{API}/voyages", headers=auth_headers)
-    ids = [v["id"] for v in r.json()]
+    _p = r.json()
+    _rows = _p["items"] if isinstance(_p, dict) else _p
+    ids = [v["id"] for v in _rows]
     assert admin_voyage in ids and own in ids
 
 

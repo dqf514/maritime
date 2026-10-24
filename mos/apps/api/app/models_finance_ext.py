@@ -7,6 +7,7 @@ payments/receipts with allocations.
 
 from __future__ import annotations
 
+from decimal import Decimal
 import uuid
 from datetime import datetime
 
@@ -38,7 +39,7 @@ class CreditNote(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     invoice_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("invoices.id"), nullable=False)
     credit_note_no: Mapped[str] = mapped_column(Text, nullable=False)
-    amount: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, default="draft")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -54,7 +55,7 @@ class RiskLimit(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     scope: Mapped[str] = mapped_column(String(32), nullable=False)
     limit_type: Mapped[str] = mapped_column(String(16), default="var_1d")
-    amount: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -88,7 +89,9 @@ class BunkerInquiry(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     order_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("bunker_orders.id"), nullable=False)
     supplier: Mapped[str | None] = mapped_column(String(128))
-    quoted_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    quoted_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    # 报价币种 —— 询比价没有币种时 450 USD 与 450 EUR 无法区分（审计 P2-B6）
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
     quoted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     status: Mapped[str] = mapped_column(String(16), default="quoted")
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -110,11 +113,12 @@ class RebillInvoice(Base):
     source_invoice_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("invoices.id"))
     source_expense_type: Mapped[str] = mapped_column(String(32), default="other")  # port_expense|bunker|other
     counterparty_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparties.id"))
-    amount: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     status: Mapped[str] = mapped_column(Text, default="draft")  # draft|sent|paid|cancelled
     over_cap: Mapped[bool] = mapped_column(Boolean, default=False)
-    cap_amount: Mapped[float | None] = mapped_column(Numeric(18, 2))
+    # 列是 Numeric → 注解必须是 Decimal（写 Mapped[float] 是"类型说谎"，审计 P2-B7）
+    cap_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -134,9 +138,9 @@ class CommissionType(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     commission_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    base_amount: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
-    rate_pct: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False)
-    calculated_amount: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    base_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    rate_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    calculated_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("invoices.id"))
     counterparty_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparties.id"))
@@ -153,7 +157,7 @@ class PaymentTerm(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
-    discount_pct: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
     discount_days: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -205,9 +209,9 @@ class AdvancePayment(Base):
     advance_no: Mapped[str] = mapped_column(Text, nullable=False)
     direction: Mapped[str] = mapped_column(String(16), nullable=False, default="payment")  # payment|receipt
     counterparty_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparties.id"))
-    amount: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
-    allocated_amount: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    allocated_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
     status: Mapped[str] = mapped_column(Text, default="unallocated")  # unallocated|partially_allocated|fully_allocated
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -222,7 +226,7 @@ class AdvanceAllocation(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     advance_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("advance_payments.id"), nullable=False)
     invoice_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("invoices.id"), nullable=False)
-    amount: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -242,8 +246,8 @@ class ApprovalLimit(Base):
     role_code: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(32), nullable=False)  # e.g. invoice|payment
     currency: Mapped[str] = mapped_column(String(3), default="USD")
-    amount_from: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
-    amount_to: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    amount_from: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    amount_to: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

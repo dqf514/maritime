@@ -16,7 +16,15 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db
 from app.models import Module, Role, Tenant, TenantModuleLicense, User, UserRole
-from app.security import AuthContext, get_current_auth, hash_password, require_module
+from app.security import (
+    AuthContext,
+    SetPassword,
+    get_current_auth,
+    hash_password,
+    redact_sensitive_fields,
+    require_module,
+    require_roles,
+)
 from app.services.audit import audit
 from app.services.graph_client import request_client_credentials_token
 from app.services.identity import send_mail
@@ -38,15 +46,6 @@ from app.services.shell_nav import (
 from app.services.timeutil import utcnow_naive
 
 router = APIRouter(tags=["Admin & Platform"])
-
-
-def require_roles(*codes: str):
-    def _dep(auth: AuthContext = Depends(get_current_auth)) -> AuthContext:
-        if not any(c in auth.roles for c in codes):
-            raise HTTPException(status_code=403, detail={"code": "ROLE_REQUIRED", "roles": list(codes)})
-        return auth
-
-    return _dep
 
 
 # —— Shell contract for UI ——
@@ -167,6 +166,54 @@ def list_roles(auth: AuthContext = Depends(require_roles("tenant_admin")), db: S
     return [{"id": str(r.id), "code": r.code, "name": r.name, "permissions": r.permissions or {}} for r in rows]
 
 
+class RolePermissionsIn(BaseModel):
+    """角色授权（``Role.permissions``）的修改体。
+
+    形状：``{"<module_code>": true, "read": true}``。
+
+    ⚠️ 这一列以前**只读不写**（只能看，改不了），而且**从不参与鉴权**
+    —— 租户管理员看到的"授权"是摆设（P2「Role.permissions 从未参与鉴权」）。
+    现在：
+
+    1. 本端点让授权**真的可编辑**；
+    2. ``app/security.py:tenant_role_grants`` 让它**真的参与鉴权**
+       （只**追加**静态映射之外的授权，不会收回 shell_nav 已有的权限）。
+    """
+
+    permissions: dict[str, bool] = Field(default_factory=dict)
+
+
+@router.put("/admin/roles/{role_code}/permissions")
+def update_role_permissions(
+    role_code: str,
+    body: RolePermissionsIn,
+    auth: AuthContext = Depends(require_roles("tenant_admin")),
+    db: Session = Depends(get_db),
+):
+    """修改角色授权 —— 只影响本租户。
+
+    - ``viewer`` 的 ``"*"`` 通配授权会被拒绝：viewer 是**只读**角色，
+      全局不变式（``roles_for_module`` 恒排除 viewer）不能被绕过。
+    - 模块码不做白名单校验（模块目录随版本变化），但**未知键**会被丢弃，
+      只保留布尔值 —— 避免把任意结构塞进 JSON 列。
+    """
+    role = db.scalar(select(Role).where(Role.tenant_id == auth.tenant_id, Role.code == role_code))
+    if not role:
+        raise HTTPException(404, detail={"code": "ROLE_NOT_FOUND", "message": "Role not found"})
+    perms = {k: bool(v) for k, v in (body.permissions or {}).items() if isinstance(v, bool)}
+    if role.code == "viewer" and perms.get("*"):
+        raise HTTPException(
+            422,
+            detail={
+                "code": "ROLE_PERMISSION_INVALID",
+                "message": "viewer is a read-only role; wildcard write grant is not allowed",
+            },
+        )
+    role.permissions = perms
+    db.commit()
+    return {"id": str(role.id), "code": role.code, "name": role.name, "permissions": role.permissions or {}}
+
+
 @router.get("/admin/users")
 def list_users(
     limit: int = Query(100, ge=1, le=500),
@@ -229,7 +276,7 @@ def list_users(
 class UserCreate(BaseModel):
     email: EmailStr
     full_name: str
-    password: str = Field(min_length=8)
+    password: SetPassword = Field(min_length=8)
     role_codes: list[str] = Field(default_factory=lambda: ["viewer"])
     org_unit_id: UUID | None = None
 
@@ -452,7 +499,7 @@ class TenantCreate(BaseModel):
     profile_tier: str = "M"
     admin_email: EmailStr
     admin_name: str = "Tenant Admin"
-    admin_password: str = Field(min_length=8)
+    admin_password: SetPassword = Field(min_length=8)
 
 
 @router.get("/platform/tenants")
@@ -677,11 +724,16 @@ def platform_backup_tenant(
     auth: AuthContext = Depends(require_roles("platform_admin")),
     db: Session = Depends(get_db),
 ):
-    """全量备份租户数据（所有带 tenant_id 的业务表 → JSON + BackupJob 记录）。"""
+    """全量备份租户数据（所有带 tenant_id 的业务表 → JSON + BackupJob 记录）。
+
+    **P0-21**：dump 内容剔除 ``password_hash`` / ``key_hash`` / 明文密钥等
+    敏感列 —— 备份文件落在磁盘上，被读走就是「全量口令哈希 + 明文 API Key」。
+    """
     from app.services.tenant_backup import dump_tenant, write_backup_file
 
     tenant = _platform_tenant_or_404(db, tenant_id)
     payload = dump_tenant(db, tenant.id, created_by=auth.user_id, trigger="platform")
+    redact_sensitive_fields(payload)
     job = write_backup_file(db, tenant.id, payload, created_by=auth.user_id)
     return {**_backup_job_out(job), "row_counts": payload["row_counts"], "total_rows": payload["total_rows"]}
 
@@ -751,6 +803,8 @@ def platform_purge_tenant(
     backup_job = None
     if body.backup_first:
         payload = dump_tenant(db, tenant.id, created_by=auth.user_id, trigger="platform_purge")
+        # P0-21：备份同样剔除敏感列
+        redact_sensitive_fields(payload)
         backup_job = write_backup_file(db, tenant.id, payload, created_by=auth.user_id)
     result = purge_tenant(db, tenant.id, include_users=body.include_users)
     return {
@@ -1232,7 +1286,7 @@ class PlatformUserCreateIn(BaseModel):
     full_name: str
     role_codes: list[str] = Field(default_factory=lambda: ["viewer"])
     # omitted → server generates a temp password (returned once + emailed)
-    password: str | None = Field(default=None, min_length=8)
+    password: SetPassword | None = Field(default=None, min_length=8)
     send_email: bool = True
 
 
@@ -1422,7 +1476,8 @@ def platform_delete_tenant_user(
 
 class PlatformPasswordResetIn(BaseModel):
     # omitted → server generates a temp password (returned once + emailed)
-    password: str | None = Field(default=None, min_length=8)
+    # SetPassword → 超过 72 字节直接 422（bcrypt 上限），而不是落到 hash 阶段才 500。
+    password: SetPassword | None = Field(default=None, min_length=8)
     send_email: bool = True
 
 

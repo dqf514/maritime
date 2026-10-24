@@ -38,7 +38,7 @@
   border-color: var(--accent);
 }
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, var(--accent), var(--accent-soft));
+  background: linear-gradient(180deg, var(--accent-strong), var(--accent-strong-soft));
   filter: brightness(1.05);
   border-color: var(--accent);
 }

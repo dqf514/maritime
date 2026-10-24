@@ -1,9 +1,11 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { RefreshButton } from "@/components/RefreshButton";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
@@ -13,9 +15,11 @@ import { LookupSelect } from "@/components/LookupSelect";
 import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { SavedViews } from "@/components/SavedViews";
+import { StateView } from "@/components/StateView";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { useListQuery } from "@/lib/useListQuery";
@@ -49,11 +53,21 @@ const emptyVessel = {
 };
 
 // 表单值（字符串）↔ API 值（数字/null）互转：空串一律归 null，避免写成 0。
+// 非法输入（NaN）必须报错并中止提交，不得静默变成 0。
 function numIn(v: string): number | null {
   return v === "" || v === null || v === undefined ? null : Number(v);
 }
 function numOut(v: number | string | null | undefined): string {
   return v === null || v === undefined || v === "" ? "" : String(v);
+}
+
+/** 数值字段：ok=合法 | empty=留空(null) | bad=非法输入（必须中止提交） */
+type NumParse = { kind: "ok"; value: number } | { kind: "empty" } | { kind: "bad" };
+function parseNum(raw: string): NumParse {
+  const s = (raw ?? "").trim();
+  if (s === "") return { kind: "empty" };
+  const n = Number(s);
+  return Number.isFinite(n) ? { kind: "ok", value: n } : { kind: "bad" };
 }
 
 function VesselsPage() {
@@ -68,13 +82,27 @@ function VesselsPage() {
   const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({ ...emptyVessel });
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [listErr, setListErr] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<{ run: () => void; name: string } | null>(null);
 
   async function load() {
-    setRows(await apiGet("/api/v1/masterdata/vessels"));
+    setLoading(true);
+    try {
+      const data = await apiGet("/api/v1/masterdata/vessels");
+      setRows(Array.isArray(data) ? (data as Vessel[]) : []);
+      setListErr("");
+    } catch (ex) {
+      // 列表取数失败必须走错误态，不能静默变成「No records」
+      setRows([]);
+      setListErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch(() => setRows([]));
+    void load();
   }, []);
 
   function openCreate() {
@@ -133,6 +161,25 @@ function VesselsPage() {
   }
 
   async function save() {
+    // 数值校验：非法输入必须中止提交（不能用 || 0 把垃圾输入静默写成 0）
+    const numFields: Array<[keyof typeof edit, string]> = [
+      ["dwt", t("page.vessels.dwt", "DWT (MT)")],
+      ["speed_laden", t("page.vessels.speed_laden", "Speed laden (kn)")],
+      ["speed_ballast", t("page.vessels.speed_ballast", "Speed ballast (kn)")],
+      ["tpc", t("page.vessels.tpc", "TPC")],
+      ["daily_cost", t("page.vessels.daily_cost", "Daily cost (USD)")],
+    ];
+    for (const [key, label] of numFields) {
+      const p = parseNum(edit[key] as string);
+      if (p.kind === "bad") {
+        toast.error(t("page.vessels.err_numeric", "{field} must be a valid number", { field: label }));
+        return;
+      }
+      if (p.kind === "ok" && p.value < 0) {
+        toast.error(t("page.vessels.err_negative", "{field} must not be negative", { field: label }));
+        return;
+      }
+    }
     setSaving(true);
     try {
       if (creating || !open) {
@@ -144,21 +191,29 @@ function VesselsPage() {
       }
       closeModal();
       await load();
-    } catch {
-      toast.error(creating ? t("page.vessels.create_fail", "Create failed") : t("common.failed", "Failed"));
+    } catch (ex) {
+      // 写入失败必须报错（此前是 try/finally 无 catch，失败被静默吞掉）
+      toast.error(msgOf(ex, creating ? t("page.vessels.create_fail", "Create failed") : t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
   }
 
-  async function remove() {
-    if (!open) return;
+  /** 删除是不可逆动作 —— 走指名对象的二次确认（RecordModal 内置文案无法指名对象）。 */
+  function requestDelete(v: Vessel) {
+    setPendingDelete({ run: () => void remove(v), name: v.name });
+  }
+
+  async function remove(v: Vessel) {
     setSaving(true);
     try {
-      await apiDelete(`/api/v1/masterdata/vessels/${open.id}`);
+      await apiDelete(`/api/v1/masterdata/vessels/${v.id}`);
       toast.success(t("common.recycled", "Moved to recycle bin"));
       closeModal();
       await load();
+    } catch (ex) {
+      // 删除失败必须报错（此前 try/finally 无 catch，失败被静默吞掉）
+      toast.error(msgOf(ex));
     } finally {
       setSaving(false);
     }
@@ -182,7 +237,7 @@ function VesselsPage() {
       })
     : rows;
 
-  const columns: ColumnDef<Vessel>[] = [
+  const columns = useMemo<ColumnDef<Vessel>[]>(() => [
     {
       key: "name",
       title: t("common.name", "Name"),
@@ -317,7 +372,7 @@ function VesselsPage() {
         </button>
       ),
     },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -355,19 +410,29 @@ function VesselsPage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.vessels.add", "New vessel")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => void load()} />
       </Toolbar>
       <div className="panel">
-        <DataGrid<Vessel>
-          columns={columns}
-          data={filtered}
-          rowKey={(r) => r.id}
-          onRowClick={(r) => router.push(`/ship/vessels/${r.id}`)}
-          storageKey="masterdata_vessels_grid"
+        <StateView
+          loading={loading}
+          error={listErr || undefined}
+          empty={!filtered.length}
           emptyText={t("common.empty", "No records")}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid<Vessel>
+            columns={columns}
+            data={filtered}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => router.push(`/ship/vessels/${r.id}`)}
+            storageKey="masterdata_vessels_grid"
+            emptyText={t("common.empty", "No records")}
+          />
+        </StateView>
+        {/* P1-28：列表总数必须可见 */}
+        {!listErr && filtered.length ? (
+          <p className="muted">{t("list.count_total", "{n} records", { n: filtered.length })}</p>
+        ) : null}
       </div>
 
       <RecordModal
@@ -375,8 +440,6 @@ function VesselsPage() {
         title={creating ? t("page.vessels.add", "New vessel") : t("page.vessels.edit", "Edit vessel")}
         onClose={closeModal}
         onSave={save}
-        onDelete={creating ? undefined : remove}
-        canDelete={!creating}
         saving={saving}
       >
         <label>
@@ -490,7 +553,35 @@ function VesselsPage() {
             <input type="number" step="0.01" value={edit.daily_cost} onChange={(e) => setEdit({ ...edit, daily_cost: e.target.value })} />
           </label>
         </FormSection>
+
+        {/* P1-8：删除船舶是不可逆动作 —— 走指名对象的二次确认（RecordModal 内置文案无法指名对象）。 */}
+        {open ? (
+          <div className="desk-toolbar">
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={saving}
+              onClick={() => requestDelete(open)}
+            >
+              {t("common.delete", "Delete")}
+            </button>
+          </div>
+        ) : null}
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: pendingDelete?.name ?? "" })}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = pendingDelete;
+          setPendingDelete(null);
+          fn?.run();
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

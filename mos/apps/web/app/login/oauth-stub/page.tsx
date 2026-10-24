@@ -1,5 +1,6 @@
 "use client";
 
+import { msgOf } from "@/lib/errors";
 import { FormEvent, Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -74,7 +75,7 @@ function OAuthStubPage() {
           )}{" "}
           {t("login.oauth_stub_env", "Set MICROSOFT_* / GOOGLE_* env for live mode.")}
         </p>
-        {error ? <div className="error">{String(error)}</div> : null}
+        {error ? <div className="error">{msgOf(error)}</div> : null}
         <label>
           {t("login.oauth_stub_email", "Email to assert")}
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />

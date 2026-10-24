@@ -3,11 +3,15 @@
 // C4-P3 数据字典 / UDF 管理 — user-defined field definitions (Excel-dense).
 // 列表/筛选/新建/编辑/启停/删除；select 类型 options 以逗号分隔录入。
 
+import { RefreshButton } from "@/components/RefreshButton";
+import { msgOf } from "@/lib/errors";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Toolbar } from "@/components/Toolbar";
 import { RecordModal } from "@/components/RecordModal";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
@@ -69,21 +73,40 @@ export default function UdfDictionaryPage() {
   const [editing, setEditing] = useState<UdfDef | null>(null);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  // 参考数据（实体下拉）失败：局部提示，不阻断整页
+  const [entitiesErr, setEntitiesErr] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
 
   const load = useCallback(async () => {
-    const rows = (await apiGet("/api/v1/udf?include_inactive=true")) as UdfDef[];
-    setDefs(rows);
+    setLoading(true);
+    setErr(null);
+    try {
+      const rows = (await apiGet("/api/v1/udf?include_inactive=true")) as UdfDef[];
+      setDefs(Array.isArray(rows) ? rows : []);
+    } catch (ex) {
+      setErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const loadEntities = useCallback(async () => {
-    const rows = (await apiGet("/api/v1/udf/entities")) as EntityOption[];
-    setEntities(rows);
+    setEntitiesErr(null);
+    try {
+      const rows = (await apiGet("/api/v1/udf/entities")) as EntityOption[];
+      setEntities(Array.isArray(rows) ? rows : []);
+    } catch (ex) {
+      setEntitiesErr(msgOf(ex));
+      setEntities([]);
+    }
   }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async load; same pattern as settings/flags
-    load().catch(() => setDefs([]));
-    loadEntities().catch(() => setEntities([]));
+    load();
+    loadEntities();
   }, [load, loadEntities]);
 
   const entityLabel = useCallback(
@@ -111,7 +134,7 @@ export default function UdfDictionaryPage() {
     setEditing(null);
   }
 
-  function openEdit(row: UdfDef) {
+  const openEdit = useCallback((row: UdfDef) => {
     setForm({
       entity: row.entity,
       field_key: row.field_key,
@@ -125,11 +148,18 @@ export default function UdfDictionaryPage() {
     });
     setEditing(row);
     setCreating(false);
-  }
+  }, []);
 
   async function save(e?: FormEvent) {
     e?.preventDefault();
     if (!form.field_key.trim()) return;
+    // 数值校验：sort_order 非法输入 → 中止提交（不静默变 0；0 本身合法）
+    const sortOrderRaw = String(form.sort_order ?? "").trim();
+    const sortOrder = sortOrderRaw === "" ? 0 : Number(sortOrderRaw);
+    if (!Number.isFinite(sortOrder)) {
+      toast.error(t("page.udf.invalid_sort_order", "Sort order must be a number."));
+      return;
+    }
     setBusy(true);
     try {
       const payload = {
@@ -139,7 +169,7 @@ export default function UdfDictionaryPage() {
         options: textToOptions(form.options_text, form.field_type),
         required: form.required,
         active: form.active,
-        sort_order: Number(form.sort_order) || 0,
+        sort_order: sortOrder,
       };
       if (editing) {
         await apiPatch(`/api/v1/udf/${editing.id}`, payload);
@@ -156,32 +186,47 @@ export default function UdfDictionaryPage() {
       setEditing(null);
       await load();
     } catch (err) {
-      toast.error(t("page.udf.save_fail", "Failed to save field: {err}", { err: String(err) }));
+      toast.error(t("page.udf.save_fail", "Failed to save field: {err}", { err: msgOf(err) }));
     } finally {
       setBusy(false);
     }
   }
 
-  async function toggleActive(row: UdfDef) {
+  const toggleActive = useCallback(async (row: UdfDef) => {
     try {
       const updated = (await apiPatch(`/api/v1/udf/${row.id}`, { active: !row.active })) as UdfDef;
       setDefs((prev) => prev.map((d) => (d.id === row.id ? { ...d, active: updated.active } : d)));
     } catch (err) {
-      toast.error(t("page.udf.save_fail", "Failed to save field: {err}", { err: String(err) }));
+      toast.error(t("page.udf.save_fail", "Failed to save field: {err}", { err: msgOf(err) }));
     }
-  }
+  }, [t, toast]);
 
-  async function remove(row: UdfDef) {
+  const remove = useCallback(async (row: UdfDef) => {
     try {
       await apiDelete(`/api/v1/udf/${row.id}`);
       toast.success(t("page.udf.deleted", "Field deleted"));
       setDefs((prev) => prev.filter((d) => d.id !== row.id));
     } catch (err) {
-      toast.error(t("page.udf.delete_fail", "Failed to delete field: {err}", { err: String(err) }));
+      toast.error(t("page.udf.delete_fail", "Failed to delete field: {err}", { err: msgOf(err) }));
     }
-  }
+  }, [t, toast]);
 
-  const columns: ColumnDef<UdfDef>[] = [
+  /** 删除字段不可逆 → ConfirmDialog 二次确认（指名字段） */
+  const askRemove = useCallback((row: UdfDef) => {
+    setPending({
+      message: t(
+        "page.udf.confirm_delete",
+        "删除字段 {key}（{entity}）？该字段的已录入数据将不可恢复。",
+        { key: row.field_key, entity: row.entity },
+      ),
+      danger: true,
+      action: () => {
+        remove(row).catch((ex) => toast.error(t("page.udf.delete_fail", "Failed to delete field: {err}", { err: msgOf(ex) })));
+      },
+    });
+  }, [remove, t, toast]);
+
+  const columns = useMemo<ColumnDef<UdfDef>[]>(() => [
     {
       key: "entity",
       title: t("page.udf.col_entity", "Entity"),
@@ -251,13 +296,14 @@ export default function UdfDictionaryPage() {
           type="button"
           className="btn btn-sm btn-danger"
           title={t("page.udf.delete", "Delete field")}
-          onClick={() => remove(r)}
+          aria-label={t("page.udf.delete", "Delete field")}
+          onClick={() => askRemove(r)}
         >
           ✕
         </button>
       ),
     },
-  ];
+  ], [t, entityLabel, openEdit, toggleActive, askRemove]);
 
   const formFields = (
     <>
@@ -405,22 +451,29 @@ export default function UdfDictionaryPage() {
           </>
         }
       >
-        <button type="button" className="btn btn-sm" onClick={() => load()} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load()} />
         <span className="muted" style={{ fontSize: "var(--font-label)" }}>
           {filtered.length} / {defs.length}
         </span>
       </Toolbar>
 
-      <DataGrid<UdfDef>
-        columns={columns}
-        data={filtered}
-        rowKey={(r) => r.id}
-        storageKey="settings_udf_grid"
-        onRowDoubleClick={(r) => openEdit(r)}
+      {entitiesErr ? <p className="text-danger">{entitiesErr}</p> : null}
+      <StateView
+        loading={loading}
+        error={err ?? undefined}
+        empty={!filtered.length}
+        onRetry={() => load()}
         emptyText={t("page.udf.empty", "No user-defined fields")}
-      />
+      >
+        <DataGrid<UdfDef>
+          columns={columns}
+          data={filtered}
+          rowKey={(r) => r.id}
+          storageKey="settings_udf_grid"
+          onRowDoubleClick={(r) => openEdit(r)}
+          emptyText={t("page.udf.empty", "No user-defined fields")}
+        />
+      </StateView>
 
       <RecordModal
         open={creating || !!editing}
@@ -436,6 +489,19 @@ export default function UdfDictionaryPage() {
       >
         <div className="form-grid">{formFields}</div>
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pending)}
+        title={t("common.confirm", "Confirm")}
+        message={pending?.message || ""}
+        danger={pending?.danger}
+        onConfirm={() => {
+          const fn = pending?.action;
+          setPending(null);
+          fn?.();
+        }}
+        onCancel={() => setPending(null)}
+      />
     </AppShell>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { RefreshButton } from "@/components/RefreshButton";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ImageCropModal } from "@/components/ImageCropModal";
@@ -132,18 +133,11 @@ export default function CompanyBrandPage() {
         <button type="submit" className="btn btn-primary" form="company-profile-form">
           {t("page.company.save", "Save profile")}
         </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() =>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() =>
             apiGet("/api/v1/admin/company-profile")
               .then((p) => setForm((f) => ({ ...f, ...p })))
               .catch(() => toast.error(t("page.company.admin_required", "Tenant admin required")))
-          }
-          title={t("common.refresh", "Refresh")}
-        >
-          ↻
-        </button>
+          } />
       </Toolbar>
       <form id="company-profile-form" className="panel" onSubmit={(e) => save(e).catch(() => toast.error(t("common.failed", "Failed")))}>
         {/* ── Logo upload ── */}

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID
 from xml.sax.saxutils import escape
@@ -36,7 +36,7 @@ from app.models import Tenant
 from app.models_domain import Invoice, Payment, PaymentBatch
 from app.models_finance_ext import BankAccount
 from app.models_wave1 import Counterparty
-from app.security import AuthContext, require_module
+from app.security import AuthContext, require_module, require_module_read
 from app.services.tenant_guard import scoped_get
 
 router = APIRouter()
@@ -52,7 +52,9 @@ _PAIN_NS = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"
 
 
 def _amt(value: Any) -> Decimal:
-    return Decimal(str(value or 0)).quantize(Decimal("0.01"))
+    # 显式 ROUND_HALF_UP —— 裸 quantize() 是银行家舍入（HALF_EVEN），
+    # 银行指令金额按 HALF_EVEN 会和账上金额差半分。
+    return Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _money_dot(value: Any) -> str:
@@ -137,6 +139,7 @@ class _Txn:
         invoice: Invoice | None,
         counterparty: Counterparty | None,
         creditor_acct: BankAccount | None,
+        amount: Decimal | None = None,
     ) -> None:
         self.payment = payment
         self.invoice = invoice
@@ -145,7 +148,7 @@ class _Txn:
         inv_no = invoice.invoice_no if invoice is not None else str(payment.invoice_id)
         self.end_to_end = _txt(payment.reference or inv_no, 35)
         self.remittance = _txt(f"{inv_no} {payment.reference or ''}".strip(), 140)
-        self.amount = _amt(payment.amount)
+        self.amount = _amt(amount if amount is not None else payment.amount)
         self.currency = (payment.currency or (invoice.currency if invoice else "USD") or "USD").upper()
 
 
@@ -159,11 +162,24 @@ def _load_txns(db: Session, tenant_id: UUID, batch_id: UUID) -> tuple[PaymentBat
         .order_by(Payment.id.asc())
     ).all()
     txns: list[_Txn] = []
+    # P2-B9：**冲销过的付款不能出现在付款指令里**。冲销会写一条负金额、
+    # reference="VOID:<batch id>" 的台账行；旧实现把正负两行都塞进 MT103 /
+    # pain.001，银行照着付就付了两遍。这里按发票取净额：为 0 的不导出。
+    net: dict[UUID, Decimal] = {}
     for pay in payments:
+        net[pay.invoice_id] = net.get(pay.invoice_id, Decimal("0")) + Decimal(str(pay.amount or 0))
+    seen: set[UUID] = set()
+    for pay in payments:
+        if pay.invoice_id in seen:
+            continue
+        seen.add(pay.invoice_id)
+        net_amount = net.get(pay.invoice_id, Decimal("0"))
+        if net_amount == 0:
+            continue  # 已全额冲销 —— 不再付
         inv = scoped_get(db, Invoice, pay.invoice_id, tenant_id)
         cp = scoped_get(db, Counterparty, inv.counterparty_id, tenant_id) if inv and inv.counterparty_id else None
         creditor = _creditor_bank_account(db, tenant_id, inv.counterparty_id if inv else None)
-        txns.append(_Txn(pay, inv, cp, creditor))
+        txns.append(_Txn(pay, inv, cp, creditor, amount=net_amount))
     return batch, txns
 
 
@@ -211,10 +227,13 @@ def render_mt103(batch: PaymentBatch, txns: list[_Txn], tenant: Tenant | None, d
             "-}",
         ]
         chunks.append("\n".join(lines))
+    # P2-B9：抬头金额用**实际要付的净额**，不是批次原总额 —— 批次被冲销后
+    # 抬头还写着原总额、银行照着付，钱就白付了。
+    instruct_total = sum((t.amount for t in txns), Decimal("0"))
     header = (
         f"{{1:F01MARIOSXXX0000000000}}{{2:I103{debtor_bic[:8]}XXXXN}}{{4:\n"
         f":20:{_txt(batch.batch_number, 16)}\n"
-        f":32A:{value_date}{(batch.currency or 'USD').upper()}{_money_swift(batch.total_amount)}\n"
+        f":32A:{value_date}{(batch.currency or 'USD').upper()}{_money_swift(instruct_total)}\n"
         f":72:/BNF/BATCH EXPORT {batch.batch_number} {iso_date} MTX{len(txns)}\n"
         "-}\n"
     )
@@ -223,7 +242,7 @@ def render_mt103(batch: PaymentBatch, txns: list[_Txn], tenant: Tenant | None, d
         "MariOS MT103-style payment instruction (best-effort human-readable; "
         "not a full SWIFT compliance engine)\n"
         f"Batch: {batch.batch_number}  Date: {iso_date}  Currency: {batch.currency}  "
-        f"Total: {_money_dot(batch.total_amount)}  Payments: {len(txns)}\n\n"
+        f"Total: {_money_dot(instruct_total)}  Payments: {len(txns)}\n\n"
         f"{header}\n{body}\n"
     )
 
@@ -306,7 +325,7 @@ def render_pain001(batch: PaymentBatch, txns: list[_Txn], tenant: Tenant | None,
 def export_payment_batch(
     batch_id: UUID,
     format: str = Query("pain001", description="mt103 | pain001"),
-    auth: AuthContext = Depends(require_module("finance")),
+    auth: AuthContext = Depends(require_module_read("finance")),
     db: Session = Depends(get_db),
 ):
     """Export a payment batch as an MT103-style text file or pain.001.001.03 XML.

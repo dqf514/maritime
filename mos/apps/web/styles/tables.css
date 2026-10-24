@@ -128,8 +128,8 @@
 .dt-row-clickable { cursor: pointer; }
 .dt-row-selected { background: var(--row-selected) !important; }
 .dt-row-focused {
-  outline: 1px solid var(--focus-ring);
-  outline-offset: -1px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 .dt-empty {
   text-align: center;
@@ -331,7 +331,7 @@
 .data-picker-item.active { background: var(--accent-bg); }
 .data-picker-item.kbd-active {
   background: var(--row-selected);
-  outline: 1px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
 }
 
 /* Print doc —— 信头用租户品牌色（brand_primary），未设置时退回边框色 */

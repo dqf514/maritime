@@ -6,6 +6,7 @@
 // Tab3 Skill Bindings: skill → primary/fallback provider
 // Tab4 Usage: token 用量看板（by agent / conversation / day）
 
+import { msgOf } from "@/lib/errors";
 import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -137,6 +138,10 @@ function AiSettingsPage() {
   // —— providers ——
   const [providers, setProviders] = useState<Provider[]>([]);
   const [providersLoading, setProvidersLoading] = useState(true);
+  // 各标签页独立错误态：加载失败必须显式报错，不能退化为空列表
+  const [providersErr, setProvidersErr] = useState<string | null>(null);
+  const [modelsErr, setModelsErr] = useState<string | null>(null);
+  const [skillsErr, setSkillsErr] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
   const [form, setForm] = useState<ProviderForm>(EMPTY_FORM);
@@ -176,10 +181,12 @@ function AiSettingsPage() {
 
   const loadProviders = useCallback(async () => {
     setProvidersLoading(true);
+    setProvidersErr(null);
     try {
       const data = await apiGet("/api/v1/settings/ai/providers");
       setProviders(Array.isArray(data) ? data : []);
-    } catch {
+    } catch (ex) {
+      setProvidersErr(msgOf(ex));
       setProviders([]);
     }
     setProvidersLoading(false);
@@ -248,7 +255,7 @@ function AiSettingsPage() {
     } catch (err) {
       toast.error(
         t("ai.provider.save_fail", { en: "Save failed: {msg}", zh: "保存失败：{msg}" }, {
-          msg: err instanceof Error ? err.message : String(err),
+          msg: msgOf(err),
         }),
       );
     }
@@ -264,7 +271,7 @@ function AiSettingsPage() {
     } catch (err) {
       toast.error(
         t("ai.provider.delete_fail", { en: "Delete failed: {msg}", zh: "删除失败：{msg}" }, {
-          msg: err instanceof Error ? err.message : String(err),
+          msg: msgOf(err),
         }),
       );
     }
@@ -296,7 +303,7 @@ function AiSettingsPage() {
         );
       } else {
         // 探测失败（后端已给出友好提示）→ 红色 toast，别再报「连接正常」
-        toast.error(String(res?.message || ""));
+        toast.error(res?.message ? String(res.message) : t("ai.test.failed", "Connection test failed"));
       }
     } catch (err) {
       setTestResult({
@@ -305,7 +312,7 @@ function AiSettingsPage() {
         latency_ms: Date.now() - started,
         models: [],
         model: p.model_default,
-        message: err instanceof Error ? err.message : String(err),
+        message: msgOf(err),
         tested_at: new Date().toISOString(),
       });
       toast.error(t("ai.test.fail", { en: "Connection test failed", zh: "连接测试失败" }));
@@ -389,6 +396,7 @@ function AiSettingsPage() {
   // ============================== model settings ==============================
 
   const loadModelsTab = useCallback(async () => {
+    setModelsErr(null);
     try {
       const data = (await apiGet("/api/v1/settings/ai/models")) as ModelsResponse | ModelEntry[];
       if (Array.isArray(data)) {
@@ -403,7 +411,8 @@ function AiSettingsPage() {
           if (d.timeout_s !== undefined) setGlobalTimeout(String(d.timeout_s));
         }
       }
-    } catch {
+    } catch (ex) {
+      setModelsErr(msgOf(ex));
       setModelEntries([]);
     }
     try {
@@ -411,7 +420,8 @@ function AiSettingsPage() {
       const list: AgentRow[] = Array.isArray(ags) ? ags : [];
       setAgents(list);
       setAgentSel((prev) => prev || list[0]?.agent_name || "");
-    } catch {
+    } catch (ex) {
+      setModelsErr(msgOf(ex));
       setAgents([]);
     }
   }, []);
@@ -439,7 +449,7 @@ function AiSettingsPage() {
     } catch (err) {
       toast.error(
         t("ai.models.save_fail", { en: "Save failed: {msg}", zh: "保存失败：{msg}" }, {
-          msg: err instanceof Error ? err.message : String(err),
+          msg: msgOf(err),
         }),
       );
     }
@@ -459,7 +469,7 @@ function AiSettingsPage() {
     } catch (err) {
       toast.error(
         t("ai.models.save_fail", { en: "Save failed: {msg}", zh: "保存失败：{msg}" }, {
-          msg: err instanceof Error ? err.message : String(err),
+          msg: msgOf(err),
         }),
       );
     }
@@ -470,6 +480,7 @@ function AiSettingsPage() {
 
   const loadSkills = useCallback(async () => {
     setSkillsLoading(true);
+    setSkillsErr(null);
     try {
       const [cat, binds] = await Promise.all([
         apiGet("/api/v1/settings/ai/skills/catalog"),
@@ -477,7 +488,8 @@ function AiSettingsPage() {
       ]);
       setSkills(Array.isArray(cat) ? cat : []);
       setBindings(Array.isArray(binds) ? binds : []);
-    } catch {
+    } catch (ex) {
+      setSkillsErr(msgOf(ex));
       setSkills([]);
       setBindings([]);
     }
@@ -509,7 +521,7 @@ function AiSettingsPage() {
     } catch (err) {
       toast.error(
         t("ai.bind.bad_json", { en: "Params must be valid JSON: {msg}", zh: "参数须为合法 JSON：{msg}" }, {
-          msg: err instanceof Error ? err.message : String(err),
+          msg: msgOf(err),
         }),
       );
       return;
@@ -528,7 +540,7 @@ function AiSettingsPage() {
     } catch (err) {
       toast.error(
         t("ai.bind.save_fail", { en: "Save failed: {msg}", zh: "保存失败：{msg}" }, {
-          msg: err instanceof Error ? err.message : String(err),
+          msg: msgOf(err),
         }),
       );
     }
@@ -825,6 +837,14 @@ function AiSettingsPage() {
               </div>
             )}
 
+            {providersErr ? (
+              <p className="text-danger">
+                {providersErr}{" "}
+                <button type="button" className="btn btn-sm" onClick={() => loadProviders()}>
+                  {t("common.retry", "重试")}
+                </button>
+              </p>
+            ) : null}
             <DataGrid<Provider>
               columns={providerCols}
               data={providers}
@@ -982,7 +1002,15 @@ function AiSettingsPage() {
                   {t("common.refresh", "Refresh")}
                 </button>
               </div>
-              {modelEntries.length === 0 && (
+              {modelsErr ? (
+                <p className="text-danger">
+                  {modelsErr}{" "}
+                  <button type="button" className="btn btn-sm" onClick={() => loadModelsTab()}>
+                    {t("common.retry", "重试")}
+                  </button>
+                </p>
+              ) : null}
+              {modelEntries.length === 0 && !modelsErr && (
                 <p className="hint" style={{ color: "var(--muted)" }}>
                   {t("ai.models.available_empty", {
                     en: "No model inventory yet — run a provider connection test first.",
@@ -1048,6 +1076,14 @@ function AiSettingsPage() {
                 })}
               </span>
             </div>
+            {skillsErr ? (
+              <p className="text-danger">
+                {skillsErr}{" "}
+                <button type="button" className="btn btn-sm" onClick={() => loadSkills()}>
+                  {t("common.retry", "重试")}
+                </button>
+              </p>
+            ) : null}
             <DataGrid<(typeof skillRows)[number]>
               columns={skillCols}
               data={skillRows}

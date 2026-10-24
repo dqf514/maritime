@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.security import AuthContext, get_current_auth, require_module
+from app.security import AuthContext, get_current_auth, require_module, require_roles
 from app.services import doc_engine
 
 # 前缀不能用 /docs —— 与 FastAPI 自带的 Swagger UI 路径冲突
@@ -27,15 +27,6 @@ router = APIRouter(prefix="/documents", tags=["Documents & templates"])
 
 # 模板编辑属于管理动作 —— 只给能改配置的角色；出单放开到业务角色
 _EDIT_ROLES = ("tenant_admin", "finance", "chartering", "management")
-
-
-def require_roles(*codes: str):
-    def _dep(auth: AuthContext = Depends(get_current_auth)) -> AuthContext:
-        if not any(c in auth.roles for c in codes):
-            raise HTTPException(status_code=403, detail={"code": "ROLE_REQUIRED", "roles": list(codes)})
-        return auth
-
-    return _dep
 
 
 class TemplateUpdateIn(BaseModel):

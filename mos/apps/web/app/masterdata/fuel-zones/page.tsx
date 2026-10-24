@@ -1,7 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { RefreshButton } from "@/components/RefreshButton";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
@@ -9,12 +11,14 @@ import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
+import { StateView } from "@/components/StateView";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
@@ -39,6 +43,10 @@ function FuelZonesPage() {
   const { t } = useI18n();
   const toast = useToast();
   const [zones, setZones] = useState<FuelZone[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [listErr, setListErr] = useState("");
+  const [posErr, setPosErr] = useState("");
+  const [complianceErr, setComplianceErr] = useState("");
 
   // Position lookup
   const [lat, setLat] = useState("");
@@ -59,25 +67,52 @@ function FuelZonesPage() {
   const [zType, setZType] = useState("eca");
   const [zSulfur, setZSulfur] = useState("");
   const [saving, setSaving] = useState(false);
+  // 破坏性操作二次确认：pending 存待执行函数 + 被指名的对象
+  const [pendingDelete, setPendingDelete] = useState<{ run: () => void; name: string } | null>(null);
   const zoneCtx = useContextMenu<FuelZone>();
 
   async function load() {
-    setZones(await apiGet("/api/v1/reference/fuel-zones"));
+    setLoading(true);
+    try {
+      const d = await apiGet("/api/v1/reference/fuel-zones");
+      setZones(Array.isArray(d) ? (d as FuelZone[]) : []);
+      setListErr("");
+    } catch (ex) {
+      // 列表取数失败必须走错误态，不能静默变成「No fuel zones」
+      setZones([]);
+      setListErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch(() => setZones([]));
+    void load();
   }, []);
 
   async function lookupPosition() {
-    const res = await apiGet(`/api/v1/reference/fuel-zones/position?lat=${lat}&lon=${lon}`);
-    setPosResult(res);
+    setPosErr("");
+    try {
+      const res = await apiGet(`/api/v1/reference/fuel-zones/position?lat=${lat}&lon=${lon}`);
+      setPosResult(res);
+    } catch (ex) {
+      // 查询失败必须可见 —— 不能让「查不到」和「没查到」混淆
+      setPosResult(null);
+      setPosErr(msgOf(ex));
+    }
   }
 
   async function checkCompliance() {
-    const sulfurParam = cSulfur ? `&sulfur_pct=${cSulfur}` : "";
-    const res = await apiGet(`/api/v1/reference/fuel-zones/compliance?lat=${cLat}&lon=${cLon}&fuel_type=${cFuel}${sulfurParam}`);
-    setComplianceResult(res);
+    setComplianceErr("");
+    try {
+      const sulfurParam = cSulfur ? `&sulfur_pct=${cSulfur}` : "";
+      const res = await apiGet(`/api/v1/reference/fuel-zones/compliance?lat=${cLat}&lon=${cLon}&fuel_type=${cFuel}${sulfurParam}`);
+      setComplianceResult(res);
+    } catch (ex) {
+      // 判定失败绝不能显示成「不合规」—— 明确显示为查询失败
+      setComplianceResult(null);
+      setComplianceErr(msgOf(ex));
+    }
   }
 
   function openCreate() {
@@ -106,9 +141,19 @@ function FuelZonesPage() {
 
   async function saveZone(e: FormEvent) {
     e.preventDefault();
+    // 数值校验：非法输入必须中止提交（不能把 parseFloat 的 NaN 静默发出去）
+    let sulfurMax: number | null = null;
+    if (zSulfur.trim() !== "") {
+      const s = Number(zSulfur.trim());
+      if (!Number.isFinite(s) || s < 0 || s > 10) {
+        toast.error(t("page.fuelZones.err_sulfur", "Sulfur % must be between 0 and 10"));
+        return;
+      }
+      sulfurMax = s;
+    }
     setSaving(true);
     try {
-      const fuelReqs = zSulfur ? { sulfur_max: parseFloat(zSulfur), fuel_type: "MGO" } : null;
+      const fuelReqs = sulfurMax === null ? null : { sulfur_max: sulfurMax, fuel_type: "MGO" };
       const body = {
         zone_name: zName,
         zone_type: zType,
@@ -123,23 +168,23 @@ function FuelZonesPage() {
       }
       closeCreate();
       await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
   }
 
-  async function deleteZone(id: string) {
+  const deleteZone = useCallback(async (id: string) => {
     try {
       await apiDelete(`/api/v1/reference/fuel-zones/${id}`);
       toast.success(t("common.deleted", "Deleted"));
       if (zoneEditId === id) closeCreate();
       await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
-  }
+  }, [toast, t, zoneEditId]);
 
   // ── 行内编辑（值未变化不发请求） ──
   async function onZoneCellSave(rowId: string, colKey: string, value: unknown, row: FuelZone) {
@@ -147,7 +192,16 @@ function FuelZonesPage() {
     if (colKey === "sulfur") {
       const next = value === null || value === "" ? null : Number(value);
       const prev = (row.fuel_requirements as Record<string, number> | null)?.sulfur_max ?? null;
-      if (next === prev || (next !== null && isNaN(next))) return;
+      if (next !== null && !Number.isFinite(next)) {
+        // 非法数字不能静默丢弃 —— 明确告诉用户这一格没写进去
+        toast.error(t("page.fuelZones.err_sulfur", "Sulfur % must be between 0 and 10"));
+        return;
+      }
+      if (next !== null && (next < 0 || next > 10)) {
+        toast.error(t("page.fuelZones.err_sulfur", "Sulfur % must be between 0 and 10"));
+        return;
+      }
+      if (next === prev) return;
       payload = { fuel_requirements: next === null ? null : { sulfur_max: next, fuel_type: "MGO" } };
     } else if (colKey === "is_active") {
       const next = Boolean(value);
@@ -162,15 +216,20 @@ function FuelZonesPage() {
       await apiPatch(`/api/v1/reference/fuel-zones/${rowId}`, payload);
       toast.success(t("common.saved", "Saved"));
       await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
   }
 
   async function seedPresets() {
-    await apiPost("/api/v1/reference/fuel-zones/seed-presets", {});
-    toast.success(t("page.fuelZones.presets_seeded", "Preset zones seeded"));
-    await load();
+    try {
+      await apiPost("/api/v1/reference/fuel-zones/seed-presets", {});
+      toast.success(t("page.fuelZones.presets_seeded", "Preset zones seeded"));
+      await load();
+    } catch (ex) {
+      // 写入失败必须报错（此前无 catch，失败被静默吞掉）
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
+    }
   }
 
   function validateZone(): ValidateIssue[] {
@@ -220,7 +279,7 @@ function FuelZonesPage() {
     return "var(--text-secondary)";
   };
 
-  const columns: ColumnDef<FuelZone>[] = [
+  const columns = useMemo<ColumnDef<FuelZone>[]>(() => [
     { key: "zone_name", title: t("page.fuelZones.name", "Name"), minWidth: 160, value: (z) => z.zone_name, editor: { type: "text" } },
     {
       key: "zone_type",
@@ -277,7 +336,7 @@ function FuelZonesPage() {
         />
       ),
     },
-  ];
+  ], [t, deleteZone]);
 
   return (
     <AppShell>
@@ -296,21 +355,24 @@ function FuelZonesPage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.fuelZones.create_zone", "Create Zone")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => void load()} />
       </Toolbar>
 
       <div className="form-grid">
         <div className="card">
           <h3 className="muted">{t("page.fuelZones.position_lookup", "Position Lookup")}</h3>
           <div className="toolbar">
-            <input placeholder={t("page.fuelZones.lat", "Latitude")} value={lat} onChange={(e) => setLat(e.target.value)} className="input input-sm" />
-            <input placeholder={t("page.fuelZones.lon", "Longitude")} value={lon} onChange={(e) => setLon(e.target.value)} className="input input-sm" />
+            <input placeholder={t("page.fuelZones.lat", "Latitude")} aria-label={t("page.fuelZones.lat", "Latitude")} value={lat} onChange={(e) => setLat(e.target.value)} className="input input-sm" />
+            <input placeholder={t("page.fuelZones.lon", "Longitude")} aria-label={t("page.fuelZones.lon", "Longitude")} value={lon} onChange={(e) => setLon(e.target.value)} className="input input-sm" />
             <button className="btn btn-primary" onClick={lookupPosition}>
               {t("common.lookup", "Lookup")}
             </button>
           </div>
+          {posErr ? (
+            <p className="flash-err">
+              {t("page.fuelZones.lookup_failed", "Position lookup failed.")} {posErr}
+            </p>
+          ) : null}
           {posResult && (
             <div>
               <p className="muted">
@@ -342,32 +404,50 @@ function FuelZonesPage() {
         <div className="card">
           <h3 className="muted">{t("page.fuelZones.compliance_check", "Fuel Compliance Check")}</h3>
           <div className="form-grid">
-            <input placeholder={t("page.fuelZones.lat", "Latitude")} value={cLat} onChange={(e) => setCLat(e.target.value)} className="input input-sm" />
-            <input placeholder={t("page.fuelZones.lon", "Longitude")} value={cLon} onChange={(e) => setCLon(e.target.value)} className="input input-sm" />
+            <input placeholder={t("page.fuelZones.lat", "Latitude")} aria-label={t("page.fuelZones.lat", "Latitude")} value={cLat} onChange={(e) => setCLat(e.target.value)} className="input input-sm" />
+            <input placeholder={t("page.fuelZones.lon", "Longitude")} aria-label={t("page.fuelZones.lon", "Longitude")} value={cLon} onChange={(e) => setCLon(e.target.value)} className="input input-sm" />
             <select value={cFuel} onChange={(e) => setCFuel(e.target.value)} className="input input-sm">
               <option value="HFO">HFO</option>
               <option value="MGO">MGO</option>
               <option value="MDO">MDO</option>
               <option value="LNG">LNG</option>
             </select>
-            <input placeholder={t("page.fuelZones.sulfur_pct", "Sulfur %")} type="number" step="0.01" value={cSulfur} onChange={(e) => setCSulfur(e.target.value)} className="input input-sm" />
+            <input placeholder={t("page.fuelZones.sulfur_pct", "Sulfur %")} aria-label={t("page.fuelZones.sulfur_pct", "Sulfur %")} type="number" step="0.01" value={cSulfur} onChange={(e) => setCSulfur(e.target.value)} className="input input-sm" />
           </div>
           <button className="btn btn-primary" onClick={checkCompliance}>
             {t("page.fuelZones.check", "Check Compliance")}
           </button>
+          {complianceErr ? (
+            <p className="flash-err">
+              {t("page.fuelZones.check_failed", "Compliance check failed — the result is unknown.")} {complianceErr}
+            </p>
+          ) : null}
           {complianceResult ? (
             <div>
               <div
                 className={complianceResult.compliant ? "badge" : "badge"}
                 style={{
                   padding: "8px 12px",
-                  background: (complianceResult as Record<string, boolean>).compliant ? "var(--green-50)" : "var(--red-50)",
-                  color: (complianceResult as Record<string, boolean>).compliant ? "var(--green-700)" : "var(--red-700)",
+                  background:
+                    typeof (complianceResult as Record<string, unknown>).compliant !== "boolean"
+                      ? "var(--bg-secondary)"
+                      : (complianceResult as Record<string, boolean>).compliant
+                        ? "var(--green-50)"
+                        : "var(--red-50)",
+                  color:
+                    typeof (complianceResult as Record<string, unknown>).compliant !== "boolean"
+                      ? "var(--text-secondary)"
+                      : (complianceResult as Record<string, boolean>).compliant
+                        ? "var(--green-700)"
+                        : "var(--red-700)",
                 }}
               >
-                {(complianceResult as Record<string, boolean>).compliant
-                  ? t("page.fuelZones.compliant", "COMPLIANT")
-                  : t("page.fuelZones.non_compliant", "NON-COMPLIANT")}
+                {/* 后端没给 compliant 字段时不能默认判成「不合规」 */}
+                {typeof (complianceResult as Record<string, unknown>).compliant !== "boolean"
+                  ? t("page.fuelZones.unknown", "UNKNOWN")
+                  : (complianceResult as Record<string, boolean>).compliant
+                    ? t("page.fuelZones.compliant", "COMPLIANT")
+                    : t("page.fuelZones.non_compliant", "NON-COMPLIANT")}
               </div>
               {(((complianceResult as Record<string, unknown>).violations as unknown[]) || []).length > 0 ? (
                 <ul className="muted">
@@ -386,11 +466,13 @@ function FuelZonesPage() {
           {t("page.fuelZones.zone_list", "Zone List")} ({zones.length})
         </h3>
         <StatusLegend statuses={["active", "inactive"]} />
-        {zones.length === 0 ? (
-          <div className="muted" style={{ textAlign: "center", padding: 24 }}>
-            {t("page.fuelZones.no_zones", "No fuel zones defined. Seed presets to get started.")}
-          </div>
-        ) : (
+        <StateView
+          loading={loading}
+          error={listErr || undefined}
+          empty={!zones.length}
+          emptyText={t("page.fuelZones.no_zones", "No fuel zones defined. Seed presets to get started.")}
+          onRetry={() => void load()}
+        >
           <DataGrid<FuelZone>
             columns={columns}
             data={zones}
@@ -402,7 +484,11 @@ function FuelZonesPage() {
             showFooter={false}
             emptyText={t("page.fuelZones.no_zones", "No fuel zones defined. Seed presets to get started.")}
           />
-        )}
+        </StateView>
+        {/* P1-28：列表总数必须可见 */}
+        {!listErr && zones.length ? (
+          <p className="muted">{t("list.count_total", "{n} records", { n: zones.length })}</p>
+        ) : null}
         <ContextMenu controller={zoneCtx} items={zoneMenuItems} />
       </div>
 
@@ -411,8 +497,6 @@ function FuelZonesPage() {
         title={zoneEditId ? t("page.fuelZones.edit_zone", "Edit Zone") : t("page.fuelZones.create_zone", "Create Zone")}
         onClose={closeCreate}
         onSave={saveZone}
-        canDelete={!!zoneEditId}
-        onDelete={zoneEditId ? () => deleteZone(zoneEditId) : undefined}
         saving={saving}
       >
         <label>
@@ -436,7 +520,36 @@ function FuelZonesPage() {
         <div className="record-modal-validate">
           <ValidateButton onValidate={validateZone} />
         </div>
+        {/* P1-8：删除燃油区不可逆 —— 走指名对象的二次确认。 */}
+        {zoneEditId ? (
+          <div className="desk-toolbar">
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={saving}
+              onClick={() =>
+                setPendingDelete({ run: () => void deleteZone(zoneEditId), name: zName })
+              }
+            >
+              {t("common.delete", "Delete")}
+            </button>
+          </div>
+        ) : null}
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: pendingDelete?.name ?? "" })}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = pendingDelete;
+          setPendingDelete(null);
+          fn?.run();
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

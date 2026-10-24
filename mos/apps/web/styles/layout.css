@@ -387,7 +387,7 @@
   max-width: 170px;
 }
 .page-fav-link:hover {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
 }
 .page-fav-x {
@@ -418,7 +418,7 @@
 }
 .page-fav-star:hover {
   background: var(--accent-bg);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .page-fav-star.active {
   color: #d9a406;

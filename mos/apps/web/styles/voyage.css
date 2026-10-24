@@ -59,7 +59,7 @@ a.lc-step-link:hover { background: var(--accent-bg); }
   color: #fff;
   animation: lc-pulse 1.6s ease-in-out infinite;
 }
-.lc-step.current .lc-step-link strong { color: var(--accent); }
+.lc-step.current .lc-step-link strong { color: var(--accent-text); }
 .lc-text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
 .lc-text strong { font-size: 0.86rem; }
 .lc-text small { color: var(--muted); font-size: 0.74rem; }
@@ -96,7 +96,7 @@ a.lc-step-link:hover { background: var(--accent-bg); }
   font-weight: 600;
 }
 .exc-badge.critical { background: #fde8e6; color: var(--danger); }
-.exc-badge.warning { background: #fff4d9; color: var(--warn); }
+.exc-badge.warning { background: var(--warn-bg); color: var(--warn-text); }
 .exc-badge.total { background: #e7f0f3; color: var(--muted); }
 .exc-kind-select {
   margin-left: auto;
@@ -145,7 +145,7 @@ a.lc-step-link:hover { background: var(--accent-bg); }
   font-variant-numeric: tabular-nums;
 }
 .exc-row-value.critical { color: var(--danger); }
-.exc-row-value.warning { color: var(--warn); }
+.exc-row-value.warning { color: var(--warn-text); }
 
 .home-exc-link { color: var(--danger); font-weight: 700; text-decoration: underline; }
 .home-exc-row {

@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { RefreshButton } from "@/components/RefreshButton";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { Toolbar } from "@/components/Toolbar";
@@ -10,8 +11,10 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { RowActions } from "@/components/RowActions";
 import { API_BASE as API, apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { formatInTz, parseUtc } from "@/lib/datetime";
+import { StateView } from "@/components/StateView";
 import { useToast } from "@/components/ToastProvider";
 
 type Policy = {
@@ -62,26 +65,38 @@ export default function TenantSecurityPage() {
   const [invites, setInvites] = useState<InviteRow[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
   const [demoToken, setDemoToken] = useState("");
+  // 邀请列表加载失败必须走错误态，不能静默显示「无」（P1-4）
+  const [invitesLoading, setInvitesLoading] = useState(true);
+  const [invitesErr, setInvitesErr] = useState("");
 
-  async function load() {
+  const load = useCallback(async () => {
     const p = await apiGet("/api/v1/admin/security/policy");
     setPolicy(p);
     setDomains((p.allowed_domains || []).join(", "));
     setMsHint(p.microsoft_tenant_hint || "");
     setGoogleHd(p.google_hosted_domain || "");
     setSsoNotes(p.sso_notes || "");
-    setInvites(
-      ((await apiGet("/api/v1/admin/security/invites")) as any[]).map((i) => ({
-        id: String(i.id),
-        email: String(i.email || ""),
-        expires_at: String(i.expires_at || ""),
-        created_at: i.created_at ?? null,
-        full_name: String(i.payload?.full_name || ""),
-        role_codes: Array.isArray(i.payload?.role_codes) ? i.payload.role_codes : [],
-      })),
-    );
+    setInvitesLoading(true);
+    setInvitesErr("");
+    try {
+      setInvites(
+        ((await apiGet("/api/v1/admin/security/invites")) as any[]).map((i) => ({
+          id: String(i.id),
+          email: String(i.email || ""),
+          expires_at: String(i.expires_at || ""),
+          created_at: i.created_at ?? null,
+          full_name: String(i.payload?.full_name || ""),
+          role_codes: Array.isArray(i.payload?.role_codes) ? i.payload.role_codes : [],
+        })),
+      );
+    } catch (e) {
+      setInvites([]);
+      setInvitesErr(msgOf(e, t("common.failed", "Failed")));
+    } finally {
+      setInvitesLoading(false);
+    }
     setLogs(await apiGet("/api/v1/admin/security/mail-logs"));
-  }
+  }, [t]);
 
   useEffect(() => {
     load().catch(() => toast.error(t("page.security.admin_required", "需要租户管理员")));
@@ -159,47 +174,65 @@ export default function TenantSecurityPage() {
     }
   }
 
-  async function deleteInvite(row: InviteRow) {
-    try {
-      await apiDelete(`/api/v1/admin/security/invites/${row.id}`);
-      toast.success(t("common.deleted", "Deleted"));
-      await load();
-    } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
-    }
-  }
+  const deleteInvite = useCallback(
+    async (row: InviteRow) => {
+      try {
+        await apiDelete(`/api/v1/admin/security/invites/${row.id}`);
+        toast.success(t("common.deleted", "Deleted"));
+        await load();
+      } catch (ex: any) {
+        toast.error(ex?.message || t("common.failed", "Failed"));
+      }
+    },
+    [t, toast, load],
+  );
 
-  const inviteColumns: ColumnDef<InviteRow>[] = [
+  const inviteColumns = useMemo<ColumnDef<InviteRow>[]>(
+    () => [
+      {
+        key: "email",
+        title: t("common.email", "Email"),
+        minWidth: 180,
+        value: (r) => r.email,
+      },
+      {
+        key: "full_name",
+        title: t("page.users.full_name", "Name"),
+        minWidth: 130,
+        value: (r) => r.full_name || "",
+        render: (v) => (v ? String(v) : "—"),
+        editor: { type: "text" },
+      },
+      {
+        key: "expires_at",
+        title: t("page.security.expires", "Expires"),
+        width: 170,
+        value: (r) => r.expires_at || "",
+        render: (v) => (v ? formatInTz(v as string | null, null, undefined, locale) : "—"),
+        editor: { type: "datetime" },
+      },
+      {
+        key: "_actions",
+        title: "",
+        width: 30,
+        align: "center",
+        render: (_v, r) => <RowActions onDelete={() => deleteInvite(r)} label={r.email} />,
+      },
+    ],
+    [t, locale, deleteInvite],
+  );
+
+  const ssoColumns = useMemo<ColumnDef<SsoRow>[]>(() => [
+    { key: "provider", title: t("common.provider", "提供商"), width: 200, value: (r) => r.provider },
     {
-      key: "email",
-      title: t("common.email", "Email"),
-      minWidth: 180,
-      value: (r) => r.email,
+      key: "mode",
+      title: t("common.mode", "模式"),
+      width: 110,
+      value: (r) => r.mode,
+      render: (v) => <code>{String(v)}</code>,
     },
-    {
-      key: "full_name",
-      title: t("page.users.full_name", "Name"),
-      minWidth: 130,
-      value: (r) => r.full_name || "",
-      render: (v) => (v ? String(v) : "—"),
-      editor: { type: "text" },
-    },
-    {
-      key: "expires_at",
-      title: t("page.security.expires", "Expires"),
-      width: 170,
-      value: (r) => r.expires_at || "",
-      render: (v) => (v ? formatInTz(v as string | null, null, undefined, locale) : "—"),
-      editor: { type: "datetime" },
-    },
-    {
-      key: "_actions",
-      title: "",
-      width: 30,
-      align: "center",
-      render: (_v, r) => <RowActions onDelete={() => deleteInvite(r)} label={r.email} />,
-    },
-  ];
+    { key: "status", title: t("common.status", "状态"), minWidth: 220, value: (r) => r.status },
+  ], [t]);
 
   useListHotkeys(openInvite);
 
@@ -239,18 +272,6 @@ export default function TenantSecurityPage() {
     },
   ];
 
-  const ssoColumns: ColumnDef<SsoRow>[] = [
-    { key: "provider", title: t("common.provider", "提供商"), width: 200, value: (r) => r.provider },
-    {
-      key: "mode",
-      title: t("common.mode", "模式"),
-      width: 110,
-      value: (r) => r.mode,
-      render: (v) => <code>{String(v)}</code>,
-    },
-    { key: "status", title: t("common.status", "状态"), minWidth: 220, value: (r) => r.status },
-  ];
-
   return (
     <AppShell>
       <PageHeader
@@ -265,9 +286,7 @@ export default function TenantSecurityPage() {
         <button type="button" className="btn btn-primary" onClick={openInvite}>
           {t("page.security.invite_title", "邀请用户")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load().catch(handled)} />
       </Toolbar>
       {demoToken ? (
         <p className="muted">
@@ -368,16 +387,24 @@ export default function TenantSecurityPage() {
       <div className="ship-layout">
         <div className="panel">
           <h2>{t("page.security.pending", "待处理邀请")}</h2>
-          <DataGrid<InviteRow>
-            columns={inviteColumns}
-            data={invites}
-            rowKey={(r) => r.id}
-            storageKey="admin_security_invites_grid"
+          <StateView
+            loading={invitesLoading}
+            error={invitesErr || undefined}
+            empty={!invitesErr && !invites.length}
             emptyText={t("common.none", "无")}
-            showFooter={false}
-            editable
-            onCellSave={onInviteCellSave}
-          />
+            onRetry={() => void load()}
+          >
+            <DataGrid<InviteRow>
+              columns={inviteColumns}
+              data={invites}
+              rowKey={(r) => r.id}
+              storageKey="admin_security_invites_grid"
+              emptyText={t("common.none", "无")}
+              showFooter={false}
+              editable
+              onCellSave={onInviteCellSave}
+            />
+          </StateView>
         </div>
         <div className="panel">
           <h2>{t("page.security.mail_log", "租户邮件日志")}</h2>
@@ -388,6 +415,12 @@ export default function TenantSecurityPage() {
               </li>
             ))}
             {!logs.length ? <li className="muted">{t("common.none", "无")}</li> : null}
+            {/* 截断必须对用户可见（P1-28） */}
+            {logs.length > 8 ? (
+              <li className="muted">
+                {t("page.security.mail_log_more", "Showing the 8 most recent of {n} entries.", { n: logs.length })}
+              </li>
+            ) : null}
           </ul>
         </div>
       </div>

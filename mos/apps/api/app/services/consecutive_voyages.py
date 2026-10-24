@@ -7,7 +7,7 @@ under time-charter contracts (TCI/TCO).
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
 from sqlalchemy import and_, func, select
@@ -132,7 +132,7 @@ def allocate_tco_costs(
     allocations = {}
     for v, days in zip(voyages, voyage_days):
         share = (Decimal(days) / Decimal(total_days)) * total_tco_cost
-        share_float = float(share.quantize(Decimal("0.01")))
+        share_float = float(share.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
         
         # Store in voyage results
         results = v.results or {}

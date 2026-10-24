@@ -3,19 +3,23 @@
 // U-DISTANCES 航线距离表（IMOS Data Center > Distances 对齐）。
 // 全局航海参照数据（port_distances 无 tenant_id），故列表与写入都不做租户过滤。
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { RefreshButton } from "@/components/RefreshButton";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { ExportButton } from "@/components/ExportButton";
 import { RecordModal } from "@/components/RecordModal";
 import { SavedViews } from "@/components/SavedViews";
+import { StateView } from "@/components/StateView";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { useListQuery } from "@/lib/useListQuery";
@@ -67,17 +71,36 @@ function DistancesPage() {
   const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({ ...emptyRow });
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [listErr, setListErr] = useState("");
+  // P1-28：后端 /distances/list 硬上限 2000 条且无 offset —— 截断必须对用户可见
+  const [truncated, setTruncated] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ run: () => void; name: string } | null>(null);
 
   async function load() {
+    setLoading(true);
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (routeType) params.set("route_type", routeType);
     params.set("limit", "2000");
-    setRows(await apiGet(`/api/v1/distances/list?${params.toString()}`));
+    try {
+      const d = await apiGet(`/api/v1/distances/list?${params.toString()}`);
+      const arr = Array.isArray(d) ? (d as Distance[]) : [];
+      setRows(arr);
+      setTruncated(arr.length >= 2000);
+      setListErr("");
+    } catch (ex) {
+      // 列表取数失败必须走错误态，不能静默变成「No records」
+      setRows([]);
+      setTruncated(false);
+      setListErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch(() => setRows([]));
+    void load();
   }, [q, routeType]);
 
   function openCreate() {
@@ -128,6 +151,16 @@ function DistancesPage() {
       return t("page.distances.err_same", "From and To must differ");
     if (edit.distance_nm === "" || Number.isNaN(Number(edit.distance_nm)) || Number(edit.distance_nm) <= 0)
       return t("page.distances.err_distance", "Distance must be a positive number");
+    // 其余数值字段：非法输入必须中止提交（不能静默变成 NaN/null）
+    for (const [raw, label] of [
+      [edit.transit_days, t("page.distances.transit_days", "Transit (days)")],
+      [edit.canal_toll, t("page.distances.toll", "Canal toll")],
+    ] as Array<[string, string]>) {
+      if (raw.trim() === "") continue;
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0)
+        return t("page.distances.err_numeric", "{field} must be a non-negative number", { field: label });
+    }
     return null;
   }
 
@@ -149,29 +182,28 @@ function DistancesPage() {
       }
       closeModal();
       await load();
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
   }
 
-  async function remove() {
-    if (!open) return;
+  async function removeById(id: string) {
     setSaving(true);
     try {
-      await apiDelete(`/api/v1/distances/${open.id}`);
+      await apiDelete(`/api/v1/distances/${id}`);
       toast.success(t("common.deleted", "Deleted"));
       closeModal();
       await load();
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
   }
 
-  const columns: ColumnDef<Distance>[] = [
+  const columns = useMemo<ColumnDef<Distance>[]>(() => [
     {
       key: "from_port_unlocode",
       title: t("page.distances.from", "From"),
@@ -244,7 +276,7 @@ function DistancesPage() {
         </button>
       ),
     },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -294,20 +326,35 @@ function DistancesPage() {
         <button type="button" className="btn btn-primary" onClick={openCreate}>
           {t("page.distances.add", "New distance")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => void load()} />
       </Toolbar>
 
       <div className="panel">
-        <DataGrid<Distance>
-          columns={columns}
-          data={rows}
-          rowKey={(r) => r.id}
-          onRowClick={(r) => openRow(r)}
-          storageKey="masterdata_distances_grid"
+        <StateView
+          loading={loading}
+          error={listErr || undefined}
+          empty={!rows.length}
           emptyText={t("common.empty", "No records")}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid<Distance>
+            columns={columns}
+            data={rows}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => openRow(r)}
+            storageKey="masterdata_distances_grid"
+            emptyText={t("common.empty", "No records")}
+          />
+        </StateView>
+        {/* P1-28：列表总数必须可见 */}
+        {!listErr && rows.length ? (
+          <p className="muted">{t("list.count_total", "{n} records", { n: rows.length })}</p>
+        ) : null}
+        {truncated ? (
+          <p className="muted">
+            {t("page.distances.truncated", "Showing the first 2000 records — narrow the search to see the rest.")}
+          </p>
+        ) : null}
       </div>
 
       <RecordModal
@@ -315,8 +362,6 @@ function DistancesPage() {
         title={creating ? t("page.distances.add", "New distance") : t("page.distances.edit", "Edit distance")}
         onClose={closeModal}
         onSave={save}
-        onDelete={creating ? undefined : remove}
-        canDelete={!creating}
         saving={saving}
       >
         <label>
@@ -390,7 +435,40 @@ function DistancesPage() {
           {t("common.notes", "Notes")}
           <input value={edit.notes} onChange={(e) => setEdit({ ...edit, notes: e.target.value })} />
         </label>
+
+        {/* P1-8：删除航线距离是不可逆动作 —— 走指名对象的二次确认。 */}
+        {open ? (
+          <div className="desk-toolbar">
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={saving}
+              onClick={() =>
+                setPendingDelete({
+                  run: () => void removeById(open.id),
+                  name: `${open.from_port_unlocode} → ${open.to_port_unlocode}`,
+                })
+              }
+            >
+              {t("common.delete", "Delete")}
+            </button>
+          </div>
+        ) : null}
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: pendingDelete?.name ?? "" })}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = pendingDelete;
+          setPendingDelete(null);
+          fn?.run();
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

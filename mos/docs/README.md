@@ -11,6 +11,7 @@
 | [能力一览](./product-capabilities.md) | 对外可陈述的能力清单 |
 | [Microsoft 365 说明](./office-ecosystem.md) | Office 生态连接与能力概览 |
 | [平台数据面与部署](./platform-data-deploy.md) | 默认数据库、租户库绑定、初始化与部署档案 |
+| [部署指南](./deployment.md) | Docker Compose 部署、发布、反代、备份、安全清单 |
 
 请勿将内部研发清单或施工指令放入客户可见渠道。
 
@@ -18,6 +19,11 @@
 
 | 资源 | 说明 |
 |------|------|
-| [DDS V2.1](../MariOS%20完整开发规格说明书（DDS）V2.1.md) | 开发规格 SSOT |
 | [DEVELOPMENT.md](../DEVELOPMENT.md) | 本地开发与测试 |
+| [CLAUDE.md](../CLAUDE.md) | 架构约定与开发规约（代码库根，AI 协作用） |
 | [internal/](./internal/) | 内部规划与差距跟踪、QA 摘要（不对客户展示） |
+| [deploy/compose/README.md](../deploy/compose/README.md) | 部署编排说明（compose 服务、卷、迁移、备份） |
+| [apps/api/alembic/README.md](../apps/api/alembic/README.md) | 数据库迁移说明（空库自举、迁移约定、常用命令） |
+
+> 旧版本文档里指向「DDS V2.1 完整开发规格说明书」的链接已移除 —— 该文件不在仓库中
+> （且被 `.gitignore` 忽略），链接必然失效。请以上表为准。

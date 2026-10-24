@@ -1,16 +1,20 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
+import { StateView } from "@/components/StateView";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { RowActions } from "@/components/RowActions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -93,33 +97,46 @@ function PlatformSaasPage() {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [modal, setModal] = useState<"assign" | "credit" | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
+  /** 订阅列表客户端分页（后端一次返回全量；总数始终可见，不静默截断） */
+  const [subPage, setSubPage] = useState(1);
 
-  async function load() {
-    const [o, p, pk, m, a, pay, s, ten] = await Promise.all([
-      apiGet("/api/v1/platform/saas/overview"),
-      apiGet("/api/v1/platform/saas/plans"),
-      apiGet("/api/v1/platform/saas/packs"),
-      apiGet("/api/v1/platform/saas/meters"),
-      apiGet("/api/v1/platform/saas/ai-endpoints"),
-      apiGet("/api/v1/platform/saas/payments/providers"),
-      apiGet("/api/v1/platform/saas/subscriptions"),
-      apiGet("/api/v1/platform/tenants"),
-    ]);
-    setOverview(o);
-    setPlans(p);
-    setPacks(pk);
-    setMeters(m);
-    setAi(a);
-    setProviders(pay);
-    setSubs(s);
-    setTenants(ten);
-    if (!tenantId && ten.length) setTenantId(ten.find((x: Tenant) => x.code === "demo")?.id || ten[0].id);
-    if (!planCode && p.length) setPlanCode(p[0].code);
-    if (!packCode && pk.length) setPackCode(pk[0].code);
-  }
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const [o, p, pk, m, a, pay, s, ten] = await Promise.all([
+        apiGet("/api/v1/platform/saas/overview"),
+        apiGet("/api/v1/platform/saas/plans"),
+        apiGet("/api/v1/platform/saas/packs"),
+        apiGet("/api/v1/platform/saas/meters"),
+        apiGet("/api/v1/platform/saas/ai-endpoints"),
+        apiGet("/api/v1/platform/saas/payments/providers"),
+        apiGet("/api/v1/platform/saas/subscriptions"),
+        apiGet("/api/v1/platform/tenants"),
+      ]);
+      setOverview(o);
+      setPlans(p);
+      setPacks(pk);
+      setMeters(m);
+      setAi(a);
+      setProviders(pay);
+      setSubs(s);
+      setTenants(ten);
+      if (!tenantId && ten.length) setTenantId(ten.find((x: Tenant) => x.code === "demo")?.id || ten[0].id);
+      if (!planCode && p.length) setPlanCode(p[0].code);
+      if (!packCode && pk.length) setPackCode(pk[0].code);
+    } catch (ex) {
+      setErr(msgOf(ex, t("page.saas.admin_required", "Platform admin required")));
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId, planCode, packCode, t]);
 
   useEffect(() => {
-    load().catch(() => toast.error(t("page.saas.admin_required", "Platform admin required")));
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
@@ -132,6 +149,12 @@ function PlatformSaasPage() {
   }
 
   useListHotkeys(openAssign);
+
+  // ── 订阅列表客户端分页：总数常显，不做静默 slice ──
+  const SUB_PAGE_SIZE = 40;
+  const subPages = Math.max(1, Math.ceil(subs.length / SUB_PAGE_SIZE));
+  const subPageSafe = Math.min(Math.max(1, subPage), subPages);
+  const subRows = subs.slice((subPageSafe - 1) * SUB_PAGE_SIZE, subPageSafe * SUB_PAGE_SIZE);
 
   async function assignPlan(e: FormEvent) {
     e.preventDefault();
@@ -148,7 +171,7 @@ function PlatformSaasPage() {
       setModal(null);
       await load();
     } catch (err: any) {
-      toast.error(String(err?.detail?.message || err?.message || t("common.failed", "Failed")));
+      toast.error(msgOf(err, t("common.failed", "Failed")));
     } finally {
       setBusy(false);
     }
@@ -174,7 +197,7 @@ function PlatformSaasPage() {
       setModal(null);
       await load();
     } catch (err: any) {
-      toast.error(String(err?.detail?.message || err?.message || t("common.failed", "Failed")));
+      toast.error(msgOf(err, t("common.failed", "Failed")));
     } finally {
       setBusy(false);
     }
@@ -182,17 +205,34 @@ function PlatformSaasPage() {
 
   async function cancelSub() {
     if (!tenantId) return;
-    if (!confirm(t("page.saas.cancel_confirm", "Cancel the active subscription for this tenant?"))) return;
     setBusy(true);
     try {
       const res = await apiPost(`/api/v1/platform/saas/tenants/${tenantId}/cancel-subscription`, {});
       toast.success(t("page.saas.cancelled", "Cancelled {n} subscription(s) for {tenant}", { n: res.cancelled, tenant: res.tenant_code }));
       await load();
-    } catch {
-      toast.error(t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setBusy(false);
     }
+  }
+
+  /** 取消订阅属不可逆操作 → ConfirmDialog 二次确认，指名租户 */
+  function askCancelSub() {
+    if (!tenantId) return;
+    const tn = tenants.find((x) => x.id === tenantId);
+    const name = tn ? `${tn.code} · ${tn.name}` : tenantId;
+    setPending({
+      message: t(
+        "page.saas.cancel_confirm",
+        "取消租户「{tenant}」的生效订阅？该操作不可撤销。",
+        { tenant: name },
+      ),
+      danger: true,
+      action: () => {
+        cancelSub().catch((ex) => toast.error(msgOf(ex, t("common.failed", "Failed"))));
+      },
+    });
   }
 
   // ── 行内编辑：值未变化不发请求，避免 blur→reload 打断输入 ──
@@ -227,7 +267,7 @@ function PlatformSaasPage() {
       toast.success(t("common.saved", "Saved"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
   }
 
@@ -238,15 +278,15 @@ function PlatformSaasPage() {
     ]);
   }
 
-  async function deletePlan(row: Plan) {
+  const deletePlan = useCallback(async (row: Plan) => {
     try {
       await apiDelete(`/api/v1/platform/saas/plans/${row.id}`);
       toast.success(t("common.deleted", "Deleted"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
-  }
+  }, [load, t, toast]);
 
   async function onPackCellSave(rowId: string, colKey: string, value: unknown, row: Pack) {
     await patchCell(`/api/v1/platform/saas/packs/${rowId}`, colKey, value, row as unknown as Record<string, unknown>, [
@@ -255,15 +295,15 @@ function PlatformSaasPage() {
     ]);
   }
 
-  async function deletePackRow(row: Pack) {
+  const deletePackRow = useCallback(async (row: Pack) => {
     try {
       await apiDelete(`/api/v1/platform/saas/packs/${row.id}`);
       toast.success(t("common.deleted", "Deleted"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
-  }
+  }, [load, t, toast]);
 
   async function onAiCellSave(rowId: string, colKey: string, value: unknown, row: AiRow) {
     await patchCell(`/api/v1/platform/saas/ai-endpoints/${rowId}`, colKey, value, row as unknown as Record<string, unknown>, [
@@ -271,17 +311,17 @@ function PlatformSaasPage() {
     ]);
   }
 
-  async function deleteAi(row: AiRow) {
+  const deleteAi = useCallback(async (row: AiRow) => {
     try {
       await apiDelete(`/api/v1/platform/saas/ai-endpoints/${row.id}`);
       toast.success(t("common.deleted", "Deleted"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || t("common.failed", "Failed"));
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
-  }
+  }, [load, t, toast]);
 
-  const subColumns: ColumnDef<SubRow>[] = [
+  const subColumns = useMemo<ColumnDef<SubRow>[]>(() => [
     {
       key: "tenant",
       title: t("page.saas.tenant", "Tenant"),
@@ -307,9 +347,9 @@ function PlatformSaasPage() {
       width: 130,
       value: (r) => r.current_period_end || "—",
     },
-  ];
+  ], [t]);
 
-  const planColumns: ColumnDef<Plan>[] = [
+  const planColumns = useMemo<ColumnDef<Plan>[]>(() => [
     { key: "code", title: t("common.code", "Code"), width: 120, value: (r) => r.code },
     {
       key: "name",
@@ -377,9 +417,9 @@ function PlatformSaasPage() {
       align: "center",
       render: (_v, r) => <RowActions onDelete={() => deletePlan(r)} label={r.name || r.code} />,
     },
-  ];
+  ], [t, deletePlan]);
 
-  const packColumns: ColumnDef<Pack>[] = [
+  const packColumns = useMemo<ColumnDef<Pack>[]>(() => [
     { key: "code", title: t("common.code", "Code"), width: 120, value: (r) => r.code },
     {
       key: "name",
@@ -425,11 +465,11 @@ function PlatformSaasPage() {
       align: "center",
       render: (_v, r) => <RowActions onDelete={() => deletePackRow(r)} label={r.name || r.code} />,
     },
-  ];
+  ], [t, deletePackRow]);
 
   type MeterRow = Record<string, unknown>;
 
-  const meterColumns: ColumnDef<MeterRow>[] = [
+  const meterColumns = useMemo<ColumnDef<MeterRow>[]>(() => [
     { key: "code", title: t("common.code", "Code"), width: 130, value: (r) => String(r.code) },
     { key: "name", title: t("common.name", "Name"), minWidth: 150, value: (r) => String(r.name) },
     {
@@ -438,9 +478,9 @@ function PlatformSaasPage() {
       width: 140,
       value: (r) => `${String(r.overage_price)} ${String(r.currency)}`,
     },
-  ];
+  ], [t]);
 
-  const aiColumns: ColumnDef<AiRow>[] = [
+  const aiColumns = useMemo<ColumnDef<AiRow>[]>(() => [
     { key: "code", title: t("common.code", "Code"), width: 130, value: (r) => r.code },
     {
       key: "name",
@@ -478,11 +518,11 @@ function PlatformSaasPage() {
       align: "center",
       render: (_v, r) => <RowActions onDelete={() => deleteAi(r)} label={r.name || r.code} />,
     },
-  ];
+  ], [t, deleteAi]);
 
   type ProviderRow = Record<string, unknown>;
 
-  const providerColumns: ColumnDef<ProviderRow>[] = [
+  const providerColumns = useMemo<ColumnDef<ProviderRow>[]>(() => [
     { key: "code", title: t("common.code", "Code"), width: 130, value: (r) => String(r.code) },
     { key: "name", title: t("common.name", "Name"), minWidth: 150, value: (r) => String(r.name) },
     {
@@ -492,7 +532,7 @@ function PlatformSaasPage() {
       value: (r) => String(r.status),
       render: (v) => <span className={`badge badge-${v === "active" ? "ok" : "warn"}`}>{t(`status.${v}`, String(v))}</span>,
     },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -517,12 +557,10 @@ function PlatformSaasPage() {
         <button type="button" className="btn" onClick={openCredit}>
           {t("page.saas.credit_pack", "Credit pack")}
         </button>
-        <button type="button" className="btn btn-ghost" disabled={busy || !tenantId} onClick={() => cancelSub()}>
+        <button type="button" className="btn btn-ghost" disabled={busy || !tenantId} onClick={() => askCancelSub()}>
           {t("page.saas.cancel_sub", "Cancel subscription")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load()} />
       </Toolbar>
 
       <div className="workbench-grid">
@@ -542,63 +580,103 @@ function PlatformSaasPage() {
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.saas.subs_list", "Tenant subscriptions")}</h3>
-        <DataGrid<SubRow>
-          columns={subColumns}
-          data={subs.slice(0, 40)}
-          rowKey={(r) => r.id}
-          storageKey="platform_saas_subs_grid"
+        <StateView
+          loading={loading}
+          error={err ?? undefined}
+          empty={!subs.length}
+          onRetry={() => load()}
           emptyText={t("common.none", "None")}
-        />
+        >
+          <DataGrid<SubRow>
+            columns={subColumns}
+            data={subRows}
+            rowKey={(r) => r.id}
+            storageKey="platform_saas_subs_grid"
+            emptyText={t("common.none", "None")}
+          />
+          <div className="dt-pager">
+            <span className="muted">{t("common.count_total", "共 {n} 条", { n: subs.length })}</span>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              disabled={subPageSafe <= 1}
+              aria-label={t("common.page_prev", "上一页")}
+              onClick={() => setSubPage((p) => Math.max(1, p - 1))}
+            >
+              ←
+            </button>
+            <span className="muted">
+              {subPageSafe} / {subPages}
+            </span>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              disabled={subPageSafe >= subPages}
+              aria-label={t("common.page_next", "下一页")}
+              onClick={() => setSubPage((p) => Math.min(subPages, p + 1))}
+            >
+              →
+            </button>
+          </div>
+        </StateView>
       </div>
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.saas.plans", "Commercial plan catalog")}</h3>
-        <DataGrid<Plan>
-          columns={planColumns}
-          data={plans}
-          rowKey={(r) => r.id}
-          storageKey="platform_saas_plans_grid"
-          emptyText={t("common.none", "None")}
-          editable
-          onCellSave={onPlanCellSave}
-        />
+        <StateView loading={loading} error={err ?? undefined} empty={!plans.length} onRetry={() => load()} emptyText={t("common.none", "None")}>
+          <DataGrid<Plan>
+            columns={planColumns}
+            data={plans}
+            rowKey={(r) => r.id}
+            storageKey="platform_saas_plans_grid"
+            emptyText={t("common.none", "None")}
+            editable
+            onCellSave={onPlanCellSave}
+          />
+        </StateView>
       </div>
 
       <div className="panel">
         <div className="panel-header">{t("page.saas.packs", "Usage packs")}</div>
-        <DataGrid<Pack>
-          columns={packColumns}
-          data={packs}
-          rowKey={(r) => r.id}
-          storageKey="platform_saas_packs_grid"
-          emptyText={t("common.none", "None")}
-          editable
-          onCellSave={onPackCellSave}
-        />
+        <StateView loading={loading} error={err ?? undefined} empty={!packs.length} onRetry={() => load()} emptyText={t("common.none", "None")}>
+          <DataGrid<Pack>
+            columns={packColumns}
+            data={packs}
+            rowKey={(r) => r.id}
+            storageKey="platform_saas_packs_grid"
+            emptyText={t("common.none", "None")}
+            editable
+            onCellSave={onPackCellSave}
+          />
+        </StateView>
       </div>
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.saas.meters", "Meters")}</h3>
-        <DataGrid<MeterRow>
-          columns={meterColumns}
-          data={meters}
-          rowKey={(r) => String(r.code)}
-          storageKey="platform_saas_meters_grid"
-          emptyText={t("common.none", "None")}
-        />
+        <StateView loading={loading} error={err ?? undefined} empty={!meters.length} onRetry={() => load()} emptyText={t("common.none", "None")}>
+          <DataGrid<MeterRow>
+            columns={meterColumns}
+            data={meters}
+            rowKey={(r) => String(r.code)}
+            storageKey="platform_saas_meters_grid"
+            emptyText={t("common.none", "None")}
+          />
+        </StateView>
       </div>
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.saas.ai_endpoints", "Platform AI endpoints")}</h3>
-        <DataGrid<AiRow>
-          columns={aiColumns}
-          data={ai}
-          rowKey={(r) => r.id}
-          storageKey="platform_saas_ai_endpoints_grid"
-          emptyText={t("common.none", "None")}
-          editable
-          onCellSave={onAiCellSave}
-        />
+        <StateView loading={loading} error={err ?? undefined} empty={!ai.length} onRetry={() => load()} emptyText={t("common.none", "None")}>
+          <DataGrid<AiRow>
+            columns={aiColumns}
+            data={ai}
+            rowKey={(r) => r.id}
+            storageKey="platform_saas_ai_endpoints_grid"
+            emptyText={t("common.none", "None")}
+            editable
+            onCellSave={onAiCellSave}
+          />
+        </StateView>
       </div>
 
       <div className="panel">
@@ -606,13 +684,15 @@ function PlatformSaasPage() {
         <p className="muted" style={{ marginTop: 0 }}>
           {t("page.saas.payments_hint", "All providers are unwired; connect checkout & webhooks once online payments go live.")}
         </p>
-        <DataGrid<ProviderRow>
-          columns={providerColumns}
-          data={providers}
-          rowKey={(r) => String(r.code)}
-          storageKey="platform_saas_payments_grid"
-          emptyText={t("common.none", "None")}
-        />
+        <StateView loading={loading} error={err ?? undefined} empty={!providers.length} onRetry={() => load()} emptyText={t("common.none", "None")}>
+          <DataGrid<ProviderRow>
+            columns={providerColumns}
+            data={providers}
+            rowKey={(r) => String(r.code)}
+            storageKey="platform_saas_payments_grid"
+            emptyText={t("common.none", "None")}
+          />
+        </StateView>
       </div>
 
       <RecordModal
@@ -690,6 +770,19 @@ function PlatformSaasPage() {
           </label>
         </div>
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pending)}
+        title={t("common.confirm", "Confirm")}
+        message={pending?.message || ""}
+        danger={pending?.danger}
+        onConfirm={() => {
+          const fn = pending?.action;
+          setPending(null);
+          fn?.();
+        }}
+        onCancel={() => setPending(null)}
+      />
     </AppShell>
   );
 }

@@ -67,6 +67,7 @@ class Charter(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     charter_no: Mapped[str] = mapped_column(Text, nullable=False)
     charter_type: Mapped[str] = mapped_column(Text, default="voyage")
     status: Mapped[str] = mapped_column(Text, default="draft")
@@ -324,6 +325,7 @@ class LaytimeCalc(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     voyage_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("voyages.id"))
     port_call_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("port_calls.id"))
     booking_reference: Mapped[str | None] = mapped_column(String(64))  # booking 订舱单号（from-booking）
@@ -401,6 +403,7 @@ class Claim(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     claim_no: Mapped[str] = mapped_column(Text, nullable=False)
     claim_type: Mapped[str] = mapped_column(Text, default="demurrage")
     subtype: Mapped[str | None] = mapped_column(String(32))  # claim_taxonomy CLAIM_SUBTYPES 子类
@@ -458,6 +461,7 @@ class BunkerOrder(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     order_no: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, default="planned")
     vessel_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("vessels.id"))
@@ -520,6 +524,8 @@ class BunkerOption(Base):
     fuel_type: Mapped[str] = mapped_column(String(32), default="VLSFO")
     qty: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
     price_per_mt: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    # 计价币种 —— 报价没有币种时 450 USD 与 450 EUR 无法区分（审计 P2-B6）
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
     delivery_date: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(16), default="offered")  # offered|selected|rejected
     notes: Mapped[str | None] = mapped_column(Text)
@@ -537,6 +543,8 @@ class BunkerCapCollar(Base):
     fuel_type: Mapped[str] = mapped_column(String(32), nullable=False)
     cap_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     collar_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # 上限/下限价的计价币种 —— 与报价同一口径，必须带币种（审计 P2-B6）
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
     index_symbol: Mapped[str | None] = mapped_column(String(32))
     effective_from: Mapped[date] = mapped_column(Date, nullable=False)
     effective_to: Mapped[date | None] = mapped_column(Date)
@@ -582,7 +590,10 @@ class Invoice(Base):
     mirror_of_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("invoices.id"))
     mirror_synced_source_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # last pull-sync stamp (源改镜像跟)
     bill_by: Mapped[str | None] = mapped_column(String(16))  # cp_qty | bl_qty
-    commission_basis: Mapped[str | None] = mapped_column(String(16))  # net | gross
+    # net | gross（规范口径码）；宽度放到 128 是为了兼容历史自由文本
+    # （旧数据写过 "brokerage on INV-001 (charter ...)" 这类说明，PG 上
+    # String(16) 会 StringDataRightTruncation → 500，P1-B2）
+    commission_basis: Mapped[str | None] = mapped_column(String(128))
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
     # attribution (创建人/修改人/时间) — enables row-level data scope + record metadata
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
@@ -601,6 +612,7 @@ class Payment(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     invoice_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("invoices.id"), nullable=False)
     batch_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("payment_batches.id"))
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
@@ -617,6 +629,7 @@ class PaymentBatch(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     batch_number: Mapped[str] = mapped_column(Text, nullable=False)
     batch_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(Text, default="draft")  # draft|processing|completed|reversed

@@ -2,12 +2,14 @@
 
 // 3.6 前端拆分试点：Dynamic P&L 面板（自取数，finance 页标签挂载）。
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { Num } from "@/components/Num";
+import { StateView } from "@/components/StateView";
 import { apiGet } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 const PNL_LINE_KEYS = ["revenue", "hire", "demurrage", "port_costs", "canal", "bunker", "commission", "emissions", "other"] as const;
@@ -39,17 +41,32 @@ export function PnlPanel() {
   const [pnl, setPnl] = useState<PnlRow[]>([]);
   const [basis, setBasis] = useState<"actual" | "accrual">("actual");
   const [selected, setSelected] = useState<string | null>(null);
+  // P1-4：取数失败 → 三态错误（不能静默变成「No records」）
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  // P1-32：请求序号 —— actual/accrual 两个 in-flight 请求可能乱序返回，
+  // 过期响应必须丢弃，否则会用旧数据覆盖新数据。
+  const reqSeq = useRef(0);
 
   const load = useCallback(async (b: "actual" | "accrual") => {
+    const seq = ++reqSeq.current;
+    setLoading(true);
+    setErr(null);
     try {
-      setPnl(await apiGet(`/api/v1/analytics/reports/voyage-pnl?basis=${b}`));
-    } catch {
+      const data = await apiGet(`/api/v1/analytics/reports/voyage-pnl?basis=${b}`);
+      if (seq !== reqSeq.current) return; // 过期响应，丢弃
+      setPnl(Array.isArray(data) ? data : []);
+    } catch (ex) {
+      if (seq !== reqSeq.current) return;
       setPnl([]);
+      setErr(msgOf(ex));
+    } finally {
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    load("actual").catch(() => undefined);
+    load("actual").catch(handled);
   }, [load]);
 
   const listCols = useMemo<ColumnDef<PnlRow>[]>(
@@ -219,15 +236,23 @@ export function PnlPanel() {
           {t("common.refresh", "刷新")}
         </button>
       </div>
-      <DataGrid<PnlRow>
-        columns={listCols}
-        data={pnl}
-        rowKey={(r) => r.voyage_id}
-        onRowClick={(r) => setSelected(r.voyage_id === selected ? null : r.voyage_id)}
-        storageKey="finance_pnl_panel_grid"
-        showFooter={false}
+      <StateView
+        loading={loading}
+        error={err ?? undefined}
+        empty={!pnl.length}
         emptyText={t("common.empty", "No records")}
-      />
+        onRetry={() => load(basis)}
+      >
+        <DataGrid<PnlRow>
+          columns={listCols}
+          data={pnl}
+          rowKey={(r) => r.voyage_id}
+          onRowClick={(r) => setSelected(r.voyage_id === selected ? null : r.voyage_id)}
+          storageKey="finance_pnl_panel_grid"
+          showFooter={false}
+          emptyText={t("common.empty", "No records")}
+        />
+      </StateView>
       {sel && sel.lines ? (
         <div className="desk-section">
           <h3>

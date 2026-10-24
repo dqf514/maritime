@@ -8,7 +8,10 @@ import { Num } from "@/components/Num";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { apiGet } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { StateView } from "@/components/StateView";
 
 type LineKey = "revenue" | "hire" | "demurrage" | "port_costs" | "canal" | "bunker" | "commission" | "emissions" | "other";
 const LINE_KEYS: LineKey[] = ["revenue", "hire", "demurrage", "port_costs", "canal", "bunker", "commission", "emissions", "other"];
@@ -67,8 +70,8 @@ function exportCsv(rows: VoyageRow[]) {
   }
   for (const k of LINE_KEYS) cols.push(`variance_${k}`);
 
-  const lines = [cols.join(",")];
-  for (const r of rows) {
+  // P0-16/17：走 lib/csv（自带 BOM + 公式注入防护），不再自造 Blob。
+  const body: (string | number)[][] = rows.map((r) => {
     const cells: (string | number)[] = [r.voyage_no, r.status, r.cargo ?? ""];
     for (const col of ["estimate", "actual", "posted"] as const) {
       for (const k of LINE_KEYS) cells.push(r.columns[col][k] ?? 0);
@@ -76,15 +79,9 @@ function exportCsv(rows: VoyageRow[]) {
       cells.push(t.revenue, t.cost, t.pnl);
     }
     for (const k of LINE_KEYS) cells.push(r.columns.variance[k] ?? 0);
-    lines.push(cells.map((c) => (typeof c === "number" ? c.toFixed(2) : `"${c}"`)).join(","));
-  }
-  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `pnl_fleet_${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+    return cells;
+  });
+  downloadCsv(`pnl_fleet_${new Date().toISOString().slice(0, 10)}`, cols, body);
 }
 
 export default function PnlOverviewPage() {
@@ -92,11 +89,13 @@ export default function PnlOverviewPage() {
   const [voyages, setVoyages] = useState<VoyageRow[]>([]);
   const [fleet, setFleet] = useState<FleetSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<string>("voyage_no");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   const load = useCallback(async () => {
     setLoading(true);
+    setErr(null);
     try {
       const [v, f] = await Promise.all([
         apiGet("/api/v1/analytics/reports/pnl-4col") as Promise<VoyageRow[]>,
@@ -104,6 +103,9 @@ export default function PnlOverviewPage() {
       ]);
       setVoyages(v);
       setFleet(f);
+    } catch (ex) {
+      // P1-4：主列表取数失败必须走错误态，不能静默变空表
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -372,9 +374,13 @@ export default function PnlOverviewPage() {
           </div>
         ) : null}
 
-        {loading ? (
-          <div className="skeleton-table" />
-        ) : (
+        <StateView
+          loading={loading}
+          error={err ?? undefined}
+          empty={!loading && !err && !gridRows.length}
+          emptyText={t("common.empty", "No records")}
+          onRetry={() => void load()}
+        >
           <DataGrid<GridRow>
             columns={cols}
             data={gridRows}
@@ -387,7 +393,7 @@ export default function PnlOverviewPage() {
             showFooter={false}
             emptyText={t("common.empty", "No records")}
           />
-        )}
+        </StateView>
       </div>
     </AppShell>
   );

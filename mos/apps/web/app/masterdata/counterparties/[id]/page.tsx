@@ -5,20 +5,22 @@
 // Details = 身份编号 / 地址与联系 / 授信 / 合规 / GL 科目五组；
 // Address Types 是 IMOS 的多角色集合（Agents + Brokers + Charterers + Owners + Company Info + Misc）。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordAttribution } from "@/components/RecordAttribution";
+import { StateView } from "@/components/StateView";
 import { Tabs } from "@/components/Tabs";
 import { FormSection } from "@/components/form/FormPanel";
 import { LookupSelect } from "@/components/LookupSelect";
-import { VesselCrudGrid } from "@/components/ship/VesselCrudGrid";
+import { VesselCrudGrid, type ColumnDef, type FieldDef } from "@/components/ship/VesselCrudGrid";
 import { PARTY_ROLES, PARTY_STATUS, SANCTIONS_STATUS } from "@/lib/party-catalog";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 
 type Tab = "details" | "contacts" | "properties" | "bank";
 
@@ -94,8 +96,12 @@ export default function CounterpartyDetailPage() {
   const [glAccounts, setGlAccounts] = useState<{ account_code: string; account_name: string }[]>([]);
   const [roleInit, setRoleInit] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
+  const [glErr, setGlErr] = useState("");
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       const data = await apiGet(`/api/v1/masterdata/counterparties/${partyId}`);
       setParty(data);
@@ -118,10 +124,15 @@ export default function CounterpartyDetailPage() {
       for (const role of PARTY_ROLES) r[role] = selected.includes(role);
       setRoles(r);
       setRoleInit({ ...r });
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+      setLoadErr("");
+    } catch (ex) {
+      // 取数失败必须显性报错，不能静默留空表单
+      setParty(null);
+      setLoadErr(msgOf(ex, t("common.failed", "Failed")));
+    } finally {
+      setLoading(false);
     }
-  }, [partyId, t, toast]);
+  }, [partyId, t]);
 
   useEffect(() => {
     void load();
@@ -130,8 +141,15 @@ export default function CounterpartyDetailPage() {
   // 科目表仅用于 datalist 提示（finance 模块未授权时静默留空，不打断表单）
   useEffect(() => {
     apiGet("/api/v1/gl/accounts?limit=500")
-      .then((d: any) => setGlAccounts(Array.isArray(d?.items) ? d.items : Array.isArray(d) ? d : []))
-      .catch(() => setGlAccounts([]));
+      .then((d: any) => {
+        setGlAccounts(Array.isArray(d?.items) ? d.items : Array.isArray(d) ? d : []);
+        setGlErr("");
+      })
+      // 参考数据失败：不让整页报错，但必须可见（科目下拉提示会空）
+      .catch((ex) => {
+        setGlAccounts([]);
+        setGlErr(msgOf(ex));
+      });
   }, []);
 
   // PATCH 走 exclude_unset：只提交改动的键，未提交字段不动。
@@ -148,7 +166,18 @@ export default function CounterpartyDetailPage() {
       }
       for (const f of NUM_FIELDS) {
         if (form[f.key] === init[f.key]) continue;
-        payload[f.key] = form[f.key] === "" ? null : Number(form[f.key]);
+        if (form[f.key] === "") {
+          payload[f.key] = null;
+          continue;
+        }
+        // P1-24：非法数字必须中止提交（不能静默变成 NaN）
+        const n = Number(form[f.key]);
+        if (!Number.isFinite(n)) {
+          toast.error(t("page.parties.err_numeric", "{field} must be a valid number", { field: f.label }));
+          setBusy(false);
+          return;
+        }
+        payload[f.key] = n;
       }
       for (const f of DATE_FIELDS) {
         if (form[f.key] === init[f.key]) continue;
@@ -166,8 +195,8 @@ export default function CounterpartyDetailPage() {
       await apiPatch(`/api/v1/masterdata/counterparties/${partyId}`, payload);
       toast.success(t("common.saved", "Saved"));
       await load();
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setBusy(false);
     }
@@ -180,6 +209,86 @@ export default function CounterpartyDetailPage() {
     { key: "compliance", labelKey: "page.parties.grp_compliance", label: "Compliance" },
     { key: "gl", labelKey: "page.parties.grp_gl", label: "GL accounts" },
   ];
+
+  const contactColumns = useMemo<ColumnDef[]>(
+    () => [
+      { key: "name", label: t("common.name", "Name"), minWidth: 150 },
+      { key: "title", label: t("page.parties.contact_title", "Title"), width: 130 },
+      { key: "email", label: t("common.email", "Email"), minWidth: 180 },
+      { key: "phone", label: t("page.parties.phone", "Phone"), width: 140 },
+      { key: "mobile", label: t("page.parties.mobile", "Mobile"), width: 140 },
+      { key: "department", label: t("page.parties.department", "Department"), width: 140 },
+      {
+        key: "is_primary",
+        label: t("page.parties.primary", "Primary"),
+        width: 90,
+        render: (r) => (r.is_primary ? "★" : "—"),
+      },
+    ],
+    [t],
+  );
+
+  const propertyColumns = useMemo<ColumnDef[]>(
+    () => [
+      { key: "title", label: t("common.title", "Title"), width: 220 },
+      { key: "value", label: t("common.value", "Value") },
+    ],
+    [t],
+  );
+
+  // CRUD 弹窗字段定义：每次渲染都换身份会让 VesselCrudGrid 的列模型缓存失效
+  const contactFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "name", label: t("common.name", "Name"), type: "text", required: true },
+      { key: "title", label: t("page.parties.contact_title", "Title"), type: "text" },
+      { key: "email", label: t("common.email", "Email"), type: "text" },
+      { key: "phone", label: t("page.parties.phone", "Phone"), type: "text" },
+      { key: "mobile", label: t("page.parties.mobile", "Mobile"), type: "text" },
+      { key: "department", label: t("page.parties.department", "Department"), type: "text" },
+      { key: "is_primary", label: t("page.parties.primary", "Primary"), type: "checkbox" },
+      { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
+    ],
+    [t],
+  );
+
+  const propertyFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "title", label: t("common.title", "Title"), type: "text", required: true },
+      { key: "value", label: t("common.value", "Value"), type: "text", span: true },
+    ],
+    [t],
+  );
+
+  const bankFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "bank_name", label: t("page.parties.bank_name", "Bank"), type: "text", required: true },
+      { key: "account_name", label: t("page.parties.account_name", "Account name"), type: "text", required: true },
+      { key: "account_number", label: t("page.parties.account_no", "Account no."), type: "text", required: true },
+      { key: "swift_code", label: "SWIFT", type: "text" },
+      { key: "iban", label: "IBAN", type: "text", span: true },
+      { key: "currency", label: t("page.parties.currency", "Curr"), type: "text" },
+      { key: "is_default", label: t("page.parties.default", "Def"), type: "checkbox" },
+    ],
+    [t],
+  );
+
+  const bankColumns = useMemo<ColumnDef[]>(
+    () => [
+      { key: "bank_name", label: t("page.parties.bank_name", "Bank"), minWidth: 150 },
+      { key: "account_name", label: t("page.parties.account_name", "Account name"), minWidth: 150 },
+      { key: "account_number", label: t("page.parties.account_no", "Account no."), width: 160 },
+      { key: "swift_code", label: "SWIFT", width: 120 },
+      { key: "iban", label: t("page.parties.iban", "IBAN"), width: 180 },
+      { key: "currency", label: t("page.parties.currency", "Curr"), width: 80 },
+      {
+        key: "is_default",
+        label: t("page.parties.default", "Def"),
+        width: 70,
+        render: (r) => (r.is_default ? "★" : "—"),
+      },
+    ],
+    [t],
+  );
 
   function renderField(f: (typeof TEXT_FIELDS)[number]) {
     const label = t(`page.parties.f_${f.key}`, f.label);
@@ -252,6 +361,18 @@ export default function CounterpartyDetailPage() {
 
       {tab === "details" ? (
         <div className="panel">
+          {glErr ? (
+            <p className="flash-warn">
+              {t("page.parties.gl_accounts_load_failed", "GL accounts could not be loaded — the account suggestions may be incomplete.")}{" "}
+              {glErr}
+            </p>
+          ) : null}
+          <StateView
+            loading={loading}
+            error={loadErr || undefined}
+            empty={false}
+            onRetry={() => void load()}
+          >
           {groups.map((g) => (
             <FormSection key={g.key} title={t(g.labelKey, g.label)}>
               {g.key === "identity" ? (
@@ -361,6 +482,7 @@ export default function CounterpartyDetailPage() {
               ))}
             </div>
           </FormSection>
+          </StateView>
         </div>
       ) : null}
 
@@ -372,30 +494,8 @@ export default function CounterpartyDetailPage() {
           title={t("page.parties.contacts", "Contacts")}
           addLabel={t("page.parties.add_contact", "Add contact")}
           emptyText={t("page.parties.no_contacts", "No contacts yet")}
-          columns={[
-            { key: "name", label: t("common.name", "Name"), minWidth: 150 },
-            { key: "title", label: t("page.parties.contact_title", "Title"), width: 130 },
-            { key: "email", label: t("common.email", "Email"), minWidth: 180 },
-            { key: "phone", label: t("page.parties.phone", "Phone"), width: 140 },
-            { key: "mobile", label: t("page.parties.mobile", "Mobile"), width: 140 },
-            { key: "department", label: t("page.parties.department", "Department"), width: 140 },
-            {
-              key: "is_primary",
-              label: t("page.parties.primary", "Primary"),
-              width: 90,
-              render: (r) => (r.is_primary ? "★" : "—"),
-            },
-          ]}
-          fields={[
-            { key: "name", label: t("common.name", "Name"), type: "text", required: true },
-            { key: "title", label: t("page.parties.contact_title", "Title"), type: "text" },
-            { key: "email", label: t("common.email", "Email"), type: "text" },
-            { key: "phone", label: t("page.parties.phone", "Phone"), type: "text" },
-            { key: "mobile", label: t("page.parties.mobile", "Mobile"), type: "text" },
-            { key: "department", label: t("page.parties.department", "Department"), type: "text" },
-            { key: "is_primary", label: t("page.parties.primary", "Primary"), type: "checkbox" },
-            { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
-          ]}
+          columns={contactColumns}
+          fields={contactFields}
         />
       ) : null}
 
@@ -407,14 +507,8 @@ export default function CounterpartyDetailPage() {
           title={t("page.parties.tab_properties", "Properties")}
           addLabel={t("page.parties.add_property", "Add property")}
           emptyText={t("page.parties.no_properties", "No properties yet")}
-          columns={[
-            { key: "title", label: t("common.title", "Title"), width: 220 },
-            { key: "value", label: t("common.value", "Value") },
-          ]}
-          fields={[
-            { key: "title", label: t("common.title", "Title"), type: "text", required: true },
-            { key: "value", label: t("common.value", "Value"), type: "text", span: true },
-          ]}
+          columns={propertyColumns}
+          fields={propertyFields}
         />
       ) : null}
 
@@ -428,29 +522,8 @@ export default function CounterpartyDetailPage() {
           title={t("page.parties.tab_bank", "Bank")}
           addLabel={t("page.parties.add_bank", "Add bank account")}
           emptyText={t("page.parties.no_bank", "No bank accounts yet")}
-          columns={[
-            { key: "bank_name", label: t("page.parties.bank_name", "Bank"), minWidth: 150 },
-            { key: "account_name", label: t("page.parties.account_name", "Account name"), minWidth: 150 },
-            { key: "account_number", label: t("page.parties.account_no", "Account no."), width: 160 },
-            { key: "swift_code", label: "SWIFT", width: 120 },
-            { key: "iban", label: "IBAN", width: 180 },
-            { key: "currency", label: t("page.parties.currency", "Curr"), width: 80 },
-            {
-              key: "is_default",
-              label: t("page.parties.default", "Def"),
-              width: 70,
-              render: (r) => (r.is_default ? "★" : "—"),
-            },
-          ]}
-          fields={[
-            { key: "bank_name", label: t("page.parties.bank_name", "Bank"), type: "text", required: true },
-            { key: "account_name", label: t("page.parties.account_name", "Account name"), type: "text", required: true },
-            { key: "account_number", label: t("page.parties.account_no", "Account no."), type: "text", required: true },
-            { key: "swift_code", label: "SWIFT", type: "text" },
-            { key: "iban", label: "IBAN", type: "text", span: true },
-            { key: "currency", label: t("page.parties.currency", "Curr"), type: "text" },
-            { key: "is_default", label: t("page.parties.default", "Def"), type: "checkbox" },
-          ]}
+          columns={bankColumns}
+          fields={bankFields}
         />
       ) : null}
     </AppShell>

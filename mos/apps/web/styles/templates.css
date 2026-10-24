@@ -201,7 +201,7 @@
 
 .tpl-var-name {
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-  color: var(--accent);
+  color: var(--accent-text);
   flex: none;
   max-width: 60%;
   overflow: hidden;

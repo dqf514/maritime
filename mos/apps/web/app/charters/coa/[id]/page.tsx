@@ -16,8 +16,9 @@ import { RevisionsPanel } from "@/components/RevisionsPanel";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Tabs } from "@/components/Tabs";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
-import { useStateActions } from "@/components/useTransitions";
+import { useStateActions, useTransitionTable } from "@/components/useTransitions";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -149,6 +150,8 @@ export default function CoaWorkspacePage() {
   const [liftings, setLiftings] = useState<LiftingRow[]>([]);
   const [ports, setPorts] = useState<RefItem[]>([]);
   const [err, setErr] = useState("");
+  /** 参考数据（港口）加载失败 */
+  const [refErr, setRefErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabId>("contract");
   const [tabBusy, setTabBusy] = useState(false);
@@ -159,6 +162,8 @@ export default function CoaWorkspacePage() {
   const [scoreBusy, setScoreBusy] = useState(false);
 
   // 状态机动作可见性：只渲染当前状态可执行的转移（coa_contract 表）
+  // 转移表取数失败时不能静默地「没有可用动作」
+  const { error: transitionErr } = useTransitionTable();
   const nextStatuses = useStateActions("coa_contract", contract?.status);
 
   const toDraft = useCallback((c: CoaContract) => {
@@ -208,11 +213,15 @@ export default function CoaWorkspacePage() {
       const c = await apiGet(`/api/v1/coa/contracts/${coaId}`);
       setContract(c);
       toDraft(c);
-      apiGet("/api/v1/masterdata/ports")
-        .then((p) => setPorts(p || []))
-        .catch(() => setPorts([]));
+      apiGet("/api/v1/masterdata/ports/options")
+        .then((p) => {
+          setPorts(p || []);
+          setRefErr(null);
+        })
+        // 参考数据取数失败 ≠ 没有港口选项：局部提示
+        .catch((ex) => setRefErr(msgOf(ex)));
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -240,7 +249,7 @@ export default function CoaWorkspacePage() {
           }
         }
       } catch (ex) {
-        setErr(String(ex));
+        setErr(msgOf(ex));
       } finally {
         setTabBusy(false);
       }
@@ -277,7 +286,7 @@ export default function CoaWorkspacePage() {
       if (ex?.status === 422) {
         toast.error(ex?.message || t("page.coa.cp_terms_invalid", "Cargo CP terms invalid — check bill by / tolerance / overage"));
       } else {
-        toast.error(String(ex));
+        toast.error(msgOf(ex));
       }
     } finally {
       setSaving(false);
@@ -290,7 +299,7 @@ export default function CoaWorkspacePage() {
       setContract((c) => (c ? { ...c, status: res.status || target } : c));
       toast.success(t("page.coa.transitioned", "Status → {s}", { s: res.status || target }));
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -300,7 +309,7 @@ export default function CoaWorkspacePage() {
       const res: ScoreResult = await apiGet(`/api/v1/coa/contracts/${coaId}/score`);
       setScore(res);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setScoreBusy(false);
     }
@@ -472,6 +481,38 @@ export default function CoaWorkspacePage() {
     ];
   }, [pnl, t]);
 
+  const scoreMatchColumns: ColumnDef<ScoreMatch>[] = useMemo(
+    () => [
+      {
+        key: "cargo_no",
+        title: t("page.coa.score_cargo", "Cargo"),
+        minWidth: 140,
+        value: (r) => r.cargo_no || r.cargo_id || "",
+      },
+      {
+        key: "score",
+        title: t("page.coa.score_value", "Score"),
+        width: 100,
+        align: "right",
+        value: (r) => r.score,
+        render: (v) => <Num v={Number(v ?? 0)} digits={1} />,
+      },
+      {
+        key: "within_tolerance",
+        title: t("page.coa.score_tolerance", "In tolerance"),
+        width: 110,
+        value: (r) => r.within_tolerance,
+        render: (v) =>
+          v ? (
+            <span className="badge badge-pass">{t("common.yes", "Yes")}</span>
+          ) : (
+            <span className="badge badge-warn">{t("common.no", "No")}</span>
+          ),
+      },
+    ],
+    [t],
+  );
+
   const tabLabels: Record<TabId, string> = {
     contract: t("page.coa.tab.contract", "Contract"),
     liftings: t("page.coa.tab.liftings", "Lifting Schedule"),
@@ -488,6 +529,16 @@ export default function CoaWorkspacePage() {
   return (
     <AppShell>
       {err ? <p className="flash-err">{err}</p> : null}
+      {refErr ? (
+        <p className="flash-err">
+          {t("page.coa.ref_load_failed", "Reference data failed to load: {msg}", { msg: refErr })}
+        </p>
+      ) : null}
+      {transitionErr ? (
+        <p className="flash-err">
+          {t("page.transitions.load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
+        </p>
+      ) : null}
 
       {contract ? (
         <>
@@ -750,34 +801,7 @@ export default function CoaWorkspacePage() {
                               <p className="muted">{t("page.coa.score_no_match", "No matching cargoes")}</p>
                             ) : (
                               <DataGrid<ScoreMatch>
-                                columns={[
-                                  {
-                                    key: "cargo_no",
-                                    title: t("page.coa.score_cargo", "Cargo"),
-                                    minWidth: 140,
-                                    value: (r) => r.cargo_no || r.cargo_id || "",
-                                  },
-                                  {
-                                    key: "score",
-                                    title: t("page.coa.score_value", "Score"),
-                                    width: 100,
-                                    align: "right",
-                                    value: (r) => r.score,
-                                    render: (v) => <Num v={Number(v ?? 0)} digits={1} />,
-                                  },
-                                  {
-                                    key: "within_tolerance",
-                                    title: t("page.coa.score_tolerance", "In tolerance"),
-                                    width: 110,
-                                    value: (r) => r.within_tolerance,
-                                    render: (v) =>
-                                      v ? (
-                                        <span className="badge badge-pass">{t("common.yes", "Yes")}</span>
-                                      ) : (
-                                        <span className="badge badge-warn">{t("common.no", "No")}</span>
-                                      ),
-                                  },
-                                ]}
+                                columns={scoreMatchColumns}
                                 data={leg.matches}
                                 rowKey={(r, i) => `${leg.seq}-${r.cargo_id || i}`}
                                 storageKey="coa-score-matches"

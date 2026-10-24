@@ -17,11 +17,12 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from app.services.money import CENT
 
 # bill_by: weight → mt, measure → m3/cbm, volume → bbl (see models_coa.COA_BILL_BY)
 BILL_BY_VALUES = ("weight", "measure", "volume")
 
-TWOPLACES = Decimal("0.01")
+
 THREE = Decimal("0.001")
 
 # validation ranges (mirrored by the Pydantic schemas)
@@ -41,13 +42,24 @@ def quantity_bounds(
     qty: Decimal | float | int | str | None,
     tolerance_pct: Decimal | float | int | str | None,
 ) -> tuple[Decimal | None, Decimal | None]:
-    """(qty_min, qty_max) = qty × (1 ∓ tolerance_pct/100); None tolerance → (qty, qty)."""
+    """(qty_min, qty_max) = qty × (1 ∓ tolerance_pct/100); None tolerance → (qty, qty).
+
+    tolerance_pct 必须落在本模块声明的区间内（TOLERANCE_PCT_MIN..MAX）——
+    以前负公差会算出「下界 > 上界」的反向区间（P2-B17）。
+    """
     if qty is None:
         return None, None
     q = _d(qty)
+    if q < 0:
+        raise ValueError(f"qty must be >= 0, got {qty!r}")
     if tolerance_pct is None:
         return q, q
-    tol = _d(tolerance_pct) / Decimal("100")
+    tol_pct = _d(tolerance_pct)
+    if tol_pct < TOLERANCE_PCT_MIN or tol_pct > TOLERANCE_PCT_MAX:
+        raise ValueError(
+            f"tolerance_pct must be between {TOLERANCE_PCT_MIN} and {TOLERANCE_PCT_MAX}, got {tol_pct}"
+        )
+    tol = tol_pct / Decimal("100")
     return (
         (q * (Decimal("1") - tol)).quantize(THREE, rounding=ROUND_HALF_UP),
         (q * (Decimal("1") + tol)).quantize(THREE, rounding=ROUND_HALF_UP),
@@ -89,11 +101,18 @@ def freight_with_overage(
     at_contract = billed if billed <= qty_max else qty_max
     over_qty = billed - at_contract
     over_rate_pct = _d(overage_pct) if overage_pct is not None else Decimal("0")
+    if over_rate_pct < OVERAGE_PCT_MIN or over_rate_pct > OVERAGE_PCT_MAX:
+        raise ValueError(
+            f"overage_pct must be between {OVERAGE_PCT_MIN} and {OVERAGE_PCT_MAX}, got {over_rate_pct}"
+        )
 
-    contract_freight = (at_contract * rate).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
-    overage_freight = (
-        over_qty * rate * (Decimal("1") + over_rate_pct / Decimal("100"))
-    ).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+    contract_freight = (at_contract * rate).quantize(CENT, rounding=ROUND_HALF_UP)
+    # 超量部分按**量化后**的费率计价 —— 报的 overage_rate 与实际算的钱必须是
+    # 同一个数（以前报 1.51 却按 1.5035 算，100 单位差 0.10）（P2-B16）。
+    over_rate = (rate * (Decimal("1") + over_rate_pct / Decimal("100"))).quantize(
+        CENT, rounding=ROUND_HALF_UP
+    )
+    overage_freight = (over_qty * over_rate).quantize(CENT, rounding=ROUND_HALF_UP)
 
     return {
         "billable_basis_note": "per-unit freight_rate; bill_by selects the qty unit (weight|measure|volume)",
@@ -106,10 +125,10 @@ def freight_with_overage(
         "qty_at_contract_rate": float(at_contract.quantize(THREE, rounding=ROUND_HALF_UP)),
         "qty_at_overage_rate": float(over_qty.quantize(THREE, rounding=ROUND_HALF_UP)),
         "freight_rate": float(rate),
-        "overage_rate": float((rate * (Decimal("1") + over_rate_pct / Decimal("100"))).quantize(TWOPLACES, rounding=ROUND_HALF_UP)),
+        "overage_rate": float(over_rate),
         "contract_freight": float(contract_freight),
         "overage_freight": float(overage_freight),
-        "total_freight": float((contract_freight + overage_freight).quantize(TWOPLACES, rounding=ROUND_HALF_UP)),
+        "total_freight": float((contract_freight + overage_freight).quantize(CENT, rounding=ROUND_HALF_UP)),
     }
 
 
@@ -162,7 +181,7 @@ def score_cargo_vs_leg(
     if cq is not None and lq is not None and cq > 0 and lq > 0:
         qty_score = float(
             (Decimal("30") * (cq if cq < lq else lq) / (cq if cq > lq else lq)).quantize(
-                TWOPLACES, rounding=ROUND_HALF_UP
+                CENT, rounding=ROUND_HALF_UP
             )
         )
         if tolerance_pct is not None:
@@ -176,8 +195,17 @@ def score_cargo_vs_leg(
         laycan_score = 20.0 if overlaps else 0.0
     breakdown["laycan_window"] = laycan_score
 
+    # 评分求和走 Decimal + 显式 HALF_UP：裸 round() 是二进制银行家舍入
+    # （round(2.675, 2) == 2.67）（P2-B19）
+    score = (
+        Decimal(str(breakdown["load_port"]))
+        + Decimal(str(breakdown["disch_port"]))
+        + Decimal(str(qty_score))
+        + Decimal(str(laycan_score))
+    ).quantize(CENT, rounding=ROUND_HALF_UP)
+
     return {
-        "score": round(breakdown["load_port"] + breakdown["disch_port"] + qty_score + laycan_score, 2),
+        "score": float(score),
         "breakdown": breakdown,
         "within_tolerance": within_tolerance,
     }

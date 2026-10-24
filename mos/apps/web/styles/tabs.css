@@ -53,7 +53,7 @@
   background: var(--toolbar-bg);
 }
 .ui-tabs--line .ui-tab.active {
-  color: var(--accent);
+  color: var(--accent-text);
   border-bottom-color: var(--accent);
   background: transparent;
 }

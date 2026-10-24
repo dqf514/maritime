@@ -304,7 +304,7 @@
 .sidenav a:hover .nav-icon-wrap,
 .sidenav a.active .nav-icon-wrap {
   opacity: 1;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .sidenav a:hover, .sidenav a.active {
   background: var(--nav-active-bg);
@@ -405,7 +405,7 @@
   transition: color 0.15s;
 }
 .breadcrumb a:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .breadcrumb-sep {
   color: var(--border);
@@ -709,7 +709,7 @@
 }
 .nav-popup-item.active {
   background: var(--accent-bg-strong);
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 700;
 }
 .nav-popup-item svg,

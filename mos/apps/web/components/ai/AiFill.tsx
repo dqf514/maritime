@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 /**
@@ -55,7 +56,7 @@ export function AiFill({
       setNarrative(res.narrative || null);
       setSource(res.source || null);
     } catch (ex: any) {
-      setError(ex?.message || t("ai.fill.fail", "AI 填充失败"));
+      setError(msgOf(ex, t("ai.fill.fail", "AI 填充失败")));
     } finally {
       setBusy(false);
     }
@@ -69,7 +70,7 @@ export function AiFill({
         type="button"
         className="btn btn-sm ai-fill-btn"
         disabled={busy}
-        onClick={() => run().catch(() => undefined)}
+        onClick={() => void run()}
         title={t("ai.fill.hint", "用 AI 生成建议值（需人工确认）")}
       >
         {busy ? "…" : "✦"} {label || t("ai.fill.btn", "AI 填充")}

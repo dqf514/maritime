@@ -3,19 +3,22 @@
 // U-CARGONAMES 货物品名主数据（IMOS Data Center > Cargo Names 对齐）。
 // Tabs: Names · Groups —— 名称列表点行进详情卡（含 Title/Value 属性子表）。
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { RefreshButton } from "@/components/RefreshButton";
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { RecordModal } from "@/components/RecordModal";
 import { SavedViews } from "@/components/SavedViews";
+import { StateView } from "@/components/StateView";
 import { Tabs } from "@/components/Tabs";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiGet, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { useListQuery } from "@/lib/useListQuery";
@@ -61,20 +64,44 @@ function CargoNamesPage() {
   const [creating, setCreating] = useState(false);
   const [edit, setEdit] = useState({ ...emptyName });
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [listErr, setListErr] = useState("");
+  const [groupsErr, setGroupsErr] = useState("");
 
   async function load() {
+    setLoading(true);
     const url = q ? `/api/v1/masterdata/cargo-names?q=${encodeURIComponent(q)}&limit=500` : "/api/v1/masterdata/cargo-names?limit=500";
-    setRows(await apiGet(url));
+    try {
+      const d = await apiGet(url);
+      setRows(Array.isArray(d) ? (d as CargoName[]) : []);
+      setListErr("");
+    } catch (ex) {
+      // 列表取数失败必须走错误态，不能静默变成「No records」
+      setRows([]);
+      setListErr(msgOf(ex));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadGroups() {
+    try {
+      const d = await apiGet("/api/v1/masterdata/cargo-groups");
+      setGroups(Array.isArray(d) ? (d as CargoGroup[]) : []);
+      setGroupsErr("");
+    } catch (ex) {
+      // 参考数据失败：不让整页报错，但必须可见（分组列会空）
+      setGroups([]);
+      setGroupsErr(msgOf(ex));
+    }
   }
 
   useEffect(() => {
-    load().catch(() => setRows([]));
+    void load();
   }, [q]);
 
   useEffect(() => {
-    apiGet("/api/v1/masterdata/cargo-groups")
-      .then((d: any) => setGroups(Array.isArray(d) ? d : []))
-      .catch(() => setGroups([]));
+    void loadGroups();
   }, []);
 
   function openCreate() {
@@ -103,16 +130,19 @@ function CargoNamesPage() {
       toast.success(t("page.cargo.created", "Cargo name created"));
       setCreating(false);
       await load();
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
   }
 
-  const groupId = (id: string | null) => (id ? groups.find((g) => g.id === id)?.name ?? "" : "");
+  const groupId = useCallback(
+    (id: string | null) => (id ? groups.find((g) => g.id === id)?.name ?? "" : ""),
+    [groups],
+  );
 
-  const nameColumns: ColumnDef<CargoName>[] = [
+  const nameColumns = useMemo<ColumnDef<CargoName>[]>(() => [
     {
       key: "short_name",
       title: t("page.cargo.short_name", "Short name"),
@@ -183,9 +213,9 @@ function CargoNamesPage() {
         </Link>
       ),
     },
-  ];
+  ], [t, groupId]);
 
-  const groupColumns: ColumnDef<CargoGroup>[] = [
+  const groupColumns = useMemo<ColumnDef<CargoGroup>[]>(() => [
     { key: "name", title: t("common.name", "Name"), minWidth: 160, value: (r) => r.name },
     { key: "description", title: t("common.notes", "Notes"), value: (r) => r.description || "", render: (_v, r) => r.description || "—" },
     {
@@ -195,7 +225,7 @@ function CargoNamesPage() {
       value: (r) => r.created_at ?? null,
       render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
     },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -240,36 +270,55 @@ function CargoNamesPage() {
             {t("page.cargo.add", "New cargo name")}
           </button>
         ) : null}
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => (tab === "names" ? load().catch(() => undefined) : apiGet("/api/v1/masterdata/cargo-groups").then((d: any) => setGroups(Array.isArray(d) ? d : [])).catch(() => undefined))}
-          title={t("common.refresh", "Refresh")}
-        >
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => void (tab === "names" ? load() : loadGroups())} />
       </Toolbar>
+
+      {groupsErr ? (
+        <p className="flash-warn">
+          {t("page.cargo_names.groups_load_failed", "Cargo groups could not be loaded — the group column may be empty.")} {groupsErr}
+        </p>
+      ) : null}
 
       {tab === "names" ? (
         <div className="panel">
-          <DataGrid<CargoName>
-            columns={nameColumns}
-            data={rows}
-            rowKey={(r) => r.id}
-            onRowClick={(r) => router.push(`/masterdata/cargo-names/${r.id}`)}
-            storageKey="masterdata_cargo_names_grid"
+          <StateView
+            loading={loading}
+            error={listErr || undefined}
+            empty={!rows.length}
             emptyText={t("common.empty", "No records")}
-          />
+            onRetry={() => void load()}
+          >
+            <DataGrid<CargoName>
+              columns={nameColumns}
+              data={rows}
+              rowKey={(r) => r.id}
+              onRowClick={(r) => router.push(`/masterdata/cargo-names/${r.id}`)}
+              storageKey="masterdata_cargo_names_grid"
+              emptyText={t("common.empty", "No records")}
+            />
+          </StateView>
+          {/* P1-28：列表总数必须可见 */}
+          {!listErr && rows.length ? (
+            <p className="muted">{t("list.count_total", "{n} records", { n: rows.length })}</p>
+          ) : null}
         </div>
       ) : (
         <div className="panel">
-          <DataGrid<CargoGroup>
-            columns={groupColumns}
-            data={groups}
-            rowKey={(r) => r.id}
-            storageKey="masterdata_cargo_groups_grid"
+          <StateView
+            loading={loading}
+            error={groupsErr || undefined}
+            empty={!groups.length}
             emptyText={t("common.empty", "No records")}
-          />
+            onRetry={() => void loadGroups()}
+          >
+            <DataGrid<CargoGroup>
+              columns={groupColumns}
+              data={groups}
+              rowKey={(r) => r.id}
+              storageKey="masterdata_cargo_groups_grid"
+              emptyText={t("common.empty", "No records")}
+            />
+          </StateView>
         </div>
       )}
 

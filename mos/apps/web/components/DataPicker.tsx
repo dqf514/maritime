@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { apiGet } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 export type PickerItem = {
@@ -24,6 +25,13 @@ type Props = {
   /** 最近使用存储键（按数据集隔离） */
   recentKey: string;
   placeholder?: string;
+  /**
+   * 无障碍：显式的可访问名（aria-label）。
+   * 本组件基本都被调用方用 <label>/<FieldRow> 包裹 —— 此时**可见标签本身就是**可访问名，
+   * 在这里硬编码 aria-label 反而会覆盖掉更具体的可见标签（违反 WCAG 2.5.3 Label in Name）。
+   * 因此默认不写死 aria-label；只有在无法用可见标签包裹时才由调用方显式传入。
+   */
+  ariaLabel?: string;
   disabled?: boolean;
   required?: boolean;
   /** 同步预载选项（可选，提升首屏体验） */
@@ -68,6 +76,7 @@ export function DataPicker({
   emptyLabel,
   recentKey,
   placeholder,
+  ariaLabel,
   disabled,
   required,
   preload,
@@ -76,6 +85,8 @@ export function DataPicker({
   const storeKey = `${tenantScope()}_${recentKey}`;
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<PickerItem[]>(preload || []);
+  /** 检索失败 —— 不能与「没有匹配项」混淆 */
+  const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [kbdIndex, setKbdIndex] = useState(-1);
   const [selected, setSelected] = useState<PickerItem | null>(
@@ -99,8 +110,10 @@ export function DataPicker({
           };
         });
         setItems(mapped);
-      } catch {
+        setErr(null);
+      } catch (ex) {
         setItems([]);
+        setErr(msgOf(ex));
       }
     }, 200);
     return () => clearTimeout(timer);
@@ -134,7 +147,7 @@ export function DataPicker({
             .find((o) => o.id === value);
           if (hit) setSelected({ id: hit.id, label: hit.label || hit.name || hit.id, sublabel: hit.counterparty_name ?? hit.email ?? null });
         })
-        .catch(() => undefined);
+        .catch((ex) => setErr(msgOf(ex)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
@@ -158,6 +171,7 @@ export function DataPicker({
           setQuery("");
           setOpen(true);
         }}
+        aria-label={ariaLabel}
         placeholder={placeholder || t("picker.search", "搜索…")}
         disabled={disabled}
         required={required && !selected}
@@ -251,7 +265,15 @@ export function DataPicker({
               </button>
             );
           })}
-          {!list.length ? <div className="data-picker-item muted">{t("common.empty", "No records")}</div> : null}
+          {!list.length ? (
+            err ? (
+              <div className="data-picker-item muted" role="alert">
+                {t("picker.search_failed", "Search failed: {err}", { err })}
+              </div>
+            ) : (
+              <div className="data-picker-item muted">{t("common.empty", "No records")}</div>
+            )
+          ) : null}
         </div>
       ) : null}
     </div>

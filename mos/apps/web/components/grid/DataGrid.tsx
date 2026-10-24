@@ -3,12 +3,13 @@
 // DataGrid — 单元格中心的 Excel 式数据网格
 // 特性：单元格导航、范围选择、复制粘贴、聚合 footer、内联编辑、列管理、分组折叠
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CellPos, ColumnDef, DataGridProps, GridSelection } from "./types";
 import { useCellSelection } from "./useCellSelection";
 import { useGridKeyboard } from "./useGridKeyboard";
 import { GridFooter } from "./GridFooter";
 import { copyToClipboard, readFromClipboard, coerceValue, fillSeries } from "./clipboard";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { parseUtc } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 
@@ -54,6 +55,23 @@ function isStatusKey(key: string): boolean {
   return key === "status" || key === "state" || key.endsWith("_status") || key.endsWith("_state");
 }
 
+/** 单元格校验错误 —— 按单元格存放，互不影响（P1-25）。 */
+type CellError = { row: number; col: number; msg: string };
+
+/** 一次批量清空的快照 —— 用于撤销（P1-11）。 */
+type ClearedSnapshot = {
+  rowKey: string;
+  colKey: string;
+  /** 清空前该单元格的原值 */
+  value: unknown;
+  /** 清空时该行在 data 中的下标（行可能被重排，撤销时优先按 rowKey 回找） */
+  rowIdx: number;
+};
+
+function errorKey(row: number, col: number): string {
+  return `${row}:${col}`;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function formatDisplay(
   col: ColumnDef<any>,
@@ -89,13 +107,14 @@ export function DataGrid<T extends Record<string, any>>({
   virtualThreshold = 500,
   selectedKeys,
   onSelectedKeysChange,
+  selectable = false,
   loading,
   emptyText = "No records",
   storageKey,
   className = "",
 }: DataGridProps<T>) {
   // status/state 类裸值的中文化翻译函数（无 provider 时 useI18n 返回直通实现）
-  const { t: tr } = useI18n();
+  const { t } = useI18n();
   // 列可见性（支持 storageKey 持久化）
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(() => {
     if (!storageKey) return new Set();
@@ -127,6 +146,58 @@ export function DataGrid<T extends Record<string, any>>({
 
   const gridRef = useRef<HTMLDivElement>(null);
   const editingInputRef = useRef<HTMLInputElement | HTMLSelectElement>(null);
+  // P1-11：Delete 的二次确认
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  // P1-11：批量清空的快照栈（撤销用）。每次清空压入一条「操作」，Ctrl+Z 逐条回滚。
+  const undoRef = useRef<ClearedSnapshot[][]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+
+  // P1-25：单元格校验错误（此前被静默吞掉，只剩一行 TODO）——按单元格存放，
+  // 一个单元格报错不影响其它单元格继续编辑。
+  const [cellErrs, setCellErrs] = useState<Record<string, CellError>>({});
+  // 错误提示的 DOM id 前缀（多网格共存时不能撞号）
+  const gridId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  // 当前处于校验错误状态的单元格数（状态条用）
+  const errCount = Object.keys(cellErrs).length;
+
+  // ── 虚拟滚动（virtualThreshold 此前声明未用；上千行 DOM 会卡顿） ──
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(0);
+  const [measuredRowH, setMeasuredRowH] = useState(0);
+  const virtual = data.length > virtualThreshold;
+  // 行高优先用外部指定，其次实测，最后回退到紧凑密度默认值
+  const rowH = rowHeight ?? measuredRowH ?? 26;
+  const OVERSCAN = 8;
+  const firstVisible = virtual ? Math.max(0, Math.floor(scrollTop / rowH) - OVERSCAN) : 0;
+  const lastVisible = virtual
+    ? Math.min(data.length, Math.ceil((scrollTop + (viewportH || 600)) / rowH) + OVERSCAN)
+    : data.length;
+  const visibleData = virtual ? data.slice(firstVisible, lastVisible) : data;
+  const padTop = virtual ? firstVisible * rowH : 0;
+  const padBottom = virtual ? Math.max(0, (data.length - lastVisible) * rowH) : 0;
+
+  // 视口高度跟随容器尺寸变化
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onResize = () => setViewportH(el.clientHeight);
+    onResize();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(onResize);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // 实测行高（密度切换会变），用于虚拟滚动的像素换算
+  useEffect(() => {
+    if (rowHeight) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const firstRow = el.querySelector("tbody tr.grid-row");
+    const h = firstRow ? firstRow.getBoundingClientRect().height : 0;
+    if (h > 0) setMeasuredRowH(Math.round(h));
+  }, [rowHeight, data.length, columns.length, visibleData.length]);
 
   // 聚焦到网格容器以接收键盘事件
   // 注意 preventScroll：默认 focus() 会把容器滚动进视野，实测在网格里按下鼠标会让
@@ -199,16 +270,69 @@ export function DataGrid<T extends Record<string, any>>({
   }, [editable, sel, columns, data, rowKey, onCellSave]);
 
   // --- 删除 ---
-  const handleDelete = useCallback(() => {
+  // P1-11：Delete 直接清空所有选中单元格且无确认无撤销。
+  // 现在：① 先弹 ConfirmDialog 确认；② 清空前把原值暂存，可撤销（Ctrl+Z / Undo 按钮）。
+  // 选中范围里真正可编辑（清得动）的单元格数 —— 确认框里报这个数。
+  const editableCellCount = useMemo(() => {
+    if (!editable) return 0;
+    let n = 0;
+    for (const pos of sel.cellsInRange()) {
+      if (columns[pos.col]?.editor) n++;
+    }
+    return n;
+  }, [editable, sel, columns]);
+
+  const clearCells = useCallback(() => {
     if (!editable) return;
+    const snapshot: ClearedSnapshot[] = [];
     for (const pos of sel.cellsInRange()) {
       const col = columns[pos.col];
       if (!col?.editor) continue;
       const rowData = data[pos.row] as any;
       const rk = rowKey(data[pos.row] as any, pos.row);
+      // 暂存原值 —— 撤销时原样写回
+      snapshot.push({
+        rowKey: rk,
+        colKey: col.key,
+        value: getCellValue(col, rowData),
+        rowIdx: pos.row,
+      });
       onCellSave?.(rk, col.key, null, rowData);
     }
+    if (snapshot.length) {
+      undoRef.current = [...undoRef.current, snapshot];
+      setCanUndo(true);
+    }
   }, [editable, sel, columns, data, rowKey, onCellSave]);
+
+  const handleDelete = useCallback(() => {
+    if (!editable) return;
+    if (!editableCellCount) return;
+    setConfirmDelete(true);
+  }, [editable, editableCellCount]);
+
+  // 撤销最近一次批量清空 —— 把暂存的值写回（Ctrl+Z 或点 Undo 按钮）
+  const handleUndo = useCallback(() => {
+    const stack = undoRef.current;
+    const last = stack[stack.length - 1];
+    if (!last || !last.length) return;
+    undoRef.current = stack.slice(0, -1);
+    setCanUndo(undoRef.current.length > 0);
+    for (const s of last) {
+      // 行可能被重排 —— 优先按 rowKey 回找，找不到再退回清空时的行下标
+      let idx = -1;
+      for (let i = 0; i < data.length; i++) {
+        if (rowKey(data[i] as any, i) === s.rowKey) {
+          idx = i;
+          break;
+        }
+      }
+      if (idx < 0) idx = s.rowIdx;
+      const rowData = data[idx] as any;
+      if (!rowData) continue;
+      onCellSave?.(s.rowKey, s.colKey, s.value, rowData);
+    }
+  }, [data, rowKey, onCellSave]);
 
   // --- 填充 ---
   const handleFillDown = useCallback(() => {
@@ -245,8 +369,9 @@ export function DataGrid<T extends Record<string, any>>({
 
   // --- 提交编辑 ---
   const commitEdit = useCallback(() => {
-    if (!sel.editing) return;
-    const col = columns[sel.editing.col];
+    const editing = sel.editing;
+    if (!editing) return;
+    const col = columns[editing.col];
     const input = editingInputRef.current;
     if (!col?.editor || !input) {
       sel.stopEdit();
@@ -254,19 +379,30 @@ export function DataGrid<T extends Record<string, any>>({
     }
     const raw = input.value;
     const coerced = coerceValue(raw, col.editor.type);
-    const rowData = data[sel.editing.row];
-    const rk = rowKey(data[sel.editing.row] as any, sel.editing.row);
+    const rowData = data[editing.row];
+    const rk = rowKey(data[editing.row] as any, editing.row);
 
     // 验证
     if (col.editor.validate) {
       const err = col.editor.validate(coerced, rowData);
       if (err) {
-        // TODO: 显示验证错误
+        // P1-25：校验错误必须让用户看见（此前直接吞掉）。
+        // 错误按单元格存放：只挡住当前这一格，其它单元格照常编辑。
+        const k = errorKey(editing.row, editing.col);
+        setCellErrs((prev) => ({ ...prev, [k]: { row: editing.row, col: editing.col, msg: err } }));
         sel.stopEdit();
         return;
       }
     }
 
+    // 该格校验通过 → 清掉这一格的错误（不影响其它格）
+    const ek = errorKey(editing.row, editing.col);
+    setCellErrs((prev) => {
+      if (!prev[ek]) return prev;
+      const next = { ...prev };
+      delete next[ek];
+      return next;
+    });
     onCellSave?.(rk, col.key, coerced, rowData as any);
     sel.stopEdit();
   }, [sel, columns, data, rowKey, onCellSave]);
@@ -288,6 +424,7 @@ export function DataGrid<T extends Record<string, any>>({
     onDelete: handleDelete,
     onFillDown: handleFillDown,
     onFillRight: handleFillRight,
+    onUndo: handleUndo,
   });
 
   // --- 排序 ---
@@ -324,6 +461,43 @@ export function DataGrid<T extends Record<string, any>>({
     [storageKey],
   );
 
+  // --- 行选择（复选框） ---
+  // P1-27：此前 DataGrid 根本没有「选中行」的状态出口，调用方的 sel 永远为空，
+  // 「导出选中」按钮因此永远禁用。这里补上受控/非受控两套。
+  const [internalSelected, setInternalSelected] = useState<Set<string>>(new Set());
+  const selected = selectedKeys ?? internalSelected;
+  const setSelected = useCallback(
+    (next: Set<string>) => {
+      if (!selectedKeys) setInternalSelected(next);
+      onSelectedKeysChange?.(next);
+    },
+    [selectedKeys, onSelectedKeysChange],
+  );
+  const showSelectCol = selectable || Boolean(onSelectedKeysChange);
+  const rowKeyOf = useCallback(
+    (row: T, idx: number) => String(rowKey(row as any, idx)),
+    [rowKey],
+  );
+  const toggleRow = useCallback(
+    (key: string) => {
+      const next = new Set(selected);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      setSelected(next);
+    },
+    [selected, setSelected],
+  );
+  const allSelected = data.length > 0 && data.every((row, i) => selected.has(rowKeyOf(row, i)));
+  const toggleAll = useCallback(() => {
+    if (allSelected) {
+      setSelected(new Set());
+      return;
+    }
+    const next = new Set<string>();
+    data.forEach((row, i) => next.add(rowKeyOf(row, i)));
+    setSelected(next);
+  }, [allSelected, data, rowKeyOf, setSelected]);
+
   // --- 分组 ---
   const groupedData = useMemo(() => {
     if (!groupBy.length) return null;
@@ -351,6 +525,9 @@ export function DataGrid<T extends Record<string, any>>({
       const isEditing = sel.editing?.row === rowIdx && sel.editing?.col === colIdx;
       const isSelected = sel.isInRange(rowIdx, colIdx);
       const isFocus = sel.selection.focus.row === rowIdx && sel.selection.focus.col === colIdx;
+      // P1-25：本格的校验错误（其它格的错误不影响本格）
+      const cellErr = cellErrs[errorKey(rowIdx, colIdx)];
+      const cellErrId = `${gridId}-cerr-${rowIdx}-${colIdx}`;
 
       const cellClass = [
         isSelected ? "cell-selected" : "",
@@ -422,6 +599,9 @@ export function DataGrid<T extends Record<string, any>>({
         <td
           key={col.key}
           className={cellClass}
+          // P1-25：出错单元格标红 + aria-describedby 指向错误文案，读屏也能听到。
+          aria-invalid={cellErr ? true : undefined}
+          aria-describedby={cellErr ? cellErrId : undefined}
           onMouseDown={(e) => {
             // 行内交互控件（按钮/链接/输入）不触发单元格选中：否则会重绘并滚动列表，
             // 按钮在 mouseup 之前被挪走，click 事件落空。
@@ -434,11 +614,20 @@ export function DataGrid<T extends Record<string, any>>({
             if (editable && col.editor) sel.startEdit({ row: rowIdx, col: colIdx });
           }}
         >
-          {formatDisplay(col, row, rowIdx, tr)}
+          {formatDisplay(col, row, rowIdx, t)}
+          {cellErr ? (
+            <span className="grid-cell-error" id={cellErrId} role="alert">
+              {t(
+                "grid.cell_invalid",
+                { en: "Invalid value: {msg}", zh: "取值无效：{msg}" },
+                { msg: cellErr.msg },
+              )}
+            </span>
+          ) : null}
         </td>
       );
     },
-    [sel, editable, commitEdit, columns, tr],
+    [sel, editable, commitEdit, columns, t, cellErrs, gridId],
   );
 
   // 空状态
@@ -451,10 +640,16 @@ export function DataGrid<T extends Record<string, any>>({
   }
 
   return (
-    <div className={`grid-wrapper ${className}`} ref={gridRef} tabIndex={0} onKeyDown={handleKeyDown}>
+    <>
+      <div className={`grid-wrapper ${className}`} ref={gridRef} tabIndex={0} onKeyDown={handleKeyDown}>
       {showColumnMenu && (
         <div className="dt-colmenu">
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowColMenu((v) => !v)}>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={() => setShowColMenu((v) => !v)}
+            aria-label={t("grid.column_menu", "Column menu")}
+          >
             ☰
           </button>
           {showColMenu && (
@@ -474,10 +669,29 @@ export function DataGrid<T extends Record<string, any>>({
         </div>
       )}
 
-      <div className="grid-scroll">
+      <div
+        className={`grid-scroll${virtual ? " grid-scroll--virtual" : ""}`}
+        ref={scrollRef}
+        onScroll={virtual ? (e) => setScrollTop(e.currentTarget.scrollTop) : undefined}
+        style={
+          virtual
+            ? ({ "--vt": `${padTop}px`, "--vb": `${padBottom}px` } as React.CSSProperties)
+            : undefined
+        }
+      >
         <table className="grid-table">
           <thead>
             <tr>
+              {showSelectCol ? (
+                <th className="dt-select-th">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    aria-label={t("common.select_all", "Select all rows")}
+                  />
+                </th>
+              ) : null}
               {columns.map((col, ci) => (
                 <th
                   key={col.key}
@@ -501,7 +715,7 @@ export function DataGrid<T extends Record<string, any>>({
                 return (
                   <tbody key={groupKey} className="grid-group-body">
                     <tr className="grid-group-header" onClick={() => toggleGroup(groupKey)}>
-                      <td colSpan={columns.length}>
+                      <td colSpan={columns.length + (showSelectCol ? 1 : 0)}>
                         <span className="grid-group-toggle">{isCollapsed ? "▸" : "▾"}</span>
                         <strong>{groupKey}</strong>
                         <span className="muted"> ({rows.length})</span>
@@ -510,6 +724,7 @@ export function DataGrid<T extends Record<string, any>>({
                     {!isCollapsed &&
                       rows.map((row, ri) => {
                         const globalIdx = data.indexOf(row as T);
+                        const rk = rowKeyOf(row, globalIdx);
                         return (
                           <tr
                             key={rowKey(row as T, globalIdx)}
@@ -525,6 +740,17 @@ export function DataGrid<T extends Record<string, any>>({
                                 : undefined
                             }
                           >
+                            {showSelectCol ? (
+                              <td className="dt-select-cell">
+                                <input
+                                  type="checkbox"
+                                  checked={selected.has(rk)}
+                                  onChange={() => toggleRow(rk)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  aria-label={t("common.select_row", "Select row")}
+                                />
+                              </td>
+                            ) : null}
                             {columns.map((col, ci) => renderCell(col, row, globalIdx, ci))}
                           </tr>
                         );
@@ -535,30 +761,94 @@ export function DataGrid<T extends Record<string, any>>({
             </>
           ) : (
             <tbody>
-              {data.map((row, ri) => (
-                <tr
-                  key={rowKey(row as T, ri)}
-                  className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}`}
-                  onDoubleClick={() => onRowDoubleClick?.(row as T, ri)}
-                  onClick={() => onRowClick?.(row as T, ri)}
-                  onContextMenu={
-                    onRowContextMenu
-                      ? (e) => {
-                          e.preventDefault();
-                          onRowContextMenu(row as T, ri, e);
-                        }
-                      : undefined
-                  }
-                >
-                  {columns.map((col, ci) => renderCell(col, row, ri, ci))}
+              {padTop > 0 ? (
+                <tr className="grid-vspace grid-vspace-top" aria-hidden="true">
+                  <td colSpan={columns.length + (showSelectCol ? 1 : 0)} />
                 </tr>
-              ))}
+              ) : null}
+              {visibleData.map((row, vi) => {
+                const ri = firstVisible + vi;
+                const rk = rowKeyOf(row, ri);
+                return (
+                  <tr
+                    key={rowKey(row as T, ri)}
+                    className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}`}
+                    onDoubleClick={() => onRowDoubleClick?.(row as T, ri)}
+                    onClick={() => onRowClick?.(row as T, ri)}
+                    onContextMenu={
+                      onRowContextMenu
+                        ? (e) => {
+                            e.preventDefault();
+                            onRowContextMenu(row as T, ri, e);
+                          }
+                        : undefined
+                    }
+                  >
+                    {showSelectCol ? (
+                      <td className="dt-select-cell">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(rk)}
+                          onChange={() => toggleRow(rk)}
+                          onClick={(e) => e.stopPropagation()}
+                          aria-label={t("common.select_row", "Select row")}
+                        />
+                      </td>
+                    ) : null}
+                    {columns.map((col, ci) => renderCell(col, row, ri, ci))}
+                  </tr>
+                );
+              })}
+              {padBottom > 0 ? (
+                <tr className="grid-vspace grid-vspace-bottom" aria-hidden="true">
+                  <td colSpan={columns.length + (showSelectCol ? 1 : 0)} />
+                </tr>
+              ) : null}
             </tbody>
           )}
 
           {showFooter && <GridFooter columns={columns} data={data as Record<string, unknown>[]} selection={sel.selection} />}
         </table>
       </div>
-    </div>
+      {/* P1-11 撤销 + P1-25 校验状态条 */}
+      {errCount > 0 || canUndo ? (
+        <div className="dt-pager">
+          {errCount > 0 ? (
+            <span className="flash-err" role="status" aria-live="polite">
+              {t(
+                "grid.cell_errors",
+                { en: "{n} cell(s) failed validation — see the highlighted cells.", zh: "有 {n} 个单元格未通过校验，请查看标红的单元格。" },
+                { n: errCount },
+              )}
+            </span>
+          ) : null}
+          {canUndo ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={handleUndo}
+              title={t("grid.undo_clear_hint", { en: "Undo the last clear (Ctrl+Z)", zh: "撤销上一次清空（Ctrl+Z）" })}
+            >
+              {t("grid.undo_clear", { en: "Undo clear", zh: "撤销清空" })}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      </div>
+      <ConfirmDialog
+        open={confirmDelete}
+        title={t("common.confirm", "Confirm")}
+        message={t("grid.confirm_clear", "Clear the value of {n} selected cell(s)?", {
+          n: editableCellCount,
+        })}
+        danger
+        confirmLabel={t("common.clear", "Clear")}
+        onConfirm={() => {
+          setConfirmDelete(false);
+          clearCells();
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
+    </>
   );
 }

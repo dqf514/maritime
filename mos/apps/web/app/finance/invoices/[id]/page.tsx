@@ -11,11 +11,14 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { Num } from "@/components/Num";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { StateView } from "@/components/StateView";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { useStateActions } from "@/components/useTransitions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { baseAmountPreview } from "@/lib/numbers";
 import { formatInTz } from "@/lib/datetime";
 import { useToast } from "@/components/ToastProvider";
 import { SkeletonCard } from "@/components/Skeleton";
@@ -72,6 +75,9 @@ function InvoiceDetailPage() {
   const [creditNotes, setCreditNotes] = useState<CreditNote[]>([]);
   const [mirrorChain, setMirrorChain] = useState<MirrorChainItem[]>([]);
   const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
+  const [sectionErr, setSectionErr] = useState<{ payments?: string; creditNotes?: string; mirror?: string }>({});
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notFound, setNotFound] = useState(false);
@@ -80,32 +86,65 @@ function InvoiceDetailPage() {
   const nextStatuses = useStateActions("invoice", inv?.status);
 
   const refresh = useCallback(async () => {
-    const data = await apiGet(`/api/v1/invoices/${id}`);
-    setInv(data);
-    setEditType(data.invoice_type || "freight");
-    setEditAmount(String(data.amount ?? ""));
-    const [pays, cns, chain] = await Promise.all([
-      apiGet(`/api/v1/invoices/${id}/payments`).catch(() => []),
-      apiGet(`/api/v1/invoices/${id}/credit-notes`).catch(() => []),
-      apiGet(`/api/v1/invoices/${id}/mirror-chain`).catch(() => ({ items: [] })),
-    ]);
-    setPayments(Array.isArray(pays) ? pays : []);
-    setCreditNotes(Array.isArray(cns) ? cns : []);
-    setMirrorChain(Array.isArray(chain?.items) ? chain.items : []);
+    setLoading(true);
+    try {
+      const data = await apiGet(`/api/v1/invoices/${id}`);
+      setInv(data);
+      setEditType(data.invoice_type || "freight");
+      setEditAmount(String(data.amount ?? ""));
+      setLoadErr("");
+      // 附属数据失败不拖垮整页，但必须可见（不能静默变空列表）
+      const [pays, cns, chain] = await Promise.allSettled([
+        apiGet(`/api/v1/invoices/${id}/payments`),
+        apiGet(`/api/v1/invoices/${id}/credit-notes`),
+        apiGet(`/api/v1/invoices/${id}/mirror-chain`),
+      ]);
+      setPayments(pays.status === "fulfilled" && Array.isArray(pays.value) ? pays.value : []);
+      setCreditNotes(cns.status === "fulfilled" && Array.isArray(cns.value) ? cns.value : []);
+      setMirrorChain(chain.status === "fulfilled" && Array.isArray(chain.value?.items) ? chain.value.items : []);
+      const sectionErr: { payments?: string; creditNotes?: string; mirror?: string } = {};
+      if (pays.status === "rejected") sectionErr.payments = msgOf(pays.reason);
+      if (cns.status === "rejected") sectionErr.creditNotes = msgOf(cns.reason);
+      if (chain.status === "rejected") sectionErr.mirror = msgOf(chain.reason);
+      setSectionErr(sectionErr);
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
 
   useEffect(() => {
     refresh()
       .catch((ex) => {
         if (ex?.status === 404) setNotFound(true);
-        else setErr(String(ex));
+        else setLoadErr(msgOf(ex));
       });
   }, [refresh]);
 
+  /** 重新加载（错误态重试按钮用） */
+  function reload() {
+    setLoadErr("");
+    setNotFound(false);
+    refresh().catch((ex) => {
+      if (ex?.status === 404) setNotFound(true);
+      else setLoadErr(msgOf(ex));
+    });
+  }
+
   async function save() {
-    const amount = Number(editAmount);
-    if (!editAmount.trim() || Number.isNaN(amount) || amount < 0) {
-      setErr(t("page.finance.bad_amount", "金额必须是有效数字"));
+    const raw = editAmount.trim();
+    const amount = Number(raw);
+    if (!raw || !Number.isFinite(amount) || amount < 0) {
+      const msg = t("page.finance.bad_amount", "金额必须是有效数字");
+      setErr(msg);
+      toast.error(msg);
+      return;
+    }
+    // P1-13：保存前跑校验，阻断级（error）问题中止提交
+    const blockers = blockingIssues(inv ? { ...inv, amount, invoice_type: editType } : null);
+    if (blockers.length) {
+      const msg = blockingMessage(blockers);
+      setErr(msg);
+      toast.error(msg);
       return;
     }
     setSaving(true);
@@ -115,7 +154,8 @@ function InvoiceDetailPage() {
       toast.success(t("common.saved", "Saved"));
       await refresh();
     } catch (ex: any) {
-      setErr(ex?.message || String(ex));
+      setErr(msgOf(ex));
+      toast.error(msgOf(ex));
     } finally {
       setSaving(false);
     }
@@ -127,12 +167,23 @@ function InvoiceDetailPage() {
       await apiDelete(`/api/v1/invoices/${id}`);
       window.location.href = "/finance?tab=invoices";
     } catch (ex: any) {
-      setErr(ex?.message || String(ex));
+      setErr(msgOf(ex));
+      toast.error(msgOf(ex));
       setSaving(false);
     }
   }
 
   async function transition(target: string) {
+    // P1-13：提交/开票等推进动作同样受阻断级校验约束
+    if (["pending_approval", "issued"].includes(target)) {
+      const blockers = blockingIssues(inv);
+      if (blockers.length) {
+        const msg = blockingMessage(blockers);
+        setErr(msg);
+        toast.error(msg);
+        return;
+      }
+    }
     setBusy(true);
     setErr("");
     try {
@@ -145,7 +196,7 @@ function InvoiceDetailPage() {
         setErr(msg);
         toast.error(msg);
       } else {
-        const msg = ex?.message || String(ex);
+        const msg = msgOf(ex);
         setErr(msg);
         toast.error(msg);
       }
@@ -156,9 +207,12 @@ function InvoiceDetailPage() {
 
   async function recordPayment(e: FormEvent) {
     e.preventDefault();
-    const amount = Number(payAmount);
-    if (!amount) {
-      setErr(t("page.finance.need_pay", "Enter payment amount"));
+    const raw = payAmount.trim();
+    const amount = Number(raw);
+    if (!raw || !Number.isFinite(amount) || amount <= 0) {
+      const msg = t("page.finance.need_pay", "Enter payment amount");
+      setErr(msg);
+      toast.error(msg);
       return;
     }
     setBusy(true);
@@ -171,7 +225,7 @@ function InvoiceDetailPage() {
       setPayRef("");
       await refresh();
     } catch (ex: any) {
-      const msg = ex?.message || String(ex);
+      const msg = msgOf(ex);
       setErr(msg);
       toast.error(msg);
     } finally {
@@ -194,7 +248,7 @@ function InvoiceDetailPage() {
       } else if (ex?.status === 409 && code === "GL_POSTED") {
         msg = t("page.finance.void_gl_posted", "发票已过账（GL posted），禁止冲正其付款");
       } else {
-        msg = ex?.message || String(ex);
+        msg = msgOf(ex);
       }
       setErr(msg);
       toast.error(msg);
@@ -205,11 +259,27 @@ function InvoiceDetailPage() {
 
   async function createCreditNote(e: FormEvent) {
     e.preventDefault();
-    const amount = Number(cnAmount);
-    if (!cnAmount.trim() || Number.isNaN(amount)) {
-      setErr(t("page.finance.bad_amount", "金额必须是有效数字"));
+    const raw = cnAmount.trim();
+    const amount = Number(raw);
+    if (!raw || !Number.isFinite(amount)) {
+      const msg = t("page.finance.bad_amount", "金额必须是有效数字");
+      setErr(msg);
+      toast.error(msg);
       return;
     }
+    // P1-8：红冲是不可逆操作 —— 二次确认并指名对象
+    setConfirm({
+      message: t("page.finance.cn_confirm", "对发票 {no} 红冲 {amount} {cur}？红冲后不可撤销。", {
+        no: inv?.invoice_no || id,
+        amount: amount.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+        cur: inv?.currency || "USD",
+      }),
+      danger: true,
+      action: () => void postCreditNote(amount),
+    });
+  }
+
+  async function postCreditNote(amount: number) {
     setBusy(true);
     setErr("");
     try {
@@ -224,7 +294,7 @@ function InvoiceDetailPage() {
       if (ex?.status === 409 && ex?.detail?.code === "CREDIT_EXCEEDS_BALANCE") {
         msg = t("page.finance.cn_exceeds", "红冲金额超过发票余额");
       } else {
-        msg = ex?.message || String(ex);
+        msg = msgOf(ex);
       }
       setErr(msg);
       toast.error(msg);
@@ -240,7 +310,7 @@ function InvoiceDetailPage() {
       toast.success(t("page.finance.gl_ok", "GL posted"));
       await refresh();
     } catch (ex: any) {
-      const msg = ex?.message || String(ex);
+      const msg = msgOf(ex);
       setErr(msg);
       toast.error(msg);
     } finally {
@@ -249,28 +319,40 @@ function InvoiceDetailPage() {
   }
 
   /** R4 前端校验：错误阻断 / 警告可继续 / 全绿通过 */
-  function validateInvoice(): ValidateIssue[] {
+  function validateInvoice(target: Invoice | null = inv): ValidateIssue[] {
     const issues: ValidateIssue[] = [];
-    if (!inv) return issues;
-    if (!(Number(inv.amount) > 0)) {
+    if (!target) return issues;
+    if (!(Number(target.amount) > 0)) {
       issues.push({ level: "error", message: t("validate.inv_amount", "Amount must be greater than zero.") });
     }
-    if (!inv.counterparty_id) {
+    if (!target.counterparty_id) {
       issues.push({ level: "error", message: t("validate.inv_counterparty", "Counterparty is required.") });
     }
-    if (!INVOICE_TYPES.includes(inv.invoice_type || "")) {
-      issues.push({ level: "error", message: t("validate.inv_type", "Invalid invoice type: {type}", { type: inv.invoice_type || "—" }) });
+    if (!INVOICE_TYPES.includes(target.invoice_type || "")) {
+      issues.push({ level: "error", message: t("validate.inv_type", "Invalid invoice type: {type}", { type: target.invoice_type || "—" }) });
     }
-    if (inv.due_date && inv.issued_at && String(inv.due_date) < String(inv.issued_at).slice(0, 10)) {
+    if (target.due_date && target.issued_at && String(target.due_date) < String(target.issued_at).slice(0, 10)) {
       issues.push({ level: "error", message: t("validate.inv_due", "Due date is before the invoice date.") });
     }
-    if (inv.currency && inv.currency !== "USD" && (inv.fx_rate === null || inv.fx_rate === undefined)) {
-      issues.push({ level: "warn", message: t("validate.inv_fx", "FX rate missing on non-base currency ({cur}).", { cur: inv.currency }) });
+    if (target.currency && target.currency !== "USD" && (target.fx_rate === null || target.fx_rate === undefined)) {
+      issues.push({ level: "warn", message: t("validate.inv_fx", "FX rate missing on non-base currency ({cur}).", { cur: target.currency }) });
     }
-    if (!inv.voyage_id) {
+    if (!target.voyage_id) {
       issues.push({ level: "warn", message: t("validate.inv_voyage", "No PDA / linked voyage on this invoice.") });
     }
     return issues;
+  }
+
+  /** 只取阻断级（error）问题 —— 存在即不允许保存/提交 */
+  function blockingIssues(target: Invoice | null): ValidateIssue[] {
+    return validateInvoice(target).filter((i) => i.level === "error");
+  }
+
+  function blockingMessage(issues: ValidateIssue[]): string {
+    return t("page.finance.blocking_issues", "存在 {n} 项阻断级问题，操作已中止：{list}", {
+      n: issues.length,
+      list: issues.map((i) => i.message).join(" / "),
+    });
   }
 
   function transitionLabel(target: string): string {
@@ -330,7 +412,10 @@ function InvoiceDetailPage() {
               onClick={(e) => {
                 e.stopPropagation();
                 setConfirm({
-                  message: t("page.finance.void_confirm", "确认冲正这笔付款？将生成等额反向付款行。"),
+                  message: t("page.finance.void_payment_confirm", "冲正付款 {amount} {cur}？将生成等额反向付款行。", {
+                    amount: fmt(p.amount),
+                    cur: p.currency || "USD",
+                  }),
                   danger: true,
                   action: () => voidPayment(p.id),
                 });
@@ -364,14 +449,6 @@ function InvoiceDetailPage() {
     [t],
   );
 
-  if (!inv && !notFound) {
-    return (
-      <AppShell>
-        <SkeletonCard />
-      </AppShell>
-    );
-  }
-
   if (notFound) {
     return (
       <AppShell>
@@ -381,6 +458,23 @@ function InvoiceDetailPage() {
             {t("common.back", "返回")}
           </Link>
         </div>
+      </AppShell>
+    );
+  }
+
+  // P1-5：loading / error / content 三态互斥 —— 错误绝不能被骨架屏吞掉
+  if (!inv) {
+    return (
+      <AppShell>
+        <StateView
+          loading={loading}
+          error={loadErr || undefined}
+          empty={!loading && !loadErr}
+          emptyText={t("common.empty", "No records")}
+          onRetry={reload}
+        >
+          <SkeletonCard />
+        </StateView>
       </AppShell>
     );
   }
@@ -407,7 +501,18 @@ function InvoiceDetailPage() {
       label: transitionLabel(target),
       variant: (target === "issued" || target === "paid" ? "primary" : target === "void" ? "danger" : "default") as DetailAction["variant"],
       disabled: busy,
-      onClick: () => transition(target),
+      onClick: () => {
+        // P1-8：作废发票是不可逆操作 —— 二次确认并指名对象
+        if (target === "void") {
+          setConfirm({
+            message: t("page.finance.void_invoice_confirm", "作废发票 {no}？作废后不可撤销。", { no: inv?.invoice_no || id }),
+            danger: true,
+            action: () => void transition(target),
+          });
+          return;
+        }
+        void transition(target);
+      },
     })),
   ];
   if (inv && ["issued", "partially_paid", "paid"].includes(inv.status)) {
@@ -425,7 +530,7 @@ function InvoiceDetailPage() {
     disabled: saving || busy,
     onClick: () =>
       setConfirm({
-        message: t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored."),
+        message: t("page.finance.delete_invoice_confirm", "删除发票 {no}？记录将移入回收站，可恢复。", { no: inv?.invoice_no || id }),
         danger: true,
         action: remove,
       }),
@@ -472,6 +577,16 @@ function InvoiceDetailPage() {
       />
 
       {err ? <p className="err-text">{err}</p> : null}
+      {loadErr ? (
+        <p className="state-view-text state-view-error">
+          {t("page.finance.load_failed", "数据加载失败：{msg}", { msg: loadErr })}
+        </p>
+      ) : null}
+      {sectionErr.mirror ? (
+        <p className="state-view-text state-view-error">
+          {t("page.finance.mirror_chain_failed", "镜像链加载失败：{msg}", { msg: sectionErr.mirror })}
+        </p>
+      ) : null}
 
       <div className={showDraftWatermark ? "draft-watermark" : undefined}>
       <PrintDoc
@@ -496,11 +611,7 @@ function InvoiceDetailPage() {
           <CurrencyField
             amount={editAmount}
             currency={inv?.currency || "USD"}
-            baseAmount={
-              editAmount.trim() && !Number.isNaN(Number(editAmount))
-                ? Number(editAmount) * (Number(inv?.fx_rate) || 1)
-                : (inv?.base_amount ?? null)
-            }
+            baseAmount={baseAmountPreview(editAmount, inv?.fx_rate) ?? (inv?.base_amount ?? null)}
             fxRate={inv?.fx_rate ?? 1}
             onAmountChange={setEditAmount}
           />
@@ -519,6 +630,11 @@ function InvoiceDetailPage() {
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.finance.payments", "付款记录")} ({payments.length})</h3>
+        {sectionErr.payments ? (
+          <p className="state-view-text state-view-error">
+            {t("page.finance.payments_failed", "付款记录加载失败：{msg}", { msg: sectionErr.payments })}
+          </p>
+        ) : null}
         <form className="form-grid" onSubmit={recordPayment}>
           <label>
             {t("page.finance.pay_amount", "Payment amount")}
@@ -557,6 +673,11 @@ function InvoiceDetailPage() {
             {t("page.finance.credit_note", "红冲")}
           </button>
         </div>
+        {sectionErr.creditNotes ? (
+          <p className="state-view-text state-view-error">
+            {t("page.finance.credit_notes_failed", "红冲记录加载失败：{msg}", { msg: sectionErr.creditNotes })}
+          </p>
+        ) : null}
         {creditNotes.length ? (
           <div style={{ marginTop: "0.5rem" }}>
             <DataGrid<CreditNote>

@@ -116,6 +116,36 @@ export function GanttBar({ block, x, width, pxPerDay = ZOOM_PX_PER_DAY.week, onM
     [block, onClick],
   );
 
+  // 键盘替代（无障碍）：排程条只有指针操作，键盘用户无法移动它。
+  // Enter/Space = 打开关联单据；← / → = 整体前移/后移一天；
+  // Shift + ← / → = 拉伸结束时间（手柄只有指针操作，这里给出键盘等价路径）。
+  // ↑ / ↓ 不在这里处理 —— 由 GanttBoard 负责在排程条之间移动焦点。
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick?.(block);
+        return;
+      }
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && (onMove || onResize)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const delta = (e.key === "ArrowLeft" ? -1 : 1) * DAY_MS;
+        if (e.shiftKey) {
+          if (!onResize) return;
+          const start = toMs(block.start);
+          const end = Math.max(start + 3600000, toMs(block.end) + delta);
+          onResize(block, new Date(start).toISOString(), new Date(end).toISOString());
+          return;
+        }
+        if (!onMove) return;
+        onMove(block, new Date(toMs(block.start) + delta).toISOString(), new Date(toMs(block.end) + delta).toISOString());
+      }
+    },
+    [block, onClick, onMove, onResize],
+  );
+
   const left = preview ? preview.x : x;
   const w = preview ? preview.width : width;
   const cls = [
@@ -132,6 +162,10 @@ export function GanttBar({ block, x, width, pxPerDay = ZOOM_PX_PER_DAY.week, onM
       className={cls}
       style={{ left, width: Math.max(6, w) }}
       title={`${block.label}\n${block.start} → ${block.end}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`${block.label} ${block.start} → ${block.end}`}
+      onKeyDown={handleKeyDown}
       onClick={handleClick}
       onPointerDown={(e) => beginDrag(e, "move")}
       onPointerMove={handleMove}

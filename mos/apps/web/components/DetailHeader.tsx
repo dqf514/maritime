@@ -1,7 +1,7 @@
 "use client";
 
 // 详情页头：标题 + 状态徽章 + 状态机动作按钮。
-// 详情页必须使用本组件（或 DetailPageTemplate），动作区只渲染当前状态可执行项。
+// 详情页必须使用本组件，动作区只渲染当前状态可执行项。
 
 import { ReactNode } from "react";
 import { PageHeader } from "@/components/PageHeader";

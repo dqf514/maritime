@@ -106,6 +106,7 @@ def test_full_commercial_ops_finance_chain(client, auth_headers):
     assert act.json()["status"] == "active"
 
     voyages = client.get("/api/v1/voyages", headers=h).json()
+    voyages = voyages["items"] if isinstance(voyages, dict) else voyages
     assert voyages
     voyage_id = voyages[0]["id"]
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { msgOf } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -10,6 +11,7 @@ import { ContactPicker } from "@/components/DataPicker";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { StateView } from "@/components/StateView";
 import { useStateActions } from "@/components/useTransitions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -64,6 +66,9 @@ function ClaimDetailPage() {
   const [actNotes, setActNotes] = useState("");
   const [actResult, setActResult] = useState("");
   const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
+  const [sectionErr, setSectionErr] = useState<{ actions?: string; types?: string }>({});
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notFound, setNotFound] = useState(false);
@@ -99,37 +104,65 @@ function ClaimDetailPage() {
   );
 
   const refresh = useCallback(async () => {
-    const [data, acts] = await Promise.all([
-      apiGet(`/api/v1/claims/${id}`),
-      apiGet(`/api/v1/claims/${id}/actions`).catch(() => ({ items: [] })),
-    ]);
-    setClaim(data);
-    setEditType(data.claim_type || "demurrage");
-    setEditSubtype(data.subtype || "");
-    setEditContact(data.contact?.id || "");
-    setEditAmount(String(data.amount ?? ""));
-    setEditNotes(data.notes || "");
-    setSettleAmount(String(data.settlement_amount ?? data.amount ?? ""));
-    setClaimActions(Array.isArray(acts?.items) ? acts.items : []);
+    setLoading(true);
+    try {
+      const data = await apiGet(`/api/v1/claims/${id}`);
+      setClaim(data);
+      setEditType(data.claim_type || "demurrage");
+      setEditSubtype(data.subtype || "");
+      setEditContact(data.contact?.id || "");
+      setEditAmount(String(data.amount ?? ""));
+      setEditNotes(data.notes || "");
+      setSettleAmount(String(data.settlement_amount ?? data.amount ?? ""));
+      setLoadErr("");
+      // 处置动作列表失败不拖垮整页，但必须可见
+      const acts = await apiGet(`/api/v1/claims/${id}/actions`).catch((ex) => {
+        setSectionErr((prev) => ({ ...prev, actions: msgOf(ex) }));
+        return null;
+      });
+      setClaimActions(Array.isArray(acts?.items) ? acts.items : []);
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
 
   useEffect(() => {
     refresh().catch((ex) => {
       if (ex?.status === 404) setNotFound(true);
-      else setErr(String(ex));
+      else setLoadErr(msgOf(ex));
     });
     apiGet("/api/v1/claims/types")
       .then((r: { items: ClaimTypeOpt[]; actions?: Labeled[] }) => {
         setClaimTypes(r.items);
         setActionCatalog(r.actions || []);
       })
-      .catch(() => {
+      .catch((ex) => {
         setClaimTypes([]);
         setActionCatalog([]);
+        setSectionErr((prev) => ({ ...prev, types: msgOf(ex) }));
       });
   }, [refresh]);
 
+  /** 重新加载（错误态重试） */
+  function reload() {
+    setLoadErr("");
+    setNotFound(false);
+    refresh().catch((ex) => {
+      if (ex?.status === 404) setNotFound(true);
+      else setLoadErr(msgOf(ex));
+    });
+  }
+
   async function save() {
+    // P1-24：非法数值不得被静默转成 0
+    const raw = editAmount.trim();
+    const amount = Number(raw);
+    if (!raw || !Number.isFinite(amount) || amount < 0) {
+      const msg = t("page.finance.bad_amount", "金额必须是有效数字");
+      setErr(msg);
+      toast.error(msg);
+      return;
+    }
     setSaving(true);
     setErr("");
     try {
@@ -137,13 +170,14 @@ function ClaimDetailPage() {
         claim_type: editType,
         subtype: editSubtype,
         contact_id: editContact || null,
-        amount: Number(editAmount) || 0,
+        amount,
         notes: editNotes || null,
       });
       toast.success(t("common.saved", "Saved"));
       await refresh();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
+      toast.error(msgOf(ex));
     } finally {
       setSaving(false);
     }
@@ -165,7 +199,8 @@ function ClaimDetailPage() {
       setActResult("");
       await refresh();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -182,7 +217,8 @@ function ClaimDetailPage() {
           : t("page.finance.timebar_task_created", "Time-bar task created"),
       );
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -194,22 +230,33 @@ function ClaimDetailPage() {
       await apiDelete(`/api/v1/claims/${id}`);
       window.location.href = "/finance?tab=claims";
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
+      toast.error(msgOf(ex));
       setSaving(false);
     }
   }
 
   async function transition(target: string) {
+    const q = new URLSearchParams({ target });
+    if (target === "settled" && settleAmount.trim() !== "") {
+      // P1-24：结算金额必须是合法数字（0 合法，垃圾输入不静默转 0）
+      const settle = Number(settleAmount.trim());
+      if (!Number.isFinite(settle) || settle < 0) {
+        const msg = t("page.finance.bad_amount", "金额必须是有效数字");
+        setErr(msg);
+        toast.error(msg);
+        return;
+      }
+      q.set("settlement_amount", String(settle));
+    }
     setBusy(true);
     setErr("");
     try {
-      const q = new URLSearchParams({ target });
-      if (target === "settled" && settleAmount !== "") q.set("settlement_amount", String(Number(settleAmount) || 0));
       await apiPost(`/api/v1/claims/${id}/transition?${q.toString()}`);
       toast.success(t("page.finance.claim_moved", "Claim → {target}", { target }));
       await refresh();
     } catch (ex: any) {
-      const msg = ex?.message || String(ex);
+      const msg = msgOf(ex);
       setErr(msg);
       toast.error(msg);
     } finally {
@@ -227,8 +274,10 @@ function ClaimDetailPage() {
     } catch (ex: any) {
       if (ex?.status === 409) {
         setErr(t("page.finance.claim_not_settled", "索赔未结清，不能生成发票"));
+        toast.error(t("page.finance.claim_not_settled", "索赔未结清，不能生成发票"));
       } else {
-        setErr(String(ex));
+        setErr(msgOf(ex));
+        toast.error(msgOf(ex));
       }
     } finally {
       setBusy(false);
@@ -267,7 +316,30 @@ function ClaimDetailPage() {
       label: transitionLabel(target),
       variant: (target === "settled" ? "primary" : target === "withdrawn" ? "default" : "default") as DetailAction["variant"],
       disabled: busy,
-      onClick: () => transition(target),
+      onClick: () => {
+        // P1-8：结清 / 撤回索赔是不可逆决策 —— 二次确认并指名对象
+        if (target === "settled") {
+          setConfirm({
+            message: t("page.finance.settle_claim_confirm", "结清索赔 {no}？结清金额 {amount} {cur}，操作不可撤销。", {
+              no: claim?.claim_no || id,
+              amount: settleAmount.trim() || String(claim?.settlement_amount ?? claim?.amount ?? 0),
+              cur: claim?.currency || "USD",
+            }),
+            danger: true,
+            action: () => void transition(target),
+          });
+          return;
+        }
+        if (target === "withdrawn") {
+          setConfirm({
+            message: t("page.finance.withdraw_claim_confirm", "撤回索赔 {no}？撤回后不可撤销。", { no: claim?.claim_no || id }),
+            danger: true,
+            action: () => void transition(target),
+          });
+          return;
+        }
+        void transition(target);
+      },
     })),
   ];
   if (claim?.status === "settled") {
@@ -293,20 +365,12 @@ function ClaimDetailPage() {
       disabled: saving || busy,
       onClick: () =>
         setConfirm({
-          message: t("common.confirm_delete", "Delete this record? It will move to the recycle bin and can be restored."),
+          message: t("page.finance.delete_claim_confirm", "删除索赔 {no}？记录将移入回收站，可恢复。", { no: claim?.claim_no || id }),
           danger: true,
           action: remove,
         }),
     },
   );
-
-  if (!claim && !notFound) {
-    return (
-      <AppShell>
-        <SkeletonCard />
-      </AppShell>
-    );
-  }
 
   if (notFound) {
     return (
@@ -317,6 +381,23 @@ function ClaimDetailPage() {
             {t("common.back", "返回")}
           </Link>
         </div>
+      </AppShell>
+    );
+  }
+
+  // P1-5：loading / error / content 三态互斥
+  if (!claim) {
+    return (
+      <AppShell>
+        <StateView
+          loading={loading}
+          error={loadErr || undefined}
+          empty={!loading && !loadErr}
+          emptyText={t("common.empty", "No records")}
+          onRetry={reload}
+        >
+          <SkeletonCard />
+        </StateView>
       </AppShell>
     );
   }
@@ -337,6 +418,16 @@ function ClaimDetailPage() {
       />
 
       {err ? <p className="err-text">{err}</p> : null}
+      {loadErr ? (
+        <p className="state-view-text state-view-error">
+          {t("page.finance.load_failed", "数据加载失败：{msg}", { msg: loadErr })}
+        </p>
+      ) : null}
+      {sectionErr.types ? (
+        <p className="state-view-text state-view-error">
+          {t("page.finance.claim_types_failed", "索赔类型目录加载失败：{msg}", { msg: sectionErr.types })}
+        </p>
+      ) : null}
 
       <div className="panel">
         {claim?.days_to_timebar != null ? (
@@ -400,6 +491,11 @@ function ClaimDetailPage() {
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.finance.claim_actions", "Claim actions")}</h3>
+        {sectionErr.actions ? (
+          <p className="state-view-text state-view-error">
+            {t("page.finance.claim_actions_failed", "处置动作加载失败：{msg}", { msg: sectionErr.actions })}
+          </p>
+        ) : null}
         {claimActions.length ? (
           <DataGrid<ClaimActionRow>
             columns={actionCols}

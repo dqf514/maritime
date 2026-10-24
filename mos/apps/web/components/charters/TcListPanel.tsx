@@ -5,11 +5,13 @@
 // P11 IMOS 对齐：TC In/Out 由 ?dir=in|out 分列（导航两项直达），列集对齐
 // IMOS TC 列表（TC Code / CP Date / DWT / Gross Hire / Min-Max Redelivery…）。
 
+import { msgOf } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { RecordModal } from "@/components/RecordModal";
+import { StateView } from "@/components/StateView";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
 import { DateInput } from "@/components/DateInput";
 import { PartyPicker } from "@/components/DataPicker";
@@ -134,7 +136,7 @@ export function TcListPanel() {
       setParties(p || []);
       setCharters(ch || []);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -305,6 +307,18 @@ export function TcListPanel() {
 
   async function create() {
     setBusy(true);
+    // 数值字段校验：空/非法输入不能静默变 0
+    for (const [label, raw] of [
+      [t("page.tc.col.hire_rate", "Hire rate"), form.hire_rate],
+      [t("page.tc.col.address_comm", "Address comm %"), form.address_comm_pct],
+      [t("page.tc.col.brokerage", "Brokerage %"), form.brokerage_pct],
+    ] as Array<[string, string]>) {
+      if (raw === "" || !Number.isFinite(Number(raw))) {
+        toast.error(t("page.tc.err_number", "{field} must be a valid number", { field: label }));
+        setBusy(false);
+        return;
+      }
+    }
     try {
       const payload: Record<string, unknown> = {
         charter_id: form.charter_id,
@@ -329,7 +343,7 @@ export function TcListPanel() {
       await load();
       if (created?.id) router.push(`/charters/tc/${created.id}`);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -345,8 +359,6 @@ export function TcListPanel() {
 
   return (
     <>
-      {err ? <p className="flash-err">{err}</p> : null}
-
       <div className="tc-toolbar" style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", margin: "0.5rem 0" }}>
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label={t("common.type", "Type")}>
           {typeOptions.map((o) => (
@@ -373,17 +385,24 @@ export function TcListPanel() {
       </div>
 
       <div className="panel">
+        <StateView
+          loading={loading}
+          error={err || undefined}
+          empty={!loading && !err && filtered.length === 0}
+          emptyText={t("common.empty", "No records")}
+          onRetry={() => void load()}
+        >
         <DataGrid
           columns={columns}
           data={filtered}
           rowKey={(r) => r.id}
-          loading={loading}
           showFooter={false}
           storageKey="tc-list"
           emptyText={t("common.empty", "No records")}
           onRowDoubleClick={(r) => router.push(`/charters/tc/${r.id}`)}
           onRowClick={(r) => router.push(`/charters/tc/${r.id}`)}
         />
+        </StateView>
       </div>
 
       <RecordModal

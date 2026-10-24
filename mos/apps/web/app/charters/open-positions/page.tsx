@@ -3,7 +3,7 @@
 // P11 IMOS Open Positions — TC In 还船机会 + 未成交 voyage fixture 汇总看板。
 // 数据源：GET /api/v1/chartering/open-positions（kind = tc_open | voyage_fix）。
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
@@ -13,6 +13,7 @@ import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { apiGet } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 
@@ -62,7 +63,7 @@ function OpenPositionsWorkspace() {
       const res = await apiGet(`/api/v1/chartering/open-positions${suffix}`);
       setRows(Array.isArray(res) ? res : res?.items || []);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -72,7 +73,7 @@ function OpenPositionsWorkspace() {
     load();
   }, [load]);
 
-  const columns: ColumnDef<OpenRow>[] = [
+  const columns = useMemo<ColumnDef<OpenRow>[]>(() => [
     {
       key: "kind",
       title: t("page.open_pos.kind", "Kind"),
@@ -167,7 +168,7 @@ function OpenPositionsWorkspace() {
     },
     { key: "company_code", title: t("page.tc.header.company_code", "Company"), width: 100, value: (r) => r.company_code || "" },
     { key: "trade_area", title: t("page.tc.header.trade_area", "Trade area"), width: 110, value: (r) => r.trade_area || "" },
-  ];
+  ], [t]);
 
   return (
     <AppShell>

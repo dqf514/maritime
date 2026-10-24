@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { StateView } from "@/components/StateView";
+import { useFocusTrap } from "@/components/useFocusTrap";
 import { apiGet, type PageGuide as PageGuideData } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -18,6 +19,8 @@ export function PageGuide({ pageKey }: Props) {
 
   const isZh = locale.startsWith("zh");
   const pick = (v?: { en: string; zh?: string }) => (v ? (isZh ? v.zh || v.en : v.en) : "");
+  // 模态对话框：焦点陷阱 + 关闭后焦点归还（与 RecordModal 同一套实现）
+  const { ref: panelRef, onKeyDown: trapKeyDown } = useFocusTrap<HTMLElement>(open);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,6 +68,8 @@ export function PageGuide({ pageKey }: Props) {
             role="dialog"
             aria-modal="true"
             aria-label={title}
+            ref={panelRef}
+            onKeyDown={trapKeyDown}
             onClick={(e) => e.stopPropagation()}
           >
             <header className="record-modal-head">

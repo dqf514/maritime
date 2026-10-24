@@ -3,11 +3,13 @@
 // 加油需求采购链面板：需求 → 招标 → 供应商报价 → 选定（A1/A2/A6）。
 // 自取数 + 自建表单，挂载在 Bunker desk 页。
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { RowActions } from "@/components/RowActions";
+import { StateView } from "@/components/StateView";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -41,6 +43,14 @@ function fmt(n: number | undefined | null) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+/** 数字输入解析：空串 → null；非法输入 → NaN（调用方必须报错，禁止静默转 0）。 */
+function numOrNull(raw: string): number | null {
+  const s = raw.trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 export function BunkerRequirementsPanel() {
   const { t } = useI18n();
   const toast = useToast();
@@ -52,54 +62,98 @@ export function BunkerRequirementsPanel() {
   const [selected, setSelected] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // P1-4：主列表失败 → 三态错误；主数据参照失败 → 单独提示；报价列表失败 → 单独提示
+  const [loading, setLoading] = useState(true);
+  const [listErr, setListErr] = useState<string | null>(null);
+  const [refErr, setRefErr] = useState<string | null>(null);
+  const [optsErr, setOptsErr] = useState<string | null>(null);
+  // 首次成功加载后，后续刷新不再整表 spinner（避免卸载 DataGrid 丢失排序/列布局）
+  const loadedOnce = useRef(false);
   const [form, setForm] = useState({ vessel_id: "", fuel_type: "VLSFO", qty_required: "500", port_id: "" });
   const [optForm, setOptForm] = useState({ supplier_id: "", price_per_mt: "600" });
 
   const load = useCallback(async () => {
-    const [r, v, p, pt] = await Promise.all([
-      apiGet("/api/v1/bunker/requirements").catch(() => ({ items: [] })),
-      apiGet("/api/v1/masterdata/vessels").catch(() => []),
-      apiGet("/api/v1/masterdata/ports").catch(() => []),
-      apiGet("/api/v1/masterdata/counterparties").catch(() => []),
+    if (!loadedOnce.current) setLoading(true);
+    setListErr(null);
+    const [r, v, p, pt] = await Promise.allSettled([
+      apiGet("/api/v1/bunker/requirements") as Promise<{ items?: Requirement[] }>,
+      apiGet("/api/v1/masterdata/vessels") as Promise<Ref[]>,
+      apiGet("/api/v1/masterdata/ports/options") as Promise<Ref[]>,
+      apiGet("/api/v1/masterdata/counterparties") as Promise<Ref[]>,
     ]);
-    setReqs(r.items || []);
-    setVessels(v);
-    setPorts(p);
-    setParties(pt);
+    if (r.status === "fulfilled") {
+      setReqs(Array.isArray(r.value?.items) ? r.value.items : []);
+      loadedOnce.current = true;
+    } else {
+      setReqs([]);
+      setListErr(msgOf(r.reason));
+    }
+    const problems: string[] = [];
+    if (v.status === "fulfilled") setVessels(Array.isArray(v.value) ? v.value : []);
+    else {
+      setVessels([]);
+      problems.push(msgOf(v.reason));
+    }
+    if (p.status === "fulfilled") setPorts(Array.isArray(p.value) ? p.value : []);
+    else {
+      setPorts([]);
+      problems.push(msgOf(p.reason));
+    }
+    if (pt.status === "fulfilled") setParties(Array.isArray(pt.value) ? pt.value : []);
+    else {
+      setParties([]);
+      problems.push(msgOf(pt.reason));
+    }
+    setRefErr(problems.length ? problems.join(" · ") : null);
+    setLoading(false);
   }, []);
 
   const loadOptions = useCallback(async (requirementId: string) => {
     if (!requirementId) {
       setOpts([]);
+      setOptsErr(null);
       return;
     }
-    const r = await apiGet(`/api/v1/bunker/options?requirement_id=${requirementId}`).catch(() => ({ items: [] }));
-    setOpts(r.items || []);
+    try {
+      const r = await apiGet(`/api/v1/bunker/options?requirement_id=${requirementId}`);
+      setOpts(Array.isArray(r?.items) ? r.items : []);
+      setOptsErr(null);
+    } catch (ex) {
+      setOpts([]);
+      setOptsErr(msgOf(ex));
+    }
   }, []);
 
   useEffect(() => {
-    load().catch(() => setErr(t("common.failed", "Failed")));
-  }, [load, t]);
+    load().catch(handled);
+  }, [load]);
 
   useEffect(() => {
-    loadOptions(selected).catch(() => undefined);
+    loadOptions(selected).catch(handled);
   }, [selected, loadOptions]);
 
   async function createRequirement(e: FormEvent) {
     e.preventDefault();
+    // P1-24：非法数字必须报错并中止提交，不能静默转 0
+    const qty = numOrNull(form.qty_required);
+    if (qty === null || Number.isNaN(qty)) {
+      setErr(t("page.finance.bad_number", "Enter a valid number"));
+      toast.error(t("page.finance.bad_number", "Enter a valid number"));
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
       await apiPost("/api/v1/bunker/requirements", {
         vessel_id: form.vessel_id,
         fuel_type: form.fuel_type,
-        qty_required: Number(form.qty_required) || 0,
+        qty_required: qty,
         port_id: form.port_id || null,
       });
       toast.success(t("page.bunker.req_created", "Bunker requirement created"));
       await load();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -112,7 +166,7 @@ export function BunkerRequirementsPanel() {
       toast.success(t("page.bunker.req_tendering", "Tendering opened"));
       await load();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -124,7 +178,7 @@ export function BunkerRequirementsPanel() {
       await apiPost(`/api/v1/bunker/requirements/${id}/transition?target=${target}`);
       await load();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -133,18 +187,25 @@ export function BunkerRequirementsPanel() {
   async function addOption(e: FormEvent) {
     e.preventDefault();
     if (!selected) return;
+    // P1-24：非法数字必须报错并中止提交，不能静默转 0
+    const price = numOrNull(optForm.price_per_mt);
+    if (price === null || Number.isNaN(price)) {
+      setErr(t("page.finance.bad_number", "Enter a valid number"));
+      toast.error(t("page.finance.bad_number", "Enter a valid number"));
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
       await apiPost("/api/v1/bunker/options", {
         requirement_id: selected,
         supplier_id: optForm.supplier_id,
-        price_per_mt: Number(optForm.price_per_mt) || 0,
+        price_per_mt: price,
       });
       toast.success(t("page.bunker.opt_created", "Option registered"));
       await loadOptions(selected);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -158,7 +219,7 @@ export function BunkerRequirementsPanel() {
       await load();
       await loadOptions(selected);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -179,7 +240,10 @@ export function BunkerRequirementsPanel() {
     let payload: Record<string, unknown>;
     if (colKey === "qty_required") {
       const n = value === null || value === "" ? null : Number(value);
-      if (n === null || isNaN(n) || n <= 0) return;
+      if (n === null || !Number.isFinite(n) || n <= 0) {
+        toast.error(t("page.finance.bad_number", "Enter a valid number"));
+        return;
+      }
       if (Number(src.qty_required ?? NaN) === n) return;
       payload = { qty_required: n };
     } else {
@@ -192,7 +256,7 @@ export function BunkerRequirementsPanel() {
       toast.success(t("common.saved", "Saved"));
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -203,7 +267,7 @@ export function BunkerRequirementsPanel() {
       if (selected === id) setSelected("");
       await load();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -213,7 +277,10 @@ export function BunkerRequirementsPanel() {
     let payload: Record<string, unknown>;
     if (colKey === "qty" || colKey === "price_per_mt") {
       const n = value === null || value === "" ? null : Number(value);
-      if (n === null || isNaN(n) || n < 0) return;
+      if (n === null || !Number.isFinite(n) || n < 0) {
+        toast.error(t("page.finance.bad_number", "Enter a valid number"));
+        return;
+      }
       if (Number(src[colKey] ?? NaN) === n) return;
       payload = { [colKey]: n };
     } else if (colKey === "supplier_id") {
@@ -230,7 +297,7 @@ export function BunkerRequirementsPanel() {
       toast.success(t("common.saved", "Saved"));
       await loadOptions(selected);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -240,114 +307,125 @@ export function BunkerRequirementsPanel() {
       toast.success(t("common.recycled", "Moved to recycle bin"));
       await loadOptions(selected);
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
-  const reqCols: ColumnDef<Requirement>[] = [
-    { key: "requirement_no", title: t("page.finance.number", "No."), value: (r) => r.requirement_no },
-    {
-      key: "fuel_type",
-      title: t("page.bunker.grade", "Grade"),
-      value: (r) => r.fuel_type,
-      editor: { type: "text" },
-    },
-    {
-      key: "qty_required",
-      title: t("page.bunker.qty", "Qty (mt)"),
-      align: "right",
-      value: (r) => r.qty_required,
-      render: (v) => fmt(v as number),
-      editor: { type: "number", step: 0.1, min: 0 },
-    },
-    { key: "status", title: t("common.status", "Status"), value: (r) => r.status },
-    {
-      key: "_actions",
-      title: t("common.actions", "Actions"),
-      value: () => "",
-      render: (_v, row) => (
-        <span className="desk-toolbar" style={{ margin: 0 }}>
-          {row.status === "draft" || row.status === "approved" ? (
-            <button className="btn btn-sm" type="button" onClick={() => tender(row.id)}>
-              {t("page.bunker.req_tender", "Tender")}
-            </button>
-          ) : null}
-          {row.status === "ordered" ? (
-            <button className="btn btn-sm" type="button" onClick={() => move(row.id, "fulfilled")}>
-              {t("page.bunker.req_fulfill", "Fulfill")}
-            </button>
-          ) : null}
-          {row.status !== "fulfilled" && row.status !== "cancelled" ? (
-            <button className="btn btn-sm btn-ghost" type="button" onClick={() => move(row.id, "cancelled")}>
-              {t("common.cancel", "Cancel")}
-            </button>
-          ) : null}
-          <RowActions
-            canEdit={reqEditable(row)}
-            canDelete={reqEditable(row)}
-            onDelete={() => deleteReq(row.id)}
-            label={row.requirement_no}
-          />
-        </span>
-      ),
-    },
-  ];
+  const reqCols = useMemo<ColumnDef<Requirement>[]>(
+    () => [
+      { key: "requirement_no", title: t("page.finance.number", "No."), value: (r) => r.requirement_no },
+      {
+        key: "fuel_type",
+        title: t("page.bunker.grade", "Grade"),
+        value: (r) => r.fuel_type,
+        editor: { type: "text" },
+      },
+      {
+        key: "qty_required",
+        title: t("page.bunker.qty", "Qty (mt)"),
+        align: "right",
+        value: (r) => r.qty_required,
+        render: (v) => fmt(v as number),
+        editor: { type: "number", step: 0.1, min: 0 },
+      },
+      { key: "status", title: t("common.status", "Status"), value: (r) => r.status },
+      {
+        key: "_actions",
+        title: t("common.actions", "Actions"),
+        value: () => "",
+        render: (_v, row) => (
+          <span className="desk-toolbar" style={{ margin: 0 }}>
+            {row.status === "draft" || row.status === "approved" ? (
+              <button className="btn btn-sm" type="button" onClick={() => tender(row.id)}>
+                {t("page.bunker.req_tender", "Tender")}
+              </button>
+            ) : null}
+            {row.status === "ordered" ? (
+              <button className="btn btn-sm" type="button" onClick={() => move(row.id, "fulfilled")}>
+                {t("page.bunker.req_fulfill", "Fulfill")}
+              </button>
+            ) : null}
+            {row.status !== "fulfilled" && row.status !== "cancelled" ? (
+              <button className="btn btn-sm btn-ghost" type="button" onClick={() => move(row.id, "cancelled")}>
+                {t("common.cancel", "Cancel")}
+              </button>
+            ) : null}
+            <RowActions
+              canEdit={reqEditable(row)}
+              canDelete={reqEditable(row)}
+              onDelete={() => deleteReq(row.id)}
+              label={row.requirement_no}
+            />
+          </span>
+        ),
+      },
+    ],
+    [t],
+  );
 
-  const optCols: ColumnDef<Option>[] = [
-    {
-      key: "supplier_id",
-      title: t("page.bunker.supplier", "Supplier"),
-      value: (r) => r.supplier_id,
-      render: (v) => parties.find((p) => p.id === v)?.name || String(v ?? "").slice(0, 8),
-      editor: { type: "select", options: parties.map((p) => ({ value: p.id, label: p.name })) },
-    },
-    {
-      key: "fuel_type",
-      title: t("page.bunker.grade", "Grade"),
-      value: (r) => r.fuel_type,
-      editor: { type: "text" },
-    },
-    {
-      key: "qty",
-      title: t("page.bunker.qty", "Qty (mt)"),
-      align: "right",
-      value: (r) => r.qty,
-      render: (v) => fmt(v as number),
-      editor: { type: "number", step: 0.1, min: 0 },
-    },
-    {
-      key: "price_per_mt",
-      title: t("page.bunker.price", "Price/mt"),
-      align: "right",
-      value: (r) => r.price_per_mt,
-      render: (v) => fmt(v as number),
-      editor: { type: "number", step: 0.01, min: 0 },
-    },
-    { key: "status", title: t("common.status", "Status"), value: (r) => r.status },
-    {
-      key: "_actions",
-      title: t("common.actions", "Actions"),
-      value: () => "",
-      render: (_v, row) => (
-        <span className="row-actions">
-          {row.status === "offered" ? (
-            <button className="btn btn-sm" type="button" onClick={() => selectOption(row.id)}>
-              {t("page.bunker.opt_select", "Select")}
-            </button>
-          ) : null}
-          <RowActions
-            canEdit={optEditable(row)}
-            canDelete={optEditable(row)}
-            onDelete={() => deleteOpt(row.id)}
-            label={`${row.fuel_type} ${fmt(row.price_per_mt)}`}
-          />
-        </span>
-      ),
-    },
-  ];
+  const optCols = useMemo<ColumnDef<Option>[]>(
+    () => [
+      {
+        key: "supplier_id",
+        title: t("page.bunker.supplier", "Supplier"),
+        value: (r) => r.supplier_id,
+        render: (v) => parties.find((p) => p.id === v)?.name || String(v ?? "").slice(0, 8),
+        editor: { type: "select", options: parties.map((p) => ({ value: p.id, label: p.name })) },
+      },
+      {
+        key: "fuel_type",
+        title: t("page.bunker.grade", "Grade"),
+        value: (r) => r.fuel_type,
+        editor: { type: "text" },
+      },
+      {
+        key: "qty",
+        title: t("page.bunker.qty", "Qty (mt)"),
+        align: "right",
+        value: (r) => r.qty,
+        render: (v) => fmt(v as number),
+        editor: { type: "number", step: 0.1, min: 0 },
+      },
+      {
+        key: "price_per_mt",
+        title: t("page.bunker.price", "Price/mt"),
+        align: "right",
+        value: (r) => r.price_per_mt,
+        render: (v) => fmt(v as number),
+        editor: { type: "number", step: 0.01, min: 0 },
+      },
+      { key: "status", title: t("common.status", "Status"), value: (r) => r.status },
+      {
+        key: "_actions",
+        title: t("common.actions", "Actions"),
+        value: () => "",
+        render: (_v, row) => (
+          <span className="row-actions">
+            {row.status === "offered" ? (
+              <button className="btn btn-sm" type="button" onClick={() => selectOption(row.id)}>
+                {t("page.bunker.opt_select", "Select")}
+              </button>
+            ) : null}
+            <RowActions
+              canEdit={optEditable(row)}
+              canDelete={optEditable(row)}
+              onDelete={() => deleteOpt(row.id)}
+              label={`${row.fuel_type} ${fmt(row.price_per_mt)}`}
+            />
+          </span>
+        ),
+      },
+    ],
+    [t],
+  );
 
   return (
     <>
+      {refErr ? (
+        <p className="flash-err">
+          {t("page.finance.ref_load_failed", "Some reference lists could not be loaded")}: {refErr}
+        </p>
+      ) : null}
       <form className="panel" onSubmit={createRequirement}>
         <h3 style={{ marginTop: 0 }}>{t("page.bunker.requirements", "Bunker requirements")}</h3>
         {err ? <p className="flash-err">{err}</p> : null}
@@ -389,22 +467,31 @@ export function BunkerRequirementsPanel() {
       </form>
 
       <div className="panel">
-        <DataGrid<Requirement>
-          data={reqs}
-          columns={reqCols}
-          rowKey={(r) => r.id}
-          storageKey="bunker_requirements_grid"
-          showFooter={false}
-          editable
-          onCellSave={onReqCellSave}
+        <StateView
+          loading={loading}
+          error={listErr ?? undefined}
+          empty={!reqs.length}
           emptyText={t("common.empty", "No records")}
-          onRowClick={(row) => setSelected(row.id)}
-        />
+          onRetry={() => load()}
+        >
+          <DataGrid<Requirement>
+            data={reqs}
+            columns={reqCols}
+            rowKey={(r) => r.id}
+            storageKey="bunker_requirements_grid"
+            showFooter={false}
+            editable
+            onCellSave={onReqCellSave}
+            emptyText={t("common.empty", "No records")}
+            onRowClick={(row) => setSelected(row.id)}
+          />
+        </StateView>
       </div>
 
       {selected ? (
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>{t("page.bunker.options", "Supplier options")}</h3>
+          {err ? <p className="flash-err">{err}</p> : null}
           <form className="form-grid" onSubmit={addOption}>
             <label>
               {t("page.bunker.supplier", "Supplier")}
@@ -433,16 +520,24 @@ export function BunkerRequirementsPanel() {
               {t("common.create", "Create")}
             </button>
           </form>
-          <DataGrid<Option>
-            data={opts}
-            columns={optCols}
-            rowKey={(r) => r.id}
-            storageKey="bunker_options_grid"
-            showFooter={false}
-            editable
-            onCellSave={onOptCellSave}
+          <StateView
+            error={optsErr ?? undefined}
+            empty={!opts.length}
             emptyText={t("common.empty", "No records")}
-          />
+            loading={false}
+            onRetry={() => loadOptions(selected)}
+          >
+            <DataGrid<Option>
+              data={opts}
+              columns={optCols}
+              rowKey={(r) => r.id}
+              storageKey="bunker_options_grid"
+              showFooter={false}
+              editable
+              onCellSave={onOptCellSave}
+              emptyText={t("common.empty", "No records")}
+            />
+          </StateView>
         </div>
       ) : null}
     </>

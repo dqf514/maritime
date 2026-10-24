@@ -3,6 +3,8 @@
 import { useCallback, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
+import { toFiniteNumber, toPageNumber } from "./numbers";
+
 /**
  * URL-backed list query state (U1 列表协议): tab / page / limit / filters live
  * in the query string so views are shareable, bookmarkable and survive the
@@ -36,9 +38,11 @@ export function useListQuery() {
     [searchParams, router, pathname],
   );
 
-  const page = Math.max(1, Number(query.page) || 1);
-  const parsedLimit = Number(query.limit);
-  const limit = PAGE_LIMITS.includes(parsedLimit) ? parsedLimit : DEFAULT_LIMIT;
+  // P1-24：页码是 1 起始的整数。`?page=abc` 不能产出 NaN —— 用显式守卫
+  // （语义与原来的 `Math.max(1, Number(q.page) || 1)` 一致，只是更明确）。
+  const page = toPageNumber(query.page);
+  const parsedLimit = toFiniteNumber(query.limit);
+  const limit = parsedLimit !== null && PAGE_LIMITS.includes(parsedLimit) ? parsedLimit : DEFAULT_LIMIT;
 
   return { query, setQuery, page, limit };
 }

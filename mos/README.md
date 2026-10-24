@@ -23,14 +23,17 @@
 | [docs/product-capabilities.md](./docs/product-capabilities.md) | 能力一览 |
 | [docs/office-ecosystem.md](./docs/office-ecosystem.md) | Microsoft 365 |
 | [docs/platform-data-deploy.md](./docs/platform-data-deploy.md) | 数据面与部署 |
+| [docs/deployment.md](./docs/deployment.md) | 部署指南（Compose / 发布 / 反代 / 备份 / 安全清单） |
 | [docs/README.md](./docs/README.md) | 文档导读 |
 
 ## 研发材料（内部）
 
 | 资源 | 说明 |
 | --- | --- |
-| [MariOS 完整开发规格说明书（DDS）V2.1.md](./MariOS%20完整开发规格说明书（DDS）V2.1.md) | 开发 SSOT |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 本地开发与测试 |
+| [CLAUDE.md](./CLAUDE.md) | 架构约定与开发规约 |
+| [deploy/compose/README.md](./deploy/compose/README.md) | 部署编排说明 |
+| [apps/api/alembic/README.md](./apps/api/alembic/README.md) | 数据库迁移说明 |
 | [docs/internal/](./docs/internal/) | 内部规划（不对客户展示） |
 
 ## 本地预览介绍页
@@ -42,6 +45,20 @@
 见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
 
 Demo 登录：`admin@demo.marios` / `Demo1234!` / tenant `demo`
+
+## 部署（Docker Compose）
+
+```bash
+cd deploy/compose
+cp .env.example .env      # 填好 JWT_SECRET / OPS_DATA_KEY / 各口令（缺值 compose 直接报错）
+docker compose up -d      # migrate 服务先跑 alembic upgrade head，api/web 随后启动
+```
+
+- 空库无需额外操作：`alembic upgrade head` 会按模型建全量表并登记版本；
+- 默认数据库 **PostgreSQL 16**，库名 `voyageos`（`POSTGRES_DB` 可改，本地开发默认 SQLite）；
+- 备份：`pg_dump` 定时快照（带 sha256 + 保留策略）+ 按租户的 JSON 备份（可加密）。
+
+完整步骤（发布、反代、探针、备份恢复、安全清单）：**[docs/deployment.md](./docs/deployment.md)**。
 
 ## 技术要点（摘要）
 

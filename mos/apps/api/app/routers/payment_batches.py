@@ -30,6 +30,7 @@ from app.pagination import envelope, paginate
 from app.security import AuthContext, require_module
 from app.services import payment_batch as pb_service
 from app.services.doc_numbering import next_doc_number
+from app.services.money import invoice_gross, invoice_open
 from app.services.tenant_guard import scoped_get, scoped_query
 
 router = APIRouter()
@@ -112,8 +113,11 @@ def list_payable_invoices(
             "status": r.status,
             "counterparty_id": str(r.counterparty_id) if r.counterparty_id else None,
             "amount": _f(r.amount),
+            "tax_amount": _f(r.tax_amount),
+            "gross_amount": float(invoice_gross(r)),
             "paid_amount": _f(r.paid_amount),
-            "outstanding": _f(r.amount) - _f(r.paid_amount),
+            # P0-B4：未收 = 金额 + 税 − 已收（与批次入账口径一致）
+            "outstanding": float(invoice_open(r)),
             "currency": r.currency,
             "due_date": r.due_date.isoformat() if r.due_date else None,
         }

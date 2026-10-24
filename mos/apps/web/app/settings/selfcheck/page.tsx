@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiRunSelfCheck } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 type Result = { check_id: string; severity: string; status: string; message?: string };
@@ -26,8 +27,8 @@ export default function SelfCheckPage() {
       const data = await apiRunSelfCheck();
       setScore(data.score);
       setResults(data.results || []);
-    } catch {
-      setError(t("page.selfcheck.error", "Failed to run SelfCheck. Is the API up?"));
+    } catch (ex) {
+      setError(msgOf(ex, t("page.selfcheck.error", "Failed to run SelfCheck. Is the API up?")));
     } finally {
       setLoading(false);
       setRan(true);
@@ -40,7 +41,7 @@ export default function SelfCheckPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const columns: ColumnDef<Result>[] = [
+  const columns = useMemo<ColumnDef<Result>[]>(() => [
     { key: "check_id", title: t("page.selfcheck.check", "Check"), minWidth: 180, value: (r) => r.check_id },
     { key: "severity", title: t("page.selfcheck.severity", "Severity"), width: 110, value: (r) => r.severity },
     {
@@ -58,7 +59,7 @@ export default function SelfCheckPage() {
       minWidth: 220,
       value: (r) => r.message || "",
     },
-  ];
+  ], [t]);
 
   const passCount = results.filter((r) => r.status === "pass").length;
   const warnCount = results.filter((r) => r.status === "warn").length;

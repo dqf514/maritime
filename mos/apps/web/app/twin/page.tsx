@@ -8,6 +8,7 @@ import { StatusBadge, type StatusTone } from "@/components/StatusBadge";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 type FleetVessel = { name: string; status: string; lat: number | null; lon: number | null };
@@ -37,19 +38,33 @@ export default function TwinPage() {
   const [whatif, setWhatif] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
+  /** 告警（次要列表）加载失败 */
+  const [alertErr, setAlertErr] = useState<string | null>(null);
+  /** what-if 运行失败 */
+  const [whatifErr, setWhatifErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setLoadErr("");
-    try {
-      const [f, a] = await Promise.all([apiGet("/api/v1/twin/fleet"), apiGet("/api/v1/twin/alerts")]);
-      setFleet(f);
-      setAlerts(Array.isArray(a) ? a : []);
-    } catch {
-      setLoadErr(t("common.failed", "Failed"));
-    } finally {
-      setLoading(false);
+    // 船队（主列表）与告警（次要）分开结算：一方失败不连累另一方
+    const [fR, aR] = await Promise.allSettled([
+      apiGet("/api/v1/twin/fleet"),
+      apiGet("/api/v1/twin/alerts"),
+    ]);
+    if (fR.status === "fulfilled") {
+      setFleet(fR.value as { vessels: FleetVessel[] });
+      setLoadErr("");
+    } else {
+      setFleet(null);
+      setLoadErr(msgOf(fR.reason, t("common.failed", "Failed")));
     }
+    if (aR.status === "fulfilled") {
+      setAlerts(Array.isArray(aR.value) ? (aR.value as TwinAlertItem[]) : []);
+    } else {
+      setAlerts([]);
+      setAlertErr(msgOf(aR.reason));
+    }
+    setLoading(false);
   }, [t]);
 
   useEffect(() => {
@@ -57,19 +72,24 @@ export default function TwinPage() {
   }, [load]);
 
   async function runWhatIf() {
-    const res = await apiPost("/api/v1/twin/what-if", {
-      lump_sum_freight: 100000,
-      sea_days: 10,
-      port_days: 2,
-      port_costs: 10000,
-    });
-    setWhatif(
-      t("page.twin.whatif_result", "L4 base TCE {base} → faster {faster} (Δ {delta})", {
-        base: res.base_tce,
-        faster: res.faster_tce,
-        delta: res.delta_tce,
-      }),
-    );
+    try {
+      const res = await apiPost("/api/v1/twin/what-if", {
+        lump_sum_freight: 100000,
+        sea_days: 10,
+        port_days: 2,
+        port_costs: 10000,
+      });
+      setWhatifErr(null);
+      setWhatif(
+        t("page.twin.whatif_result", "L4 base TCE {base} → faster {faster} (Δ {delta})", {
+          base: res.base_tce,
+          faster: res.faster_tce,
+          delta: res.delta_tce,
+        }),
+      );
+    } catch (ex) {
+      setWhatifErr(msgOf(ex, t("common.failed", "Failed")));
+    }
   }
 
   /** title/body 双语择取 —— 无 i18n 结构时回落原文 */
@@ -112,12 +132,13 @@ export default function TwinPage() {
         title={t("page.twin.title", "Fleet Twin")}
         subtitle={t("page.twin.sub", "Positions, alerts and what-if.")}
         actions={
-          <button className="btn btn-primary" type="button" onClick={() => runWhatIf().catch(() => setWhatif(t("common.failed", "Failed")))}>
+          <button className="btn btn-primary" type="button" onClick={() => void runWhatIf()}>
             {t("page.twin.run_whatif", "Run L4 what-if")}
           </button>
         }
       />
       {whatif ? <p>{whatif}</p> : null}
+      {whatifErr ? <p className="flash-err">{whatifErr}</p> : null}
       <div className="panel">
         <h3>{t("page.twin.fleet", "Fleet (L1)")}</h3>
         <StateView loading={loading} error={loadErr} empty={!(fleet?.vessels || []).length} onRetry={load}>
@@ -133,7 +154,13 @@ export default function TwinPage() {
       </div>
       <div className="panel">
         <h3>{t("page.twin.alerts", "Alerts")}</h3>
-        <StateView loading={loading} error={loadErr} empty={!alerts.length} emptyText={t("page.twin.no_alerts", "No alerts")} onRetry={load}>
+        <StateView
+          loading={loading}
+          error={alertErr ?? undefined}
+          empty={!loading && !alertErr && !alerts.length}
+          emptyText={t("page.twin.no_alerts", "No alerts")}
+          onRetry={load}
+        >
           <ul className="twin-alerts">
             {alerts.map((a, i) => {
               const detail = alertBody(a);

@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.models_domain import Invoice, Payment, PaymentBatch
 from app.services.doc_numbering import next_doc_number
+from app.services.money import invoice_gross, invoice_open
+from app.services.state_machine import INVOICE_TRANSITIONS, transition
 from app.services.timeutil import utcnow_naive
 
 
@@ -65,9 +67,13 @@ def create_batch(
             continue
         if inv.status not in ("issued", "partially_paid"):
             continue
+        if invoice_open(inv) <= 0:
+            continue  # 已结清 —— 不该进批次
         invoices.append(inv)
 
-    total = sum((inv.amount - inv.paid_amount) for inv in invoices)
+    # P0-B4：未收口径 = 金额 + 税 − 已收（与单笔收款 / 账龄一致）。
+    # 旧实现用 `amount - paid_amount`，**漏掉了税** —— 有税发票会被少付一笔税。
+    total = sum((invoice_open(inv) for inv in invoices), Decimal("0"))
 
     batch = PaymentBatch(
         id=uuid.uuid4(),
@@ -80,12 +86,13 @@ def create_batch(
         payment_count=len(invoices),
         bank_charge_mode=bank_charge_mode,
         approval_user_id=user_id,
+        created_by=user_id,
     )
     db.add(batch)
     db.flush()
 
     for inv in invoices:
-        outstanding = inv.amount - inv.paid_amount
+        outstanding = invoice_open(inv)
         payment = Payment(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
@@ -93,6 +100,7 @@ def create_batch(
             batch_id=batch.id,
             amount=outstanding,
             currency=inv.currency,
+            created_by=user_id,
         )
         db.add(payment)
 
@@ -113,9 +121,15 @@ def approve_batch(db: Session, batch: PaymentBatch, user_id: UUID) -> PaymentBat
     payments = db.scalars(stmt).all()
     for pay in payments:
         inv = db.get(Invoice, pay.invoice_id)
-        if inv:
-            inv.paid_amount = inv.paid_amount + pay.amount
-            inv.status = "partially_paid" if inv.paid_amount < inv.amount else "paid"
+        if not inv:
+            continue
+        inv.paid_amount = (inv.paid_amount or 0) + pay.amount
+        # 状态判定用**总额**（金额 + 税），与单笔收款一致
+        total = invoice_gross(inv)
+        if inv.paid_amount >= total:
+            inv.status = "paid"
+        elif inv.paid_amount > 0:
+            inv.status = "partially_paid"
 
     batch.status = "completed"
     db.flush()
@@ -123,20 +137,47 @@ def approve_batch(db: Session, batch: PaymentBatch, user_id: UUID) -> PaymentBat
 
 
 def reverse_batch(db: Session, batch: PaymentBatch) -> PaymentBatch:
-    """Reverse a completed batch — undo payment amounts on linked invoices."""
+    """Reverse a completed batch — undo payment amounts on linked invoices.
+
+    P1-B5：冲销走**台账**（写一条金额为负、``reference="VOID:<batch id>"`` 的
+    Payment 行），而不是只在发票上把 ``paid_amount`` 减掉。旧实现留下一条
+    「已收款但账上查无此笔」的记录，付款台账和发票余额对不上。
+    """
     if batch.status not in ("completed", "processing"):
         raise ValueError(f"Cannot reverse batch in status '{batch.status}'")
+
+    void_ref = f"VOID:{batch.id}"
+    existing = db.scalar(
+        select(Payment).where(Payment.tenant_id == batch.tenant_id, Payment.reference == void_ref)
+    )
+    if existing:
+        raise ValueError("Batch is already reversed")
 
     stmt = select(Payment).where(Payment.batch_id == batch.id)
     payments = db.scalars(stmt).all()
     for pay in payments:
         inv = db.get(Invoice, pay.invoice_id)
-        if inv:
-            inv.paid_amount = max(Decimal(0), inv.paid_amount - pay.amount)
-            if inv.paid_amount == 0:
-                inv.status = "issued"
-            else:
-                inv.status = "partially_paid"
+        if not inv:
+            continue
+        db.add(
+            Payment(
+                tenant_id=batch.tenant_id,
+                invoice_id=inv.id,
+                batch_id=batch.id,
+                amount=-Decimal(str(pay.amount)),
+                currency=pay.currency,
+                reference=void_ref,
+            )
+        )
+        inv.paid_amount = max(Decimal(0), (inv.paid_amount or 0) - Decimal(str(pay.amount)))
+        # 状态必须走状态机 —— 以前直接赋值，能做出「paid → issued」这种非法转移
+        # （INVOICE_TRANSITIONS 里 paid 只能退到 partially_paid）。审计 P1-B5
+        target = "issued" if inv.paid_amount == 0 else ("partially_paid" if inv.status == "paid" else None)
+        if target and target != inv.status:
+            if inv.status == "paid" and target == "issued":
+                # paid → issued 没有直接边：先退到 partially_paid 再退回 issued
+                inv.status = transition("invoice", inv.status, "partially_paid", INVOICE_TRANSITIONS)
+            inv.status = transition("invoice", inv.status, target, INVOICE_TRANSITIONS)
 
     batch.status = "reversed"
     db.flush()

@@ -23,6 +23,7 @@ from app.models_ops import (
     TenantDatastoreBinding,
 )
 from app.services.ops_crypto import decrypt_secret, encrypt_secret, mask_connection_url
+from app.services.observability import METRICS as _OBSERVABILITY_METRICS
 from app.services.timeutil import utcnow_naive
 
 
@@ -309,10 +310,10 @@ BUILTIN_DEPLOY_PROFILES: list[dict[str, Any]] = [
         "kind": "docker_compose",
         "cloud_provider": None,
         "region": None,
-        "description": "本机或内网主机：api / web / postgres / redis / minio。",
+        "description": "本机或内网主机：postgres / api / web / backup。",
         "template": {
             "path": "deploy/compose/docker-compose.yml",
-            "services": ["postgres", "redis", "minio", "api", "web"],
+            "services": ["postgres", "migrate", "api", "web", "backup"],
             "ports": {"web": 3000, "api": 8000, "postgres": 5432},
             "database": "postgresql+psycopg",
             "steps": [
@@ -492,7 +493,7 @@ DEFAULT_ALERT_RULES: list[dict[str, Any]] = [
         "operator": "gt",
         "threshold": 5,
         "severity": "warning",
-        "description": "近窗错误率超过 5%（演示指标）",
+        "description": "近窗错误率超过 5%",
     },
 ]
 
@@ -535,11 +536,17 @@ def _disk_usage_pct() -> float:
 
 def capture_monitor_snapshot(db: Session) -> dict[str, Any]:
     ping = test_connection_url(get_settings().database_url)
+    # P3-6：错误率以前是写死的 0.5%（标着「演示」），运维看板据此做告警等于看
+    # 假数据。改成进程内观测计数器的真实值（5xx / 总请求）。
+    requests_total = float(_OBSERVABILITY_METRICS.get("http_requests_total") or 0)
+    errors_total = float(_OBSERVABILITY_METRICS.get("http_5xx_total") or 0)
+    error_rate_pct = round(errors_total / requests_total * 100, 3) if requests_total else 0.0
     samples = [
         ("db.ping_ms", "主库探测延迟", "database", "ms", float(ping.get("elapsed_ms") or 0)),
         ("db.up", "主库可用", "database", "bool", 1.0 if ping.get("ok") else 0.0),
         ("resource.disk_pct", "磁盘占用", "resource", "%", _disk_usage_pct()),
-        ("app.error_rate_pct", "API 错误率（演示）", "app", "%", 0.5),
+        ("app.error_rate_pct", "API 错误率", "app", "%", error_rate_pct),
+        ("app.requests_total", "API 请求数（进程启动以来）", "app", "count", requests_total),
         ("system.tenant_count", "租户数", "app", "count", float(db.scalar(select(func.count()).select_from(Tenant)) or 0)),
     ]
     captured = _now()

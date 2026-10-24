@@ -3,11 +3,13 @@
 // A5 双重 UI 归并：COA 合同列表面板（原 /charters/coa 列表页）。
 // 挂载于 /charters?type=coa；行点击仍直达详情 /charters/coa/{id}。
 
+import { msgOf } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { RecordModal } from "@/components/RecordModal";
+import { StateView } from "@/components/StateView";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
 import { DateInput } from "@/components/DateInput";
 import { apiGet, apiPost } from "@/lib/api";
@@ -88,7 +90,7 @@ export function CoaListPanel() {
       setCharters(ch || []);
       setParties(p || []);
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -180,6 +182,17 @@ export function CoaListPanel() {
 
   async function create() {
     setBusy(true);
+    // 数值字段校验：空/非法输入不能静默变 0
+    for (const [label, raw] of [
+      [t("page.coa.col.total_qty", "Total qty"), form.total_qty],
+      [t("page.coa.col.rate", "Rate"), form.rate],
+    ] as Array<[string, string]>) {
+      if (raw === "" || !Number.isFinite(Number(raw))) {
+        toast.error(t("page.coa.err_number", "{field} must be a valid number", { field: label }));
+        setBusy(false);
+        return;
+      }
+    }
     try {
       const payload: Record<string, unknown> = {
         charter_id: form.charter_id,
@@ -199,7 +212,7 @@ export function CoaListPanel() {
       await load();
       if (created?.id) router.push(`/charters/coa/${created.id}`);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -207,8 +220,6 @@ export function CoaListPanel() {
 
   return (
     <>
-      {err ? <p className="flash-err">{err}</p> : null}
-
       <div className="coa-toolbar" style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", margin: "0.5rem 0" }}>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label={t("common.status", "Status")}>
           <option value="">{t("common.all", "All")}</option>
@@ -232,17 +243,24 @@ export function CoaListPanel() {
       </div>
 
       <div className="panel">
-        <DataGrid
-          columns={columns}
-          data={filtered}
-          rowKey={(r) => r.id}
+        <StateView
           loading={loading}
-          showFooter={false}
-          storageKey="coa-list"
+          error={err || undefined}
+          empty={!loading && !err && filtered.length === 0}
           emptyText={t("common.empty", "No records")}
-          onRowDoubleClick={(r) => router.push(`/charters/coa/${r.id}`)}
-          onRowClick={(r) => router.push(`/charters/coa/${r.id}`)}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid
+            columns={columns}
+            data={filtered}
+            rowKey={(r) => r.id}
+            showFooter={false}
+            storageKey="coa-list"
+            emptyText={t("common.empty", "No records")}
+            onRowDoubleClick={(r) => router.push(`/charters/coa/${r.id}`)}
+            onRowClick={(r) => router.push(`/charters/coa/${r.id}`)}
+          />
+        </StateView>
       </div>
 
       <RecordModal

@@ -65,12 +65,35 @@ export function downloadCsv(
   opts?: DownloadCsvOpts,
 ) {
   if (!rows.length && opts?.emptyGuard && !window.confirm(opts.emptyGuard)) return;
-  const esc = (v: string | number | null | undefined) => {
-    const s = guardFormula(v === null || v === undefined ? "" : String(v));
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [headers.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))];
-  const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const lines = [headers.map(escCell).join(","), ...rows.map((r) => r.map(escCell).join(","))];
+  saveCsvFile(filename, lines.join("\n"));
+}
+
+/**
+ * \u4E0B\u8F7D\u300C\u5DF2\u7ECF\u662F CSV \u6587\u672C\u300D\u7684\u5185\u5BB9\uFF08\u540E\u7AEF\u5BFC\u51FA\u7684\u62A5\u8868\u7B49\uFF09\u3002
+ *
+ * \u76F4\u63A5 Blob \u539F\u59CB\u6587\u672C\u4F1A\u6F0F\u6389\u4E24\u4EF6\u4E8B\uFF1ABOM\uFF08Excel \u91CC\u4E2D\u6587\u8868\u5934\u4E71\u7801\uFF09\u4E0E\u516C\u5F0F\u6CE8\u5165\u9632\u62A4
+ * \uFF08\u8239\u540D/\u5BF9\u624B\u65B9\u540D\u4EE5 `=`/`+`/`-` \u5F00\u5934\u65F6 Excel \u4F1A\u5F53\u516C\u5F0F\u6267\u884C\uFF09\u3002
+ * \u8FD9\u91CC\u5148\u89E3\u6790\u6210\u683C\u5B50\uFF0C\u518D\u8D70\u4E0E downloadCsv \u76F8\u540C\u7684\u9632\u62A4\u4E0E BOM \u51FA\u53E3\u3002
+ */
+export function downloadCsvText(filename: string, csvText: string) {
+  const rows = parseCsv(csvText ?? "");
+  if (!rows.length) {
+    saveCsvFile(filename, "");
+    return;
+  }
+  downloadCsv(filename, rows[0], rows.slice(1));
+}
+
+/** \u5355\u683C\u8F6C\u4E49 + \u516C\u5F0F\u6CE8\u5165\u9632\u62A4\u3002 */
+function escCell(v: string | number | null | undefined): string {
+  const s = guardFormula(v === null || v === undefined ? "" : String(v));
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** \u843D\u76D8\uFF08\u5E26 BOM\uFF0C\u4FDD\u8BC1 Excel \u6B63\u786E\u8BC6\u522B UTF-8 \u4E2D\u6587\u8868\u5934\uFF09\u3002 */
+function saveCsvFile(filename: string, text: string) {
+  const blob = new Blob(["\uFEFF" + text], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

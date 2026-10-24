@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models_gl import ChartOfAccount, PeriodJournal
+from app.services.money import dec, money
 
 _ZERO = Decimal("0")
 _DEBIT_NORMAL = {"asset", "expense"}
@@ -147,15 +148,18 @@ def trial_balance(
 ) -> dict[str, Any]:
     """Trial balance — every account's period movement, totals must agree."""
     rows = account_balances(db, tenant_id, period_from, period_to)
-    total_debit = round(sum(r["debit"] for r in rows), 2)
-    total_credit = round(sum(r["credit"] for r in rows), 2)
+    total_debit = money(sum(r["debit"] for r in rows))
+    total_credit = money(sum(r["credit"] for r in rows))
     return {
         "period_from": norm_period(period_from) if period_from else None,
         "period_to": norm_period(period_to) if period_to else None,
         "rows": rows,
-        "total_debit": total_debit,
-        "total_credit": total_credit,
-        "balanced": abs(total_debit - total_credit) < 0.01,
+        "total_debit": float(total_debit),
+        "total_credit": float(total_credit),
+        # **精确相等**，不用 ``< 0.01`` 的 float 容差：写路径（gl_engine）用
+        # Decimal 精确比较拒收不平的分录，报告却放行 0.01 的差额 ——
+        # 两套口径互相打架（P2-B3）。
+        "balanced": total_debit == total_credit,
     }
 
 
@@ -175,31 +179,32 @@ def generate_balance_sheet(db: Session, tenant_id: UUID, as_of_date: date) -> di
     revenue = [r for r in rows if r["account_type"] == "revenue"]
     expenses = [r for r in rows if r["account_type"] == "expense"]
 
-    net_income = round(sum(r["balance"] for r in revenue) - sum(r["balance"] for r in expenses), 2)
+    net_income = money(sum(r["balance"] for r in revenue) - sum(r["balance"] for r in expenses))
     earnings_row = {
         "account_code": "CURRENT_EARNINGS",
         "account_name": "Current period earnings",
         "account_type": "equity",
         "debit": 0.0,
         "credit": 0.0,
-        "balance": net_income,
+        "balance": float(net_income),
     }
     equity_rows = equity + [earnings_row]
 
-    total_assets = round(sum(r["balance"] for r in assets), 2)
-    total_liabilities = round(sum(r["balance"] for r in liabilities), 2)
-    total_equity = round(sum(r["balance"] for r in equity_rows), 2)
+    total_assets = money(sum(r["balance"] for r in assets))
+    total_liabilities = money(sum(r["balance"] for r in liabilities))
+    total_equity = money(sum(r["balance"] for r in equity_rows))
 
     return {
         "as_of": as_of_date.isoformat(),
         "assets": assets,
         "liabilities": liabilities,
         "equity": equity_rows,
-        "total_assets": total_assets,
-        "total_liabilities": total_liabilities,
-        "total_equity": total_equity,
-        "net_income": net_income,
-        "balanced": abs(total_assets - (total_liabilities + total_equity)) < 0.01,
+        "total_assets": float(total_assets),
+        "total_liabilities": float(total_liabilities),
+        "total_equity": float(total_equity),
+        "net_income": float(net_income),
+        # 同上：精确相等，不用 float 容差（P2-B3）
+        "balanced": total_assets == (total_liabilities + total_equity),
     }
 
 
@@ -213,8 +218,9 @@ def generate_income_statement(
     rows = account_balances(db, tenant_id, period_from=period_from, period_to=period_to)
     revenue = [r for r in rows if r["account_type"] == "revenue"]
     expenses = [r for r in rows if r["account_type"] == "expense"]
-    total_revenue = round(sum(r["balance"] for r in revenue), 2)
-    total_expenses = round(sum(r["balance"] for r in expenses), 2)
+    # 显式 HALF_UP（``round(Decimal, 2)`` 走的是银行家舍入，与全仓口径不一致 —— 审计 P2-B19）
+    total_revenue = money(sum((dec(r["balance"]) for r in revenue), _ZERO))
+    total_expenses = money(sum((dec(r["balance"]) for r in expenses), _ZERO))
     return {
         "period_from": norm_period(period_from),
         "period_to": norm_period(period_to),
@@ -222,7 +228,7 @@ def generate_income_statement(
         "expenses": expenses,
         "total_revenue": total_revenue,
         "total_expenses": total_expenses,
-        "net_income": round(total_revenue - total_expenses, 2),
+        "net_income": money(total_revenue - total_expenses),
     }
 
 
@@ -294,10 +300,10 @@ def generate_cashflow(
     return {
         "period_from": period_from_n,
         "period_to": period_to_n,
-        "operating": float(round(buckets["operating"], 2)),
-        "investing": float(round(buckets["investing"], 2)),
-        "financing": float(round(buckets["financing"], 2)),
-        "net_change_in_cash": float(round(net_change, 2)),
-        "cash_beginning": float(round(cash_beginning, 2)),
-        "cash_ending": float(round(cash_ending_all, 2)),
+        "operating": float(money(buckets["operating"])),
+        "investing": float(money(buckets["investing"])),
+        "financing": float(money(buckets["financing"])),
+        "net_change_in_cash": float(money(net_change)),
+        "cash_beginning": float(money(cash_beginning)),
+        "cash_ending": float(money(cash_ending_all)),
     }

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { msgOf } from "@/lib/errors";
 
 export type LookupItem = {
   id?: string;
@@ -86,6 +87,13 @@ export function LookupSelect({
   const [items, setItems] = useState<LookupItem[]>([]);
   const [filter, setFilter] = useState("");
   const [loaded, setLoaded] = useState(false);
+  // P1-4：参照表取不到时不能只剩一个**空**下拉框 —— 用户会以为"这个表
+  // 没有可选值"，其实是没取到。单独留一个错误状态，明确说出来。
+  // 错误按「数据集 + 语言」打标：换参照表时旧错误自动失效（不必在
+  // effect 里 setState 清空 —— 那会触发 react-hooks/set-state-in-effect）。
+  const [err, setErr] = useState<{ key: string; msg: string } | null>(null);
+  const errKey = `${dataset}:${locale?.startsWith("zh") ? "zh-CN" : "en"}`;
+  const loadError = err && err.key === errKey ? err.msg : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -103,17 +111,21 @@ export function LookupSelect({
         cache.set(key, { at: Date.now(), rows });
         setItems(rows);
         setLoaded(true);
+        setErr(null);
       })
-      .catch(() => {
-        if (!cancelled) {
-          setItems([]);
-          setLoaded(true);
-        }
+      .catch((ex) => {
+        if (cancelled) return;
+        setItems([]);
+        setLoaded(true);
+        setErr({
+          key: `${dataset}:${loc}`,
+          msg: msgOf(ex, t("lookup.load_fail", "Reference list could not be loaded — please retry.")),
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [dataset, locale]);
+  }, [dataset, locale, t]);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -185,6 +197,11 @@ export function LookupSelect({
         ))}
       </select>
       {!loaded ? <span className="muted">{t("common.loading", "Loading…")}</span> : null}
+      {loadError ? (
+        <span className="field-error" role="alert">
+          {loadError}
+        </span>
+      ) : null}
     </div>
   );
 }

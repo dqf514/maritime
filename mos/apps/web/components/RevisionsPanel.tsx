@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { formatInTz } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
+import { msgOf } from "@/lib/errors";
 
 type Revision = {
   id: string;
@@ -20,6 +21,11 @@ type Revision = {
 export function RevisionsPanel({ entityType, entityId }: { entityType: string; entityId: string }) {
   const { t, locale } = useI18n();
   const [rows, setRows] = useState<Revision[] | null>(null);
+  // P1-4：修订记录取不到时不能显示"尚无变更记录" —— 那是**没取到**。
+  // 错误按实体打标：换实体时旧错误自动失效（不必在 effect 里 setState 清空）。
+  const [err, setErr] = useState<{ key: string; msg: string } | null>(null);
+  const errKey = `${entityType}:${entityId}`;
+  const loadError = err && err.key === errKey ? err.msg : "";
 
   useEffect(() => {
     let alive = true;
@@ -28,13 +34,18 @@ export function RevisionsPanel({ entityType, entityId }: { entityType: string; e
       .then((res) => {
         if (alive) setRows(((res as { items?: Revision[] }).items ?? []) as Revision[]);
       })
-      .catch(() => {
-        if (alive) setRows([]);
+      .catch((ex) => {
+        if (!alive) return;
+        setRows([]);
+        setErr({
+          key: `${entityType}:${entityId}`,
+          msg: msgOf(ex, t("revisions.load_fail", "Could not load the revision history.")),
+        });
       });
     return () => {
       alive = false;
     };
-  }, [entityType, entityId]);
+  }, [entityType, entityId, t]);
 
   return (
     <div className="panel revisions-panel">
@@ -42,6 +53,10 @@ export function RevisionsPanel({ entityType, entityId }: { entityType: string; e
       <div className="panel-body">
         {rows === null ? (
           <span className="muted">{t("common.loading", "Loading…")}</span>
+        ) : loadError ? (
+          <span className="field-error" role="alert">
+            {loadError}
+          </span>
         ) : rows.length === 0 ? (
           <span className="muted">{t("revisions.empty", "No changes recorded yet")}</span>
         ) : (

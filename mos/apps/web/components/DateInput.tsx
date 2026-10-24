@@ -12,6 +12,13 @@ type CommonProps = {
   id?: string;
   name?: string;
   style?: CSSProperties;
+  /**
+   * 无障碍：显式的可访问名（aria-label）。
+   * 本组件基本都被调用方用 <label>/<FieldRow> 包裹 —— 此时**可见标签本身就是**可访问名，
+   * 在这里硬编码 aria-label 反而会覆盖掉更具体的可见标签（违反 WCAG 2.5.3 Label in Name）。
+   * 因此默认不写死 aria-label；只有在无法用可见标签包裹时才由调用方显式传入。
+   */
+  ariaLabel?: string;
 };
 
 function openNativePicker(el: HTMLInputElement | null, disabled?: boolean) {
@@ -38,7 +45,7 @@ function normalizeDateTime(raw: string): string {
 }
 
 /** App-locale date field — avoids OS Chinese native date chrome when UI is English. */
-export function DateInput({ value, onChange, required, disabled, className, id, name, style }: CommonProps) {
+export function DateInput({ value, onChange, required, disabled, className, id, name, style, ariaLabel }: CommonProps) {
   const { locale, t } = useI18n();
   const pickerRef = useRef<HTMLInputElement>(null);
   const lang = locale.startsWith("zh") ? "zh-CN" : "en-US";
@@ -54,6 +61,7 @@ export function DateInput({ value, onChange, required, disabled, className, id, 
         inputMode="numeric"
         autoComplete="off"
         spellCheck={false}
+        aria-label={ariaLabel}
         placeholder="YYYY-MM-DD"
         value={value || ""}
         required={required}
@@ -96,7 +104,7 @@ export function DateInput({ value, onChange, required, disabled, className, id, 
 }
 
 /** App-locale datetime field — stores HTML datetime-local value (YYYY-MM-DDTHH:mm). */
-export function DateTimeInput({ value, onChange, required, disabled, className, id, name, style }: CommonProps) {
+export function DateTimeInput({ value, onChange, required, disabled, className, id, name, style, ariaLabel }: CommonProps) {
   const { locale, t } = useI18n();
   const pickerRef = useRef<HTMLInputElement>(null);
   const lang = locale.startsWith("zh") ? "zh-CN" : "en-US";
@@ -112,6 +120,7 @@ export function DateTimeInput({ value, onChange, required, disabled, className, 
         inputMode="numeric"
         autoComplete="off"
         spellCheck={false}
+        aria-label={ariaLabel}
         placeholder="YYYY-MM-DDTHH:mm"
         value={value || ""}
         required={required}

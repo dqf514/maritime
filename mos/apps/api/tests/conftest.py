@@ -1,4 +1,5 @@
 import os
+import shutil
 from collections.abc import Generator
 
 import pytest
@@ -20,9 +21,14 @@ os.environ["SEED_DEMO_EXTRA"] = "0"
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 os.environ["JOB_WORKER_ENABLED"] = "false"
 os.environ["MARIOS_LLM_OFF"] = "1"  # 测试零网络：LLM 抽取熔断（mock 除外）
+# 启动种子由 conftest 的模板库负责，lifespan 不再重复灌（否则每个测试多花 ~3s）
+os.environ["STARTUP_SEED"] = "false"
 
 from app.db import Base, get_db  # noqa: E402
 import app.models  # noqa: E402, F401
+import app.models_audit  # noqa: E402, F401
+import app.models_onboarding  # noqa: E402, F401
+import app.models_task  # noqa: E402, F401
 import app.models_wave1  # noqa: E402, F401
 import app.models_vessel_ext  # noqa: E402, F401
 import app.models_domain  # noqa: E402, F401
@@ -66,24 +72,10 @@ from app.services.report_builder import seed_report_datasets  # noqa: E402
 from app.services.config_service import seed_config_flag_presets  # noqa: E402
 
 
-@pytest.fixture()
-def db_engine():
-    pg_url = os.environ.get("TEST_DATABASE_URL")
-    if pg_url:
-        # Postgres 集成模式：每测试重建 schema（字典序 drop/create），无内存池
-        engine = create_engine(pg_url)
-        Base.metadata.drop_all(bind=engine)
-        Base.metadata.create_all(bind=engine)
-    else:
-        # 文件库 + 常规连接池：TestClient 的请求线程与测试主线程各自持连接，
-        # 彻底消除 StaticPool 单连接跨线程事务交错的可见性竞态（flaky 根因）。
-        import tempfile
-
-        fd, path = tempfile.mkstemp(prefix="marios_test_", suffix=".db")
-        os.close(fd)
-        engine = create_engine(f"sqlite+pysqlite:///{path}")
-        engine._marios_db_path = path
-        Base.metadata.create_all(bind=engine)
+def _build_seeded_engine(url: str):
+    """建表 + 灌种子数据，返回 engine（不 dispose）。"""
+    engine = create_engine(url)
+    Base.metadata.create_all(bind=engine)
     TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with TestingSession() as db:
         seed_if_empty(db)
@@ -101,16 +93,74 @@ def db_engine():
         seed_report_datasets(db)
         seed_config_flag_presets(db)
         db.commit()
-    yield engine
-    Base.metadata.drop_all(bind=engine)
+    return engine
+
+
+@pytest.fixture(scope="session")
+def _template_db(tmp_path_factory):
+    """整个会话只建库 + 灌种子一次；每个测试复制一份模板文件作为自己的库。
+
+    旧实现是「每个测试 drop_all + create_all(216 张表) + 11 个 seed 函数」，
+    实测固定开销 10–13 秒/测试，943 个用例全量要 4–7 小时 —— 没有人跑得动，
+    于是「测试全绿」从来没有真正拦住过任何缺陷。模板库把它降到 <0.1 秒。
+    """
+    path = tmp_path_factory.mktemp("marios_template") / "template.db"
+    engine = _build_seeded_engine(f"sqlite+pysqlite:///{path}")
     engine.dispose()
-    # 文件库清理（内存库路径下该变量未定义）
-    db_path = getattr(engine, "_marios_db_path", None)
-    if db_path:
-        try:
-            os.unlink(db_path)
-        except OSError:
-            pass
+    return str(path)
+
+
+@pytest.fixture()
+def db_engine(request, _template_db, tmp_path):
+    pg_url = os.environ.get("TEST_DATABASE_URL")
+    if pg_url:
+        # Postgres 集成模式：每测试重建 schema（字典序 drop/create），无内存池
+        engine = create_engine(pg_url)
+        Base.metadata.drop_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
+        TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with TestingSession() as db:
+            seed_if_empty(db)
+            seed_wave1_demo(db)
+            seed_saas_catalog(db)
+            seed_full_demo_flow(db)
+            seed_i18n(db)
+            bootstrap_ops_catalog(db)
+            seed_reference_catalog(db)
+            from app.services.fuel_zone_service import seed_preset_zones
+
+            seed_preset_zones(db)
+            seed_clause_pack(db)
+            seed_report_datasets(db)
+            seed_config_flag_presets(db)
+            db.commit()
+        yield engine
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+        return
+
+    # SQLite：复制模板库 → 每个测试一份完全独立的库文件
+    dest = tmp_path / "test.db"
+    shutil.copyfile(_template_db, dest)
+    engine = create_engine(f"sqlite+pysqlite:///{dest}")
+    engine._marios_db_path = str(dest)
+    # 让 app 自身的 engine / SessionLocal 也指向这一个库：
+    # lifespan 的 create_all 变成 no-op，直接使用 SessionLocal 的代码也能看到测试数据。
+    import app.db as _db_mod
+    import app.main as _main_mod
+
+    _orig = (_db_mod.engine, _db_mod.SessionLocal, _main_mod.engine, _main_mod.SessionLocal)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    _db_mod.engine = engine
+    _db_mod.SessionLocal = session_factory
+    _main_mod.engine = engine
+    _main_mod.SessionLocal = session_factory
+    try:
+        yield engine
+    finally:
+        (_db_mod.engine, _db_mod.SessionLocal, _main_mod.engine, _main_mod.SessionLocal) = _orig
+        engine.dispose()
+    # 文件由 pytest 的 tmp_path 自动清理
 
 
 @pytest.fixture()

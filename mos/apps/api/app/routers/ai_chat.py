@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.security import AuthContext, require_module
+from app.security import AuthContext, require_module, require_roles
 from app.services import mari_ai
 from app.services.recycle import soft_delete
 
@@ -82,7 +82,7 @@ def list_agents(
 
 @router.post("/agents/seed", status_code=201)
 def seed_agents(
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     created = mari_ai.seed_preset_agents(db)
@@ -240,5 +240,21 @@ def execute_tool(
     auth: AuthContext = Depends(require_module("operations")),
     db: Session = Depends(get_db),
 ):
+    """执行一个 AI 工具。
+
+    **模块授权在工具内部再查一次**（P0-20）：``require_module("operations")``
+    只管住这个端点本身；``list_invoices`` / ``get_invoice`` / ``list_claims``
+    / ``get_exposure`` 这些工具读的是 finance / claims / risk 域的数据 ——
+    没买对应模块的租户也必须被拒。判定见 ``mari_ai.execute_tool``。
+    """
     result = mari_ai.execute_tool(db, auth.tenant_id, body.tool_name, body.parameters)
+    if result.get("code") == "MODULE_NOT_LICENSED":
+        raise HTTPException(
+            403,
+            detail={
+                "code": "MODULE_NOT_LICENSED",
+                "module": result.get("module"),
+                "message": result.get("error"),
+            },
+        )
     return result

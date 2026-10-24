@@ -3,9 +3,11 @@
 // Laytime 深度面板：预付滞期（on-account）/ 根因分摊 / 延误跟踪 / 时效任务。
 // 自取数 + 自建表单，挂载在 laytime 单据详情页（B10）。
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { msgOf, handled } from "@/lib/errors";
+import { FormEvent, useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { DataTable, type ColumnDef } from "@/components/DataTable";
 import { Num } from "@/components/Num";
+import { StateView } from "@/components/StateView";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -49,9 +51,20 @@ type DelayRow = {
 
 type Envelope<T> = { items: T[]; total: number } & Record<string, unknown>;
 
+/** P1-30：四个数据块各自独立的错误位（局部失败只影响对应块）。 */
+type LoadErrs = { est?: string; oa?: string; rc?: string; dl?: string };
+
 function fmt(n: number | undefined | null) {
   if (n === undefined || n === null) return "—";
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/** 数字输入解析：空串 → null；非法输入 → NaN（调用方必须报错，禁止静默转 0）。 */
+function numOrNull(raw: string): number | null {
+  const s = raw.trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
 }
 
 export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
@@ -63,6 +76,11 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  // P1-30 + P1-4：局部失败 → 对应块显示错误，其余照常展示
+  const [loadErrs, setLoadErrs] = useState<LoadErrs>({});
+  const [loading, setLoading] = useState(true);
+  // 首次成功加载后，后续刷新不再整块 spinner（避免卸载表格闪烁）
+  const loadedOnce = useRef(false);
 
   const [oaAmount, setOaAmount] = useState("");
   const [oaStatus, setOaStatus] = useState("paid");
@@ -74,21 +92,52 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
   const [dEnd, setDEnd] = useState("");
   const [dExcluded, setDExcluded] = useState(false);
 
+  // P1-30：Promise.all → Promise.allSettled，一处失败不再清空整块面板
   const load = useCallback(async () => {
-    const [e, oa, rc, dl] = await Promise.all([
+    if (!loadedOnce.current) setLoading(true);
+    const [e, oa, rc, dl] = await Promise.allSettled([
       apiGet(`/api/v1/laytimes/${laytimeId}/estimated-demurrage`),
       apiGet(`/api/v1/laytimes/${laytimeId}/demurrage-on-account`),
       apiGet(`/api/v1/laytimes/${laytimeId}/root-causes`),
       apiGet(`/api/v1/laytimes/${laytimeId}/delays`),
     ]);
-    setEst(e);
-    setOnAcc(oa);
-    setCauses(rc);
-    setDelays(dl);
+    const errs: LoadErrs = {};
+    let anyOk = false;
+    if (e.status === "fulfilled") {
+      setEst(e.value);
+      anyOk = true;
+    } else {
+      setEst(null);
+      errs.est = msgOf(e.reason);
+    }
+    if (oa.status === "fulfilled") {
+      setOnAcc(oa.value);
+      anyOk = true;
+    } else {
+      setOnAcc(null);
+      errs.oa = msgOf(oa.reason);
+    }
+    if (rc.status === "fulfilled") {
+      setCauses(rc.value);
+      anyOk = true;
+    } else {
+      setCauses(null);
+      errs.rc = msgOf(rc.reason);
+    }
+    if (dl.status === "fulfilled") {
+      setDelays(dl.value);
+      anyOk = true;
+    } else {
+      setDelays(null);
+      errs.dl = msgOf(dl.reason);
+    }
+    if (anyOk) loadedOnce.current = true;
+    setLoadErrs(errs);
+    setLoading(false);
   }, [laytimeId]);
 
   useEffect(() => {
-    load().catch(() => undefined);
+    load().catch(handled);
   }, [load]);
 
   async function run(action: () => Promise<void>) {
@@ -100,7 +149,7 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
       setMsg(t("common.created", "Created"));
       await load();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
@@ -108,9 +157,15 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
 
   async function addOnAccount(e: FormEvent) {
     e.preventDefault();
+    // P1-24：非法数字必须报错并中止，不能静默变成 NaN/0
+    const amt = numOrNull(oaAmount);
+    if (amt === null || Number.isNaN(amt)) {
+      setErr(t("page.finance.bad_number", "Enter a valid number"));
+      return;
+    }
     await run(() =>
       apiPost(`/api/v1/laytimes/${laytimeId}/demurrage-on-account`, {
-        amount: Number(oaAmount),
+        amount: amt,
         status: oaStatus,
       })
     );
@@ -119,10 +174,15 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
 
   async function addRootCause(e: FormEvent) {
     e.preventDefault();
+    const hours = numOrNull(rcHours);
+    if (hours === null || Number.isNaN(hours)) {
+      setErr(t("page.finance.bad_number", "Enter a valid number"));
+      return;
+    }
     await run(() =>
       apiPost(`/api/v1/laytimes/${laytimeId}/root-causes`, {
         cause: rcCause,
-        delay_hours: Number(rcHours),
+        delay_hours: hours,
         responsible_party: rcParty,
       })
     );
@@ -153,42 +213,51 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
   const partyLabel = (v: unknown) => t(`laytime.party.${v}`, String(v ?? "").replace(/_/g, " "));
   const statusLabel = (v: unknown) => t(`status.${v}`, String(v ?? "").replace(/_/g, " "));
 
-  const oaCols: ColumnDef<OnAccountRow>[] = [
-    { key: "amount", title: t("common.amount", "Amount"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
-    { key: "currency", title: t("page.finance.currency", "Currency") },
-    { key: "payment_date", title: t("common.date", "Date") },
-    { key: "status", title: t("common.status", "Status"), render: (v) => statusLabel(v) },
-    { key: "notes", title: t("common.notes", "Notes") },
-  ];
+  const oaCols = useMemo<ColumnDef<OnAccountRow>[]>(
+    () => [
+      { key: "amount", title: t("common.amount", "Amount"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
+      { key: "currency", title: t("page.finance.currency", "Currency") },
+      { key: "payment_date", title: t("common.date", "Date") },
+      { key: "status", title: t("common.status", "Status"), render: (v) => statusLabel(v) },
+      { key: "notes", title: t("common.notes", "Notes") },
+    ],
+    [t],
+  );
 
-  const rcCols: ColumnDef<RootCauseRow>[] = [
-    { key: "cause", title: t("page.finance.lt_cause", "Cause"), render: (v) => causeLabel(v) },
-    { key: "responsible_party", title: t("page.finance.lt_party", "Responsible"), render: (v) => partyLabel(v) },
-    { key: "delay_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
-    { key: "share_pct", title: t("page.finance.lt_share", "Share %"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
-    { key: "allocated_amount", title: t("page.finance.lt_allocated", "Allocated"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
-  ];
+  const rcCols = useMemo<ColumnDef<RootCauseRow>[]>(
+    () => [
+      { key: "cause", title: t("page.finance.lt_cause", "Cause"), render: (v) => causeLabel(v) },
+      { key: "responsible_party", title: t("page.finance.lt_party", "Responsible"), render: (v) => partyLabel(v) },
+      { key: "delay_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
+      { key: "share_pct", title: t("page.finance.lt_share", "Share %"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
+      { key: "allocated_amount", title: t("page.finance.lt_allocated", "Allocated"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
+    ],
+    [t],
+  );
 
-  const dCols: ColumnDef<DelayRow>[] = [
-    { key: "delay_type", title: t("common.type", "Type"), render: (v) => delayLabel(v) },
-    {
-      key: "start_at",
-      title: t("common.start", "Start"),
-      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
-    },
-    {
-      key: "end_at",
-      title: t("common.end", "End"),
-      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
-    },
-    { key: "duration_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
-    {
-      key: "excluded_from_laytime",
-      title: t("page.finance.ev_excluded", "Excluded"),
-      render: (v) => (v ? t("common.yes", "Yes") : t("common.no", "No")),
-    },
-    { key: "cost_impact", title: t("page.finance.lt_cost", "Cost impact"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
-  ];
+  const dCols = useMemo<ColumnDef<DelayRow>[]>(
+    () => [
+      { key: "delay_type", title: t("common.type", "Type"), render: (v) => delayLabel(v) },
+      {
+        key: "start_at",
+        title: t("common.start", "Start"),
+        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
+      {
+        key: "end_at",
+        title: t("common.end", "End"),
+        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      },
+      { key: "duration_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
+      {
+        key: "excluded_from_laytime",
+        title: t("page.finance.ev_excluded", "Excluded"),
+        render: (v) => (v ? t("common.yes", "Yes") : t("common.no", "No")),
+      },
+      { key: "cost_impact", title: t("page.finance.lt_cost", "Cost impact"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
+    ],
+    [t],
+  );
 
   return (
     <>
@@ -196,24 +265,26 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
         <h3 style={{ marginTop: 0 }}>{t("page.finance.lt_demurrage_depth", "Demurrage / on-account / root causes")}</h3>
         {msg ? <p className="flash">{msg}</p> : null}
         {err ? <p className="flash-err">{err}</p> : null}
-        <div className="desk-results">
-          <div className="kv-box">
-            <span>{t("page.finance.lt_demurrage", "Demurrage")}</span>
-            <strong>{fmt(est?.demurrage_amount)}</strong>
+        <StateView loading={loading} error={loadErrs.est} empty={false} onRetry={() => load()}>
+          <div className="desk-results">
+            <div className="kv-box">
+              <span>{t("page.finance.lt_demurrage", "Demurrage")}</span>
+              <strong>{fmt(est?.demurrage_amount)}</strong>
+            </div>
+            <div className="kv-box">
+              <span>{t("page.finance.lt_on_account", "On account (paid)")}</span>
+              <strong>{fmt(est?.on_account_total)}</strong>
+            </div>
+            <div className="kv-box">
+              <span>{t("page.finance.lt_on_account_pending", "On account (pending)")}</span>
+              <strong>{fmt(est?.on_account_pending)}</strong>
+            </div>
+            <div className="kv-box">
+              <span>{t("page.finance.lt_outstanding", "Outstanding")}</span>
+              <strong>{fmt(est?.outstanding)}</strong>
+            </div>
           </div>
-          <div className="kv-box">
-            <span>{t("page.finance.lt_on_account", "On account (paid)")}</span>
-            <strong>{fmt(est?.on_account_total)}</strong>
-          </div>
-          <div className="kv-box">
-            <span>{t("page.finance.lt_on_account_pending", "On account (pending)")}</span>
-            <strong>{fmt(est?.on_account_pending)}</strong>
-          </div>
-          <div className="kv-box">
-            <span>{t("page.finance.lt_outstanding", "Outstanding")}</span>
-            <strong>{fmt(est?.outstanding)}</strong>
-          </div>
-        </div>
+        </StateView>
         <div className="desk-toolbar" style={{ margin: "0.5rem 0 0" }}>
           <button className="btn btn-sm" type="button" disabled={busy} onClick={makeTimeBarTask}>
             {t("page.finance.lt_timebar_task", "Generate time bar task")}
@@ -242,7 +313,15 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
             </button>
           </div>
         </form>
-        <DataTable data={onAcc?.items || []} columns={oaCols} emptyText={t("common.empty", "No records")} />
+        <StateView
+          loading={loading}
+          error={loadErrs.oa}
+          empty={!onAcc?.items?.length}
+          emptyText={t("common.empty", "No records")}
+          onRetry={() => load()}
+        >
+          <DataTable data={onAcc?.items || []} columns={oaCols} emptyText={t("common.empty", "No records")} />
+        </StateView>
       </div>
 
       <div className="panel no-print">
@@ -278,13 +357,21 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
             </button>
           </div>
         </form>
-        <DataTable data={causes?.items || []} columns={rcCols} emptyText={t("common.empty", "No records")} />
-        {causes ? (
-          <p className="page-sub">
-            {t("page.finance.lt_allocated_total", "Allocated total")}: {fmt(causes.allocated_total as number)} ·{" "}
-            {t("page.finance.lt_hours", "Hours")}: {fmt(causes.total_delay_hours as number)}
-          </p>
-        ) : null}
+        <StateView
+          loading={loading}
+          error={loadErrs.rc}
+          empty={!causes?.items?.length}
+          emptyText={t("common.empty", "No records")}
+          onRetry={() => load()}
+        >
+          <DataTable data={causes?.items || []} columns={rcCols} emptyText={t("common.empty", "No records")} />
+          {causes ? (
+            <p className="page-sub">
+              {t("page.finance.lt_allocated_total", "Allocated total")}: {fmt(causes.allocated_total as number)} ·{" "}
+              {t("page.finance.lt_hours", "Hours")}: {fmt(causes.total_delay_hours as number)}
+            </p>
+          ) : null}
+        </StateView>
       </div>
 
       <div className="panel no-print">
@@ -319,14 +406,22 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
             </button>
           </div>
         </form>
-        <DataTable data={delays?.items || []} columns={dCols} emptyText={t("common.empty", "No records")} />
-        {delays?.summary ? (
-          <p className="page-sub">
-            {t("page.finance.lt_total_hours", "Total")}: {fmt((delays.summary as Record<string, number>).total_delay_hours)} ·{" "}
-            {t("page.finance.ev_excluded", "Excluded")}: {fmt((delays.summary as Record<string, number>).excluded_hours)} ·{" "}
-            {t("page.finance.lt_counted", "Counted")}: {fmt((delays.summary as Record<string, number>).counted_hours)}
-          </p>
-        ) : null}
+        <StateView
+          loading={loading}
+          error={loadErrs.dl}
+          empty={!delays?.items?.length}
+          emptyText={t("common.empty", "No records")}
+          onRetry={() => load()}
+        >
+          <DataTable data={delays?.items || []} columns={dCols} emptyText={t("common.empty", "No records")} />
+          {delays?.summary ? (
+            <p className="page-sub">
+              {t("page.finance.lt_total_hours", "Total")}: {fmt((delays.summary as Record<string, number>).total_delay_hours)} ·{" "}
+              {t("page.finance.ev_excluded", "Excluded")}: {fmt((delays.summary as Record<string, number>).excluded_hours)} ·{" "}
+              {t("page.finance.lt_counted", "Counted")}: {fmt((delays.summary as Record<string, number>).counted_hours)}
+            </p>
+          ) : null}
+        </StateView>
       </div>
     </>
   );

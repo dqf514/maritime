@@ -33,6 +33,7 @@ from app.services.graph_client import (
     refresh_access_token,
     token_expiry,
 )
+from app.security import assert_safe_outbound_url
 from app.services.identity import soft_sign_state
 from app.services.ms_config import effective_mode, resolve_ms_config
 from app.services.ops_crypto import decrypt_token, encrypt_token
@@ -441,6 +442,10 @@ def deliver_webhook(db: Session, endpoint: WebhookEndpoint, event: str, payload:
                 delivery.status = "delivered"
                 delivery.response_code = 200
             else:
+                # P0-18：出网前做 URL 白名单校验（内网/环回/链路本地/元数据地址
+                # 一律拒绝）。老的 `"example.com" in target_url` 判断还会被
+                # `http://example.com.attacker.tld/` 绕过。
+                assert_safe_outbound_url(endpoint.target_url, purpose="webhook delivery")
                 res = client.post(endpoint.target_url, content=body, headers=headers)
                 delivery.response_code = res.status_code
                 delivery.status = "delivered" if res.status_code < 300 else "failed"

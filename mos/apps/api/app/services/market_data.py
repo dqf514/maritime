@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
 from sqlalchemy import select, desc
@@ -71,15 +71,20 @@ def seed_demo_data(db: Session, tenant_id: UUID) -> int:
             ).first()
             if existing:
                 continue
+            # 价格是**金额** —— 走 Decimal + 显式 ROUND_HALF_UP，
+            # 不要用 float round()（银行家舍入 + 二进制尾数）。
             if cat == "bunker":
-                base = DEMO_BUNKER_PRICES.get(symbol, 500)
-                value = Decimal(str(round(base + (day_offset - 15) * 2.5, 2)))
+                base = Decimal(str(DEMO_BUNKER_PRICES.get(symbol, 500)))
+                step = Decimal("2.5")
             elif cat == "index":
-                base = DEMO_INDICES.get(symbol, 1500)
-                value = Decimal(str(round(base + (day_offset - 15) * 15, 2)))
+                base = Decimal(str(DEMO_INDICES.get(symbol, 1500)))
+                step = Decimal("15")
             else:
-                base = DEMO_TCE.get(symbol, 20000)
-                value = Decimal(str(round(base + (day_offset - 15) * 200, 2)))
+                base = Decimal(str(DEMO_TCE.get(symbol, 20000)))
+                step = Decimal("200")
+            value = (base + (day_offset - 15) * step).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
             q = MarketQuote(
                 tenant_id=tenant_id,
                 symbol=symbol,

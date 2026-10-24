@@ -23,6 +23,7 @@ import hashlib
 import math
 import random
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -46,8 +47,17 @@ from app.models_domain import (
 )
 from app.models_ship import ShipCertificate, ShipDefect, ShipTechnicalProfile, ShipWorkOrder
 from app.models_wave1 import ConnectorInstance, Vessel
+from app.routers._finance_common import _base_currency
 from app.routers.ship_mgmt import _refresh_certificate_status
 from app.security import AuthContext, require_auth
+from app.services.data_scope import apply_data_scope, effective_scope
+from app.services.money import (
+    invoice_base_amount,
+    invoice_base_open,
+    invoice_base_paid,
+    money,
+)
+from app.services.tenant_guard import scoped_get
 
 router = APIRouter(prefix="/dashboards", tags=["Dashboards"])
 
@@ -125,6 +135,10 @@ def dashboard_catalog(auth: AuthContext = Depends(require_auth)):
     items = []
     for code, meta in ROLE_SCREENS.items():
         if code in roles or "tenant_admin" in roles or "management" in roles or "platform_admin" in roles:
+            # 平台看板只对 platform_admin 可见（P0-6）—— 它列的是**所有租户**
+            # 的名册，租户管理员/管理层不该在目录里看到入口。
+            if code == "platform_admin" and "platform_admin" not in roles:
+                continue
             items.append({"role": code, **meta, "href": f"/dashboards/{code}"})
     if not items:
         items = [{"role": "management", **ROLE_SCREENS["management"], "href": "/dashboards/management"}]
@@ -139,14 +153,24 @@ def dashboard_snapshot(
 ):
     if role not in ROLE_SCREENS:
         raise HTTPException(404, "Unknown dashboard role")
+    roles = auth.roles or []
+    # P0-6：平台看板（platform_admin）**必须**持有 platform_admin 角色。
+    # 旧的 AND 否定式角色墙把「管理 / 租户管理员」也放行了，于是
+    # management / tenant_admin 能 GET /dashboards/platform_admin/snapshot
+    # 拿到**所有租户**的名册、用户数、许可数（跨租户泄漏，实测可复现）。
+    if role == "platform_admin" and "platform_admin" not in roles:
+        raise HTTPException(
+            403,
+            detail={"code": "ROLE_REQUIRED", "roles": ["platform_admin"]},
+        )
     # management / tenant_admin / platform_admin can open any wall; others their own + management view
     if (
-        role not in (auth.roles or [])
-        and "tenant_admin" not in (auth.roles or [])
-        and "management" not in (auth.roles or [])
-        and "platform_admin" not in (auth.roles or [])
+        role not in roles
+        and "tenant_admin" not in roles
+        and "management" not in roles
+        and "platform_admin" not in roles
     ):
-        if role != _primary_role(auth.roles or []):
+        if role != _primary_role(roles):
             raise HTTPException(403, "Role wall not permitted")
 
     tid = auth.tenant_id
@@ -161,7 +185,7 @@ def dashboard_snapshot(
         "tenant_admin": _admin,
         "platform_admin": _platform,
     }
-    body = builders[role](db, tid)
+    body = builders[role](db, tid, auth)
     return {
         "role": role,
         "title": meta["title"],
@@ -182,12 +206,94 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _mgmt(db: Session, tid: UUID) -> dict:
-    voyages = db.scalars(select(Voyage).where(Voyage.tenant_id == tid)).all()
+def _claim_rate_context(db: Session, claim: Claim) -> dict:
+    """索赔的取价日上下文 —— 规则（FxDateRule）选哪个 basis，这里给哪个日期。
+
+    * ``invoice`` / ``posted`` → 单据日期（索赔创建日）
+    * ``departure`` / ``arrival`` → 关联航次的开航 / 到港日；没有航次就没有
+      这两个键，由 :func:`pick_rate_date` 的 fallback 退回单据日期。
+
+    P1-B9：以前看板折算一律取「绝对最新汇率」，租户改了汇率再看板就变数。
+    """
+    doc_date = claim.created_at.date() if isinstance(claim.created_at, datetime) else (claim.time_bar or date.today())
+    context = {
+        "invoice": doc_date,
+        "invoice_date": doc_date,
+        "posted": doc_date,
+        "posted_date": doc_date,
+        "gmt_date": doc_date,
+    }
+    if claim.voyage_id:
+        # 租户过滤：claim.voyage_id 指向的航次必须属于同一租户（跨租户读 = 泄漏）
+        voyage = scoped_get(db, Voyage, claim.voyage_id, claim.tenant_id)
+        if voyage is not None:
+            if isinstance(voyage.started_at, datetime):
+                context["departure"] = context["departure_date"] = context["sailing_date"] = (
+                    voyage.started_at.date()
+                )
+            if isinstance(voyage.completed_at, datetime):
+                context["arrival"] = context["arrival_date"] = voyage.completed_at.date()
+    return context
+
+
+def _claim_to_base(
+    db: Session,
+    tenant_id: UUID,
+    claim: Claim,
+    base_ccy: str,
+    field: str,
+) -> Decimal:
+    """索赔金额 → 本位币（P1-B4）。
+
+    索赔行带 ``currency``，没有行内汇率 —— 按 ``ExchangeRate`` 折算；
+    折不动（没汇率）时**原样保留**并在返回值里保持原币数额（宁可标注也不猜）。
+
+    P1-B9：折算用的汇率按租户配置的**汇率取数日规则**取（默认单据日期），
+    不再是「绝对最新汇率」。
+    """
+    raw = getattr(claim, field, None)
+    if raw is None:
+        return Decimal("0")
+    amt = money(raw)
+    ccy = (getattr(claim, "currency", None) or base_ccy or "USD").upper()
+    base = (base_ccy or "USD").upper()
+    if ccy == base:
+        return amt
+    from app.services.fx_date_rules import resolve_fx_rate, resolve_rate_date
+
+    context = _claim_rate_context(db, claim)
+    doc_date = context["invoice"]
+    rate_date = resolve_rate_date(
+        db, tenant_id, claim.claim_type, context, fallback=doc_date
+    )
+    rate = resolve_fx_rate(
+        db,
+        tenant_id,
+        ccy,
+        base,
+        invoice_type=claim.claim_type,
+        context_date=rate_date,
+    )
+    if rate:
+        return money(amt * rate)
+    return amt
+
+
+def _scope_stmt(db: Session, stmt, model, auth: AuthContext | None, module: str):
+    """看板查询也走行级数据权限 —— 收窄后的角色不该在看板上看到全租户。"""
+    if auth is None:
+        return stmt
+    scope = effective_scope(db, auth.tenant_id, auth.roles, module)
+    return apply_data_scope(stmt, model, auth.user_id, scope)
+
+def _mgmt(db: Session, tid: UUID, auth: AuthContext | None = None) -> dict:
+    voyages = db.scalars(_scope_stmt(db, select(Voyage).where(Voyage.tenant_id == tid), Voyage, auth, "operations")).all()
     active = [v for v in voyages if v.status in ("in_progress", "planned", "active")]
-    invoices = db.scalars(select(Invoice).where(Invoice.tenant_id == tid)).all()
-    revenue = sum(float(i.amount or 0) for i in invoices)
-    unpaid = sum(float(i.amount or 0) - float(i.paid_amount or 0) for i in invoices if i.status != "paid")
+    invoices = db.scalars(_scope_stmt(db, select(Invoice).where(Invoice.tenant_id == tid), Invoice, auth, "finance")).all()
+    # P1-B4：**按本位币求和** —— 发票金额是原币，直接相加等于把 USD 和 EUR
+    # 当同一个数。口径统一走 services/money.py（金额 Decimal + 显式 HALF_UP）。
+    revenue = float(sum((invoice_base_amount(i) for i in invoices), Decimal("0")))
+    unpaid = float(sum((invoice_base_open(i) for i in invoices if i.status != "paid"), Decimal("0")))
     vessels = db.scalars(select(Vessel).where(Vessel.tenant_id == tid)).all()
     tce = _pulse("tce", 18500)
     util = min(98.0, 72 + _pulse("util", 8))
@@ -253,8 +359,8 @@ def _mgmt(db: Session, tid: UUID) -> dict:
     }
 
 
-def _chartering(db: Session, tid: UUID) -> dict:
-    estimates = db.scalars(select(Estimate).where(Estimate.tenant_id == tid)).all()
+def _chartering(db: Session, tid: UUID, auth: AuthContext | None = None) -> dict:
+    estimates = db.scalars(_scope_stmt(db, select(Estimate).where(Estimate.tenant_id == tid), Estimate, auth, "chartering")).all()
     charters = db.scalars(select(Charter).where(Charter.tenant_id == tid)).all()
     open_est = [e for e in estimates if e.status in ("draft", "working", "submitted")]
     active_cp = [c for c in charters if c.status in ("active", "approved", "submitted")]
@@ -333,8 +439,8 @@ def _chartering(db: Session, tid: UUID) -> dict:
     }
 
 
-def _operations(db: Session, tid: UUID) -> dict:
-    voyages = db.scalars(select(Voyage).where(Voyage.tenant_id == tid)).all()
+def _operations(db: Session, tid: UUID, auth: AuthContext | None = None) -> dict:
+    voyages = db.scalars(_scope_stmt(db, select(Voyage).where(Voyage.tenant_id == tid), Voyage, auth, "operations")).all()
     alerts = db.scalars(select(TwinAlert).where(TwinAlert.tenant_id == tid).limit(12)).all()
     noons = db.scalars(select(NoonReport).where(NoonReport.tenant_id == tid).order_by(NoonReport.report_at.desc()).limit(20)).all()
     vessels = {v.id: v for v in db.scalars(select(Vessel).where(Vessel.tenant_id == tid)).all()}
@@ -417,13 +523,14 @@ def _operations(db: Session, tid: UUID) -> dict:
     }
 
 
-def _finance(db: Session, tid: UUID) -> dict:
-    invoices = db.scalars(select(Invoice).where(Invoice.tenant_id == tid)).all()
+def _finance(db: Session, tid: UUID, auth: AuthContext | None = None) -> dict:
+    invoices = db.scalars(_scope_stmt(db, select(Invoice).where(Invoice.tenant_id == tid), Invoice, auth, "finance")).all()
     open_inv = [i for i in invoices if i.status not in ("paid", "void")]
     aging = {"0-30": 0.0, "31-60": 0.0, "61-90": 0.0, "90+": 0.0}
     today = date.today()
     for i in open_inv:
-        bal = float(i.amount or 0) - float(i.paid_amount or 0)
+        # P1-B4：账龄按**本位币**未收金额分桶（原币直接相加 = 跨币种错账）。
+        bal = float(invoice_base_open(i))
         if bal <= 0:
             continue
         due = i.due_date or today
@@ -439,7 +546,7 @@ def _finance(db: Session, tid: UUID) -> dict:
     aging_demo = sum(aging.values()) == 0
     if aging_demo:
         aging = {"0-30": 820000, "31-60": 310000, "61-90": 95000, "90+": 42000}
-    collected = sum(float(i.paid_amount or 0) for i in invoices)
+    collected = float(sum((invoice_base_paid(i) for i in invoices), Decimal("0")))
     return {
         "kpis": [
             _kpi("Open AR", f"{sum(aging.values()):,.0f}", "USD", None, "warn", synthetic=aging_demo),
@@ -485,16 +592,27 @@ def _finance(db: Session, tid: UUID) -> dict:
     }
 
 
-def _demurrage(db: Session, tid: UUID) -> dict:
+def _demurrage(db: Session, tid: UUID, auth: AuthContext | None = None) -> dict:
     claims = db.scalars(select(Claim).where(Claim.tenant_id == tid)).all()
     open_c = [c for c in claims if c.status in ("open", "negotiating")]
-    amount = sum(float(c.amount or 0) for c in open_c)
+    # P1-B4：索赔金额带**币种**，原币直接相加 = 跨币种错账 → 按汇率折本位币。
+    base_ccy = _base_currency(db, tid)
+    amount = float(sum((_claim_to_base(db, tid, c, base_ccy, "amount") for c in open_c), Decimal("0")))
     today = date.today()
     timebar_urgent = sum(1 for c in open_c if c.time_bar and 0 <= (c.time_bar - today).days < 14)
     sof_pending = db.scalar(
         select(func.count()).select_from(LaytimeCalc).where(LaytimeCalc.tenant_id == tid, LaytimeCalc.status != "finalized")
     ) or 0
-    settled = sum(float(c.settlement_amount or 0) for c in claims if c.status in ("settled", "closed", "paid"))
+    settled = float(
+        sum(
+            (
+                _claim_to_base(db, tid, c, base_ccy, "settlement_amount")
+                for c in claims
+                if c.status in ("settled", "closed", "paid")
+            ),
+            Decimal("0"),
+        )
+    )
     return {
         "kpis": [
             _kpi("Open claims", len(open_c) or 2, "", None, "warn", synthetic=not open_c),
@@ -539,7 +657,7 @@ def _demurrage(db: Session, tid: UUID) -> dict:
     }
 
 
-def _technical(db: Session, tid: UUID) -> dict:
+def _technical(db: Session, tid: UUID, auth: AuthContext | None = None) -> dict:
     _refresh_certificate_status(db, tid)
     wos = db.scalars(select(ShipWorkOrder).where(ShipWorkOrder.tenant_id == tid)).all()
     open_wo = [w for w in wos if w.status in ("open", "in_progress")]
@@ -614,7 +732,7 @@ def _technical(db: Session, tid: UUID) -> dict:
     }
 
 
-def _admin(db: Session, tid: UUID) -> dict:
+def _admin(db: Session, tid: UUID, auth: AuthContext | None = None) -> dict:
     users = db.execute(select(func.count()).select_from(Voyage).where(Voyage.tenant_id == tid)).scalar() or 0
     connectors = db.scalars(select(ConnectorInstance).where(ConnectorInstance.tenant_id == tid)).all()
     down = [c for c in connectors if c.status != "active" or not (c.last_health or {}).get("ok", True)]
@@ -651,7 +769,7 @@ def _admin(db: Session, tid: UUID) -> dict:
     }
 
 
-def _platform(db: Session, tid: UUID) -> dict:
+def _platform(db: Session, tid: UUID, auth: AuthContext | None = None) -> dict:
     _ = tid
     tenants = db.scalars(select(Tenant).where(Tenant.code != "sys")).all()
     total_tenants = len(tenants)

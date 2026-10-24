@@ -14,12 +14,14 @@ import { RecordAttribution } from "@/components/RecordAttribution";
 import { Tabs } from "@/components/Tabs";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
+import { StateView } from "@/components/StateView";
 import { VesselCertificates } from "@/components/ShipCertificates";
 import { PartyPicker } from "@/components/DataPicker";
 import { FormSection } from "@/components/form/FormPanel";
-import { formatKv, VesselCrudGrid } from "@/components/ship/VesselCrudGrid";
+import { formatKv, VesselCrudGrid, type ColumnDef as CrudColumnDef, type FieldDef } from "@/components/ship/VesselCrudGrid";
 import { CLASS_SOCIETIES, OWNERSHIP_OPTIONS, TRADE_AREAS } from "@/lib/vessel-catalog";
 import { useI18n } from "@/lib/i18n";
+import { msgOf } from "@/lib/errors";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
 
@@ -159,6 +161,9 @@ export default function VesselDetailPage() {
   const [summary, setSummary] = useState<any>(null);
   const [ship, setShip] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  // 摘要加载失败必须走错误态，不能静默渲染成空 KPI（P1-4）
+  const [summaryErr, setSummaryErr] = useState("");
+  const [summaryLoading, setSummaryLoading] = useState(true);
 
   // spec form state (flat) + deadweight scale editor
   const [specForm, setSpecForm] = useState<Record<string, string>>({});
@@ -178,6 +183,7 @@ export default function VesselDetailPage() {
 
   const loadSummary = useCallback(async () => {
     const data = await apiGet(`/api/v1/vessels/${vesselId}/summary`);
+    setSummaryErr("");
     setSummary(data);
     const spec = data?.spec ?? {};
     const flat: Record<string, string> = {};
@@ -218,7 +224,16 @@ export default function VesselDetailPage() {
 
   useEffect(() => {
     if (!vesselId) return;
-    Promise.all([loadSummary().catch((e: any) => toast.error(e?.message || t("common.failed", "Failed"))), loadShip()]);
+    setSummaryLoading(true);
+    Promise.all([
+      loadSummary()
+        .catch((e: any) => {
+          setSummaryErr(msgOf(e, t("common.failed", "Failed")));
+          toast.error(msgOf(e, t("common.failed", "Failed")));
+        })
+        .finally(() => setSummaryLoading(false)),
+      loadShip(),
+    ]);
   }, [vesselId, loadSummary, loadShip, t, toast]);
 
   const vessel = summary?.vessel;
@@ -440,129 +455,279 @@ export default function VesselDetailPage() {
   );
 
   // ── Consumption tab：IMOS In Port Consumption Table + Speed Consumption Table ──
-  const portConsColumns = [
-    { key: "fuel_grade", label: t("page.vessel.pc_fuel_grade", "Fuel grade"), width: 116 },
-    { key: "unit", label: t("page.vessel.pc_unit", "Unit"), width: 84 },
-    ...PORT_CONS_NUM_KEYS.map((k) => ({
-      key: k,
-      label: t(`page.vessel.pc_${k}`, PORT_CONS_LABELS[k]),
-      width: 106,
-      align: "right" as const,
-      render: (r: Record<string, unknown>) => fmt(r[k]),
-    })),
-    {
-      key: "inactive",
-      label: t("common.status", "Status"),
-      width: 96,
-      render: (r: Record<string, unknown>) => (
-        <span className={`pill ${r.inactive ? "warn" : "valid"}`}>
-          {r.inactive ? t("common.inactive", "Inactive") : t("common.active", "Active")}
-        </span>
-      ),
-    },
-  ];
+  const portConsColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      { key: "fuel_grade", label: t("page.vessel.pc_fuel_grade", "Fuel grade"), width: 116 },
+      { key: "unit", label: t("page.vessel.pc_unit", "Unit"), width: 84 },
+      ...PORT_CONS_NUM_KEYS.map((k) => ({
+        key: k,
+        label: t(`page.vessel.pc_${k}`, PORT_CONS_LABELS[k]),
+        width: 106,
+        align: "right" as const,
+        render: (r: Record<string, unknown>) => fmt(r[k]),
+      })),
+      {
+        key: "inactive",
+        label: t("common.status", "Status"),
+        width: 96,
+        render: (r: Record<string, unknown>) => (
+          <span className={`pill ${r.inactive ? "warn" : "valid"}`}>
+            {r.inactive ? t("common.inactive", "Inactive") : t("common.active", "Active")}
+          </span>
+        ),
+      },
+    ],
+    [t],
+  );
 
-  const portConsFields = [
-    {
-      key: "fuel_grade",
-      label: t("page.vessel.pc_fuel_grade", "Fuel grade"),
-      type: "text" as const,
-      required: true,
-      placeholder: "VLSFO",
-    },
-    {
-      key: "unit",
-      label: t("page.vessel.pc_unit", "Unit"),
-      type: "select" as const,
-      options: [
-        { value: "MT", label: "MT" },
-        { value: "MT/day", label: "MT/day" },
-        { value: "LT", label: "LT" },
-        { value: "BBL", label: "BBL" },
-      ],
-    },
-    { key: "gas_flag", label: t("page.vessel.pc_gas_flag", "L / G"), type: "text" as const, placeholder: "L" },
-    { key: "inactive", label: t("page.vessel.pc_inactive", "Inactive — do not use in estimates"), type: "checkbox" as const },
-    ...PORT_CONS_NUM_KEYS.map((k) => ({
-      key: k,
-      label: t(`page.vessel.pc_${k}`, PORT_CONS_LABELS[k]),
-      type: "number" as const,
-      step: "0.001",
-    })),
-  ];
+  const portConsFields = useMemo<FieldDef[]>(
+    () => [
+      {
+        key: "fuel_grade",
+        label: t("page.vessel.pc_fuel_grade", "Fuel grade"),
+        type: "text" as const,
+        required: true,
+        placeholder: "VLSFO",
+      },
+      {
+        key: "unit",
+        label: t("page.vessel.pc_unit", "Unit"),
+        type: "select" as const,
+        options: [
+          { value: "MT", label: "MT" },
+          { value: "MT/day", label: "MT/day" },
+          { value: "LT", label: "LT" },
+          { value: "BBL", label: "BBL" },
+        ],
+      },
+      { key: "gas_flag", label: t("page.vessel.pc_gas_flag", "L / G"), type: "text" as const, placeholder: "L" },
+      { key: "inactive", label: t("page.vessel.pc_inactive", "Inactive — do not use in estimates"), type: "checkbox" as const },
+      ...PORT_CONS_NUM_KEYS.map((k) => ({
+        key: k,
+        label: t(`page.vessel.pc_${k}`, PORT_CONS_LABELS[k]),
+        type: "number" as const,
+        step: "0.001",
+      })),
+    ],
+    [t],
+  );
 
-  const speedConsColumns = [
-    {
-      key: "speed",
-      label: t("page.vessel.sc_speed", "Speed (kn)"),
-      width: 100,
-      align: "right" as const,
-      render: (r: Record<string, unknown>) => fmt(r.speed),
-    },
-    {
-      key: "ballast_laden",
-      label: t("page.vessel.sc_bl", "B / L"),
-      width: 96,
-      render: (r: Record<string, unknown>) =>
-        r.ballast_laden === "B"
-          ? t("page.vessel.sc_ballast", "Ballast")
-          : r.ballast_laden === "L"
-            ? t("page.vessel.sc_laden", "Laden")
-            : "—",
-    },
-    {
-      key: "engine_load",
-      label: t("page.vessel.sc_load", "Engine load (%)"),
-      width: 130,
-      align: "right" as const,
-      render: (r: Record<string, unknown>) => fmt(r.engine_load),
-    },
-    {
-      key: "fuel_consumption",
-      label: t("page.vessel.sc_fuel", "Consumption (MT/day)"),
-      width: 240,
-      render: (r: Record<string, unknown>) => formatKv(r.fuel_consumption) || "—",
-    },
-    {
-      key: "basis",
-      label: t("page.vessel.sc_basis", "Basis"),
-      width: 170,
-      render: (r: Record<string, unknown>) =>
-        r.basis ? t(`page.vessel.basis_${String(r.basis)}`, String(r.basis)) : "—",
-    },
-  ];
+  const speedConsColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      {
+        key: "speed",
+        label: t("page.vessel.sc_speed", "Speed (kn)"),
+        width: 100,
+        align: "right" as const,
+        render: (r: Record<string, unknown>) => fmt(r.speed),
+      },
+      {
+        key: "ballast_laden",
+        label: t("page.vessel.sc_bl", "B / L"),
+        width: 96,
+        render: (r: Record<string, unknown>) =>
+          r.ballast_laden === "B"
+            ? t("page.vessel.sc_ballast", "Ballast")
+            : r.ballast_laden === "L"
+              ? t("page.vessel.sc_laden", "Laden")
+              : "—",
+      },
+      {
+        key: "engine_load",
+        label: t("page.vessel.sc_load", "Engine load (%)"),
+        width: 130,
+        align: "right" as const,
+        render: (r: Record<string, unknown>) => fmt(r.engine_load),
+      },
+      {
+        key: "fuel_consumption",
+        label: t("page.vessel.sc_fuel", "Consumption (MT/day)"),
+        width: 240,
+        render: (r: Record<string, unknown>) => formatKv(r.fuel_consumption) || "—",
+      },
+      {
+        key: "basis",
+        label: t("page.vessel.sc_basis", "Basis"),
+        width: 170,
+        render: (r: Record<string, unknown>) =>
+          r.basis ? t(`page.vessel.basis_${String(r.basis)}`, String(r.basis)) : "—",
+      },
+    ],
+    [t],
+  );
 
-  const speedConsFields = [
-    { key: "speed", label: t("page.vessel.sc_speed", "Speed (kn)"), type: "number" as const, step: "0.01" },
-    {
-      key: "ballast_laden",
-      label: t("page.vessel.sc_bl", "B / L"),
-      type: "select" as const,
-      options: [
-        { value: "", label: t("common.none", "None") },
-        { value: "B", label: t("page.vessel.sc_ballast", "Ballast") },
-        { value: "L", label: t("page.vessel.sc_laden", "Laden") },
-      ],
-    },
-    { key: "engine_load", label: t("page.vessel.sc_load", "Engine load (%)"), type: "number" as const, step: "0.01" },
-    {
-      key: "fuel_consumption",
-      label: t("page.vessel.sc_fuel", "Consumption (MT/day)"),
-      type: "kv" as const,
-      span: true,
-      placeholder: "VLSFO=15.20; MGO=0.30",
-    },
-    {
-      key: "basis",
-      label: t("page.vessel.sc_basis", "Basis"),
-      type: "select" as const,
-      options: [
-        { value: "", label: t("common.none", "None") },
-        { value: "eco_owner", label: t("page.vessel.basis_eco_owner", "Eco Owner") },
-        { value: "warranted_owner", label: t("page.vessel.basis_warranted_owner", "Warranted Owner") },
-      ],
-    },
-  ];
+  const speedConsFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "speed", label: t("page.vessel.sc_speed", "Speed (kn)"), type: "number" as const, step: "0.01" },
+      {
+        key: "ballast_laden",
+        label: t("page.vessel.sc_bl", "B / L"),
+        type: "select" as const,
+        options: [
+          { value: "", label: t("common.none", "None") },
+          { value: "B", label: t("page.vessel.sc_ballast", "Ballast") },
+          { value: "L", label: t("page.vessel.sc_laden", "Laden") },
+        ],
+      },
+      { key: "engine_load", label: t("page.vessel.sc_load", "Engine load (%)"), type: "number" as const, step: "0.01" },
+      {
+        key: "fuel_consumption",
+        label: t("page.vessel.sc_fuel", "Consumption (MT/day)"),
+        type: "kv" as const,
+        span: true,
+        placeholder: "VLSFO=15.20; MGO=0.30",
+      },
+      {
+        key: "basis",
+        label: t("page.vessel.sc_basis", "Basis"),
+        type: "select" as const,
+        options: [
+          { value: "", label: t("common.none", "None") },
+          { value: "eco_owner", label: t("page.vessel.basis_eco_owner", "Eco Owner") },
+          { value: "warranted_owner", label: t("page.vessel.basis_warranted_owner", "Warranted Owner") },
+        ],
+      },
+    ],
+    [t],
+  );
+
+  // CRUD 弹窗字段定义：每次渲染都换身份会让 VesselCrudGrid 的列模型缓存失效
+  const contactFields = useMemo<FieldDef[]>(
+    () => [
+      {
+        key: "contact_role",
+        label: t("page.vessel.role", "Role"),
+        type: "select",
+        required: true,
+        options: [
+          { value: "captain", label: "captain" },
+          { value: "superintendent", label: "superintendent" },
+          { value: "agent", label: "agent" },
+          { value: "owner", label: "owner" },
+        ],
+      },
+      { key: "name", label: t("common.name", "Name"), type: "text", required: true },
+      { key: "email", label: t("common.email", "Email"), type: "text" },
+      { key: "phone", label: t("common.phone", "Phone"), type: "text" },
+    ],
+    [t],
+  );
+
+  const routesFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "route_name", label: t("page.vessel.route_name", "Route"), type: "text", required: true },
+      { key: "from_area", label: t("page.vessel.route_from", "From area"), type: "text" },
+      { key: "to_area", label: t("page.vessel.route_to", "To area"), type: "text" },
+      { key: "typical_speed", label: t("page.vessel.route_speed", "Typical speed (kn)"), type: "number", step: "0.01" },
+      { key: "distance_nm", label: t("page.vessel.route_dist", "Distance (nm)"), type: "number" },
+      { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
+    ],
+    [t],
+  );
+
+  const tugFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "tug_name", label: t("page.vessel.tug_name", "Tug name"), type: "text", required: true },
+      { key: "power_hp", label: t("page.vessel.tug_power", "Power (HP)"), type: "number" },
+      { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
+    ],
+    [t],
+  );
+
+  const tankFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "tank_name", label: t("page.vessel.tank_name", "Tank name"), type: "text", required: true },
+      {
+        key: "tank_type",
+        label: t("page.vessel.tank_type", "Type"),
+        type: "select",
+        required: true,
+        options: [
+          { value: "fuel", label: "fuel" },
+          { value: "lube", label: "lube" },
+          { value: "water", label: "water" },
+          { value: "ballast", label: "ballast" },
+        ],
+      },
+      { key: "capacity_mt", label: t("page.vessel.tank_cap", "Capacity (MT)"), type: "number" },
+      { key: "max_fill_pct", label: t("page.vessel.tank_fill", "Max fill (%)"), type: "number", step: "0.01" },
+      { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
+    ],
+    [t],
+  );
+
+  const performanceFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "cargo_type", label: t("page.vessel.cargo_type", "Cargo type"), type: "text", required: true },
+      { key: "load_rate_mt_hr", label: t("page.vessel.load_rate", "Load rate (MT/h)"), type: "number" },
+      { key: "discharge_rate_mt_hr", label: t("page.vessel.disch_rate", "Discharge rate (MT/h)"), type: "number" },
+      { key: "stowage_factor", label: t("page.vessel.stowage", "Stowage factor (m3/MT)"), type: "number", step: "0.001" },
+      { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
+    ],
+    [t],
+  );
+
+  const tceFields = useMemo<FieldDef[]>(
+    () => [
+      { key: "year_month", label: t("page.vessel.tce_month", "Month (YYYY-MM)"), type: "text", required: true },
+      { key: "target_tce_usd", label: t("page.vessel.tce_target", "Target TCE (USD)"), type: "number" },
+      { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
+    ],
+    [t],
+  );
+
+  const vettingFields = useMemo<FieldDef[]>(
+    () => [
+      {
+        key: "vetting_type",
+        label: t("page.vessel.vetting_type", "Type"),
+        type: "select",
+        required: true,
+        options: [
+          { value: "sire", label: "SIRE" },
+          { value: "cdi", label: "CDI" },
+          { value: "psc", label: "PSC" },
+        ],
+      },
+      { key: "vetting_date", label: t("page.vessel.vetting_date", "Date"), type: "date" },
+      {
+        key: "result",
+        label: t("page.vessel.vetting_result", "Result"),
+        type: "select",
+        required: true,
+        options: [
+          { value: "pass", label: "pass" },
+          { value: "conditional", label: "conditional" },
+          { value: "fail", label: "fail" },
+        ],
+      },
+      { key: "expiry_date", label: t("page.vessel.vetting_expiry", "Expiry date"), type: "date" },
+      { key: "inspector", label: t("page.vessel.vetting_inspector", "Inspector"), type: "text" },
+      { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
+    ],
+    [t],
+  );
+
+  const loadlineFields = useMemo<FieldDef[]>(
+    () => [
+      {
+        key: "zone_name",
+        label: t("page.vessel.zone_name", "Zone"),
+        type: "select",
+        required: true,
+        options: [
+          { value: "summer", label: "summer" },
+          { value: "tropical", label: "tropical" },
+          { value: "winter", label: "winter" },
+          { value: "winter_north_atlantic", label: "winter N. Atlantic" },
+        ],
+      },
+      { key: "max_draft_m", label: t("page.vessel.zone_draft", "Max draft (m)"), type: "number", step: "0.01" },
+      { key: "valid_from", label: t("page.vessel.zone_from", "Valid from"), type: "date" },
+      { key: "valid_to", label: t("page.vessel.zone_to", "Valid to"), type: "date" },
+    ],
+    [t],
+  );
 
   const imosGroups: { key: ImosGroup; labelKey: string; label: string }[] = [
     { key: "identity", labelKey: "page.vessel.imos_identity", label: "Identity" },
@@ -596,6 +761,96 @@ export default function VesselDetailPage() {
         value: (r: any) => r.severity,
         render: (v) => fmt(v),
       },
+    ],
+    [t],
+  );
+
+  const contactColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      { key: "contact_role", label: t("page.vessel.role", "Role") },
+      { key: "name", label: t("common.name", "Name") },
+      { key: "email", label: t("common.email", "Email") },
+      { key: "phone", label: t("common.phone", "Phone") },
+    ],
+    [t],
+  );
+
+  const routesCrudColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      { key: "route_name", label: t("page.vessel.route_name", "Route") },
+      { key: "from_area", label: t("page.vessel.route_from", "From") },
+      { key: "to_area", label: t("page.vessel.route_to", "To") },
+      { key: "typical_speed", label: t("page.vessel.route_speed", "Speed (kn)") },
+      { key: "distance_nm", label: t("page.vessel.route_dist", "Distance (nm)") },
+      { key: "notes", label: t("common.notes", "Notes") },
+    ],
+    [t],
+  );
+
+  const tugColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      { key: "tug_name", label: t("page.vessel.tug_name", "Tug") },
+      { key: "power_hp", label: t("page.vessel.tug_power", "Power (HP)") },
+      { key: "notes", label: t("common.notes", "Notes") },
+    ],
+    [t],
+  );
+
+  const tankColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      { key: "tank_name", label: t("page.vessel.tank_name", "Tank") },
+      { key: "tank_type", label: t("page.vessel.tank_type", "Type") },
+      { key: "capacity_mt", label: t("page.vessel.tank_cap", "Capacity (MT)") },
+      { key: "max_fill_pct", label: t("page.vessel.tank_fill", "Max fill (%)") },
+      { key: "notes", label: t("common.notes", "Notes") },
+    ],
+    [t],
+  );
+
+  const performanceColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      { key: "cargo_type", label: t("page.vessel.cargo_type", "Cargo type") },
+      { key: "load_rate_mt_hr", label: t("page.vessel.load_rate", "Load rate (MT/h)") },
+      { key: "discharge_rate_mt_hr", label: t("page.vessel.disch_rate", "Discharge rate (MT/h)") },
+      { key: "stowage_factor", label: t("page.vessel.stowage", "Stowage factor (m3/MT)") },
+      { key: "notes", label: t("common.notes", "Notes") },
+    ],
+    [t],
+  );
+
+  const tceColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      { key: "year_month", label: t("page.vessel.tce_month", "Month") },
+      { key: "target_tce_usd", label: t("page.vessel.tce_target", "Target TCE (USD)") },
+      { key: "notes", label: t("common.notes", "Notes") },
+    ],
+    [t],
+  );
+
+  const vettingColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      { key: "vetting_type", label: t("page.vessel.vetting_type", "Type") },
+      { key: "vetting_date", label: t("page.vessel.vetting_date", "Date") },
+      {
+        key: "result",
+        label: t("page.vessel.vetting_result", "Result"),
+        render: (r) => (
+          <span className={`pill ${r.result === "pass" ? "valid" : r.result === "fail" ? "danger" : "warn"}`}>{String(r.result ?? "—")}</span>
+        ),
+      },
+      { key: "expiry_date", label: t("page.vessel.vetting_expiry", "Expiry") },
+      { key: "inspector", label: t("page.vessel.vetting_inspector", "Inspector") },
+      { key: "notes", label: t("common.notes", "Notes") },
+    ],
+    [t],
+  );
+
+  const loadlineColumns = useMemo<CrudColumnDef[]>(
+    () => [
+      { key: "zone_name", label: t("page.vessel.zone_name", "Zone") },
+      { key: "max_draft_m", label: t("page.vessel.zone_draft", "Max draft (m)") },
+      { key: "valid_from", label: t("page.vessel.zone_from", "Valid from") },
+      { key: "valid_to", label: t("page.vessel.zone_to", "Valid to") },
     ],
     [t],
   );
@@ -636,6 +891,22 @@ export default function VesselDetailPage() {
         variant="line"
 
       />
+
+      {/* 摘要加载失败 —— 显式错误态 + 重试，不能静默渲染成空数据（P1-4） */}
+      {summaryErr ? (
+        <StateView
+          loading={summaryLoading}
+          error={summaryErr}
+          empty={false}
+          onRetry={() => {
+            setSummaryLoading(true);
+            setSummaryErr("");
+            loadSummary().catch((e: any) => setSummaryErr(msgOf(e, t("common.failed", "Failed")))).finally(() => setSummaryLoading(false));
+          }}
+        >
+          <span />
+        </StateView>
+      ) : null}
 
       {tab === "summary" ? (
         <>
@@ -989,29 +1260,8 @@ export default function VesselDetailPage() {
           title={t("page.vessel.tab_contacts", "Contacts")}
           addLabel={t("page.vessel.add_contact", "Add contact")}
           emptyText={t("page.vessel.no_contacts", "No vessel contacts yet")}
-          columns={[
-            { key: "contact_role", label: t("page.vessel.role", "Role") },
-            { key: "name", label: t("common.name", "Name") },
-            { key: "email", label: t("common.email", "Email") },
-            { key: "phone", label: t("common.phone", "Phone") },
-          ]}
-          fields={[
-            {
-              key: "contact_role",
-              label: t("page.vessel.role", "Role"),
-              type: "select",
-              required: true,
-              options: [
-                { value: "captain", label: "captain" },
-                { value: "superintendent", label: "superintendent" },
-                { value: "agent", label: "agent" },
-                { value: "owner", label: "owner" },
-              ],
-            },
-            { key: "name", label: t("common.name", "Name"), type: "text", required: true },
-            { key: "email", label: t("common.email", "Email"), type: "text" },
-            { key: "phone", label: t("common.phone", "Phone"), type: "text" },
-          ]}
+          columns={contactColumns}
+          fields={contactFields}
         />
       ) : null}
 
@@ -1022,22 +1272,8 @@ export default function VesselDetailPage() {
           title={t("page.vessel.tab_routes", "Routes")}
           addLabel={t("page.vessel.add_route", "Add route")}
           emptyText={t("page.vessel.no_routes", "No preferred routes yet")}
-          columns={[
-            { key: "route_name", label: t("page.vessel.route_name", "Route") },
-            { key: "from_area", label: t("page.vessel.route_from", "From") },
-            { key: "to_area", label: t("page.vessel.route_to", "To") },
-            { key: "typical_speed", label: t("page.vessel.route_speed", "Speed (kn)") },
-            { key: "distance_nm", label: t("page.vessel.route_dist", "Distance (nm)") },
-            { key: "notes", label: t("common.notes", "Notes") },
-          ]}
-          fields={[
-            { key: "route_name", label: t("page.vessel.route_name", "Route"), type: "text", required: true },
-            { key: "from_area", label: t("page.vessel.route_from", "From area"), type: "text" },
-            { key: "to_area", label: t("page.vessel.route_to", "To area"), type: "text" },
-            { key: "typical_speed", label: t("page.vessel.route_speed", "Typical speed (kn)"), type: "number", step: "0.01" },
-            { key: "distance_nm", label: t("page.vessel.route_dist", "Distance (nm)"), type: "number" },
-            { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
-          ]}
+          columns={routesCrudColumns}
+          fields={routesFields}
         />
       ) : null}
 
@@ -1048,16 +1284,8 @@ export default function VesselDetailPage() {
           title={t("page.vessel.tab_tugs", "Tugs")}
           addLabel={t("page.vessel.add_tug", "Add tug")}
           emptyText={t("page.vessel.no_tugs", "No tug records yet")}
-          columns={[
-            { key: "tug_name", label: t("page.vessel.tug_name", "Tug") },
-            { key: "power_hp", label: t("page.vessel.tug_power", "Power (HP)") },
-            { key: "notes", label: t("common.notes", "Notes") },
-          ]}
-          fields={[
-            { key: "tug_name", label: t("page.vessel.tug_name", "Tug name"), type: "text", required: true },
-            { key: "power_hp", label: t("page.vessel.tug_power", "Power (HP)"), type: "number" },
-            { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
-          ]}
+          columns={tugColumns}
+          fields={tugFields}
         />
       ) : null}
 
@@ -1068,31 +1296,8 @@ export default function VesselDetailPage() {
           title={t("page.vessel.tab_tanks", "Bunker Tanks")}
           addLabel={t("page.vessel.add_tank", "Add tank")}
           emptyText={t("page.vessel.no_tanks", "No tanks yet")}
-          columns={[
-            { key: "tank_name", label: t("page.vessel.tank_name", "Tank") },
-            { key: "tank_type", label: t("page.vessel.tank_type", "Type") },
-            { key: "capacity_mt", label: t("page.vessel.tank_cap", "Capacity (MT)") },
-            { key: "max_fill_pct", label: t("page.vessel.tank_fill", "Max fill (%)") },
-            { key: "notes", label: t("common.notes", "Notes") },
-          ]}
-          fields={[
-            { key: "tank_name", label: t("page.vessel.tank_name", "Tank name"), type: "text", required: true },
-            {
-              key: "tank_type",
-              label: t("page.vessel.tank_type", "Type"),
-              type: "select",
-              required: true,
-              options: [
-                { value: "fuel", label: "fuel" },
-                { value: "lube", label: "lube" },
-                { value: "water", label: "water" },
-                { value: "ballast", label: "ballast" },
-              ],
-            },
-            { key: "capacity_mt", label: t("page.vessel.tank_cap", "Capacity (MT)"), type: "number" },
-            { key: "max_fill_pct", label: t("page.vessel.tank_fill", "Max fill (%)"), type: "number", step: "0.01" },
-            { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
-          ]}
+          columns={tankColumns}
+          fields={tankFields}
         />
       ) : null}
 
@@ -1103,20 +1308,8 @@ export default function VesselDetailPage() {
           title={t("page.vessel.tab_performance", "L/D Performance")}
           addLabel={t("page.vessel.add_perf", "Add cargo profile")}
           emptyText={t("page.vessel.no_perf", "No cargo profiles yet")}
-          columns={[
-            { key: "cargo_type", label: t("page.vessel.cargo_type", "Cargo type") },
-            { key: "load_rate_mt_hr", label: t("page.vessel.load_rate", "Load rate (MT/h)") },
-            { key: "discharge_rate_mt_hr", label: t("page.vessel.disch_rate", "Discharge rate (MT/h)") },
-            { key: "stowage_factor", label: t("page.vessel.stowage", "Stowage factor (m3/MT)") },
-            { key: "notes", label: t("common.notes", "Notes") },
-          ]}
-          fields={[
-            { key: "cargo_type", label: t("page.vessel.cargo_type", "Cargo type"), type: "text", required: true },
-            { key: "load_rate_mt_hr", label: t("page.vessel.load_rate", "Load rate (MT/h)"), type: "number" },
-            { key: "discharge_rate_mt_hr", label: t("page.vessel.disch_rate", "Discharge rate (MT/h)"), type: "number" },
-            { key: "stowage_factor", label: t("page.vessel.stowage", "Stowage factor (m3/MT)"), type: "number", step: "0.001" },
-            { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
-          ]}
+          columns={performanceColumns}
+          fields={performanceFields}
         />
       ) : null}
 
@@ -1127,16 +1320,8 @@ export default function VesselDetailPage() {
           title={t("page.vessel.tab_tce", "TCE Targets")}
           addLabel={t("page.vessel.add_tce", "Add TCE target")}
           emptyText={t("page.vessel.no_tce", "No TCE targets yet")}
-          columns={[
-            { key: "year_month", label: t("page.vessel.tce_month", "Month") },
-            { key: "target_tce_usd", label: t("page.vessel.tce_target", "Target TCE (USD)") },
-            { key: "notes", label: t("common.notes", "Notes") },
-          ]}
-          fields={[
-            { key: "year_month", label: t("page.vessel.tce_month", "Month (YYYY-MM)"), type: "text", required: true },
-            { key: "target_tce_usd", label: t("page.vessel.tce_target", "Target TCE (USD)"), type: "number" },
-            { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
-          ]}
+          columns={tceColumns}
+          fields={tceFields}
         />
       ) : null}
 
@@ -1147,48 +1332,8 @@ export default function VesselDetailPage() {
           title={t("page.vessel.tab_vetting", "Vetting")}
           addLabel={t("page.vessel.add_vetting", "Add vetting record")}
           emptyText={t("page.vessel.no_vetting", "No vetting records yet")}
-          columns={[
-            { key: "vetting_type", label: t("page.vessel.vetting_type", "Type") },
-            { key: "vetting_date", label: t("page.vessel.vetting_date", "Date") },
-            {
-              key: "result",
-              label: t("page.vessel.vetting_result", "Result"),
-              render: (r) => (
-                <span className={`pill ${r.result === "pass" ? "valid" : r.result === "fail" ? "danger" : "warn"}`}>{String(r.result ?? "—")}</span>
-              ),
-            },
-            { key: "expiry_date", label: t("page.vessel.vetting_expiry", "Expiry") },
-            { key: "inspector", label: t("page.vessel.vetting_inspector", "Inspector") },
-            { key: "notes", label: t("common.notes", "Notes") },
-          ]}
-          fields={[
-            {
-              key: "vetting_type",
-              label: t("page.vessel.vetting_type", "Type"),
-              type: "select",
-              required: true,
-              options: [
-                { value: "sire", label: "SIRE" },
-                { value: "cdi", label: "CDI" },
-                { value: "psc", label: "PSC" },
-              ],
-            },
-            { key: "vetting_date", label: t("page.vessel.vetting_date", "Date"), type: "date" },
-            {
-              key: "result",
-              label: t("page.vessel.vetting_result", "Result"),
-              type: "select",
-              required: true,
-              options: [
-                { value: "pass", label: "pass" },
-                { value: "conditional", label: "conditional" },
-                { value: "fail", label: "fail" },
-              ],
-            },
-            { key: "expiry_date", label: t("page.vessel.vetting_expiry", "Expiry date"), type: "date" },
-            { key: "inspector", label: t("page.vessel.vetting_inspector", "Inspector"), type: "text" },
-            { key: "notes", label: t("common.notes", "Notes"), type: "text", span: true },
-          ]}
+          columns={vettingColumns}
+          fields={vettingFields}
         />
       ) : null}
 
@@ -1199,29 +1344,8 @@ export default function VesselDetailPage() {
           title={t("page.vessel.tab_loadline", "Loadline Zones")}
           addLabel={t("page.vessel.add_zone", "Add zone")}
           emptyText={t("page.vessel.no_zone", "No loadline zones yet")}
-          columns={[
-            { key: "zone_name", label: t("page.vessel.zone_name", "Zone") },
-            { key: "max_draft_m", label: t("page.vessel.zone_draft", "Max draft (m)") },
-            { key: "valid_from", label: t("page.vessel.zone_from", "Valid from") },
-            { key: "valid_to", label: t("page.vessel.zone_to", "Valid to") },
-          ]}
-          fields={[
-            {
-              key: "zone_name",
-              label: t("page.vessel.zone_name", "Zone"),
-              type: "select",
-              required: true,
-              options: [
-                { value: "summer", label: "summer" },
-                { value: "tropical", label: "tropical" },
-                { value: "winter", label: "winter" },
-                { value: "winter_north_atlantic", label: "winter N. Atlantic" },
-              ],
-            },
-            { key: "max_draft_m", label: t("page.vessel.zone_draft", "Max draft (m)"), type: "number", step: "0.01" },
-            { key: "valid_from", label: t("page.vessel.zone_from", "Valid from"), type: "date" },
-            { key: "valid_to", label: t("page.vessel.zone_to", "Valid to"), type: "date" },
-          ]}
+          columns={loadlineColumns}
+          fields={loadlineFields}
         />
       ) : null}
 

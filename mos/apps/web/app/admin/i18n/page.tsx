@@ -1,15 +1,18 @@
 "use client";
 
+import { RefreshButton } from "@/components/RefreshButton";
 import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { SavedViews } from "@/components/SavedViews";
+import { StateView } from "@/components/StateView";
 import { Toolbar } from "@/components/Toolbar";
 import { RecordModal } from "@/components/RecordModal";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPut } from "@/lib/api";
+import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
@@ -26,10 +29,12 @@ function TenantI18nPage() {
   const toast = useToast();
   const router = useRouter();
   const pathname = usePathname();
-  const { query, setQuery } = useListQuery();
+  const { query, setQuery, page, limit } = useListQuery();
   const q = query.q ?? "";
   const [settings, setSettings] = useState<any>(null);
   const [terms, setTerms] = useState<TermRow[]>([]);
+  const [termsLoading, setTermsLoading] = useState(true);
+  const [termsErr, setTermsErr] = useState("");
   const [editKey, setEditKey] = useState("");
   const [editLabel, setEditLabel] = useState("");
 
@@ -38,8 +43,18 @@ function TenantI18nPage() {
   }
 
   async function loadTerms() {
-    const data = await apiGet(`/api/v1/admin/i18n/terminology?q=${encodeURIComponent(q)}`);
-    setTerms(data.items || []);
+    setTermsLoading(true);
+    setTermsErr("");
+    try {
+      const data = await apiGet(`/api/v1/admin/i18n/terminology?q=${encodeURIComponent(q)}`);
+      setTerms(data.items || []);
+    } catch (e) {
+      // 主列表失败必须走错误态，不能静默变成空术语表（P1-4）。
+      setTerms([]);
+      setTermsErr(msgOf(e, t("common.failed", "Failed")));
+    } finally {
+      setTermsLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -47,9 +62,18 @@ function TenantI18nPage() {
   }, [t]);
 
   useEffect(() => {
-    loadTerms().catch(() => toast.error(t("common.failed", "Failed")));
+    loadTerms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
+
+  // 分页（P1-28）：原来硬截断前 40 条且不可见 —— 现在分页 + 「共 N 条」。
+  const totalPages = Math.max(1, Math.ceil(terms.length / limit));
+  const safePage = Math.min(page, totalPages);
+  const pagedTerms = useMemo(
+    () => terms.slice((safePage - 1) * limit, safePage * limit),
+    [terms, safePage, limit],
+  );
+  const setPage = (p: number) => setQuery({ page: p > 1 ? p : null });
 
   async function saveSettings(e: FormEvent) {
     e.preventDefault();
@@ -185,20 +209,45 @@ function TenantI18nPage() {
           />
         }
       >
-        <button type="button" className="btn btn-sm" onClick={() => Promise.all([loadSettings(), loadTerms()]).catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => Promise.all([loadSettings(), loadTerms()]).catch(handled)} />
       </Toolbar>
       <div className="panel">
         <h2>{t("i18n.terms", "Terminology")}</h2>
-        <DataGrid<TermRow>
-          columns={columns}
-          data={terms.slice(0, 40)}
-          rowKey={(r, i) => String(r.key ?? i)}
-          storageKey="admin_i18n_terms"
+        <StateView
+          loading={termsLoading}
+          error={termsErr || undefined}
+          empty={!termsErr && !terms.length}
           emptyText={t("common.empty", "No records")}
-          showFooter={false}
-        />
+          onRetry={loadTerms}
+        >
+          <DataGrid<TermRow>
+            columns={columns}
+            data={pagedTerms}
+            rowKey={(r, i) => String(r.key ?? i)}
+            storageKey="admin_i18n_terms"
+            emptyText={t("common.empty", "No records")}
+            showFooter={false}
+          />
+        </StateView>
+        {!termsErr ? (
+          <div className="dt-pagination">
+            <span className="dt-page-info">
+              {t("common.page_of", "{from}-{to} of {n}", {
+                from: terms.length ? (safePage - 1) * limit + 1 : 0,
+                to: Math.min(safePage * limit, terms.length),
+                n: terms.length,
+              })}
+            </span>
+            <span className="dt-page-btns">
+              <button type="button" onClick={() => setPage(safePage - 1)} disabled={safePage <= 1} aria-label="prev">
+                ‹
+              </button>
+              <button type="button" onClick={() => setPage(safePage + 1)} disabled={safePage >= totalPages} aria-label="next">
+                ›
+              </button>
+            </span>
+          </div>
+        ) : null}
         <RecordModal
           open={Boolean(editKey)}
           title={`${t("common.override", "Override")} ${editKey}`}

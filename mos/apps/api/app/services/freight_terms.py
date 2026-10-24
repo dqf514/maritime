@@ -43,8 +43,8 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from app.services.money import CENT
 
-TWOPLACES = Decimal("0.01")
 
 _TERM_BASIS_ALIASES: dict[str, str] = {
     "per_mt": "per_mt",
@@ -69,7 +69,12 @@ _TERM_BASIS_ALIASES: dict[str, str] = {
 def _d(v: Any) -> Decimal:
     if v is None:
         return Decimal("0")
-    return Decimal(str(v))
+    try:
+        return Decimal(str(v))
+    except Exception as exc:  # noqa: BLE001 - decimal.InvalidOperation & co
+        # InvalidOperation 不是 ValueError，会一路逃成 500；这里转成 ValueError
+        # 让 API 层回 422（P2-B18）。
+        raise ValueError(f"expected a number, got {v!r}") from exc
 
 
 # ---- scale table ---------------------------------------------------------
@@ -214,16 +219,15 @@ def parse_extra_freight_terms(
             raise ValueError(f"extra_freight_terms[{i}].rate is required")
         rate = _d(rate_raw)
         if basis == "per_mt":
-            value = rate * cargo_qty
+            raw = rate * cargo_qty
         elif basis == "per_lump":
-            value = rate
+            raw = rate
         else:  # pct_of_freight
-            value = (freight_base * rate / Decimal("100")).quantize(
-                TWOPLACES, rounding=ROUND_HALF_UP
-            )
-        if basis != "pct_of_freight":
-            value = value.quantize(TWOPLACES, rounding=ROUND_HALF_UP)
-        total += value
+            raw = freight_base * rate / Decimal("100")
+        # 行值量化后展示，总额先求和后量化（P2-B13）：逐行量化再求和会把每行
+        # 的半分误差累积到总额（3 × 0.005 → 0.03 而非 0.02），行数越多偏得越多。
+        value = raw.quantize(CENT, rounding=ROUND_HALF_UP)
+        total += raw
         row: dict[str, Any] = {
             "term": str(term),
             "basis": basis,
@@ -231,4 +235,4 @@ def parse_extra_freight_terms(
             "value": float(value),
         }
         rows.append(row)
-    return total.quantize(TWOPLACES, rounding=ROUND_HALF_UP), rows
+    return total.quantize(CENT, rounding=ROUND_HALF_UP), rows

@@ -1,4 +1,19 @@
--- MariOS Wave 0 DDL (docs/ddl.sql — single source)
+-- =============================================================================
+-- ⚠️ 已废弃（DEPRECATED）—— 请勿用于初始化数据库
+--
+-- 本文件是 Wave 0 时期的手写 DDL 快照，**已与当前模型严重漂移**（缺 90+ 张表、
+-- 多个表的列/约束/索引也已过时）。拿它初始化会得到一个残缺且与代码不匹配的库。
+--
+-- 正确的建库方式（二选一）：
+--   1) docker compose up -d
+--      → migrate 服务执行 `alembic upgrade head`（空库会按模型建全量表）。
+--   2) 手工：cd apps/api && alembic upgrade head
+--
+-- schema 的唯一真源是 `apps/api/app/models*.py`（Base.metadata）+ `apps/api/alembic/`。
+-- 本文件仅作历史留档，已从部署流程中移除；保留在此只为对照早期部署。
+-- =============================================================================
+
+-- MariOS Wave 0 DDL (docs/ddl.sql — 历史快照，已废弃)
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS citext;
 

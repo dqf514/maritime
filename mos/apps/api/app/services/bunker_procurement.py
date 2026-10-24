@@ -9,7 +9,7 @@ Cap/collar (上下限保护)：租约约定燃油采购价上限 (cap) 与下限
 from __future__ import annotations
 
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -29,9 +29,9 @@ def apply_cap_collar(
     collar_price: Decimal | float | str | None = None,
 ) -> Decimal:
     """Clamp ``price`` into the [collar_price, cap_price] band (2dp)."""
-    p = Decimal(str(price)).quantize(Decimal("0.01"))
-    collar = Decimal(str(collar_price)).quantize(Decimal("0.01")) if collar_price is not None else None
-    cap = Decimal(str(cap_price)).quantize(Decimal("0.01")) if cap_price is not None else None
+    p = Decimal(str(price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    collar = Decimal(str(collar_price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if collar_price is not None else None
+    cap = Decimal(str(cap_price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if cap_price is not None else None
     if collar is not None and cap is not None and collar > cap:
         raise ValueError("collar_price must be <= cap_price")
     if collar is not None and p < collar:
@@ -87,15 +87,15 @@ def resolve_cap_collar_price(
     row = find_cap_collar(db, tenant_id, fuel_type, on_date=on_date, charter_id=charter_id)
     if row is None:
         return {
-            "price": float(Decimal(str(price)).quantize(Decimal("0.01"))),
-            "clamped_price": float(Decimal(str(price)).quantize(Decimal("0.01"))),
+            "price": float(Decimal(str(price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "clamped_price": float(Decimal(str(price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
             "cap_price": None,
             "collar_price": None,
             "cap_collar_id": None,
             "clamped": False,
         }
     clamped = apply_cap_collar(price, cap_price=row.cap_price, collar_price=row.collar_price)
-    raw = Decimal(str(price)).quantize(Decimal("0.01"))
+    raw = Decimal(str(price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return {
         "price": float(raw),
         "clamped_price": float(clamped),

@@ -7,9 +7,11 @@ import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Num } from "@/components/Num";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { apiGet } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 type LineKey = "revenue" | "hire" | "demurrage" | "port_costs" | "canal" | "bunker" | "commission" | "emissions" | "other";
@@ -68,14 +70,21 @@ export default function VoyagePnlDetailPage() {
 
   const [data, setData] = useState<VoyageData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
   const [grossNet, setGrossNet] = useState<"gross" | "net">("gross");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
+    setErr(null);
     try {
       const rows = (await apiGet(`/api/v1/analytics/reports/pnl-4col?voyage_id=${voyageId}`)) as VoyageData[];
       setData(rows[0] ?? null);
+    } catch (ex: any) {
+      // P1-31：只有 404 才是「未找到」；500/403 等一律显示加载失败 + 重试
+      setData(null);
+      if (ex?.status === 404) setErr(null);
+      else setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -333,6 +342,26 @@ export default function VoyagePnlDetailPage() {
           title={t("common.loading", "Loading…")}
         />
         <div className="panel"><div className="skeleton-table" /></div>
+      </AppShell>
+    );
+  }
+
+  if (err) {
+    return (
+      <AppShell>
+        <PageHeader
+          breadcrumb={[
+            { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
+            { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
+            { label: `#${voyageId}` },
+          ]}
+          title={t("page.pnl.load_failed", "Failed to load voyage P&L")}
+        />
+        <div className="panel">
+          <StateView loading={false} error={err} empty={false} onRetry={() => void load()}>
+            <span />
+          </StateView>
+        </div>
       </AppShell>
     );
   }

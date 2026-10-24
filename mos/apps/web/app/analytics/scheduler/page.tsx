@@ -3,6 +3,8 @@
 // 计划报表调度台 — Report schedule console：按频率向收件人邮件发送报表。
 // 列表 / 新建 / 编辑 / 立即运行 / 启用停用 / 删除（确认弹窗）。
 
+import { RefreshButton } from "@/components/RefreshButton";
+import { msgOf } from "@/lib/errors";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -10,6 +12,7 @@ import { RecordModal } from "@/components/RecordModal";
 import { Toolbar } from "@/components/Toolbar";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -62,20 +65,28 @@ export default function ReportSchedulerPage() {
   const [reports, setReports] = useState<ReportOption[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
   const [loading, setLoading] = useState(false);
+  /** 主列表加载失败 —— 与「没有调度」区分 */
+  const [err, setErr] = useState<string | null>(null);
+  /** 报表下拉（参考数据）加载失败 —— 局部提示 */
+  const [reportsErr, setReportsErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Schedule | null>(null);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  /** 待确认的「立即运行」—— 会真实跑批 */
+  const [confirmRun, setConfirmRun] = useState<Schedule | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const data = await apiGet("/api/v1/reports/schedules/list");
       setRows(Array.isArray(data) ? data : []);
-    } catch {
+      setErr(null);
+    } catch (ex) {
       setRows([]);
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -85,14 +96,16 @@ export default function ReportSchedulerPage() {
     try {
       const data = await apiGet("/api/v1/reports");
       setReports(Array.isArray(data) ? data : []);
-    } catch {
+      setReportsErr(null);
+    } catch (ex) {
       setReports([]);
+      setReportsErr(msgOf(ex));
     }
   }, []);
 
   useEffect(() => {
-    load().catch(() => setRows([]));
-    loadReports().catch(() => setReports([]));
+    load();
+    loadReports();
   }, [load, loadReports]);
 
   const filtered = useMemo(() => {
@@ -108,7 +121,7 @@ export default function ReportSchedulerPage() {
     setCreating(true);
   }
 
-  function openEdit(row: Schedule) {
+  const openEdit = useCallback((row: Schedule) => {
     setForm({
       report_id: row.report_id,
       schedule_type: row.schedule_type,
@@ -119,7 +132,7 @@ export default function ReportSchedulerPage() {
     });
     setEditing(row);
     setCreating(false);
-  }
+  }, []);
 
   async function save(e?: FormEvent) {
     e?.preventDefault();
@@ -150,20 +163,23 @@ export default function ReportSchedulerPage() {
       setEditing(null);
       await load();
     } catch (err) {
-      toast.error(t("sched.save_fail", "Failed to save schedule: {err}", { err: String(err) }));
+      toast.error(t("sched.save_fail", "Failed to save schedule: {err}", { err: msgOf(err) }));
     } finally {
       setSaving(false);
     }
   }
 
-  async function toggleActive(row: Schedule) {
-    try {
-      await apiPatch(`/api/v1/reports/schedules/${row.id}`, { is_active: !row.is_active });
-      setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, is_active: !row.is_active } : r)));
-    } catch (err) {
-      toast.error(t("sched.toggle_fail", "Failed to update schedule: {err}", { err: String(err) }));
-    }
-  }
+  const toggleActive = useCallback(
+    async (row: Schedule) => {
+      try {
+        await apiPatch(`/api/v1/reports/schedules/${row.id}`, { is_active: !row.is_active });
+        setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, is_active: !row.is_active } : r)));
+      } catch (err) {
+        toast.error(t("sched.toggle_fail", "Failed to update schedule: {err}", { err: msgOf(err) }));
+      }
+    },
+    [t, toast],
+  );
 
   async function runNow(row: Schedule) {
     setBusyId(row.id);
@@ -176,11 +192,16 @@ export default function ReportSchedulerPage() {
       }
       await load();
     } catch (err) {
-      toast.error(t("sched.run_fail", "Run failed: {err}", { err: String(err) }));
+      toast.error(t("sched.run_fail", "Run failed: {err}", { err: msgOf(err) }));
     } finally {
       setBusyId(null);
     }
   }
+
+  /** 「立即运行」会真实跑批并发信 —— 先确认。 */
+  const requestRun = useCallback((row: Schedule) => {
+    setConfirmRun(row);
+  }, []);
 
   async function remove(id: string) {
     try {
@@ -188,7 +209,7 @@ export default function ReportSchedulerPage() {
       toast.success(t("sched.deleted", "Schedule deleted"));
       setRows((prev) => prev.filter((r) => r.id !== id));
     } catch (err) {
-      toast.error(t("sched.delete_fail", "Failed to delete schedule: {err}", { err: String(err) }));
+      toast.error(t("sched.delete_fail", "Failed to delete schedule: {err}", { err: msgOf(err) }));
     }
   }
 
@@ -197,109 +218,113 @@ export default function ReportSchedulerPage() {
     [reports],
   );
 
-  const columns: ColumnDef<Schedule>[] = [
-    {
-      key: "report_name",
-      title: t("sched.col_report", "Report"),
-      width: 220,
-      sticky: true,
-      value: (r) => reportNameOf(r),
-      render: (v, r) => (
-        <button type="button" className="linklike" onClick={() => openEdit(r)}>
-          {String(v)}
-        </button>
-      ),
-    },
-    {
-      key: "schedule_type",
-      title: t("sched.col_frequency", "Frequency"),
-      width: 130,
-      value: (r) => r.schedule_type,
-      render: (v, r) => (
-        <span>
-          {t(`sched.freq_${String(v)}`, String(v))}
-          {r.cron_expression ? <span className="muted"> · {r.cron_expression}</span> : null}
-        </span>
-      ),
-    },
-    {
-      key: "next_run_at",
-      title: t("sched.col_next_run", "Next run"),
-      width: 150,
-      value: (r) => r.next_run_at || "",
-      render: (v) => <span className="muted">{fmtTs(String(v || "") || null)}</span>,
-    },
-    {
-      key: "last_run_at",
-      title: t("sched.col_last_run", "Last run"),
-      width: 150,
-      value: (r) => r.last_run_at || "",
-      render: (v) => <span className="muted">{fmtTs(String(v || "") || null)}</span>,
-    },
-    {
-      key: "last_status",
-      title: t("sched.col_last_status", "Last status"),
-      width: 120,
-      value: (r) => r.last_status || "never",
-      render: (v) => {
-        const s = String(v || "never");
-        if (s === "never") {
-          return <StatusBadge status="never" tone="muted" label={t("sched.status_never", "Never run")} />;
-        }
-        return <StatusBadge status={s} />;
+  const columns = useMemo<ColumnDef<Schedule>[]>(
+    () => [
+      {
+        key: "report_name",
+        title: t("sched.col_report", "Report"),
+        width: 220,
+        sticky: true,
+        value: (r) => reportNameOf(r),
+        render: (v, r) => (
+          <button type="button" className="linklike" onClick={() => openEdit(r)}>
+            {String(v)}
+          </button>
+        ),
       },
-    },
-    {
-      key: "is_active",
-      title: t("sched.col_enabled", "Enabled"),
-      width: 100,
-      value: (r) => r.is_active,
-      render: (_v, r) => (
-        <button
-          type="button"
-          className="linklike"
-          onClick={() => toggleActive(r)}
-          title={t("sched.toggle_hint", "Click to enable / pause")}
-        >
-          <StatusBadge
-            status={r.is_active ? "active" : "inactive"}
-            tone={r.is_active ? "ok" : "muted"}
-            label={r.is_active ? t("sched.on", "ON") : t("sched.off", "OFF")}
-          />
-        </button>
-      ),
-    },
-    {
-      key: "_actions",
-      title: t("sched.col_actions", "Actions"),
-      width: 200,
-      align: "right",
-      render: (_v, r) => (
-        <span style={{ display: "inline-flex", gap: 6, justifyContent: "flex-end" }}>
-          <button type="button" className="btn btn-sm" onClick={() => openEdit(r)}>
-            {t("common.edit", "Edit")}
-          </button>
+      {
+        key: "schedule_type",
+        title: t("sched.col_frequency", "Frequency"),
+        width: 130,
+        value: (r) => r.schedule_type,
+        render: (v, r) => (
+          <span>
+            {t(`sched.freq_${String(v)}`, String(v))}
+            {r.cron_expression ? <span className="muted"> · {r.cron_expression}</span> : null}
+          </span>
+        ),
+      },
+      {
+        key: "next_run_at",
+        title: t("sched.col_next_run", "Next run"),
+        width: 150,
+        value: (r) => r.next_run_at || "",
+        render: (v) => <span className="muted">{fmtTs(String(v || "") || null)}</span>,
+      },
+      {
+        key: "last_run_at",
+        title: t("sched.col_last_run", "Last run"),
+        width: 150,
+        value: (r) => r.last_run_at || "",
+        render: (v) => <span className="muted">{fmtTs(String(v || "") || null)}</span>,
+      },
+      {
+        key: "last_status",
+        title: t("sched.col_last_status", "Last status"),
+        width: 120,
+        value: (r) => r.last_status || "never",
+        render: (v) => {
+          const s = String(v || "never");
+          if (s === "never") {
+            return <StatusBadge status="never" tone="muted" label={t("sched.status_never", "Never run")} />;
+          }
+          return <StatusBadge status={s} />;
+        },
+      },
+      {
+        key: "is_active",
+        title: t("sched.col_enabled", "Enabled"),
+        width: 100,
+        value: (r) => r.is_active,
+        render: (_v, r) => (
           <button
             type="button"
-            className="btn btn-sm"
-            disabled={busyId === r.id}
-            onClick={() => runNow(r)}
-            title={t("sched.run_hint", "Execute this schedule once")}
+            className="linklike"
+            onClick={() => toggleActive(r)}
+            title={t("sched.toggle_hint", "Click to enable / pause")}
+            aria-label={t("sched.toggle_active", "Enable or pause schedule")}
           >
-            {busyId === r.id ? t("sched.running", "Running…") : t("sched.run_now", "Run now")}
+            <StatusBadge
+              status={r.is_active ? "active" : "inactive"}
+              tone={r.is_active ? "ok" : "muted"}
+              label={r.is_active ? t("sched.on", "ON") : t("sched.off", "OFF")}
+            />
           </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-danger"
-            onClick={() => setConfirmDel(r.id)}
-            title={t("sched.delete_hint", "Delete schedule")}
-          >
-            {t("common.delete", "Delete")}
-          </button>
-        </span>
-      ),
-    },
-  ];
+        ),
+      },
+      {
+        key: "_actions",
+        title: t("sched.col_actions", "Actions"),
+        width: 200,
+        align: "right",
+        render: (_v, r) => (
+          <span style={{ display: "inline-flex", gap: 6, justifyContent: "flex-end" }}>
+            <button type="button" className="btn btn-sm" onClick={() => openEdit(r)}>
+              {t("common.edit", "Edit")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={busyId === r.id}
+              onClick={() => requestRun(r)}
+              title={t("sched.run_hint", "Execute this schedule once")}
+            >
+              {busyId === r.id ? t("sched.running", "Running…") : t("sched.run_now", "Run now")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-danger"
+              onClick={() => setConfirmDel(r.id)}
+              title={t("sched.delete_hint", "Delete schedule")}
+            >
+              {t("common.delete", "Delete")}
+            </button>
+          </span>
+        ),
+      },
+    ],
+    [t, reportNameOf, openEdit, toggleActive, requestRun, busyId],
+  );
 
   const formFields = (
     <>
@@ -414,23 +439,34 @@ export default function ReportSchedulerPage() {
         <button type="button" className="btn btn-primary btn-sm" onClick={openCreate}>
           {t("sched.new", "New schedule")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => load()} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load()} />
         <span className="muted" style={{ fontSize: "var(--font-label)" }}>
           {filtered.length} / {rows.length}
         </span>
       </Toolbar>
 
-      <DataGrid<Schedule>
-        columns={columns}
-        data={filtered}
-        rowKey={(r) => r.id}
+      {reportsErr ? (
+        <p className="state-view-error" role="alert">
+          {t("sched.reports_fail", "Report list could not be loaded: {err}", { err: reportsErr })}
+        </p>
+      ) : null}
+
+      <StateView
         loading={loading}
-        storageKey="analytics_scheduler"
-        onRowDoubleClick={(r) => openEdit(r)}
+        error={err ?? undefined}
+        empty={!loading && !err && filtered.length === 0}
         emptyText={t("sched.empty", "No scheduled reports yet")}
-      />
+        onRetry={() => void load()}
+      >
+        <DataGrid<Schedule>
+          columns={columns}
+          data={filtered}
+          rowKey={(r) => r.id}
+          storageKey="analytics_scheduler"
+          onRowDoubleClick={(r) => openEdit(r)}
+          emptyText={t("sched.empty", "No scheduled reports yet")}
+        />
+      </StateView>
 
       <RecordModal
         open={creating || !!editing}
@@ -462,6 +498,25 @@ export default function ReportSchedulerPage() {
           setConfirmDel(null);
         }}
         onCancel={() => setConfirmDel(null)}
+      />
+
+      {/* 立即运行 —— 会真实跑批并向收件人发信，先确认 */}
+      <ConfirmDialog
+        open={confirmRun !== null}
+        title={t("sched.confirm_run_title", "Run schedule now")}
+        message={t(
+          "sched.confirm_run_message",
+          'Run "{name}" now? The report will be generated and emailed to the recipients immediately.',
+          { name: confirmRun ? reportNameOf(confirmRun) : "" },
+        )}
+        confirmLabel={t("sched.run_now", "Run now")}
+        danger
+        onConfirm={() => {
+          const row = confirmRun;
+          setConfirmRun(null);
+          if (row) void runNow(row);
+        }}
+        onCancel={() => setConfirmRun(null)}
       />
     </AppShell>
   );

@@ -55,10 +55,10 @@ export function GridFooter({ columns, data, selection, showSelectionStats = true
           aggs[col.key] = `n=${data.length}`;
           break;
         case "min":
-          aggs[col.key] = `↓ ${formatAggValue(Math.min(...nums), "min")}`;
+          aggs[col.key] = `↓ ${formatAggValue(nums.reduce((a, b) => (b < a ? b : a), nums[0]), "min")}`;
           break;
         case "max":
-          aggs[col.key] = `↑ ${formatAggValue(Math.max(...nums), "max")}`;
+          aggs[col.key] = `↑ ${formatAggValue(nums.reduce((a, b) => (b > a ? b : a), nums[0]), "max")}`;
           break;
       }
     }

@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models_field_perms import FieldPermission
 from app.schemas_wave1 import CounterpartyIn, PortIn, VesselIn
-from app.security import AuthContext, require_module
+from app.security import AuthContext, require_roles
 
 router = APIRouter(prefix="/field-permissions", tags=["field-permissions"])
 
@@ -87,7 +87,7 @@ def _validate_entity(entity: str) -> None:
 
 
 @router.get("/entities")
-def list_entities(auth: AuthContext = Depends(require_module("admin"))):
+def list_entities(auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin"))):
     """Registered entities and their field names (for the permissions matrix)."""
     _ = auth
     return [{"entity": name, "fields": fields} for name, fields in ENTITY_FIELDS.items()]
@@ -97,7 +97,7 @@ def list_entities(auth: AuthContext = Depends(require_module("admin"))):
 def list_rules(
     entity: str | None = Query(None),
     role: str | None = Query(None),
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     stmt = select(FieldPermission).where(FieldPermission.tenant_id == auth.tenant_id)
@@ -112,7 +112,7 @@ def list_rules(
 @router.post("", response_model=FieldPermOut, status_code=201)
 def create_rule(
     body: FieldPermIn,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     _validate_mode(body.mode)
@@ -142,7 +142,7 @@ def create_rule(
 def update_rule(
     rule_id: UUID,
     body: FieldPermPatch,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     row = db.get(FieldPermission, rule_id)
@@ -180,7 +180,7 @@ def update_rule(
 @router.delete("/{rule_id}")
 def delete_rule(
     rule_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     row = db.get(FieldPermission, rule_id)

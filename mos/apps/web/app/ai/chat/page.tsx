@@ -2,12 +2,14 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { StatusLegend } from "@/components/StatusLegend";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -53,16 +55,28 @@ export default function AiChatPage() {
   const [renameTitle, setRenameTitle] = useState("");
   // LLM 可用性：未配置 → 顶部常驻提示；已配置但回落 → 回复后追加提示
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  /** AI 助手状态（参考数据）加载失败 */
+  const [assistErr, setAssistErr] = useState<string | null>(null);
   const [fallbackNotice, setFallbackNotice] = useState(false);
+  /** 会话历史（主列表）加载失败 */
+  const [convErr, setConvErr] = useState<string | null>(null);
+  /** 当前会话消息加载失败 */
+  const [msgErr, setMsgErr] = useState<string | null>(null);
+  /** Agent 目录（参考数据）加载失败 */
+  const [agentsErr, setAgentsErr] = useState<string | null>(null);
+  /** 待确认的不可逆动作：归档 / 删除会话 */
+  const [pending, setPending] = useState<{ kind: "delete" | "archive"; conv: Conversation } | null>(null);
   const convCtx = useContextMenu<Conversation>();
 
   async function loadAgents() {
     try {
       const data = await apiGet("/api/v1/ai/agents");
       setAgents(data);
+      setAgentsErr(null);
       if (data.length > 0 && !selectedAgent) setSelectedAgent(data[0].agent_name);
-    } catch {
+    } catch (ex) {
       setAgents([]);
+      setAgentsErr(msgOf(ex));
     }
   }
 
@@ -70,8 +84,10 @@ export default function AiChatPage() {
     try {
       const data = await apiGet("/api/v1/ai/conversations");
       setConversations(data);
-    } catch {
+      setConvErr(null);
+    } catch (ex) {
       setConversations([]);
+      setConvErr(msgOf(ex));
     }
   }
 
@@ -79,8 +95,10 @@ export default function AiChatPage() {
     try {
       const data = await apiGet(`/api/v1/ai/conversations/${convId}/messages`);
       setMessages(data);
-    } catch {
+      setMsgErr(null);
+    } catch (ex) {
       setMessages([]);
+      setMsgErr(msgOf(ex));
     }
   }
 
@@ -88,8 +106,12 @@ export default function AiChatPage() {
     loadAgents();
     loadConversations();
     apiGet("/api/v1/ai/assist/status")
-      .then((s: AiStatus) => setAiStatus(s))
-      .catch(() => setAiStatus({ available: false, provider: null, fallback_mode: "rules" }));
+      .then((s: AiStatus) => {
+        setAiStatus(s);
+        setAssistErr(null);
+      })
+      // 取数失败 ≠ 未配置模型：单独报错，不伪造状态
+      .catch((ex) => setAssistErr(msgOf(ex)));
   }, []);
 
   useEffect(() => {
@@ -97,20 +119,28 @@ export default function AiChatPage() {
   }, [activeConv?.id]);
 
   async function seedAgents() {
-    await apiPost("/api/v1/ai/agents/seed", {});
-    toast.success(t("ai.seeded", "Agents seeded"));
-    await loadAgents();
+    try {
+      await apiPost("/api/v1/ai/agents/seed", {});
+      toast.success(t("ai.seeded", "Agents seeded"));
+      await loadAgents();
+    } catch (ex) {
+      toast.error(msgOf(ex, t("ai.seed_fail", "Could not seed agents")));
+    }
   }
 
   async function startConversation() {
     if (!selectedAgent) return;
-    const conv = await apiPost("/api/v1/ai/conversations", {
-      agent_name: selectedAgent,
-      title: `${selectedAgent} — ${new Date().toLocaleDateString()}`,
-    });
-    setActiveConv(conv);
-    setMessages([]);
-    await loadConversations();
+    try {
+      const conv = await apiPost("/api/v1/ai/conversations", {
+        agent_name: selectedAgent,
+        title: `${selectedAgent} — ${new Date().toLocaleDateString()}`,
+      });
+      setActiveConv(conv);
+      setMessages([]);
+      await loadConversations();
+    } catch (ex) {
+      toast.error(msgOf(ex, t("ai.chat.new_fail", "Couldn't start the conversation")));
+    }
   }
 
   async function sendMessage(e: FormEvent) {
@@ -131,8 +161,8 @@ export default function AiChatPage() {
       ]);
       setInput("");
       setActiveConv({ ...activeConv, message_count: (activeConv.message_count || 0) + 2 });
-    } catch {
-      toast.error(t("ai.chat.send_fail", "Couldn't send — please try again."));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("ai.chat.send_fail", "Couldn't send — please try again.")));
     }
     setLoading(false);
   }
@@ -163,7 +193,7 @@ export default function AiChatPage() {
       setRenaming(null);
       await loadConversations();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -175,7 +205,7 @@ export default function AiChatPage() {
       if (activeConv?.id === c.id) setActiveConv({ ...c, status: next });
       await loadConversations();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -189,7 +219,7 @@ export default function AiChatPage() {
       }
       await loadConversations();
     } catch (ex: any) {
-      toast.error(ex?.message || String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -204,9 +234,9 @@ export default function AiChatPage() {
     {
       key: "archive",
       label: c.status === "archived" ? t("ai.unarchive", "Unarchive") : t("ai.archive", "Archive"),
-      onClick: () => toggleArchive(c).catch(() => undefined),
+      onClick: () => setPending({ kind: "archive", conv: c }),
     },
-    { key: "delete", label: t("common.delete", "Delete"), onClick: () => deleteConv(c).catch(() => undefined) },
+    { key: "delete", label: t("common.delete", "Delete"), onClick: () => setPending({ kind: "delete", conv: c }) },
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyConvId(c) },
   ];
 
@@ -230,6 +260,12 @@ export default function AiChatPage() {
             </span>
           </div>
         ) : null}
+        {assistErr ? (
+          <div className="ai-notice ai-notice-warn" role="status">
+            <strong>{t("ai.chat.status_fail_title", "AI status unavailable")}</strong>
+            <span>{t("ai.chat.status_fail", "Could not load the AI provider status: {msg}", { msg: assistErr })}</span>
+          </div>
+        ) : null}
         {aiStatus?.available && fallbackNotice ? (
           <div className="ai-notice" role="status">
             {t(
@@ -245,8 +281,13 @@ export default function AiChatPage() {
             <div className="panel">
               <div className="panel-header">{t("ai.agents", "Agents")}</div>
               <div className="panel-body ai-chat-list">
-                {agents.length === 0 && (
-                  <button type="button" className="btn btn-sm" onClick={() => seedAgents().catch(() => undefined)}>
+                {agentsErr ? (
+                  <p className="state-view-error" role="alert">
+                    {t("ai.agents_fail", "Agents could not be loaded: {err}", { err: agentsErr })}
+                  </p>
+                ) : null}
+                {agents.length === 0 && !agentsErr && (
+                  <button type="button" className="btn btn-sm" onClick={() => void seedAgents()}>
                     {t("ai.seed", "Seed preset agents")}
                   </button>
                 )}
@@ -268,6 +309,11 @@ export default function AiChatPage() {
               <div className="panel-body">
                 <StatusLegend statuses={["active", "archived"]} />
                 <div className="ai-chat-list ai-chat-hist">
+                  {convErr ? (
+                    <p className="state-view-error" role="alert">
+                      {t("ai.history_fail", "Conversation history could not be loaded: {err}", { err: convErr })}
+                    </p>
+                  ) : null}
                   {conversations.map((c) => (
                     <button
                       key={c.id}
@@ -283,7 +329,7 @@ export default function AiChatPage() {
                       </span>
                     </button>
                   ))}
-                  {conversations.length === 0 && (
+                  {conversations.length === 0 && !convErr && (
                     <p className="hint">{t("ai.no_history", "No conversations yet")}</p>
                   )}
                 </div>
@@ -303,7 +349,7 @@ export default function AiChatPage() {
                   <span className="ai-chat-agent-desc">{t(`ai.agent_desc.${agent.agent_name}`, agent.description)}</span>
                 ) : null}
               </span>
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => startConversation().catch(() => undefined)}>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => void startConversation()}>
                 {t("ai.new_chat", "New chat")}
               </button>
             </div>
@@ -317,8 +363,13 @@ export default function AiChatPage() {
               </div>
             ) : null}
 
-            <div className="ai-chat-body">
-              {messages.length === 0 && (
+            <div className="ai-chat-body" role="log" aria-live="polite" aria-label={t("ai.chat.log_label", "Chat messages")}>
+              {msgErr ? (
+                <p className="state-view-error" role="alert">
+                  {t("ai.messages_fail", "Messages could not be loaded: {err}", { err: msgErr })}
+                </p>
+              ) : null}
+              {messages.length === 0 && !msgErr && (
                 <p className="hint ai-chat-empty">
                   {activeConv
                     ? t("ai.start_typing", "Start typing to chat with the agent")
@@ -356,7 +407,7 @@ export default function AiChatPage() {
               )}
             </div>
 
-            <form className="ai-chat-form" onSubmit={(e) => sendMessage(e).catch(() => undefined)}>
+            <form className="ai-chat-form" onSubmit={(e) => void sendMessage(e)}>
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -392,6 +443,47 @@ export default function AiChatPage() {
           />
         </label>
       </RecordModal>
+
+      {/* 归档 / 删除会话 —— 不可逆，先确认 */}
+      <ConfirmDialog
+        open={pending !== null}
+        title={
+          pending?.kind === "delete"
+            ? t("ai.confirm_delete_title", "Delete conversation")
+            : pending?.conv.status === "archived"
+              ? t("ai.confirm_unarchive_title", "Unarchive conversation")
+              : t("ai.confirm_archive_title", "Archive conversation")
+        }
+        message={
+          pending?.kind === "delete"
+            ? t("ai.confirm_delete_msg", 'Delete "{name}"? It will be moved to the recycle bin.', {
+                name: pending?.conv.title || pending?.conv.agent_name || pending?.conv.id || "",
+              })
+            : pending?.conv.status === "archived"
+              ? t("ai.confirm_unarchive_msg", 'Restore "{name}" to the active conversation list?', {
+                  name: pending?.conv.title || pending?.conv.agent_name || pending?.conv.id || "",
+                })
+              : t("ai.confirm_archive_msg", 'Archive "{name}"? It will leave the active conversation list.', {
+                  name: pending?.conv.title || pending?.conv.agent_name || pending?.conv.id || "",
+                })
+        }
+        confirmLabel={
+          pending?.kind === "delete"
+            ? t("common.delete", "Delete")
+            : pending?.conv.status === "archived"
+              ? t("ai.unarchive", "Unarchive")
+              : t("ai.archive", "Archive")
+        }
+        danger={pending?.kind === "delete"}
+        onConfirm={() => {
+          const p = pending;
+          setPending(null);
+          if (!p) return;
+          if (p.kind === "delete") void deleteConv(p.conv);
+          else void toggleArchive(p.conv);
+        }}
+        onCancel={() => setPending(null)}
+      />
     </AppShell>
   );
 }

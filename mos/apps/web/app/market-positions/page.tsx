@@ -1,5 +1,7 @@
 "use client";
 
+import { RefreshButton } from "@/components/RefreshButton";
+import { msgOf } from "@/lib/errors";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -79,7 +81,7 @@ function MarketPositionsWorkspace() {
         })),
       );
     } catch (ex) {
-      setLoadErr(String(ex));
+      setLoadErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
@@ -209,9 +211,7 @@ function MarketPositionsWorkspace() {
         onClearFilters={() => setQuery({ commodity: null })}
         right={<span className="hint">{t("page.market_pos.count", "{n} positions", { n: filtered.length })}</span>}
       >
-        <button type="button" className="btn btn-sm" onClick={load} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={load} />
         <span className="field-inline">
           {t("page.market_pos.filter_commodity", "Commodity")}
           <select

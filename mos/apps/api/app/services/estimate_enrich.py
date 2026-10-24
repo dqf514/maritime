@@ -32,6 +32,7 @@ from app.models_domain import MarketQuote
 from app.models_wave1 import Port, Vessel
 from app.services.carbon_calculator import EU_ETS_CO2_PRICE
 from app.services.tenant_guard import scoped_get
+from app.services.money import round_half_up
 
 # MarketQuote symbols accepted as an EU ETS allowance price (most recent wins).
 _EUA_SYMBOLS = ("EUA", "EU_ETS", "EUETS", "ETS_EUA")
@@ -193,7 +194,7 @@ def enrich_estimate_inputs(
             if resolved:
                 frac = sum(1 for f in resolved if f) / len(resolved)
                 if frac > 0:
-                    new_inputs["eca_days"] = round(sea_days * frac, 2)
+                    new_inputs["eca_days"] = float(round_half_up(float(sea_days) * float(frac), 2))
                     prov["eca_days"] = "fuel-zone ECA endpoint share × sea_days"
 
     return new_inputs, prov

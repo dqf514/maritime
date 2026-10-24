@@ -117,6 +117,7 @@ class CargoName(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     short_name: Mapped[str] = mapped_column(Text, nullable=False)  # RSM / SBM / STEAM COAL
     full_name: Mapped[str | None] = mapped_column(Text)
     cargo_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("cargo_groups.id"))

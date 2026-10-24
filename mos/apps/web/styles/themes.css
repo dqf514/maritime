@@ -16,28 +16,38 @@
   --accent: #1A9B96;
   --accent-soft: #2BB5B0;
   --accent-hover: #158A85;
+  /* 文字档：4.65:1 @ --bg / 5.08:1 @ --foam / 5.68:1 @ --surface（AA 4.5:1） */
+  --accent-text: #0C736F;
+  --accent-text-on-dark: #2BB5B0;
+  /* 对比度修正（WCAG AA）：主按钮底色用这一档，白字才够 4.5:1 */
+  --accent-strong: #0E706C;
+  --accent-strong-soft: #12837F;
   --accent-bg: rgba(26, 155, 150, 0.08);
   --accent-bg-strong: rgba(26, 155, 150, 0.15);
   --surface: #ffffff;
   --border: #c8d4de;
   --border-light: #dde5ec;
+  --input-border: #768a97;
   --danger: #c0392b;
   --ok: #1e7a46;
   --warn: #b7791f;
+  /* 浅色底上的黄色文字需要更深一档才达 AA */
+  --warn-text: #8a5a12;
+  --warn-bg: #fff4d9;
   --chrome-bg: #e8edf2;
   --chrome-border: #b0bec9;
   --toolbar-bg: #f0f4f7;
   --panel-header-bg: #e4eaf0;
   --btn-bg: linear-gradient(180deg, #fafbfc, #e8edf2);
   --btn-hover: linear-gradient(180deg, #f0f4f7, #dde5ec);
-  --btn-primary-bg: linear-gradient(180deg, var(--accent-soft), var(--accent));
+  --btn-primary-bg: linear-gradient(180deg, var(--accent-strong-soft), var(--accent-strong));
   --btn-primary-hover: var(--accent);
   --topbar-bg: linear-gradient(180deg, #f5f7fa, #e8edf2);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
   --shadow-md: 0 2px 6px rgba(0,0,0,0.12);
   --skeleton: #e2e8f0;
   --skeleton-shine: #f8fafc;
-  --focus-ring: rgba(26,155,150,0.75);
+  --focus-ring: #0C736F;
   --row-hover: rgba(26, 155, 150, 0.04);
   --row-selected: rgba(26, 155, 150, 0.1);
 
@@ -91,28 +101,38 @@
   --accent: #58a6ff;
   --accent-soft: #79b8ff;
   --accent-hover: #79b8ff;
+  /* 深色主题的文字档：9.12:1 @ --bg / 8.33:1 @ --surface */
+  --accent-text: #79b8ff;
+  --accent-text-on-dark: #79b8ff;
+  --accent-strong: #1f6feb;
+  --accent-strong-soft: #2b73d6;
   --accent-bg: rgba(88, 166, 255, 0.1);
   --accent-bg-strong: rgba(88, 166, 255, 0.18);
   --surface: #161b22;
   --border: #30363d;
   --border-light: #21262d;
+  /* 表单控件边界：3.28:1 @ --surface（UI 组件需要 ≥3:1） */
+  --input-border: #616d7a;
   --danger: #f85149;
   --ok: #3fb950;
   --warn: #d29922;
+  /* 深色底上的琥珀文字：9.73:1 @ --bg / 8.89:1 @ --surface */
+  --warn-text: #e3b341;
+  --warn-bg: rgba(210, 153, 34, 0.16);
   --chrome-bg: #161b22;
   --chrome-border: #30363d;
   --toolbar-bg: #21262d;
   --panel-header-bg: #21262d;
   --btn-bg: linear-gradient(180deg, #21262d, #161b22);
   --btn-hover: linear-gradient(180deg, #30363d, #21262d);
-  --btn-primary-bg: linear-gradient(180deg, var(--accent-soft), var(--accent));
+  --btn-primary-bg: linear-gradient(180deg, var(--accent-strong-soft), var(--accent-strong));
   --btn-primary-hover: var(--accent-hover);
   --topbar-bg: linear-gradient(180deg, #21262d, #161b22);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
   --shadow-md: 0 2px 6px rgba(0,0,0,0.4);
   --skeleton: #21262d;
   --skeleton-shine: #30363d;
-  --focus-ring: rgba(88, 166, 255, 0.85);
+  --focus-ring: #79b8ff;
   --row-hover: rgba(88, 166, 255, 0.06);
   --row-selected: rgba(88, 166, 255, 0.12);
   color-scheme: dark;
@@ -167,28 +187,36 @@
   --accent: #6366f1;
   --accent-soft: #818cf8;
   --accent-hover: #4f46e5;
+  /* --accent 当文字只有 4.47:1，差一点不达标；文字档 6.00:1 @ --bg */
+  --accent-text: #4f46e5;
+  --accent-text-on-dark: #818cf8;
+  --accent-strong: #4f46e5;
+  --accent-strong-soft: #6165e0;
   --accent-bg: rgba(99, 102, 241, 0.08);
   --accent-bg-strong: rgba(99, 102, 241, 0.15);
   --surface: #ffffff;
   --border: #d1d5db;
   --border-light: #e5e7eb;
+  --input-border: #6b7280;
   --danger: #dc2626;
   --ok: #16a34a;
   --warn: #d97706;
+  --warn-text: #8a5200;
+  --warn-bg: #fff4d9;
   --chrome-bg: #eef2ff;
   --chrome-border: #c7d2fe;
   --toolbar-bg: #f5f3ff;
   --panel-header-bg: #eef2ff;
   --btn-bg: linear-gradient(180deg, #faf9ff, #eef2ff);
   --btn-hover: linear-gradient(180deg, #f5f3ff, #e0e7ff);
-  --btn-primary-bg: linear-gradient(180deg, var(--accent-soft), var(--accent));
+  --btn-primary-bg: linear-gradient(180deg, var(--accent-strong-soft), var(--accent-strong));
   --btn-primary-hover: var(--accent-hover);
   --topbar-bg: linear-gradient(180deg, #f5f3ff, #eef2ff);
   --shadow-sm: 0 1px 2px rgba(99, 102, 241, 0.1);
   --shadow-md: 0 2px 8px rgba(99, 102, 241, 0.15);
   --skeleton: #e5e7eb;
   --skeleton-shine: #f5f3ff;
-  --focus-ring: rgba(99, 102, 241, 0.8);
+  --focus-ring: #4f46e5;
   --row-hover: rgba(99, 102, 241, 0.05);
   --row-selected: rgba(99, 102, 241, 0.12);
 }
@@ -317,6 +345,6 @@
   flex-shrink: 0;
 }
 .theme-picker-check {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 700;
 }

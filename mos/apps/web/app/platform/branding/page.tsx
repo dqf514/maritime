@@ -1,5 +1,6 @@
 "use client";
 
+import { RefreshButton } from "@/components/RefreshButton";
 import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -7,7 +8,9 @@ import { ImageCropModal, type CropKind } from "@/components/ImageCropModal";
 import { RecordModal } from "@/components/RecordModal";
 import { Toolbar } from "@/components/Toolbar";
 import { useListHotkeys } from "@/components/useListHotkeys";
+import { StateView } from "@/components/StateView";
 import { apiGet, apiPost, apiPut, apiUpload, assetUrl } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -29,17 +32,30 @@ function PlatformBrandingPage() {
   const { t } = useI18n();
   const toast = useToast();
   const [form, setForm] = useState<Branding | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
   const [uploading, setUploading] = useState<string | null>(null);
   const [crop, setCrop] = useState<{ kind: CropKind; file: File } | null>(null);
   const [cropErr, setCropErr] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  async function load() {
+    setLoading(true);
+    setErr(null);
+    try {
+      setForm(await apiGet("/api/v1/platform/branding"));
+    } catch (ex) {
+      setErr(msgOf(ex, t("page.branding.admin_required", "Platform admin required")));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    apiGet("/api/v1/platform/branding")
-      .then(setForm)
-      .catch(() => toast.error(t("page.branding.admin_required", "Platform admin required")));
-  }, [t]);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function openEdit() {
     setEditOpen(true);
@@ -55,8 +71,8 @@ function PlatformBrandingPage() {
       await apiPut("/api/v1/platform/branding", form);
       toast.success(t("page.branding.updated", "Product branding updated — portal, login and top bar pick it up."));
       setEditOpen(false);
-    } catch {
-      toast.error(t("common.failed", "Failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
@@ -66,20 +82,19 @@ function PlatformBrandingPage() {
     try {
       setForm(await apiPost("/api/v1/platform/branding/reset"));
       toast.success(t("page.branding.reset_done", "Restored MariOS default branding."));
-    } catch {
-      toast.error(t("page.branding.reset_fail", "Reset failed"));
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.branding.reset_fail", "Reset failed")));
     }
   }
 
   function pickFile(kind: CropKind, file: File | null) {
     if (!file) return;
-    toast.success("");
     if (!OK_TYPES.includes(file.type)) {
-      toast.success(t("page.branding.bad_type", "Only png / jpg / webp images are supported"));
+      toast.error(t("page.branding.bad_type", "Only png / jpg / webp images are supported"));
       return;
     }
     if (file.size > MAX_UPLOAD_BYTES) {
-      toast.success(t("page.branding.too_large", "File exceeds 2.5MB — compress and retry"));
+      toast.error(t("page.branding.too_large", "File exceeds 2.5MB — compress and retry"));
       return;
     }
     setCropErr("");
@@ -97,19 +112,11 @@ function PlatformBrandingPage() {
       setForm(await apiUpload(`/api/v1/platform/branding/upload?kind=${kind}`, fd));
       toast.success(t("page.branding.uploaded", "Uploaded {kind}", { kind }));
       setCrop(null);
-    } catch (err: any) {
-      setCropErr(t("page.branding.upload_fail", "Upload failed: {err}", { err: String(err?.message || err) }));
+    } catch (ex) {
+      setCropErr(msgOf(ex, t("page.branding.upload_fail", "Upload failed")));
     } finally {
       setUploading(null);
     }
-  }
-
-  if (!form) {
-    return (
-      <AppShell>
-        <p>{t("common.loading", "Loading…")}</p>
-      </AppShell>
-    );
   }
 
   return (
@@ -120,6 +127,9 @@ function PlatformBrandingPage() {
         breadcrumb={[{ label: t("page.platform.title", "Platform"), href: "/platform" }, { label: t("page.branding.title", "Product branding") }]}
       />
 
+      <StateView loading={loading} error={err ?? undefined} empty={false} onRetry={() => load()}>
+        {form ? (
+          <>
       <Toolbar>
         <button type="button" className="btn btn-primary" onClick={openEdit}>
           {t("page.branding.edit", "Edit branding")}
@@ -127,14 +137,7 @@ function PlatformBrandingPage() {
         <button type="button" className="btn" onClick={reset}>
           {t("page.branding.reset", "Restore defaults")}
         </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => apiGet("/api/v1/platform/branding").then(setForm).catch(() => undefined)}
-          title={t("common.refresh", "Refresh")}
-        >
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load()} />
       </Toolbar>
 
       <div className="brand-preview panel">
@@ -171,6 +174,9 @@ function PlatformBrandingPage() {
           ))}
         </div>
       </div>
+          </>
+        ) : null}
+      </StateView>
 
       <RecordModal
         open={editOpen}
@@ -180,33 +186,35 @@ function PlatformBrandingPage() {
         saving={saving}
         canDelete={false}
       >
-        <div className="kv-grid">
-          <label>
-            {t("page.branding.field_product_name", "Product name")}
-            <input value={form.product_name} onChange={(e) => setForm({ ...form, product_name: e.target.value })} />
-          </label>
-          <label>
-            {t("page.branding.field_primary_color", "Primary color")}
-            <input value={form.primary_color} onChange={(e) => setForm({ ...form, primary_color: e.target.value })} />
-          </label>
-          <label style={{ gridColumn: "1 / -1" }}>
-            {t("page.branding.field_tagline", "Tagline")}
-            <input value={form.tagline} onChange={(e) => setForm({ ...form, tagline: e.target.value })} />
-          </label>
-          <label style={{ gridColumn: "1 / -1" }}>
-            {t("page.branding.field_hero_title", "Hero title")}
-            <input value={form.hero_title} onChange={(e) => setForm({ ...form, hero_title: e.target.value })} />
-          </label>
-          <label style={{ gridColumn: "1 / -1" }}>
-            {t("page.branding.field_hero_subtitle", "Hero subtitle")}
-            <textarea
-              value={form.hero_subtitle}
-              rows={3}
-              onChange={(e) => setForm({ ...form, hero_subtitle: e.target.value })}
-              style={{ width: "100%", marginTop: "0.25rem" }}
-            />
-          </label>
-        </div>
+        {form ? (
+          <div className="kv-grid">
+            <label>
+              {t("page.branding.field_product_name", "Product name")}
+              <input value={form.product_name} onChange={(e) => setForm({ ...form, product_name: e.target.value })} />
+            </label>
+            <label>
+              {t("page.branding.field_primary_color", "Primary color")}
+              <input value={form.primary_color} onChange={(e) => setForm({ ...form, primary_color: e.target.value })} />
+            </label>
+            <label style={{ gridColumn: "1 / -1" }}>
+              {t("page.branding.field_tagline", "Tagline")}
+              <input value={form.tagline} onChange={(e) => setForm({ ...form, tagline: e.target.value })} />
+            </label>
+            <label style={{ gridColumn: "1 / -1" }}>
+              {t("page.branding.field_hero_title", "Hero title")}
+              <input value={form.hero_title} onChange={(e) => setForm({ ...form, hero_title: e.target.value })} />
+            </label>
+            <label style={{ gridColumn: "1 / -1" }}>
+              {t("page.branding.field_hero_subtitle", "Hero subtitle")}
+              <textarea
+                value={form.hero_subtitle}
+                rows={3}
+                onChange={(e) => setForm({ ...form, hero_subtitle: e.target.value })}
+                style={{ width: "100%", marginTop: "0.25rem" }}
+              />
+            </label>
+          </div>
+        ) : null}
       </RecordModal>
 
       <ImageCropModal

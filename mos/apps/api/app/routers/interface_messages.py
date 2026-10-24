@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models_interface import InterfaceMessage
-from app.security import AuthContext, require_module
+from app.security import AuthContext, require_roles
 from app.services.interface_messages import process_message
 from app.services.tenant_guard import scoped_get, scoped_query
 
@@ -69,7 +69,7 @@ def list_messages(
     interface_code: str | None = Query(None),
     limit: int = Query(50, ge=1, le=_MAX_LIMIT),
     offset: int = Query(0, ge=0),
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """List interface messages for the current tenant, newest first."""
@@ -88,7 +88,7 @@ def list_messages(
 
 @router.get("/stats")
 def message_stats(
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Counts by status overall and within the last 24 hours."""
@@ -123,7 +123,7 @@ def message_stats(
 @router.get("/{message_id}", response_model=InterfaceMessageOut)
 def get_message(
     message_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Message detail including the full payload."""
@@ -136,7 +136,7 @@ def get_message(
 @router.post("/{message_id}/retry", response_model=InterfaceMessageOut)
 def retry_message(
     message_id: UUID,
-    auth: AuthContext = Depends(require_module("admin")),
+    auth: AuthContext = Depends(require_roles("tenant_admin", "platform_admin")),
     db: Session = Depends(get_db),
 ):
     """Re-queue a message and run the stub processor synchronously.

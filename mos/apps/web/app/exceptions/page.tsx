@@ -1,5 +1,6 @@
 "use client";
 
+import { RefreshButton } from "@/components/RefreshButton";
 import { Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -13,6 +14,7 @@ import { Tabs, type TabItem } from "@/components/Tabs";
 import { Toolbar } from "@/components/Toolbar";
 import { StateView } from "@/components/StateView";
 import { apiGet, type ExceptionItem, type ExceptionScan } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { formatDateInTz, parseUtc } from "@/lib/datetime";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
@@ -20,18 +22,19 @@ import { useListQuery } from "@/lib/useListQuery";
 
 type SeverityFilter = "all" | "critical" | "warning";
 
+// P2：兜底文案走 t()（key 缺失时用英文兜底，UI 默认英文）
 const KIND_FALLBACKS: Record<string, string> = {
-  pnl_deterioration: "盈亏恶化",
-  eta_delay: "ETA 延误",
-  demurrage_open: "滞期未结",
-  claim_timebar: "索赔时效",
-  invoice_overdue: "发票逾期",
-  cert_expired: "证书过期",
-  cert_expiring: "证书临期",
-  off_hire_open: "停租未关闭",
-  tc_redelivery_due: "期租还船临期",
-  sanctions_blocked: "制裁拦截",
-  dq_issue: "数据质量问题",
+  pnl_deterioration: "P&L deterioration",
+  eta_delay: "ETA delay",
+  demurrage_open: "Open demurrage",
+  claim_timebar: "Claim time bar",
+  invoice_overdue: "Invoice overdue",
+  cert_expired: "Certificate expired",
+  cert_expiring: "Certificate expiring",
+  off_hire_open: "Off-hire not closed",
+  tc_redelivery_due: "TC redelivery due",
+  sanctions_blocked: "Sanctions blocked",
+  dq_issue: "Data quality issue",
 };
 
 function ExceptionsPageInner() {
@@ -71,7 +74,7 @@ function ExceptionsPageInner() {
       setScannedAt(new Date());
       setNow(Date.now());
     } catch (e: any) {
-      setError(e?.message || t("common.failed", "Failed"));
+      setError(msgOf(e, t("common.failed", "Failed")));
     } finally {
       setLoading(false);
     }
@@ -147,9 +150,7 @@ function ExceptionsPageInner() {
           </select>
         }
       >
-        <button type="button" className="btn btn-sm" onClick={load} disabled={loading} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={load} disabled={loading} />
       </Toolbar>
 
       <StateView loading={loading && !scan} error={error} empty={false} onRetry={load}>

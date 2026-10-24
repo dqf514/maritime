@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, time, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -19,17 +19,30 @@ from app.security import AuthContext, require_module
 from app.models_domain import Charter, Invoice, Payment, Voyage, VoyageAccrual
 from app.models_finance_ext import CreditNote, OffHireEvent
 from app.services.doc_numbering import next_doc_number
-from app.services.finance_workflow import assert_void_allowed, record_payment
-from app.services.hire_engine import create_hire_statement
+from app.services.finance_workflow import (
+    assert_void_allowed,
+    post_credit_note_reversal,
+    post_reversals_for_credit_notes,
+    record_payment,
+)
+from app.services.hire_engine import _off_hire_in_period, create_hire_statement
 from app.services.audit import audit
 from app.services.recycle import soft_delete
 from app.services.state_machine import INVOICE_TRANSITIONS, transition
 from app.services.optimistic_lock import assert_fresh
 
-from app.routers._finance_common import _alive, _as_utc_naive, _base_currency, _credited_amount, _resolve_fx_rate
+from app.routers._finance_common import _alive, _base_currency, _credited_amount, _resolve_fx_rate
 from app.services.approval_limits import assert_within_limit
-from app.services.invoice_mirror import assert_mirror_writable
+from app.services.invoice_mirror import assert_mirror_writable, sync_mirrors
 from app.services.invoice_types import invalid_invoice_type_detail, is_valid_invoice_type
+from app.services.data_scope import apply_module_scope
+from app.services.money import (
+    invoice_gross,
+    invoice_open,
+    invoice_to_base,
+    invoice_type_code,
+    money,
+)
 from app.services.period_close import assert_period_open
 
 from app.models_wave1 import Counterparty
@@ -186,27 +199,53 @@ def create_invoice(body: InvoiceIn, auth: AuthContext = Depends(require_module("
         voyage = db.get(Voyage, body.voyage_id)
         if not voyage or voyage.tenant_id != auth.tenant_id:
             raise HTTPException(404, "Voyage not found")
-    amount = Decimal(str(body.amount)).quantize(Decimal("0.01"))
-    tax_amount = Decimal(str(body.tax_amount)).quantize(Decimal("0.01"))
-    if amount < 0 or tax_amount < 0:
-        raise HTTPException(422, detail={"code": "INVALID_AMOUNT", "message": "amount/tax_amount must be >= 0"})
+    amount = money(body.amount)
+    tax_amount = money(body.tax_amount)
+    if amount <= 0 or tax_amount < 0:
+        # P0-23：零金额发票没有任何业务含义（不产生收入、不入账龄、不占额度），
+        # 却会在列表/账龄里占一行，看起来像漏了数据。退款场景走红冲接口。
+        raise HTTPException(
+            422,
+            detail={
+                "code": "INVALID_AMOUNT",
+                "message": "amount must be > 0 and tax_amount must be >= 0",
+            },
+        )
+    base_ccy = _base_currency(db, auth.tenant_id)
     fx_rate = None
     base_amount = None
     if body.fx_rate is not None:
         if body.fx_rate <= 0:
             raise HTTPException(422, detail={"code": "INVALID_FX_RATE", "message": "fx_rate must be > 0"})
         fx_rate = Decimal(str(body.fx_rate))
+    elif (body.currency or "USD").upper() == (base_ccy or "USD").upper():
+        # 本位币 → 汇率恒为 1（没有汇率行也必须能开票）
+        fx_rate = Decimal("1")
     else:
         fx_rate = _resolve_fx_rate(
             db,
             auth.tenant_id,
             body.currency,
-            _base_currency(db, auth.tenant_id),
+            base_ccy,
             invoice_type=body.invoice_type,
             context_date=date.today(),
         )
-    if fx_rate is not None:
-        base_amount = (amount * fx_rate).quantize(Decimal("0.01"))
+    if fx_rate is None:
+        # 外币发票缺汇率 → **fail closed**。旧实现静默放行，base_amount 留空，
+        # 于是这张外币发票在 P&L / 账龄里被当成本币金额直接求和（P0-B5）。
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "FX_RATE_NOT_FOUND",
+                "message": (
+                    f"No FX rate {body.currency}→{base_ccy} available for "
+                    f"{date.today().isoformat()}; supply fx_rate explicitly"
+                ),
+                "currency": body.currency,
+                "base_currency": base_ccy,
+            },
+        )
+    base_amount = money(amount * fx_rate)
     row = Invoice(
         tenant_id=auth.tenant_id,
         invoice_no=next_doc_number(db, auth.tenant_id, Invoice, Invoice.invoice_no, "INV"),
@@ -221,11 +260,9 @@ def create_invoice(body: InvoiceIn, auth: AuthContext = Depends(require_module("
         commission_basis=body.commission_basis,
         created_by=auth.user_id,
         updated_by=auth.user_id,
+        fx_rate=fx_rate,
+        base_amount=base_amount,
     )
-    if fx_rate is not None:
-        row.fx_rate = fx_rate
-    if base_amount is not None:
-        row.base_amount = base_amount
     db.add(row)
     db.commit()
     return {
@@ -233,8 +270,10 @@ def create_invoice(body: InvoiceIn, auth: AuthContext = Depends(require_module("
         "invoice_no": row.invoice_no,
         "status": row.status,
         "amount": float(row.amount),
-        "fx_rate": float(fx_rate) if fx_rate is not None else None,
-        "base_amount": float(base_amount) if base_amount is not None else None,
+        "tax_amount": float(row.tax_amount),
+        "currency": row.currency,
+        "fx_rate": float(fx_rate),
+        "base_amount": float(base_amount),
     }
 
 
@@ -280,6 +319,11 @@ def invoice_transition(invoice_id: UUID, target: str, auth: AuthContext = Depend
         # 审批额度工作流：超出审批人额度 → 409 APPROVAL_LIMIT
         # （approver 无额度行时默认放行 — 见 services/approval_limits.py）
         approval_amount = Decimal(str(row.amount)) + Decimal(str(row.tax_amount or 0))
+        # P1-B9：额度比较要按**单据日期**的汇率折算（不是"绝对最新汇率"），
+        # 否则同一张单据过两个月再签发，额度结论会漂。
+        _ctx_date = row.issued_at or row.created_at
+        if hasattr(_ctx_date, "date") and not isinstance(_ctx_date, date):
+            _ctx_date = _ctx_date.date()
         assert_within_limit(
             db,
             auth.tenant_id,
@@ -287,6 +331,8 @@ def invoice_transition(invoice_id: UUID, target: str, auth: AuthContext = Depend
             "invoice",
             approval_amount,
             row.currency or "USD",
+            context_date=_ctx_date if isinstance(_ctx_date, date) else None,
+            invoice_type=invoice_type_code(row),
         )
 
     row.status = transition("invoice", row.status, target, INVOICE_TRANSITIONS)
@@ -344,15 +390,23 @@ def update_invoice(
                 "status": row.status,
             },
         )
-    new_amount = Decimal(str(row.amount))
-    new_tax = Decimal(str(row.tax_amount or 0))
+    new_amount = money(row.amount)
+    new_tax = money(row.tax_amount or 0)
     if body.amount is not None:
-        new_amount = Decimal(str(body.amount)).quantize(Decimal("0.01"))
+        new_amount = money(body.amount)
     if body.tax_amount is not None:
-        new_tax = Decimal(str(body.tax_amount)).quantize(Decimal("0.01"))
-    if new_amount < 0 or new_tax < 0:
-        raise HTTPException(422, detail={"code": "INVALID_AMOUNT", "message": "amount/tax_amount must be >= 0"})
-    paid = Decimal(str(row.paid_amount or 0))
+        new_tax = money(body.tax_amount)
+    if new_amount <= 0 or new_tax < 0:
+        # P0-23：把一张发票改成 0 金额和新建 0 金额一样没意义 —— 会占一行账龄、
+        # 不产生收入，纯粹是脏数据。红冲场景必须走红冲接口。
+        raise HTTPException(
+            422,
+            detail={
+                "code": "INVALID_AMOUNT",
+                "message": "amount must be > 0 and tax_amount must be >= 0",
+            },
+        )
+    paid = money(row.paid_amount or 0)
     if new_amount + new_tax < paid:
         raise HTTPException(
             status_code=409,
@@ -364,6 +418,12 @@ def update_invoice(
         )
     if body.amount is not None:
         row.amount = new_amount
+        # 本位币金额必须跟着改，否则 P&L / 账龄折算用的是旧值
+        rate = row.fx_rate
+        if rate:
+            row.base_amount = money(new_amount * Decimal(str(rate)))
+        else:
+            row.base_amount = new_amount
     if body.tax_amount is not None:
         row.tax_amount = new_tax
     if body.due_date is not None:
@@ -376,6 +436,10 @@ def update_invoice(
         row.commission_basis = body.commission_basis
     # 修改人（归属条「修改」栏）——不写的话详情页永远显示旧的操作人。
     row.updated_by = auth.user_id
+    # P1-B6：源单改了金额/本币金额，草稿镜像必须跟着走 —— 否则镜像的 P&L /
+    # 账龄还按旧金额折算，两边对不上。镜像只同步仍是草稿的那些。
+    # P1-17：跨租户的那条腿要带 user_id（公司间镜像开关按用户/租户作用域查）。
+    sync_mirrors(db, row, user_id=auth.user_id)
     audit(
         db,
         action="invoice.update",
@@ -407,14 +471,29 @@ def create_credit_note(
     auth: AuthContext = Depends(require_module("finance")),
     db: Session = Depends(get_db),
 ):
-    """红冲: issue a credit note against an invoice (capped at the un-credited balance)."""
+    """红冲: issue a credit note against an invoice (capped at the un-credited balance).
+
+    **P0-B2**：红冲除了写 ``CreditNote`` 凭证行，还必须写一张**负数 Invoice 行**
+    （``amount = -红冲额``，``credit_note_of_id`` 指回原发票）。原因：
+
+    - 账龄（``/finance/aging``）只认 Invoice 行 —— 旧实现红冲完全不进账龄，
+      客户欠款一直挂在账上；
+    - 航次 P&L（``services/pnl.py``）也只认 Invoice 行 —— 红冲不减收入，
+      已开票的运费/租金照算毛利。
+
+    负数行天然与原发票相抵，**不需要**在每条下游链路上再减一次红冲
+    （减两次才是错的）。
+    """
     inv = db.get(Invoice, invoice_id)
     if not inv or inv.tenant_id != auth.tenant_id or not _alive(inv.status):
         raise HTTPException(404, "Invoice not found")
-    amt = Decimal(str(body.amount)).quantize(Decimal("0.01"))
+    # P0-B2：红冲要写**反向分录**，分录落在红冲单自己的会计期间（= 当前月）——
+    # 期间关账了就写不进去。与其写到一半失败，不如一开始就说清楚。
+    assert_period_open(db, auth.tenant_id, datetime.now(timezone.utc).strftime("%Y-%m"))
+    amt = money(body.amount)
     if amt <= 0:
         raise HTTPException(422, detail={"code": "INVALID_AMOUNT", "message": "Credit note amount must be > 0"})
-    total = Decimal(str(inv.amount)) + Decimal(str(inv.tax_amount or 0))
+    total = invoice_gross(inv)
     credited = _credited_amount(db, inv.id)
     balance = total - credited
     if amt > balance:
@@ -436,8 +515,52 @@ def create_credit_note(
         issued_at=datetime.now(timezone.utc),
     )
     db.add(row)
+    db.flush()
+    # 负数发票行 —— 账龄 / P&L 靠它相抵
+    cn_inv = Invoice(
+        tenant_id=auth.tenant_id,
+        invoice_no=next_doc_number(db, auth.tenant_id, Invoice, Invoice.invoice_no, "CN"),
+        invoice_type="credit_note",
+        status="issued",
+        counterparty_id=inv.counterparty_id,
+        voyage_id=inv.voyage_id,
+        amount=-amt,
+        tax_amount=Decimal("0"),
+        currency=inv.currency,
+        fx_rate=inv.fx_rate,
+        base_amount=(-invoice_to_base(inv, amt) if (inv.fx_rate or inv.base_amount is not None) else None),
+        credit_note_of_id=inv.id,
+        issued_at=utcnow_naive(),
+        created_by=auth.user_id,
+        updated_by=auth.user_id,
+        meta={
+            "credit_note_id": str(row.id),
+            "credit_note_no": row.credit_note_no,
+            "credit_note_of_id": str(inv.id),
+            "credit_note_of_no": inv.invoice_no,
+            "reason": body.reason,
+        },
+    )
+    db.add(cn_inv)
+    db.flush()
+    # P0-B2：红冲的**反向分录** —— 总账必须与单据一致（同一套科目、金额相反）。
+    # 原发票还没过账 → 这里不写分录，等原发票过账时由 gl_post 补上
+    # （post_reversals_for_credit_notes），保证"红冲先于原单过账"也不丢分录。
+    # 幂等：分录挂在红冲单自己身上，重复调用只会拿到同一张。
+    post_credit_note_reversal(db, auth.tenant_id, inv, cn_inv, user_id=auth.user_id)
     db.commit()
-    return {"id": str(row.id), "credit_note_no": row.credit_note_no, "amount": float(row.amount), "status": row.status}
+    return {
+        "id": str(row.id),
+        "credit_note_no": row.credit_note_no,
+        "amount": float(row.amount),
+        "status": row.status,
+        # 红冲单本身（P0-B2 落的那张负数发票行）
+        "invoice_id": str(cn_inv.id),
+        "invoice_no": cn_inv.invoice_no,
+        # 被红冲的原发票
+        "credit_note_of_id": str(inv.id),
+        "credit_note_of_no": inv.invoice_no,
+    }
 
 
 @router.get("/invoices/{invoice_id}/credit-notes")
@@ -478,42 +601,121 @@ def hire_schedule(body: HireScheduleIn, auth: AuthContext = Depends(require_modu
         raise HTTPException(422, detail={"code": "NO_HIRE_RATE", "message": "Charter has no hire_per_day rate"})
     if body.period_end <= body.period_start:
         raise HTTPException(422, detail={"code": "INVALID_PERIOD", "message": "period_end must be after period_start"})
-    ps = datetime.combine(body.period_start, time.min)
-    pe = datetime.combine(body.period_end, time.min)
-    gross_days = (pe - ps).total_seconds() / 86400
-    offhire_days = 0.0
-    for ev in db.scalars(
+    # ── 停租：复用 hire_engine 的同一套口径 ───────────────────────────────
+    # 旧实现自己算了一遍：重叠事件**双计**（P1-B22）、12 小时停租被截断成 0 天
+    # （P1-B23）、事件里的显式 ``hire_deduction`` 一分钱都不扣。
+    # 现在统一走 ``_off_hire_in_period``：合并重叠区间 → 按小时折算 → 按本期裁剪。
+    offhire_events = db.scalars(
         select(OffHireEvent).where(
             OffHireEvent.tenant_id == auth.tenant_id,
             OffHireEvent.charter_id == ch.id,
-            OffHireEvent.deduct_hire.is_(True),
         )
-    ).all():
-        if ev.end_at is None:
-            continue
-        s = max(_as_utc_naive(ev.start_at), ps)
-        e = min(_as_utc_naive(ev.end_at), pe)
-        if e > s:
-            offhire_days += (e - s).total_seconds() / 86400
-    offhire_days = min(offhire_days, gross_days)
+    ).all()
+    offhire_days, explicit_deduction, _oh_rows = _off_hire_in_period(
+        offhire_events, body.period_start, body.period_end
+    )
+    gross_days = Decimal(str((body.period_end - body.period_start).days))
     billable_days = gross_days - offhire_days
+    if billable_days < 0:
+        billable_days = Decimal("0")
+
+    # ── 公布口径的天数（4dp）—— 金额与 meta 用**同一个**天数 ──────────────
+    # 旧实现 meta 记 round(days,4) 而金额用未舍入的 float：14.5208 天 × 15000
+    # 会差 0.50 元，账单与 meta 永远对不上（P2-B5）。
+    gross_days_pub = gross_days.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    offhire_days_pub = offhire_days.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    billable_days_pub = (gross_days_pub - offhire_days_pub).quantize(
+        Decimal("0.0001"), rounding=ROUND_HALF_UP
+    )
+
+    # P0-23：整段停租 → 应付天数为 0 → 租金为 0。零金额发票没有任何业务含义
+    # （不产生收入、不入账龄、不占额度、GL 里是一笔 0 分录），却会在应收列表里
+    # 占一行，看起来像漏了数据。退款场景走红冲接口，租金场景没有退款语义。
+    if billable_days_pub <= 0:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "NO_BILLABLE_DAYS",
+                "message": (
+                    "The period has no billable hire days (fully off-hire); "
+                    "a zero-amount hire invoice cannot be issued"
+                ),
+                "gross_days": float(gross_days_pub),
+                "offhire_days": float(offhire_days_pub),
+            },
+        )
+
     rate = Decimal(str(hire_per_day))
-    gross_amount = (rate * Decimal(str(billable_days))).quantize(Decimal("0.01"))
+    gross_amount = money(rate * billable_days_pub)
     comm_pct = Decimal(str(getattr(ch, "address_comm_pct", None) or 0))
-    comm_amount = (gross_amount * comm_pct / Decimal("100")).quantize(Decimal("0.01"))
-    net_amount = gross_amount - comm_amount
+    comm_amount = money(gross_amount * comm_pct / Decimal("100"))
+    # 显式停租扣款（事件上直接写的金额）也要扣 —— 以前完全被忽略
+    net_amount = money(gross_amount - comm_amount - explicit_deduction)
+
+    # P0-23：扣完佣金/停租后金额 <= 0（同币种同额不是同一笔钱，租金必须是正的）
+    if net_amount <= 0:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "INVALID_AMOUNT",
+                "message": "hire amount must be > 0 (deductions exceed gross hire)",
+                "gross_amount": float(gross_amount),
+                "amount": float(net_amount),
+            },
+        )
+
+    # ── 币种：取自租约（P1-B6）───────────────────────────────────────────
+    # 旧实现写死租户口径（本位币），EUR 租约的租金被记成本币 —— 收入金额没
+    # 错但币种标签错，跨币种汇总时会把两种币种直接相加。
+    ft = ch.freight_terms or {}
+    hire_ccy = str(
+        ft.get("hire_currency") or ft.get("currency") or _base_currency(db, auth.tenant_id) or "USD"
+    ).upper()
+    base_ccy = (_base_currency(db, auth.tenant_id) or "USD").upper()
+    if hire_ccy == base_ccy:
+        fx_rate = Decimal("1")
+    else:
+        fx_rate = _resolve_fx_rate(
+            db,
+            auth.tenant_id,
+            hire_ccy,
+            base_ccy,
+            invoice_type="hire",
+            context_date=body.period_end,
+        )
+        if fx_rate is None:
+            # 外币租金缺汇率 → fail closed（与普通开票同一口径，P0-B5）
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "FX_RATE_NOT_FOUND",
+                    "message": (
+                        f"No FX rate {hire_ccy}→{base_ccy} available for "
+                        f"{body.period_end.isoformat()}; the hire invoice cannot be "
+                        f"posted without a rate"
+                    ),
+                    "currency": hire_ccy,
+                    "base_currency": base_ccy,
+                },
+            )
+    base_amount = money(net_amount * fx_rate)
+
     meta = {
         "hire": {
             "charter_id": str(ch.id),
             "period_start": body.period_start.isoformat(),
             "period_end": body.period_end.isoformat(),
-            "gross_days": round(gross_days, 4),
-            "offhire_days": round(offhire_days, 4),
-            "billable_days": round(billable_days, 4),
+            "gross_days": float(gross_days_pub),
+            "offhire_days": float(offhire_days_pub),
+            "billable_days": float(billable_days_pub),
             "hire_per_day": float(rate),
             "gross_amount": float(gross_amount),
+            "explicit_deduction": float(explicit_deduction),
             "address_comm_pct": float(comm_pct),
             "address_comm_amount": float(comm_amount),
+            "currency": hire_ccy,
+            "fx_rate": float(fx_rate),
+            "base_amount": float(base_amount),
         }
     }
     if ch.counterparty_id:
@@ -525,7 +727,11 @@ def hire_schedule(body: HireScheduleIn, auth: AuthContext = Depends(require_modu
         counterparty_id=ch.counterparty_id,
         amount=net_amount,
         tax_amount=Decimal("0"),
-        currency="USD",
+        currency=hire_ccy,
+        # 金额已扣地址佣金 → 声明口径，P&L 靠它避免重复计佣（P1-B1/B2）
+        commission_basis="net",
+        fx_rate=fx_rate,
+        base_amount=base_amount,
         meta=meta,
         created_by=auth.user_id,
         updated_by=auth.user_id,
@@ -578,7 +784,13 @@ def add_payment(
         assert_not_sanctioned(db, auth.tenant_id, inv.counterparty_id)
     if inv.status not in {"issued", "partially_paid"}:
         raise HTTPException(409, detail={"code": "INVALID_STATE", "message": f"Cannot pay invoice in status {inv.status}"})
-    record_payment(db, inv, amount, reference=reference)
+    if invoice_type_code(inv) == "XREV" or (inv.amount or 0) < 0:
+        # 红冲单据是负数发票行，本身没有可收的钱
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CREDIT_NOTE_NOT_PAYABLE", "message": "A credit note (negative invoice) cannot receive payment"},
+        )
+    record_payment(db, inv, amount, reference=reference, created_by=auth.user_id)
     db.commit()
     return {"invoice_id": str(inv.id), "status": inv.status, "paid_amount": float(inv.paid_amount)}
 
@@ -608,15 +820,56 @@ def list_payments(invoice_id: UUID, auth: AuthContext = Depends(require_module("
 
 @router.post("/invoices/{invoice_id}/gl-post")
 def gl_post(invoice_id: UUID, auth: AuthContext = Depends(require_module("finance")), db: Session = Depends(get_db)):
+    """发票过账到总账 —— 生成**真正的借贷分录**（P0-B3）。
+
+    旧实现只把 ``gl_posted`` 置 True，系统里根本没有对应分录，总账和业务单据
+    对不上。现在按本位币生成 DR/CR 分录并落 ``PeriodJournal``：
+
+    - 收入侧：借 应收账款 / 贷 营业收入 + 应交税费（销项）
+    - 成本侧：借 费用 + 进项税 / 贷 应付账款
+    - 红冲（负数发票）：借贷方向自动对调
+
+    **幂等**：同一张发票重复过账不会产生第二张分录（靠
+    ``(tenant_id, journal_type, source_type, source_id)`` 唯一约束）。
+    失败时回滚，**不会**留下 ``gl_posted=True`` 的半成品。
+    """
     inv = db.get(Invoice, invoice_id)
     if not inv or inv.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Invoice not found")
     if inv.status not in {"issued", "partially_paid", "paid"}:
         raise HTTPException(409, detail={"code": "INVALID_STATE", "message": "Invoice not issuable for GL"})
+    from app.services.gl_engine import post_invoice_journal
+
+    try:
+        journal, created = post_invoice_journal(db, auth.tenant_id, inv, user_id=auth.user_id)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:  # noqa: BLE001 — 过账失败不能留下半成品
+        db.rollback()
+        log.exception("GL post failed for invoice %s", inv.id)
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "GL_POST_FAILED", "message": str(exc)},
+        )
     inv.gl_posted = True
-    inv.meta = {**(inv.meta or {}), "gl_posted_at": datetime.now(timezone.utc).isoformat()}
+    inv.meta = {
+        **(inv.meta or {}),
+        "gl_posted_at": datetime.now(timezone.utc).isoformat(),
+        "gl_journal_id": str(journal.id),
+    }
+    # P0-B2：红冲先于原发票过账时，在这里**补**红冲的反向分录（幂等）。
+    post_reversals_for_credit_notes(db, auth.tenant_id, inv, user_id=auth.user_id)
     db.commit()
-    return {"id": str(inv.id), "gl_posted": True}
+    return {
+        "id": str(inv.id),
+        "gl_posted": True,
+        "journal_id": str(journal.id),
+        "journal_created": created,
+        "total_debit": float(journal.total_debit or 0),
+        "total_credit": float(journal.total_credit or 0),
+        "currency": journal.currency,
+    }
 
 
 @router.post("/payments/{payment_id}/void")
@@ -646,24 +899,45 @@ def void_payment(payment_id: UUID, auth: AuthContext = Depends(require_module("f
             detail={"code": "INVALID_STATE", "message": f"Cannot void a payment on invoice in status {inv.status}"},
         )
     void_ref = f"VOID:{pay.id}"
-    existing = db.scalar(select(Payment).where(Payment.invoice_id == inv.id, Payment.reference == void_ref))
+    existing = db.scalar(
+        select(Payment).where(
+            Payment.tenant_id == auth.tenant_id,
+            Payment.invoice_id == inv.id,
+            Payment.reference == void_ref,
+        )
+    )
     if existing:
         raise HTTPException(409, detail={"code": "ALREADY_VOIDED", "message": "Payment is already voided"})
     reverse = Payment(
         tenant_id=auth.tenant_id,
         invoice_id=inv.id,
+        # 必须带上原付款的 batch_id —— 否则这条冲销行游离在批次之外，
+        # MT103 / pain.001 按 batch 取净额时看不到它，已冲销的付款仍会出现在
+        # 付款指令里（审计 P2-B9）。
+        batch_id=pay.batch_id,
         amount=-Decimal(str(pay.amount)),
         currency=pay.currency,
         reference=void_ref,
+        created_by=auth.user_id,
     )
     db.add(reverse)
     db.flush()
-    total_paid = sum(
-        (Decimal(str(p.amount)) for p in db.scalars(select(Payment).where(Payment.invoice_id == inv.id)).all()),
-        Decimal("0"),
-    ).quantize(Decimal("0.01"))
+    total_paid = money(
+        sum(
+            (
+                Decimal(str(p.amount))
+                for p in db.scalars(
+                    select(Payment).where(
+                        Payment.tenant_id == auth.tenant_id,
+                        Payment.invoice_id == inv.id,
+                    )
+                ).all()
+            ),
+            Decimal("0"),
+        )
+    )
     inv.paid_amount = total_paid
-    total = Decimal(str(inv.amount)) + Decimal(str(inv.tax_amount or 0))
+    total = invoice_gross(inv)
     target = "paid" if total_paid >= total else "partially_paid" if total_paid > 0 else "issued"
     if target != inv.status:
         # Reversal goes backwards through the machine; hop paid → partially_paid first
@@ -704,6 +978,10 @@ def list_invoices(
                 "invoice_type": r.invoice_type,
                 "status": r.status,
                 "amount": float(r.amount),
+                "tax_amount": float(r.tax_amount or 0),
+                "gross_amount": float(invoice_gross(r)),
+                "open_amount": float(invoice_open(r)),
+                "base_amount": float(r.base_amount) if r.base_amount is not None else None,
                 "paid_amount": float(r.paid_amount or 0),
                 "voyage_id": str(r.voyage_id) if r.voyage_id else None,
                 "counterparty_id": str(r.counterparty_id) if r.counterparty_id else None,
@@ -711,6 +989,8 @@ def list_invoices(
                 "due_date": r.due_date.isoformat() if r.due_date else None,
                 "gl_posted": bool(r.gl_posted),
                 "mirror_of_id": str(r.mirror_of_id) if r.mirror_of_id else None,
+                # P0-B2：红冲行回链原发票（列表里能看出「这是 INV-x 的红冲」）
+                "credit_note_of_id": str(r.credit_note_of_id) if r.credit_note_of_id else None,
                 "bill_by": r.bill_by,
                 "commission_basis": r.commission_basis,
                 "created_by": str(r.created_by) if r.created_by else None,
@@ -728,11 +1008,35 @@ def list_invoices(
 
 @router.get("/finance/aging")
 def aging(auth: AuthContext = Depends(require_module("finance")), db: Session = Depends(get_db)):
-    rows = db.scalars(select(Invoice).where(Invoice.tenant_id == auth.tenant_id, Invoice.status.in_(["issued", "partially_paid"]))).all()
+    """应收账款账龄。
+
+    口径（P0-B4）：**未收 = 金额 + 税 − 已收**，与单笔收款、付款批次一致。
+    红冲是一张负数发票行，所以这里天然相抵，不需要再减一次红冲。
+    多币种时 ``currency`` 一并返回（跨币种求和前必须先折本币）。
+    """
+    rows = db.scalars(
+        apply_module_scope(
+            db,
+            select(Invoice).where(
+                Invoice.tenant_id == auth.tenant_id,
+                Invoice.status.in_(["issued", "partially_paid"]),
+            ),
+            Invoice,
+            auth,
+            "finance",
+        )
+    ).all()
     return [
         {
+            "invoice_id": str(r.id),
             "invoice_no": r.invoice_no,
-            "open_amount": float(Decimal(str(r.amount)) + Decimal(str(r.tax_amount or 0)) - Decimal(str(r.paid_amount or 0))),
+            "invoice_type": r.invoice_type,
+            "counterparty_id": str(r.counterparty_id) if r.counterparty_id else None,
+            "voyage_id": str(r.voyage_id) if r.voyage_id else None,
+            "open_amount": float(invoice_open(r)),
+            "gross_amount": float(invoice_gross(r)),
+            "paid_amount": float(r.paid_amount or 0),
+            "currency": r.currency,
             "due_date": r.due_date.isoformat() if r.due_date else None,
         }
         for r in rows
@@ -864,10 +1168,35 @@ def update_accrual(
 
 
 
+def _normalize_currency(v: str | None) -> str | None:
+    """币种归一为 3 位大写 ISO 代码。
+
+    没给就是「无法核对」（不是默认 USD）—— ``services.reconciliation`` 靠这一点
+    把 ``currency_verified`` 置成 false，提醒人工确认。
+    """
+    if v is None:
+        return None
+    v = v.strip().upper()
+    if not v:
+        return None
+    if len(v) != 3 or not v.isalpha():
+        raise ValueError("currency must be a 3-letter ISO 4217 code (e.g. USD)")
+    return v
+
+
 class ReconcileLine(BaseModel):
     amount: float
     reference: str | None = None
     date: str | None = None
+    # P1-B14：银行流水的币种。同额不同币种不是同一笔钱 —— 缺了这个字段，
+    # ``services.reconciliation`` 拿不到流水币种，币种永远无法核对
+    # （currency_verified 恒为 false），跨币种同额会被误配。
+    currency: str | None = None
+
+    @field_validator("currency")
+    @classmethod
+    def _norm_currency(cls, v: str | None) -> str | None:
+        return _normalize_currency(v)
 
 
 class ReconcilePreviewIn(BaseModel):
@@ -879,6 +1208,14 @@ class ReconcileMatch(BaseModel):
     amount: float
     reference: str | None = None
     paid_at: str | None = None
+    # P1-B14：流水币种（回显自 preview 的建议）。与发票币种不一致 → 拒绝核销，
+    # 防止把 EUR 的一笔款核到 USD 发票上。
+    currency: str | None = None
+
+    @field_validator("currency")
+    @classmethod
+    def _norm_currency(cls, v: str | None) -> str | None:
+        return _normalize_currency(v)
 
 
 class ReconcileApplyIn(BaseModel):
@@ -897,9 +1234,15 @@ def reconciliation_preview(
 
     invoices = list(
         db.scalars(
-            select(Invoice).where(
-                Invoice.tenant_id == auth.tenant_id,
-                Invoice.status.in_(["issued", "partially_paid"]),
+            apply_module_scope(
+                db,
+                select(Invoice).where(
+                    Invoice.tenant_id == auth.tenant_id,
+                    Invoice.status.in_(["issued", "partially_paid"]),
+                ),
+                Invoice,
+                auth,
+                "finance",
             )
         ).all()
     )
@@ -907,7 +1250,14 @@ def reconciliation_preview(
         str(c.id): c.name
         for c in db.scalars(select(Counterparty).where(Counterparty.tenant_id == auth.tenant_id)).all()
     }
-    return suggest_matches([l.model_dump() for l in body.lines], invoices, names)
+    result = suggest_matches([l.model_dump() for l in body.lines], invoices, names)
+    # P1-B14：建议里的 ``currency`` 是**发票**币种；把流水行自带的币种也回给前端，
+    # 好让人工确认时看清「同额不同币种」到底差在哪（没带币种 → currency_verified=false）。
+    for s in result.get("suggestions", []):
+        idx = s.get("line_index")
+        if isinstance(idx, int) and 0 <= idx < len(body.lines):
+            s["line_currency"] = body.lines[idx].currency
+    return result
 
 
 @router.post("/finance/reconciliation/apply")
@@ -927,7 +1277,23 @@ def reconciliation_apply(
             raise HTTPException(404, detail={"code": "INVOICE_NOT_FOUND", "message": f"invoice {m.invoice_id}"})
         if inv.counterparty_id:
             assert_not_sanctioned(db, auth.tenant_id, inv.counterparty_id)
-        record_payment(db, inv, m.amount, reference=m.reference)
+        # P1-B14：流水币种与发票币种必须一致（同额不同币种不是同一笔钱）
+        if m.currency:
+            inv_ccy = str(inv.currency or "USD").upper()
+            if m.currency != inv_ccy:
+                raise HTTPException(
+                    400,
+                    detail={
+                        "code": "CURRENCY_MISMATCH",
+                        "message": (
+                            f"Bank line currency {m.currency} does not match invoice "
+                            f"currency {inv_ccy}"
+                        ),
+                        "invoice_currency": inv_ccy,
+                        "line_currency": m.currency,
+                    },
+                )
+        record_payment(db, inv, m.amount, reference=m.reference, created_by=auth.user_id)
         applied.append({"invoice_id": str(inv.id), "status": inv.status})
     db.commit()
     return {"applied": applied}

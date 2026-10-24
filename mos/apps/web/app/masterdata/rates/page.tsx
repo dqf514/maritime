@@ -4,9 +4,11 @@
 // 左栏表目录（按 kind 过滤）+ 右栏行编辑 DataGrid / 运价矩阵（装港×卸港）
 // + 定价模板（多表绑定报价配方）。
 
+import { msgOf } from "@/lib/errors";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
@@ -26,6 +28,7 @@ import { useToast } from "@/components/ToastProvider";
 import { apiDelete, apiList, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv, parseCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
+import { toPageNumber } from "@/lib/numbers";
 import { useListQuery } from "@/lib/useListQuery";
 
 const RATE_KINDS = ["freight_matrix", "surcharge", "demurrage_rate", "laytime_hours_rate", "bunker_surcharge"] as const;
@@ -68,18 +71,22 @@ function RatesPage() {
   const { t } = useI18n();
   const toast = useToast();
   const router = useRouter();
-  const { query, setQuery } = useListQuery();
+  const { query, setQuery, page, limit } = useListQuery();
   const kindFilter = query.kind ?? "";
   const view: "rows" | "matrix" = query.view === "matrix" ? "matrix" : "rows";
+  const tplPage = toPageNumber(query.tpl_page);
+  const tplLimit = 50;
 
   // —— 表目录 ——
   const [tables, setTables] = useState<RateTable[]>([]);
+  const [tablesTotal, setTablesTotal] = useState(0);
   const [tablesLoading, setTablesLoading] = useState(true);
   const [tablesErr, setTablesErr] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // —— 行数据 ——
   const [rows, setRows] = useState<RateRow[]>([]);
+  const [rowsTotal, setRowsTotal] = useState(0);
   const [rowsLoading, setRowsLoading] = useState(false);
   const [rowsErr, setRowsErr] = useState("");
 
@@ -112,6 +119,8 @@ function RatesPage() {
 
   // —— 定价模板 ——
   const [templates, setTemplates] = useState<PricingTemplate[]>([]);
+  const [templatesTotal, setTemplatesTotal] = useState(0);
+  const [templatesErr, setTemplatesErr] = useState("");
   const [tplModal, setTplModal] = useState(false);
   const [tplSaving, setTplSaving] = useState(false);
   const [tplEditingId, setTplEditingId] = useState<string | null>(null);
@@ -127,39 +136,52 @@ function RatesPage() {
   const rowCtx = useContextMenu<RateRow>();
   const tplCtx = useContextMenu<PricingTemplate>();
 
+  // —— 删除二次确认（指名对象） ——
+  const [pendingDelete, setPendingDelete] = useState<{ run: () => void; name: string } | null>(null);
+
   // —— 加载 ——
   const loadTables = useCallback(async () => {
     setTablesLoading(true);
     setTablesErr("");
     try {
-      const page = await apiList<RateTable>("/api/v1/rates/tables", {
+      // P1-28：服务端分页 —— 信封带 total，截断对用户可见
+      const res = await apiList<RateTable>("/api/v1/rates/tables", {
         kind: kindFilter || null,
-        limit: 200,
+        limit,
+        offset: (page - 1) * limit,
       });
-      setTables(page.items);
+      setTables(res.items);
+      setTablesTotal(res.total);
       setSelectedId((cur) => {
-        if (cur && page.items.some((x) => x.id === cur)) return cur;
-        return page.items[0]?.id ?? null;
+        if (cur && res.items.some((x) => x.id === cur)) return cur;
+        return res.items[0]?.id ?? null;
       });
     } catch (ex) {
-      setTablesErr(String(ex));
+      setTables([]);
+      setTablesTotal(0);
+      setTablesErr(msgOf(ex));
     } finally {
       setTablesLoading(false);
     }
-  }, [kindFilter]);
+  }, [kindFilter, page, limit]);
 
   const loadRows = useCallback(async (tableId: string | null) => {
     if (!tableId) {
       setRows([]);
+      setRowsTotal(0);
       return;
     }
     setRowsLoading(true);
     setRowsErr("");
     try {
-      const page = await apiList<RateRow>(`/api/v1/rates/tables/${tableId}/rows`, { limit: 200 });
-      setRows(page.items);
+      // 行编辑网格按服务端分页取数（信封 total 用于显示总数/截断提示）
+      const res = await apiList<RateRow>(`/api/v1/rates/tables/${tableId}/rows`, { limit: 200 });
+      setRows(res.items);
+      setRowsTotal(res.total);
     } catch (ex) {
-      setRowsErr(String(ex));
+      setRows([]);
+      setRowsTotal(0);
+      setRowsErr(msgOf(ex));
     } finally {
       setRowsLoading(false);
     }
@@ -167,17 +189,28 @@ function RatesPage() {
 
   const loadTemplates = useCallback(async () => {
     try {
-      const page = await apiList<PricingTemplate>("/api/v1/rates/templates", { limit: 100 });
-      setTemplates(page.items);
-    } catch {
+      const res = await apiList<PricingTemplate>("/api/v1/rates/templates", {
+        limit: tplLimit,
+        offset: (tplPage - 1) * tplLimit,
+      });
+      setTemplates(res.items);
+      setTemplatesTotal(res.total);
+      setTemplatesErr("");
+    } catch (ex) {
+      // 参考数据失败：不让整页报错，但必须可见
       setTemplates([]);
+      setTemplatesTotal(0);
+      setTemplatesErr(msgOf(ex));
     }
-  }, []);
+  }, [tplPage]);
 
   useEffect(() => {
     loadTables();
+  }, [loadTables]);
+
+  useEffect(() => {
     loadTemplates();
-  }, [loadTables, loadTemplates]);
+  }, [loadTemplates]);
 
   useEffect(() => {
     loadRows(selectedId);
@@ -214,7 +247,7 @@ function RatesPage() {
       await loadTables();
       if (created?.id) setSelectedId(created.id);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setTableSaving(false);
     }
@@ -235,6 +268,15 @@ function RatesPage() {
           await apiPatch(`/api/v1/rates/tables/${selectedId}/rows/${rowId}`, { dims });
         } else if (colKey === "value" || colKey === "priority") {
           const next = value === null || value === "" ? 0 : Number(value);
+          if (!Number.isFinite(next)) {
+            // 非法数字不能静默写成 0 —— 明确告诉用户这一格没写进去
+            toast.error(
+              colKey === "priority"
+                ? t("page.rates.err_priority", "优先级必须是有效数字")
+                : t("page.rates.err_value", "费率值必须是有效数字"),
+            );
+            return;
+          }
           if (next === (row as unknown as Record<string, number>)[colKey]) return;
           await apiPatch(`/api/v1/rates/tables/${selectedId}/rows/${rowId}`, {
             [colKey]: next,
@@ -250,7 +292,7 @@ function RatesPage() {
         }
         await loadRows(selectedId);
       } catch (ex) {
-        toast.error(String(ex));
+        toast.error(msgOf(ex));
       }
     },
     [selectedId, loadRows, toast],
@@ -263,7 +305,7 @@ function RatesPage() {
         toast.success(t("page.rates.row_deleted", "Rate row deleted"));
         await loadRows(selectedId);
       } catch (ex) {
-        toast.error(String(ex));
+        toast.error(msgOf(ex));
       }
     },
     [selectedId, loadRows, toast, t],
@@ -307,7 +349,16 @@ function RatesPage() {
     { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyRowId(r) },
     { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportRow(r) },
     { key: "d1", label: "", divider: true },
-    { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => void deleteRow(r.id) },
+    {
+      key: "delete",
+      label: t("common.delete", "Delete"),
+      danger: true,
+      onClick: () =>
+        setPendingDelete({
+          run: () => void deleteRow(r.id),
+          name: `${Object.entries(r.dims || {}).map(([k, v]) => `${k}=${v}`).join(" ") || r.id}`,
+        }),
+    },
   ];
 
   const tplMenuItems = (r: PricingTemplate): ContextMenuItem[] => [
@@ -320,7 +371,12 @@ function RatesPage() {
         downloadCsv("pricing_template", ["id", "name", "description", "is_active"], [[r.id, r.name, r.description ?? "", r.is_active ? "Y" : "N"]]),
     },
     { key: "d1", label: "", divider: true },
-    { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => void deleteTemplate(r.id) },
+    {
+      key: "delete",
+      label: t("common.delete", "Delete"),
+      danger: true,
+      onClick: () => setPendingDelete({ run: () => void deleteTemplate(r.id), name: r.name }),
+    },
   ];
 
   async function createRow() {
@@ -333,20 +389,31 @@ function RatesPage() {
       toast.error(t("page.rates.bad_value", "费率值必须是有效数字"));
       return;
     }
+    // P1-24：优先级非法输入必须中止提交（不能静默变成 0）
+    const priorityRaw = (rowForm.priority ?? "").trim();
+    let priority = 0;
+    if (priorityRaw !== "") {
+      const p = Number(priorityRaw);
+      if (!Number.isFinite(p)) {
+        toast.error(t("page.rates.err_priority", "优先级必须是有效数字"));
+        return;
+      }
+      priority = p;
+    }
     setRowSaving(true);
     try {
       await apiPost(`/api/v1/rates/tables/${selectedId}/rows`, {
         dims,
         value,
         unit: rowForm.unit || null,
-        priority: Number(rowForm.priority) || 0,
+        priority,
         notes: rowForm.notes || null,
       });
       toast.success(t("page.rates.row_created", "Rate row added"));
       setRowModal(false);
       await loadRows(selectedId);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setRowSaving(false);
     }
@@ -367,6 +434,7 @@ function RatesPage() {
         if (h in idxField) idxField[h] = i;
       });
       let ok = 0;
+      let skipped = 0;
       for (const line of matrix.slice(1)) {
         const dims: Record<string, string> = {};
         headers.forEach((h, i) => {
@@ -376,20 +444,39 @@ function RatesPage() {
         });
         const rawVal = idxField.value >= 0 ? line[idxField.value] : "0";
         const value = Number(rawVal);
-        if (!Number.isFinite(value)) continue;
+        if (!Number.isFinite(value)) {
+          skipped++;
+          continue;
+        }
+        // P1-24：优先级非法输入不能静默变成 0 —— 该行跳过并计数
+        let priority = 0;
+        if (idxField.priority >= 0) {
+          const praw = (line[idxField.priority] ?? "").trim();
+          if (praw !== "") {
+            const p = Number(praw);
+            if (!Number.isFinite(p)) {
+              skipped++;
+              continue;
+            }
+            priority = p;
+          }
+        }
         await apiPost(`/api/v1/rates/tables/${selectedId}/rows`, {
           dims,
           value,
           unit: idxField.unit >= 0 ? line[idxField.unit] || null : null,
-          priority: idxField.priority >= 0 ? Number(line[idxField.priority]) || 0 : 0,
+          priority,
           notes: idxField.notes >= 0 ? line[idxField.notes] || null : null,
         });
         ok++;
       }
+      if (skipped > 0) {
+        toast.error(t("page.rates.csv_skipped", "已导入 {ok} 行，跳过 {n} 行（数值非法）", { ok, n: skipped }));
+      }
       toast.success(t("page.rates.csv_imported", "Imported {n} rows", { n: ok }));
       await loadRows(selectedId);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -409,7 +496,11 @@ function RatesPage() {
   async function saveMatrixCell(loadPort: string, dischPort: string, raw: string, existing: RateRow | null) {
     if (!raw.trim()) return; // 空输入不动已有/不新建
     const value = Number(raw);
-    if (!Number.isFinite(value)) return;
+    if (!Number.isFinite(value)) {
+      // 非法数字不能静默丢弃
+      toast.error(t("page.rates.bad_value", "费率值必须是有效数字"));
+      return;
+    }
     if (existing && Number(existing.value) === value) return;
     try {
       if (existing) {
@@ -422,7 +513,7 @@ function RatesPage() {
       }
       await loadRows(selectedId);
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -466,7 +557,7 @@ function RatesPage() {
       setTplModal(false);
       await loadTemplates();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     } finally {
       setTplSaving(false);
     }
@@ -479,7 +570,7 @@ function RatesPage() {
       if (tplEditingId === id) setTplModal(false);
       await loadTemplates();
     } catch (ex) {
-      toast.error(String(ex));
+      toast.error(msgOf(ex));
     }
   }
 
@@ -542,9 +633,13 @@ function RatesPage() {
             type="button"
             className="icon-btn-sm"
             title={t("common.delete", "Delete")}
+            aria-label={t("common.delete", "Delete")}
             onClick={(e) => {
               e.stopPropagation();
-              deleteRow(r.id);
+              setPendingDelete({
+                run: () => void deleteRow(r.id),
+                name: `${Object.entries(r.dims || {}).map(([k, v]) => `${k}=${v}`).join(" ") || r.id}`,
+              });
             }}
           >
             ×
@@ -674,6 +769,31 @@ function RatesPage() {
               </button>
             ))}
           </StateView>
+          {/* P1-28：表目录分页 —— 总数与翻页必须可见（复用既有 .toolbar 类，不新增样式） */}
+          {tablesTotal > 0 ? (
+            <div className="toolbar">
+              <span className="muted">
+                {t("list.count_total", "{n} records", { n: tablesTotal })}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={page <= 1}
+                onClick={() => setQuery({ page: page - 1 })}
+              >
+                ← {t("common.prev", "Previous")}
+              </button>
+              <span className="muted">{t("list.page_of", "Page {page}", { page })}</span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={page * limit >= tablesTotal}
+                onClick={() => setQuery({ page: page + 1 })}
+              >
+                {t("common.next", "Next")} →
+              </button>
+            </div>
+          ) : null}
         </aside>
 
         <section className="rates-main">
@@ -778,6 +898,15 @@ function RatesPage() {
                   emptyText={t("common.empty", "No records")}
                 />
                 <ContextMenu controller={rowCtx} items={rowMenuItems} />
+                {/* P1-28：行数截断必须可见（后端单页上限 200 行） */}
+                {rowsTotal > rows.length ? (
+                  <p className="muted">
+                    {t("page.rates.rows_truncated", "Showing the first {n} of {total} rows.", {
+                      n: rows.length,
+                      total: rowsTotal,
+                    })}
+                  </p>
+                ) : null}
               </StateView>
             )}
           </div>
@@ -794,16 +923,49 @@ function RatesPage() {
                 {t("page.rates.new_template", "New Template")}
               </button>
             </div>
-            <DataGrid<PricingTemplate>
-              columns={templateColumns}
-              data={templates}
-              rowKey={(r) => r.id}
-              onRowClick={(r) => openTpl(r)}
-              onRowContextMenu={(r, _i, e) => tplCtx.open(r)(e)}
-              storageKey="rates_templates_grid"
+            <StateView
+              loading={false}
+              error={templatesErr || undefined}
+              empty={!templates.length}
               emptyText={t("common.empty", "No records")}
-            />
-            <ContextMenu controller={tplCtx} items={tplMenuItems} />
+              onRetry={loadTemplates}
+            >
+              <DataGrid<PricingTemplate>
+                columns={templateColumns}
+                data={templates}
+                rowKey={(r) => r.id}
+                onRowClick={(r) => openTpl(r)}
+                onRowContextMenu={(r, _i, e) => tplCtx.open(r)(e)}
+                storageKey="rates_templates_grid"
+                emptyText={t("common.empty", "No records")}
+              />
+              <ContextMenu controller={tplCtx} items={tplMenuItems} />
+            </StateView>
+            {/* P1-28：模板列表分页 —— 总数与翻页必须可见 */}
+            {templatesTotal > 0 ? (
+              <div className="toolbar">
+                <span className="muted">
+                  {t("list.count_total", "{n} records", { n: templatesTotal })}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={tplPage <= 1}
+                  onClick={() => setQuery({ tpl_page: tplPage - 1 })}
+                >
+                  ← {t("common.prev", "Previous")}
+                </button>
+                <span className="muted">{t("list.page_of", "Page {page}", { page: tplPage })}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={tplPage * tplLimit >= templatesTotal}
+                  onClick={() => setQuery({ tpl_page: tplPage + 1 })}
+                >
+                  {t("common.next", "Next")} →
+                </button>
+              </div>
+            ) : null}
           </div>
         </section>
       </div>
@@ -886,6 +1048,7 @@ function RatesPage() {
               {rowForm.dims.map((pair, i) => (
                 <div key={i} className="dim-editor-row">
                   <input
+                    aria-label={t("page.rates.dim_key", "dim key")}
                     placeholder={t("page.rates.dim_key", "dim key")}
                     value={pair.k}
                     onChange={(e) => {
@@ -895,6 +1058,7 @@ function RatesPage() {
                     }}
                   />
                   <input
+                    aria-label={t("page.rates.dim_value", "value")}
                     placeholder={t("page.rates.dim_value", "value")}
                     value={pair.v}
                     onChange={(e) => {
@@ -907,6 +1071,7 @@ function RatesPage() {
                     type="button"
                     className="icon-btn-sm"
                     onClick={() => setRowForm({ ...rowForm, dims: rowForm.dims.filter((_, j) => j !== i) })}
+                    aria-label={t("page.rates.remove_dim", "Remove dimension")}
                   >
                     ×
                   </button>
@@ -966,8 +1131,6 @@ function RatesPage() {
         title={tplEditingId ? t("page.rates.edit_template", "Edit Template") : t("page.rates.new_template", "New Template")}
         onClose={() => setTplModal(false)}
         onSave={saveTpl}
-        canDelete={!!tplEditingId}
-        onDelete={tplEditingId ? () => deleteTemplate(tplEditingId) : undefined}
         saving={tplSaving}
         size="lg"
       >
@@ -993,6 +1156,7 @@ function RatesPage() {
               {tplForm.refs.map((pair, i) => (
                 <div key={i} className="tpl-ref-row">
                   <input
+                    aria-label={t("page.rates.role", "role")}
                     placeholder={t("page.rates.role", "role")}
                     value={pair.role}
                     onChange={(e) => {
@@ -1020,6 +1184,7 @@ function RatesPage() {
                     type="button"
                     className="icon-btn-sm"
                     onClick={() => setTplForm({ ...tplForm, refs: tplForm.refs.filter((_, j) => j !== i) })}
+                    aria-label={t("page.rates.remove_table_ref", "Remove table reference")}
                   >
                     ×
                   </button>
@@ -1034,8 +1199,40 @@ function RatesPage() {
               </button>
             </div>
           </FormSection>
+          {/* P1-8：删除模板是不可逆动作 —— 走指名对象的二次确认（RecordModal 内置文案无法指名对象）。 */}
+          {tplEditingId ? (
+            <FieldRow label={t("common.delete", "Delete")} span={2}>
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                disabled={tplSaving}
+                onClick={() =>
+                  setPendingDelete({
+                    run: () => void deleteTemplate(tplEditingId),
+                    name: tplForm.name || tplEditingId,
+                  })
+                }
+              >
+                {t("common.delete", "Delete")}
+              </button>
+            </FieldRow>
+          ) : null}
         </FormPanel>
       </RecordModal>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={t("common.confirm", "Confirm")}
+        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: pendingDelete?.name ?? "" })}
+        danger
+        confirmLabel={t("common.delete", "Delete")}
+        onConfirm={() => {
+          const fn = pendingDelete;
+          setPendingDelete(null);
+          fn?.run();
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

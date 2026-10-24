@@ -1,81 +1,175 @@
+# MariOS 编排文件（生产 / 预发 / 本地一体的默认值）
+#
+# 用法：
+#   cp .env.example .env        # 填好所有 [必填] 项（compose 会因缺值直接报错）
+#   docker compose up -d         # migrate 服务先跑 alembic upgrade head，api 再起
+#   docker compose run --rm api alembic upgrade head    # 手动迁移（发布流程用）
+#   docker compose run --rm backup /scripts/restore.sh  # 从备份恢复
+#
+# 注意：
+# - API 的构建上下文必须是 mos/ 根（fixtures 在 mos/fixtures，SelfCheck 依赖此布局）。
+# - schema 只由 migrate 服务（alembic upgrade head）负责；应用启动时在 Postgres 上
+#   检测到表已存在就**跳过** create_all（本地 SQLite 开发仍会 create_all）。
+#   create_all 只建「缺失的表」，不会 ALTER 已有表，不能当迁移手段用。
+# - 空库不需要再手工 stamp：alembic/env.py 对完全空库会按模型建表并登记 head。
+
+# ── 全局：日志轮转 + 自动重启（避免 json-file 撑爆磁盘 / 崩溃后永不重启）──
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   postgres:
     image: docker.m.daocloud.io/library/postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-voyageos}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-voyageos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须显式设置（见 .env.example）}
       POSTGRES_DB: ${POSTGRES_DB:-voyageos}
+    # 只监听回环：外部访问一律走反向代理，不要把数据库端口暴露到公网。
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - voyageos_pg:/var/lib/postgresql/data
-      # 注意：不要挂载 docs/ddl.sql 初始化——该文件与当前模型存在漂移，
-      # 空库由 API 启动时 create_all 建表，再执行 `alembic stamp head` 登记基线。
+      # 注意：不要挂载 docs/internal/legacy_ddl.sql 初始化——该文件与当前模型存在漂移，
+      # 空库由 migrate 服务（alembic upgrade head）建表。
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-voyageos} -d ${POSTGRES_DB:-voyageos}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    stop_grace_period: 30s
 
-  redis:
-    image: docker.m.daocloud.io/library/redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  minio:
-    image: docker.m.daocloud.io/minio/minio:latest
-    command: server /data --console-address ":9001"
+  # ── 说明（审计 P2「Redis 是死服务 / MinIO 是死服务」）──────────────────
+  # 编排里**曾经**带 redis 与 minio 两个容器，但整套系统**一行代码都没用到**：
+  #   * 限流是**进程内**滑动窗口（services/ratelimit.py），不连 Redis；
+  #   * 文件/证书落**本地卷**（uploads/），没有 boto3 / minio 客户端。
+  # 两个"死服务"还带来真实运维风险：api 之前 `depends_on: redis`（健康），
+  # 于是**一个没人用的容器不健康，API 就起不来**。
+  # 现在从编排里移除；未来真要接 Redis（分布式限流/缓存）或 S3（对象存储），
+  # 再按需加回来并接线。
+  #
+  # ── 迁移：一次性服务，把 schema 升到 head（api 依赖它成功退出）──────────
+  migrate:
+    build:
+      # 构建上下文必须是 mos/（fixtures 在 mos/fixtures，SelfCheck 依赖此布局）
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+    image: marios/api:latest
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    logging: *default-logging
+    env_file:
+      - path: .env
+        required: false
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-voyageos}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-voyageossecret}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - voyageos_minio:/data
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-voyageos}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-voyageos}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须显式设置（见 .env.example）}
+      OPS_DATA_KEY: ${OPS_DATA_KEY:?OPS_DATA_KEY 必须显式设置（见 .env.example）}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 60s
 
   api:
     build:
       # 构建上下文必须是 mos/（fixtures 在 mos/fixtures，SelfCheck 依赖此布局）
       context: ../../
       dockerfile: apps/api/Dockerfile
+    image: marios/api:latest
+    restart: unless-stopped
+    logging: *default-logging
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-voyageos}:${POSTGRES_PASSWORD:-voyageos}@postgres:5432/${POSTGRES_DB:-voyageos}
-      REDIS_URL: redis://redis:6379/0
-      S3_ENDPOINT: http://minio:9000
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-voyageos}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-voyageos}
+      # P0-10: 密钥必须显式设置 —— 缺值时 compose 直接报错，绝不让应用退化成
+      # 「每进程随机密钥」（重启即毁掉已加密的 M365 token / SMTP 口令 / 租户连接串）。
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须显式设置（见 .env.example）}
+      OPS_DATA_KEY: ${OPS_DATA_KEY:?OPS_DATA_KEY 必须显式设置（见 .env.example）}
+      # P0-12: 反代后必须信任 X-Forwarded-For，否则全站共用一个限流桶。
+      # "*" = 信任所有（compose 内网反代）；生产建议收紧到反代网段。
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-*}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # P0-14: 备份 / 上传 / 密钥必须落持久卷，否则重建容器即丢。
+      - mos_api_data:/srv/mos/apps/api/app/data
+      - mos_api_uploads:/srv/mos/apps/api/uploads
+      - mos_api_keys:/srv/mos/keys
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
-      interval: 10s
+      # /readyz 探依赖（DB），/healthz 只探进程存活
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readyz"]
+      interval: 15s
       timeout: 5s
       retries: 10
+      start_period: 30s
+    mem_limit: 2g
+    cpus: 2.0
+    stop_grace_period: 45s
 
   web:
     build:
       context: ../../apps/web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE: http://localhost:8000
+        # P0-11: NEXT_PUBLIC_API_BASE 在**构建期**内联进浏览器 bundle，
+        # 必须用 ${...} 插值，否则改 .env 完全无效。
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:?NEXT_PUBLIC_API_BASE 必须设置（构建期内联）}
+    image: marios/web:latest
+    restart: unless-stopped
+    logging: *default-logging
     environment:
-      NEXT_PUBLIC_API_BASE: http://localhost:8000
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:?NEXT_PUBLIC_API_BASE 必须设置}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: 1g
+    cpus: 1.0
+    stop_grace_period: 30s
+
+  # ── 数据库备份：pg_dump 定时快照 + 校验 + 保留策略（见 backup/README.md）──
+  backup:
+    image: docker.m.daocloud.io/library/postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-voyageos}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须显式设置}
+      PGDATABASE: ${POSTGRES_DB:-voyageos}
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - ./backup:/scripts:ro
+      - mos_backups:/backups
+    entrypoint: ["/bin/sh", "/scripts/backup-loop.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 60s
 
 volumes:
   voyageos_pg:
-  voyageos_minio:
+  mos_backups:
+  mos_api_data:
+  mos_api_uploads:
+  mos_api_keys:

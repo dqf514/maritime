@@ -92,7 +92,7 @@
   padding: 0;
 }
 .rb-ds-toggle:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .rb-ds-desc {
   color: var(--muted);
@@ -119,10 +119,10 @@
   text-align: left;
 }
 .rb-field-list li button:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .rb-field-list li button.selected {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 .rb-field-type {

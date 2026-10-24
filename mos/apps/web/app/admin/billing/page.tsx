@@ -1,47 +1,74 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { RefreshButton } from "@/components/RefreshButton";
+import { msgOf, handled } from "@/lib/errors";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { StateView } from "@/components/StateView";
 import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type PlanRow = Record<string, unknown>;
 type PackRow = Record<string, unknown>;
 type UsageRow = Record<string, unknown>;
 
-export default function BillingPage() {
+function BillingPageInner() {
   const { t } = useI18n();
   const toast = useToast();
+  const { page, limit, setQuery } = useListQuery();
   const [sub, setSub] = useState<Record<string, unknown> | null>(null);
   const [plans, setPlans] = useState<PlanRow[]>([]);
   const [packs, setPacks] = useState<PackRow[]>([]);
   const [wallet, setWallet] = useState<Array<{ meter_code: string; balance: number }>>([]);
   const [usage, setUsage] = useState<UsageRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
 
   async function load() {
-    const [s, p, pk, w, u] = await Promise.all([
-      apiGet("/api/v1/billing/subscription"),
-      apiGet("/api/v1/platform/saas/plans"),
-      apiGet("/api/v1/platform/saas/packs"),
-      apiGet("/api/v1/billing/wallet"),
-      apiGet("/api/v1/billing/usage"),
-    ]);
-    setSub(s);
-    setPlans(p);
-    setPacks(pk);
-    setWallet(w);
-    setUsage(u);
+    setLoading(true);
+    setLoadErr("");
+    try {
+      const [s, p, pk, w, u] = await Promise.all([
+        apiGet("/api/v1/billing/subscription"),
+        apiGet("/api/v1/platform/saas/plans"),
+        apiGet("/api/v1/platform/saas/packs"),
+        apiGet("/api/v1/billing/wallet"),
+        apiGet("/api/v1/billing/usage"),
+      ]);
+      setSub(s);
+      setPlans(p);
+      setPacks(pk);
+      setWallet(w);
+      setUsage(u);
+    } catch (e) {
+      // 主列表失败必须走错误态，不能静默变成「暂无用量」（P1-4）。
+      setLoadErr(msgOf(e, t("page.billing.admin_required", "需要租户管理员")));
+      toast.error(msgOf(e, t("page.billing.admin_required", "需要租户管理员")));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch(() => toast.error(t("page.billing.admin_required", "需要租户管理员")));
-  }, [t]);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 分页（P1-28）：原来硬截断前 20 条且不可见 —— 现在分页 + 「共 N 条」。
+  const totalPages = Math.max(1, Math.ceil(usage.length / limit));
+  const safePage = Math.min(page, totalPages);
+  const pagedUsage = useMemo(
+    () => usage.slice((safePage - 1) * limit, safePage * limit),
+    [usage, safePage, limit],
+  );
+  const setPage = (p: number) => setQuery({ page: p > 1 ? p : null });
 
   async function invokeAi() {
     const res = await apiPost("/api/v1/billing/ai/invoke-demo");
@@ -56,7 +83,7 @@ export default function BillingPage() {
 
   const plan = (sub?.plan || null) as Record<string, unknown> | null;
 
-  const planColumns: ColumnDef<PlanRow>[] = [
+  const planColumns = useMemo<ColumnDef<PlanRow>[]>(() => [
     {
       key: "name",
       title: t("page.billing.plan", "套餐"),
@@ -101,9 +128,9 @@ export default function BillingPage() {
         );
       },
     },
-  ];
+  ], [plan, sub?.status, t]);
 
-  const packColumns: ColumnDef<PackRow>[] = [
+  const packColumns = useMemo<ColumnDef<PackRow>[]>(() => [
     { key: "name", title: t("page.billing.pack", "用量包"), minWidth: 160, value: (r) => String(r.name || "") },
     { key: "meter_code", title: t("page.billing.meter", "计量项"), width: 130, value: (r) => String(r.meter_code || "") },
     { key: "quantity", title: t("page.billing.qty", "数量"), width: 90, align: "right", value: (r) => String(r.quantity ?? "") },
@@ -118,14 +145,14 @@ export default function BillingPage() {
         </span>
       ),
     },
-  ];
+  ], [t]);
 
-  const usageColumns: ColumnDef<UsageRow>[] = [
+  const usageColumns = useMemo<ColumnDef<UsageRow>[]>(() => [
     { key: "meter_code", title: t("page.billing.meter", "计量项"), width: 130, value: (r) => String(r.meter_code || "") },
     { key: "direction", title: t("page.billing.dir", "方向"), width: 90, value: (r) => String(r.direction || "") },
     { key: "quantity", title: t("page.billing.qty", "数量"), width: 90, align: "right", value: (r) => String(r.quantity ?? "") },
     { key: "note", title: t("common.notes", "备注"), minWidth: 180, value: (r) => String(r.note || "") },
-  ];
+  ], [t]);
 
   return (
     <AppShell>
@@ -138,9 +165,7 @@ export default function BillingPage() {
         )}
       />
       <Toolbar>
-        <button type="button" className="btn btn-sm" onClick={() => load().catch(() => undefined)} title={t("common.refresh", "Refresh")}>
-          ↻
-        </button>
+        <RefreshButton label={t("common.refresh", "Refresh")} className="btn btn-sm" onClick={() => load().catch(handled)} />
       </Toolbar>
 
       <div className="panel" style={{ borderLeft: "3px solid var(--accent, #1A9B96)" }}>
@@ -163,7 +188,7 @@ export default function BillingPage() {
         ) : (
           <p>{t("page.billing.no_sub", "暂无有效订阅")}</p>
         )}
-        <button className="btn" type="button" onClick={() => invokeAi().catch((e) => toast.error(String(e)))}>
+        <button className="btn" type="button" onClick={() => invokeAi().catch((e) => toast.error(msgOf(e)))}>
           {t("page.billing.invoke_ai", "试调用计量 AI（演示）")}
         </button>
       </div>
@@ -211,15 +236,51 @@ export default function BillingPage() {
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>{t("page.billing.ledger", "用量流水")}</h3>
-        <DataGrid<UsageRow>
-          columns={usageColumns}
-          data={usage.slice(0, 20)}
-          rowKey={(r, i) => String(r.id ?? r.meter_code ?? i) + `_${i}`}
-          storageKey="admin_billing_usage_grid"
+        <StateView
+          loading={loading}
+          error={loadErr || undefined}
+          empty={!loadErr && !usage.length}
           emptyText={t("common.none", "无")}
-          showFooter={false}
-        />
+          onRetry={() => void load()}
+        >
+          <DataGrid<UsageRow>
+            columns={usageColumns}
+            data={pagedUsage}
+            rowKey={(r, i) => String(r.id ?? r.meter_code ?? i) + `_${i}`}
+            storageKey="admin_billing_usage_grid"
+            emptyText={t("common.none", "无")}
+            showFooter={false}
+          />
+        </StateView>
+        {!loadErr ? (
+          <div className="dt-pagination">
+            <span className="dt-page-info">
+              {t("common.page_of", "{from}-{to} of {n}", {
+                from: usage.length ? (safePage - 1) * limit + 1 : 0,
+                to: Math.min(safePage * limit, usage.length),
+                n: usage.length,
+              })}
+            </span>
+            <span className="dt-page-btns">
+              <button type="button" onClick={() => setPage(safePage - 1)} disabled={safePage <= 1} aria-label="prev">
+                ‹
+              </button>
+              <button type="button" onClick={() => setPage(safePage + 1)} disabled={safePage >= totalPages} aria-label="next">
+                ›
+              </button>
+            </span>
+          </div>
+        ) : null}
       </div>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function BillingPage() {
+  return (
+    <Suspense fallback={null}>
+      <BillingPageInner />
+    </Suspense>
   );
 }

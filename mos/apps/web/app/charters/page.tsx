@@ -1,12 +1,14 @@
 "use client";
 
+import { msgOf } from "@/lib/errors";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
+import { StateView } from "@/components/StateView";
 import { DateInput } from "@/components/DateInput";
 import { PageGuide } from "@/components/PageGuide";
 import { PageHeader } from "@/components/PageHeader";
@@ -228,6 +230,9 @@ function ChartersPage() {
   const [parties, setParties] = useState<RefItem[]>([]);
   const [masters, setMasters] = useState<MasterContract[]>([]);
   const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
+  /** 参考数据（船 / 对手方 / 母合同）加载失败 —— 局部提示 */
+  const [refErr, setRefErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
 
@@ -268,29 +273,76 @@ function ChartersPage() {
   }
 
   const load = useCallback(async () => {
-    const [c, v, p, m] = await Promise.all([
+    setLoading(true);
+    setRefErr(null);
+    // 主列表（租约）与参考数据（船/对手方/母合同）分别成败 ——
+    // 参考数据失败只做局部提示，不能让整页变成「空列表」。
+    const [cR, vR, pR, mR] = await Promise.allSettled([
       apiGet("/api/v1/charters"),
       apiGet("/api/v1/masterdata/vessels"),
       apiGet("/api/v1/masterdata/counterparties"),
-      apiGet("/api/v1/master-contracts").catch(() => []),
+      apiGet("/api/v1/master-contracts"),
     ]);
-    setRows(c);
-    setVessels(v);
-    setParties(p);
-    setMasters(Array.isArray(m) ? m : (m?.items ?? []));
-    if (!vesselId && v[0]?.id) setVesselId(v[0].id);
-    if (!partyId && p[0]?.id) setPartyId(p[0].id);
+    if (cR.status === "fulfilled") {
+      setRows(cR.value as Charter[]);
+      setErr("");
+    } else {
+      setRows([]);
+      setErr(msgOf(cR.reason, t("common.failed", "Failed")));
+    }
+    if (vR.status === "fulfilled") {
+      const v = vR.value as RefItem[];
+      setVessels(v);
+      if (!vesselId && v[0]?.id) setVesselId(v[0].id);
+    } else {
+      setVessels([]);
+      setRefErr(msgOf(vR.reason));
+    }
+    if (pR.status === "fulfilled") {
+      const p = pR.value as RefItem[];
+      setParties(p);
+      if (!partyId && p[0]?.id) setPartyId(p[0].id);
+    } else {
+      setParties([]);
+      setRefErr(msgOf(pR.reason));
+    }
+    if (mR.status === "fulfilled") {
+      const m = mR.value;
+      setMasters(Array.isArray(m) ? m : ((m as { items?: MasterContract[] })?.items ?? []));
+    } else {
+      setMasters([]);
+      setRefErr(msgOf(mR.reason));
+    }
+    setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    load().catch(() => setErr(t("common.failed", "Failed")));
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function create() {
     setBusy(true);
     setErr("");
+    // 数值字段校验：非法输入不得静默变 0 / NaN —— 直接中止提交
+    const numFields: Array<[string, string]> = [
+      [t("page.estimates.freight_rate", "Freight rate"), freightRate],
+      [t("page.estimates.cargo_qty", "Cargo qty"), cargoQty],
+      [t("page.estimates.commission", "Commission %"), commission],
+      ...TERM_NUM_KEYS.map((k) => [k, terms[k]] as [string, string]),
+    ];
+    if (docKind === "master_contract") {
+      numFields.push([t("page.charters.mc_total_qty", "Total qty"), mcQty]);
+    }
+    for (const [label, raw] of numFields) {
+      if (raw === "" || raw === undefined || raw === null) continue;
+      if (!Number.isFinite(Number(raw))) {
+        toast.error(t("page.charters.err_number", "{field} must be a valid number", { field: label }));
+        setBusy(false);
+        return;
+      }
+    }
     try {
       if (docKind === "master_contract") {
         const mc = await apiPost("/api/v1/master-contracts", {
@@ -338,23 +390,23 @@ function ChartersPage() {
       setFormOpen(false);
       await load();
     } catch (ex) {
-      setErr(String(ex));
+      setErr(msgOf(ex));
     } finally {
       setBusy(false);
     }
   }
 
-  function vesselName(id: string | null) {
+  const vesselName = useCallback((id: string | null) => {
     if (!id) return "—";
     return vessels.find((v) => v.id === id)?.name || id.slice(0, 8);
-  }
+  }, [vessels]);
 
-  function partyName(id: string | null) {
+  const partyName = useCallback((id: string | null) => {
     if (!id) return "—";
     return parties.find((p) => p.id === id)?.name || id.slice(0, 8);
-  }
+  }, [parties]);
 
-  const listColumns: ColumnDef<Charter>[] = [
+  const listColumns = useMemo<ColumnDef<Charter>[]>(() => [
     { key: "charter_no", title: t("page.charters.no", "编号"), width: 130, value: (r) => r.charter_no },
     {
       key: "charter_type",
@@ -420,7 +472,7 @@ function ChartersPage() {
       value: (r) => r.updated_at ?? null,
       render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
     },
-  ];
+  ], [partyName, t, vesselName]);
 
   const tabs: TabItem[] = [
     { key: "fixtures", label: t("page.charters.list", "Fixtures") },
@@ -453,17 +505,30 @@ function ChartersPage() {
       {listType === "fixtures" ? (
         <>
           {err ? <p className="flash-err">{err}</p> : null}
+          {refErr ? (
+            <p className="flash-err" role="alert">
+              {t("page.charters.ref_fail", "Reference data could not be loaded: {err}", { err: refErr })}
+            </p>
+          ) : null}
 
           <div className="panel">
-            <DataGrid<Charter>
-              columns={listColumns}
-              data={rows}
-              rowKey={(r) => r.id}
-              onRowClick={(r) => router.push(`/charters/${r.id}`)}
-              onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
-              storageKey="charters_list_grid"
+            <StateView
+              loading={loading}
+              error={err || undefined}
+              empty={!loading && !err && rows.length === 0}
               emptyText={t("common.empty", "No records")}
-            />
+              onRetry={() => void load()}
+            >
+              <DataGrid<Charter>
+                columns={listColumns}
+                data={rows}
+                rowKey={(r) => r.id}
+                onRowClick={(r) => router.push(`/charters/${r.id}`)}
+                onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
+                storageKey="charters_list_grid"
+                emptyText={t("common.empty", "No records")}
+              />
+            </StateView>
           </div>
         </>
       ) : null}

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -20,10 +21,41 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     func,
+    text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from app.db import Base
+
+#: 脱敏占位符 —— 与 ``services.integration_adapters.SECRET_MASK`` 一致。
+#: 这里硬编码是为了避免 models → services 的循环导入
+#: （integration_adapters 本身就 import 本模块的模型）。
+SECRET_MASK_PLACEHOLDER = "***"
+
+#: 回显用的掩码形态：纯 ``***`` 与版本化 ``v1:***``。
+_MASKED_SECRET_VALUES = frozenset({SECRET_MASK_PLACEHOLDER, "v1:***"})
+
+
+def _encrypt_secret_ref(current: str | None, value: str | None) -> str | None:
+    """``secret_ref`` 落库前的统一处理（P0-19）。
+
+    - 明文密钥 / 密钥引用 → ``v1:`` 版本化密文（``ops_crypto.encrypt_token``）；
+    - 已经是 ``v1:`` 的原样保留（幂等，重复保存不会二次加密）；
+    - 回显的掩码（``***`` / ``v1:***``）视为「保持原值不变」——
+      前端编辑框拿到的是掩码，回写时不能把真密钥冲成 ``***``。
+    """
+    if value is None:
+        return None
+    text = str(value)
+    if not text:
+        return None
+    if text in _MASKED_SECRET_VALUES:
+        return current or None
+    if text.startswith("v1:"):
+        return text
+    from app.services.ops_crypto import encrypt_token
+
+    return encrypt_token(text)
 
 
 class Company(Base):
@@ -47,6 +79,7 @@ class Vessel(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     name: Mapped[str] = mapped_column(Text, nullable=False)
     imo: Mapped[str | None] = mapped_column(Text)
     mmsi: Mapped[str | None] = mapped_column(Text)
@@ -201,8 +234,25 @@ class PortAlias(Base):
 class Counterparty(Base):
     __tablename__ = "counterparties"
 
+    # P0-24：同租户内对手方名称必须唯一。没有这条约束时，前端重试、多个标签页、
+    # 脚本重放都会在同一租户里造出两条同名记录 —— 之后开票选对手方会出现
+    # 两个同名条目，用户根本分不清是哪一家。
+    # 部分唯一索引（deleted_at IS NULL）：软删除的记录不再占用名字，
+    # 用户删掉一家之后可以用同名重新建档。
+    __table_args__ = (
+        Index(
+            "uq_counterparties_tenant_name",
+            "tenant_id",
+            "name",
+            unique=True,
+            sqlite_where=text("deleted_at IS NULL"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     name: Mapped[str] = mapped_column(Text, nullable=False)
     type: Mapped[str] = mapped_column(Text, default="other")
     country: Mapped[str | None] = mapped_column(Text)
@@ -311,6 +361,11 @@ class AiProvider(Base):
     config: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    @validates("secret_ref")
+    def _encrypt_provider_secret_ref(self, _key: str, value: str | None) -> str | None:
+        """供应商密钥**加密落库**（P0-19）—— 模型层兜底，路由层再遮一次。"""
+        return _encrypt_secret_ref(self.__dict__.get("secret_ref"), value)
+
 
 class AiSkillBinding(Base):
     __tablename__ = "ai_skill_bindings"
@@ -339,6 +394,15 @@ class ConnectorInstance(Base):
     last_health: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    @validates("secret_ref")
+    def _encrypt_connector_secret_ref(self, _key: str, value: str | None) -> str | None:
+        """连接器密钥**加密落库**（P0-19）。
+
+        ``ConnectorInstance.secret_ref`` 曾经直接存明文口令/API Key，
+        现在落库即 ``v1:`` 密文；前端回写的掩码按「保持原值」处理。
+        """
+        return _encrypt_secret_ref(self.__dict__.get("secret_ref"), value)
 
 
 class EmailAccount(Base):

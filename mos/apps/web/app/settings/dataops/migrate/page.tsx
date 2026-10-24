@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
@@ -13,6 +13,7 @@ import {
   apiRunAnalyze,
   apiUploadMigrationExcel,
 } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -32,15 +33,26 @@ export default function MigratePage() {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [step, setStep] = useState("connect");
+  const [err, setErr] = useState<string | null>(null);
+  // 提交迁移不可逆 → 输入确认（键入关键字）
+  const COMMIT_KEYWORD = "COMMIT";
+  const [commitOpen, setCommitOpen] = useState(false);
+  const [commitText, setCommitText] = useState("");
 
   async function refreshProposals(id: string) {
-    const rows = await apiListProposals(id);
-    setProposals(rows);
-    const init: Record<string, boolean> = {};
-    for (const r of rows) {
-      if (r.status === "proposed") init[r.id] = r.confidence >= 0.9;
+    setErr(null);
+    try {
+      const rows = await apiListProposals(id);
+      setProposals(Array.isArray(rows) ? rows : []);
+      const init: Record<string, boolean> = {};
+      for (const r of rows) {
+        if (r.status === "proposed") init[r.id] = r.confidence >= 0.9;
+      }
+      setSelected(init);
+    } catch (ex) {
+      setErr(msgOf(ex));
+      setProposals([]);
     }
-    setSelected(init);
   }
 
   async function start() {
@@ -72,24 +84,32 @@ export default function MigratePage() {
     toast.success(t("page.migrate.excel_done", "Excel produced {n} proposal(s).", { n: res.proposals_from_excel }));
   }
 
+  const selectedIds = Object.entries(selected)
+    .filter(([, v]) => v)
+    .map(([k]) => k);
+
   async function commit() {
     if (!jobId) return;
-    const ids = Object.entries(selected)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
-    toast.success(t("page.migrate.committing", "Committing {n} proposals…", { n: ids.length }));
-    const res = await apiCommitMigration(jobId, ids);
-    setStep("done");
-    toast.success(
-      t("page.migrate.committed", "Committed — vessels {v}, ports {p}, counterparties {c}.", {
-        v: res.applied?.vessel ?? 0,
-        p: res.applied?.port ?? 0,
-        c: res.applied?.counterparty ?? 0,
-      }),
-    );
+    const ids = selectedIds;
+    try {
+      toast.success(t("page.migrate.committing", "Committing {n} proposals…", { n: ids.length }));
+      const res = await apiCommitMigration(jobId, ids);
+      setStep("done");
+      setCommitOpen(false);
+      setCommitText("");
+      toast.success(
+        t("page.migrate.committed", "Committed — vessels {v}, ports {p}, counterparties {c}.", {
+          v: res.applied?.vessel ?? 0,
+          p: res.applied?.port ?? 0,
+          c: res.applied?.counterparty ?? 0,
+        }),
+      );
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.migrate.commit_fail", "Commit failed")));
+    }
   }
 
-  const columns: ColumnDef<Proposal>[] = [
+  const columns = useMemo<ColumnDef<Proposal>[]>(() => [
     {
       key: "_select",
       title: "",
@@ -120,7 +140,7 @@ export default function MigratePage() {
       value: (r) => JSON.stringify(r.payload),
       render: (v) => <code>{String(v)}</code>,
     },
-  ];
+  ], [selected, t]);
 
   return (
     <AppShell>
@@ -156,6 +176,7 @@ export default function MigratePage() {
           ) : null
         }
       />
+      {err ? <div className="error">{err}</div> : null}
       {proposals.length ? (
         <>
           <DataGrid<Proposal>
@@ -169,11 +190,52 @@ export default function MigratePage() {
             <button
               className="btn btn-primary"
               type="button"
-              onClick={() => commit().catch(() => toast.error(t("page.migrate.commit_fail", "Commit failed")))}
+              onClick={() => {
+                setCommitOpen(true);
+                setCommitText("");
+              }}
               style={{ marginTop: "1rem" }}
             >
               {t("page.migrate.apply", "Apply selected")}
             </button>
+          ) : null}
+          {commitOpen ? (
+            <div className="panel" style={{ marginTop: "0.75rem", borderColor: "var(--danger)" }}>
+              <p style={{ marginTop: 0 }}>
+                {t(
+                  "page.migrate.commit_confirm_hint",
+                  "将把选中的 {n} 条迁移建议写入正式业务数据，且不可撤销。请输入 {kw} 以确认：",
+                  { n: String(selectedIds.length), kw: COMMIT_KEYWORD },
+                )}
+              </p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                <input
+                  value={commitText}
+                  onChange={(e) => setCommitText(e.target.value)}
+                  aria-label={t("page.migrate.commit_confirm_input", "Type the confirmation keyword to commit")}
+                  placeholder={COMMIT_KEYWORD}
+                  style={{ maxWidth: 220 }}
+                />
+                <button
+                  className="btn btn-danger"
+                  type="button"
+                  disabled={commitText.trim().toUpperCase() !== COMMIT_KEYWORD}
+                  onClick={() => commit()}
+                >
+                  {t("page.migrate.commit_run", "确认提交迁移")}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={() => {
+                    setCommitOpen(false);
+                    setCommitText("");
+                  }}
+                >
+                  {t("common.cancel", "取消")}
+                </button>
+              </div>
+            </div>
           ) : null}
         </>
       ) : null}

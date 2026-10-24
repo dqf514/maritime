@@ -98,7 +98,7 @@
   width: 14px;
   height: 14px;
   background: var(--accent-bg-strong);
-  color: var(--accent);
+  color: var(--accent-text);
   border-radius: 50%;
   font-size: 9px;
   font-weight: 700;
@@ -156,7 +156,7 @@
 }
 .compare-value-cell.is-best {
   background: var(--accent-bg);
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 700;
 }
 
@@ -339,7 +339,7 @@
 }
 .compare-edge-tab:hover {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .compare-edge-tab.open {
   right: min(860px, 72vw);

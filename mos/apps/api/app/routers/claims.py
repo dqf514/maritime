@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -28,15 +28,17 @@ from app.services.claim_taxonomy import (
     is_valid_claim_subtype,
 )
 from app.services.doc_numbering import next_doc_number
+from app.services.money import FX_RATE_NOT_FOUND, FxRateUnavailable, require_fx_rate, to_base_amount
 from app.services.performance_engine import compute_performance
 from app.services.recycle import soft_delete
 from app.services.tenant_guard import scoped_get
 
-from app.routers._finance_common import _alive, _days_to_timebar, TIMEBAR_DAYS_AFTER_BL
+from app.routers._finance_common import _alive, _base_currency, _days_to_timebar, TIMEBAR_DAYS_AFTER_BL
 
 from datetime import timedelta
 from app.services.state_machine import CLAIM_TRANSITIONS, transition
 from app.services.sanctions import assert_not_sanctioned
+from app.services.data_scope import apply_module_scope
 
 router = APIRouter()
 
@@ -80,6 +82,8 @@ def create_claim(body: ClaimIn, auth: AuthContext = Depends(require_module("clai
         lt = db.get(LaytimeCalc, body.laytime_id)
         if lt and lt.results:
             amount = float(lt.results.get("amount") or 0)
+    # 金额列是 Numeric —— 写入前量化到 2dp，避免 SQLite / Postgres 舍入分叉（P1-B8）
+    amount_dec = Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if amount is not None else None
     time_bar = body.time_bar
     if time_bar is None and body.voyage_id:
         # Infer time bar from the latest B/L date on the voyage's port calls.
@@ -98,12 +102,13 @@ def create_claim(body: ClaimIn, auth: AuthContext = Depends(require_module("clai
         raise HTTPException(404, "Contact not found")
     row = Claim(
         tenant_id=auth.tenant_id,
+     created_by=auth.user_id,
         claim_no=f"CL-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:5].upper()}",
         claim_type=body.claim_type,
         subtype=body.subtype,
         voyage_id=body.voyage_id,
         laytime_id=body.laytime_id,
-        amount=amount,
+        amount=amount_dec,
         currency=body.currency,
         time_bar=time_bar,
         notes=body.notes,
@@ -139,7 +144,7 @@ def claim_transition(
     row.status = transition("claim", row.status, target, CLAIM_TRANSITIONS)
     if target == "settled":
         row.settlement_amount = (
-            Decimal(str(settlement_amount)).quantize(Decimal("0.01"))
+            Decimal(str(settlement_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             if settlement_amount is not None
             else row.amount
         )
@@ -167,7 +172,8 @@ def update_claim(
     if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Claim not found")
     if body.amount is not None:
-        row.amount = body.amount
+        # Numeric 列 —— 写入前量化（P1-B8）
+        row.amount = Decimal(str(body.amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if body.notes is not None:
         row.notes = body.notes
     if body.claim_type is not None:
@@ -220,6 +226,8 @@ def list_claims(
         q = q.where(Claim.voyage_id == voyage_id)
     if claim_type is not None:
         q = q.where(Claim.claim_type == claim_type)
+    # 行级数据权限：scope 收窄到 "own" 时只看自己建的索赔
+    q = apply_module_scope(db, q, Claim, auth, "claims")
     rows, total = paginate(db, q.order_by(Claim.claim_no), limit, offset)
     return envelope(
         [
@@ -345,7 +353,7 @@ def claim_to_invoice(claim_id: UUID, auth: AuthContext = Depends(require_module(
             detail={"code": "INVALID_STATE", "message": f"Cannot invoice a claim in status {row.status}"},
         )
     amount = row.settlement_amount if row.settlement_amount is not None else row.amount
-    amount = Decimal(str(amount or 0)).quantize(Decimal("0.01"))
+    amount = Decimal(str(amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if amount <= 0:
         raise HTTPException(422, detail={"code": "INVALID_AMOUNT", "message": "Claim has no positive amount to invoice"})
     counterparty_id = None
@@ -357,6 +365,29 @@ def claim_to_invoice(claim_id: UUID, auth: AuthContext = Depends(require_module(
                 counterparty_id = charter.counterparty_id
     if counterparty_id:
         assert_not_sanctioned(db, auth.tenant_id, counterparty_id)
+    # 外币索赔单必须有汇率（P1-B10）：没有汇率就按 1:1 入账是**错的钱**。
+    # 取不到汇率 → fail closed（422），不许静默落库。
+    currency = row.currency or "USD"
+    base_ccy = _base_currency(db, auth.tenant_id)
+    try:
+        fx_rate = require_fx_rate(
+            db,
+            auth.tenant_id,
+            currency,
+            base_ccy,
+            invoice_type="demurrage",
+            context_date=date.today(),
+        )
+    except FxRateUnavailable as exc:
+        raise HTTPException(
+            422,
+            detail={
+                "code": FX_RATE_NOT_FOUND,
+                "message": str(exc),
+                "currency": currency,
+                "base_currency": base_ccy,
+            },
+        )
     inv = Invoice(
         tenant_id=auth.tenant_id,
         invoice_no=next_doc_number(db, auth.tenant_id, Invoice, Invoice.invoice_no, "INV"),
@@ -365,12 +396,23 @@ def claim_to_invoice(claim_id: UUID, auth: AuthContext = Depends(require_module(
         voyage_id=row.voyage_id,
         amount=amount,
         tax_amount=Decimal("0"),
-        currency=row.currency or "USD",
+        currency=currency,
+        fx_rate=fx_rate,
+        base_amount=to_base_amount(amount, fx_rate),
         meta={"claim_id": str(row.id), "claim_no": row.claim_no},
     )
     db.add(inv)
     db.commit()
-    return {"id": str(inv.id), "invoice_no": inv.invoice_no, "status": inv.status, "amount": float(inv.amount), "claim_id": str(row.id)}
+    return {
+        "id": str(inv.id),
+        "invoice_no": inv.invoice_no,
+        "status": inv.status,
+        "amount": float(inv.amount),
+        "currency": inv.currency,
+        "fx_rate": float(fx_rate),
+        "base_amount": float(inv.base_amount),
+        "claim_id": str(row.id),
+    }
 
 
 # —— 索赔处置动作（negotiate/litigate/arbitrate/settle/write_off） ——

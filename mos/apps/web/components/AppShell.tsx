@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { OmniSearch } from "@/components/OmniSearch";
 import { NavIcon, sectionIconId } from "@/components/NavIcon";
 import { NavPopup } from "@/components/NavPopup";
@@ -15,6 +21,7 @@ import { apiGet, apiLogout, apiMe, assetUrl, readStorage, removeStorage, TOKEN_S
 import { LanguageSwitcher, useI18n } from "@/lib/i18n";
 import { AiAssistant } from "@/components/ai/AiAssistant";
 import { patchAiContext } from "@/components/ai/aiContextStore";
+import { useFocusTrap } from "@/components/useFocusTrap";
 
 export type NavSection = {
   section: string;
@@ -98,6 +105,14 @@ export function AppShell({
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  // 用户菜单是「非模态下拉」：复用共享 hook 只做打开时移入焦点 / 关闭时归还焦点，
+  // 不做焦点陷阱——用户要能 Tab 出去继续操作页面。
+  const { ref: userMenuTrapRef, skipRestoreRef: userMenuSkipRestore } =
+    useFocusTrap<HTMLDivElement>(userMenuOpen);
+  // 移动端抽屉导航是真正的模态遮罩层（有 backdrop + 锁滚动 + Escape 关闭），
+  // 需要焦点陷阱：Tab 不能跑到被遮住的页面上。
+  const { ref: mobileNavRef, onKeyDown: mobileNavTrapKeyDown } =
+    useFocusTrap<HTMLElement>(mobileNavOpen);
   const router = useRouter();
   const pathname = usePathname();
   const { t, reload } = useI18n();
@@ -119,7 +134,12 @@ export function AppShell({
     const [m, s, b] = await Promise.all([
       apiMe(),
       apiGet("/api/v1/shell/bootstrap"),
-      apiGet("/api/v1/public/branding").catch(() => null),
+      // 品牌是**可选**数据：取不到就退回默认品牌，不必打断用户，
+      // 但要在控制台留痕（不能静默吞掉）。
+      apiGet("/api/v1/public/branding").catch((ex) => {
+        console.warn("[branding] 加载失败，使用默认品牌", ex);
+        return null;
+      }),
     ]);
     setMe(m);
     setShell(s);
@@ -164,11 +184,28 @@ export function AppShell({
 
   useEffect(() => {
     function onDoc(e: MouseEvent) {
-      if (!userMenuRef.current?.contains(e.target as Node)) setUserMenuOpen(false);
+      if (!userMenuRef.current?.contains(e.target as Node)) {
+        // 点到别处了，焦点已经在那边，别再抢回来
+        userMenuSkipRestore.current = true;
+        setUserMenuOpen(false);
+      }
     }
-    if (userMenuOpen) document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [userMenuOpen]);
+    // 焦点（Tab / 方向键）走到菜单外面就收起菜单——非模态下拉的标准行为
+    function onFocusIn(e: FocusEvent) {
+      if (!userMenuRef.current?.contains(e.target as Node)) {
+        userMenuSkipRestore.current = true;
+        setUserMenuOpen(false);
+      }
+    }
+    if (userMenuOpen) {
+      document.addEventListener("mousedown", onDoc);
+      document.addEventListener("focusin", onFocusIn);
+    }
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("focusin", onFocusIn);
+    };
+  }, [userMenuOpen, userMenuSkipRestore]);
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -189,6 +226,34 @@ export function AppShell({
       document.body.style.overflow = prev;
     };
   }, [mobileNavOpen]);
+
+  // 用户菜单键盘操作：Escape 关闭（焦点由 hook 归还给头像按钮）、方向键在菜单项之间漫游
+  const onUserMenuKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setUserMenuOpen(false);
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
+      const root = userMenuTrapRef.current;
+      if (!root) return;
+      const nodes = Array.from(
+        root.querySelectorAll<HTMLElement>(
+          'a[href],button:not([disabled]),[role="menuitem"]:not([disabled])',
+        ),
+      ).filter((n) => n.offsetParent !== null || n === document.activeElement);
+      if (!nodes.length) return;
+      e.preventDefault();
+      const active = document.activeElement as HTMLElement | null;
+      const idx = active ? nodes.indexOf(active) : -1;
+      let next = 0;
+      if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = nodes.length - 1;
+      else if (e.key === "ArrowDown") next = idx < 0 ? 0 : (idx + 1) % nodes.length;
+      else next = idx < 0 ? nodes.length - 1 : (idx - 1 + nodes.length) % nodes.length;
+      nodes[next].focus();
+    }
+  }, [userMenuTrapRef]);
 
   function closeMobileNav() {
     setMobileNavOpen(false);
@@ -315,7 +380,13 @@ export function AppShell({
               </span>
             </button>
             {userMenuOpen ? (
-              <div className="user-menu-pop" role="menu">
+              <div
+                className="user-menu-pop"
+                role="menu"
+                ref={userMenuTrapRef}
+                tabIndex={-1}
+                onKeyDown={onUserMenuKeyDown}
+              >
                 <div className="user-menu-head">
                   <strong>{me.user.full_name || me.user.email}</strong>
                   <small>{me.user.email}</small>
@@ -356,7 +427,13 @@ export function AppShell({
           onClick={closeMobileNav}
           aria-hidden={!mobileNavOpen}
         />
-        <nav id="app-sidenav" className="sidenav" aria-label={t("shell.main_nav", "主导航")}>
+        <nav
+          id="app-sidenav"
+          className="sidenav"
+          aria-label={t("shell.main_nav", "主导航")}
+          ref={mobileNavRef}
+          onKeyDown={mobileNavOpen ? mobileNavTrapKeyDown : undefined}
+        >
           <div className="sidenav-mobile-head">
             <strong>{t("shell.main_nav", "主导航")}</strong>
             <button type="button" className="nav-drawer-close" onClick={closeMobileNav} aria-label={t("shell.close_nav", "关闭导航")}>
@@ -463,6 +540,7 @@ export function AppShell({
             className="right-panel-toggle icon-btn"
             onClick={() => setRightPanelOpen(true)}
             title={t("shell.open_panel", "展开面板")}
+            aria-label={t("shell.open_panel", "展开面板")}
             style={{
               position: "fixed",
               right: 0,

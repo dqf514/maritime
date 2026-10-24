@@ -8,11 +8,12 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider>
-      <ErrorBoundary>
-        <I18nProvider>
+      <I18nProvider>
+        {/* ErrorBoundary 必须挂在 I18nProvider 内部，否则它自己拿不到词表、只能显示硬编码英文。 */}
+        <ErrorBoundary>
           <ToastProvider>{children}</ToastProvider>
-        </I18nProvider>
-      </ErrorBoundary>
+        </ErrorBoundary>
+      </I18nProvider>
     </ThemeProvider>
   );
 }

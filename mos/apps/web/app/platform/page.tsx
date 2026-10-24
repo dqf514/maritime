@@ -5,14 +5,25 @@ import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { HubTile } from "@/components/HubTile";
 import { apiGet } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 export default function PlatformHomePage() {
   const { t } = useI18n();
   const [health, setHealth] = useState<{ tenant_count: number; active: number; suspended: number } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    setErr(null);
+    try {
+      setHealth(await apiGet("/api/v1/platform/health"));
+    } catch (ex) {
+      setErr(msgOf(ex));
+    }
+  }
 
   useEffect(() => {
-    apiGet("/api/v1/platform/health").then(setHealth).catch(() => setHealth(null));
+    load();
   }, []);
 
   return (
@@ -25,6 +36,14 @@ export default function PlatformHomePage() {
         )}
         breadcrumb={[{ label: t("nav.plat_home", "Operator console") }]}
       />
+      {err ? (
+        <div className="panel">
+          <p className="text-danger">{err}</p>
+          <button type="button" className="btn btn-sm" onClick={() => load()}>
+            {t("common.retry", "重试")}
+          </button>
+        </div>
+      ) : null}
       <div className="workbench-grid">
         <HubTile
           href="/platform/tenants"

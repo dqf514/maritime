@@ -5,13 +5,16 @@
 // tce-targets / vettings / loadline-zones). Table + RecordModal patterns follow
 // masterdata/counterparties.
 
-import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { RecordModal } from "@/components/RecordModal";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef as GridColumnDef } from "@/components/grid/types";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
+import { StateView } from "@/components/StateView";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 export type FieldDef = {
   key: string;
@@ -102,40 +105,32 @@ export function VesselCrudGrid({
   const [formOpen, setFormOpen] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
+  /** 主列表加载失败 */
+  const [err, setErr] = useState<string | null>(null);
+  /** 待确认删除的行 */
+  const [pendingDel, setPendingDel] = useState<Row | null>(null);
 
   const base = basePath ?? `/api/v1/vessels/${vesselId}/${path}`;
   const listUrl = query ? `${base}${query}` : base;
 
   const load = useCallback(async () => {
     setLoading(true);
+    setErr(null);
     try {
       const data = await apiGet(listUrl);
       setRows(Array.isArray(data) ? data : []);
-    } catch {
+    } catch (ex) {
+      // 取数失败 ≠ 没有记录：保留错误态，交由 StateView 显示并可重试
       setRows([]);
+      setErr(msgOf(ex));
     } finally {
       setLoading(false);
     }
   }, [listUrl]);
 
   useEffect(() => {
-    let alive = true;
-    apiGet(listUrl).then(
-      (data) => {
-        if (!alive) return;
-        setRows(Array.isArray(data) ? data : []);
-        setLoading(false);
-      },
-      () => {
-        if (!alive) return;
-        setRows([]);
-        setLoading(false);
-      },
-    );
-    return () => {
-      alive = false;
-    };
-  }, [listUrl]);
+    void load();
+  }, [load]);
 
   function openCreate() {
     const init: Record<string, unknown> = {};
@@ -148,7 +143,7 @@ export function VesselCrudGrid({
     setFormOpen(true);
   }
 
-  function openEdit(row: Row) {
+  const openEdit = useCallback((row: Row) => {
     const init: Record<string, unknown> = {};
     for (const f of fields) {
       const v = row[f.key];
@@ -164,7 +159,7 @@ export function VesselCrudGrid({
     setDraft(init);
     setEditing(row);
     setFormOpen(true);
-  }
+  }, [fields]);
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -202,8 +197,8 @@ export function VesselCrudGrid({
       setFormOpen(false);
       setEditing(null);
       await load();
-    } catch (err: any) {
-      toast.error(err?.message || t("common.failed", "Failed"));
+    } catch (ex: any) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     } finally {
       setSaving(false);
     }
@@ -217,8 +212,8 @@ export function VesselCrudGrid({
       setFormOpen(false);
       setEditing(null);
       await load();
-    } catch (err: any) {
-      toast.error(err?.message || t("common.failed", "Failed"));
+    } catch (ex: any) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
   }
 
@@ -227,12 +222,12 @@ export function VesselCrudGrid({
       await apiDelete(`${base}/${r.id}`);
       toast.success(t("common.deleted", "Deleted"));
       await load();
-    } catch (err: any) {
-      toast.error(err?.message || t("common.failed", "Failed"));
+    } catch (ex: any) {
+      toast.error(msgOf(ex, t("common.failed", "Failed")));
     }
   }
 
-  const gridColumns: GridColumnDef<Row>[] = [
+  const gridColumns = useMemo<GridColumnDef<Row>[]>(() => [
     ...columns.map((c) => ({
       key: c.key,
       title: c.label,
@@ -252,13 +247,13 @@ export function VesselCrudGrid({
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => openEdit(r)}>
             {t("common.edit", "Edit")}
           </button>
-          <button type="button" className="btn btn-ghost btn-sm btn-danger-text" onClick={() => removeRow(r)}>
+          <button type="button" className="btn btn-ghost btn-sm btn-danger-text" onClick={() => setPendingDel(r)}>
             {t("common.delete", "Delete")}
           </button>
         </>
       ),
     },
-  ];
+  ], [columns, openEdit, t]);
 
   return (
     <div className="panel">
@@ -270,15 +265,23 @@ export function VesselCrudGrid({
           </button>
         ) : null}
       </div>
-      <DataGrid<Row>
-        columns={gridColumns}
-        data={rows}
-        rowKey={(r) => r.id}
+      <StateView
         loading={loading}
+        error={err ?? undefined}
+        empty={false}
         emptyText={emptyText}
-        onRowDoubleClick={(r) => openEdit(r)}
-        storageKey={`vessel_${path}_grid`}
-      />
+        onRetry={() => void load()}
+      >
+        <DataGrid<Row>
+          columns={gridColumns}
+          data={rows}
+          rowKey={(r) => r.id}
+          loading={loading}
+          emptyText={emptyText}
+          onRowDoubleClick={(r) => openEdit(r)}
+          storageKey={`vessel_${path}_grid`}
+        />
+      </StateView>
 
       <RecordModal
         open={formOpen}
@@ -341,6 +344,20 @@ export function VesselCrudGrid({
           )}
         </div>
       </RecordModal>
+
+      <ConfirmDialog
+        open={pendingDel !== null}
+        title={t("common.confirm", "Confirm")}
+        message={t("page.vessel.confirm_delete_row", "Delete this record? It will move to the recycle bin and can be restored.")}
+        confirmLabel={t("common.delete", "Delete")}
+        danger
+        onConfirm={() => {
+          const r = pendingDel;
+          setPendingDel(null);
+          if (r) void removeRow(r);
+        }}
+        onCancel={() => setPendingDel(null)}
+      />
     </div>
   );
 }

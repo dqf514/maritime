@@ -10,8 +10,10 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { DeskSection } from "@/components/DeskSection";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { StateView } from "@/components/StateView";
 import { CertOverview, VesselCertificates } from "@/components/ShipCertificates";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -62,6 +64,8 @@ export default function ShipManagementPage() {
   const [selWo, setSelWo] = useState<any>(null);
   const [woDeletePending, setWoDeletePending] = useState<(() => void) | null>(null);
   const [woSpares, setWoSpares] = useState<any[]>([]);
+  /** 备件清单加载失败（≠ 没有备件） */
+  const [woSparesErr, setWoSparesErr] = useState<string | null>(null);
   const [woPart, setWoPart] = useState("");
   const [woQty, setWoQty] = useState("1");
   const [woWarnings, setWoWarnings] = useState<string[]>([]);
@@ -71,6 +75,13 @@ export default function ShipManagementPage() {
   const [certRows, setCertRows] = useState<CertRow[]>([]);
   const [editingCrew, setEditingCrew] = useState<{ id: string; full_name: string } | null>(null);
   const [certAlerts, setCertAlerts] = useState<CertAlert[]>([]);
+  /** 证书告警加载失败（≠ 没有证书告警） */
+  const [certAlertErr, setCertAlertErr] = useState<string | null>(null);
+  // 主列表（船队）失败必须走错误态，不能静默变成空列表（P1-4）。
+  const [fleetErr, setFleetErr] = useState("");
+  const [fleetLoading, setFleetLoading] = useState(true);
+  // 参考数据（接口适配器 / 同步日志 / 证书告警）失败不阻断整页，但要可见（P1-4）。
+  const [refWarn, setRefWarn] = useState("");
 
   // 三栏工作台：船队列表 | 船舶技术卡 | 证书告警/接口（分隔条可拖拽，localStorage 记忆）
   const [leftW, setLeftW] = useState(340);
@@ -106,12 +117,26 @@ export default function ShipManagementPage() {
   }
 
   useEffect(() => {
-    apiGet("/api/v1/ship/fleet").then(setFleet).catch(() => toast.error(t("page.ship.module_required", "Ship management module required")));
-    apiGet("/api/v1/ship/integrations/adapters").then(setAdapters).catch(() => undefined);
-    apiGet("/api/v1/ship/integrations/sync-logs").then(setLogs).catch(() => undefined);
+    apiGet("/api/v1/ship/fleet")
+      .then((f) => {
+        setFleet(f);
+        setFleetErr("");
+      })
+      .catch((e) => {
+        setFleet(null);
+        setFleetErr(
+          msgOf(e, t("page.ship.module_required", "Ship management module required")),
+        );
+      })
+      .finally(() => setFleetLoading(false));
+    // 参考数据失败：不全页报错，但在右栏显式提示，避免「看起来就是空的」。
+    const refFail = () =>
+      setRefWarn(t("page.ship.ref_load_fail", "Some reference data failed to load — this panel may be incomplete."));
+    apiGet("/api/v1/ship/integrations/adapters").then(setAdapters).catch(refFail);
+    apiGet("/api/v1/ship/integrations/sync-logs").then(setLogs).catch(refFail);
     apiGet("/api/v1/ship/crew/cert-alerts?days=60")
       .then((rows) => setCertAlerts(Array.isArray(rows) ? rows : []))
-      .catch(() => undefined);
+      .catch(refFail);
   }, [t]);
 
   async function openVessel(id: string) {
@@ -135,8 +160,15 @@ export default function ShipManagementPage() {
   }
 
   async function refreshCertAlerts() {
-    const rows = await apiGet("/api/v1/ship/crew/cert-alerts?days=60").catch(() => []);
-    setCertAlerts(Array.isArray(rows) ? rows : []);
+    try {
+      const rows = await apiGet("/api/v1/ship/crew/cert-alerts?days=60");
+      setCertAlerts(Array.isArray(rows) ? rows : []);
+      setCertAlertErr(null);
+    } catch (ex) {
+      // P1-4：取数失败 ≠ 「没有证书告警」——必须让用户看见错误。
+      setCertAlerts([]);
+      setCertAlertErr(msgOf(ex, t("page.ship.cert_alerts_fail", "Could not load crew certificate alerts.")));
+    }
   }
 
   async function selectWo(w: any) {
@@ -146,8 +178,10 @@ export default function ShipManagementPage() {
     try {
       const rows = await apiGet(`/api/v1/ship/work-orders/${w.id}/spares`);
       setWoSpares(Array.isArray(rows) ? rows : []);
-    } catch {
+      setWoSparesErr(null);
+    } catch (ex) {
       setWoSpares([]);
+      setWoSparesErr(msgOf(ex, t("page.ship.spares_fail", "Could not load spare parts.")));
     }
   }
 
@@ -184,7 +218,8 @@ export default function ShipManagementPage() {
 
   async function addWoSpare() {
     if (!selWo || !woPart || !(Number(woQty) > 0)) {
-      toast.success(t("page.ship.spare_need", "Select a spare part and enter quantity"));
+      // 校验失败不是成功 —— 必须报错并中止提交（P1-26）。
+      toast.error(t("page.ship.spare_need", "Select a spare part and enter quantity"));
       return;
     }
     setBusy(true);
@@ -192,8 +227,14 @@ export default function ShipManagementPage() {
       const res = await apiPost(`/api/v1/ship/work-orders/${selWo.id}/spares`, { part_id: woPart, qty: Number(woQty) });
       setWoWarnings(Array.isArray(res?.warnings) ? res.warnings.map((w: unknown) => String(w)) : []);
       toast.success(t("page.ship.spare_ok", "Spare consumption logged"));
-      const rows = await apiGet(`/api/v1/ship/work-orders/${selWo.id}/spares`).catch(() => []);
-      setWoSpares(Array.isArray(rows) ? rows : []);
+      try {
+        const rows = await apiGet(`/api/v1/ship/work-orders/${selWo.id}/spares`);
+        setWoSpares(Array.isArray(rows) ? rows : []);
+        setWoSparesErr(null);
+      } catch (ex) {
+        setWoSpares([]);
+        setWoSparesErr(msgOf(ex, t("page.ship.spares_fail", "Could not load spare parts.")));
+      }
     } catch (e: any) {
       toast.error(e?.message || t("common.failed", "Failed"));
     } finally {
@@ -216,7 +257,8 @@ export default function ShipManagementPage() {
         toast.success(t("page.ship.crew_certs_ok", "Crew certificates updated"));
       } else {
         if (!crewName.trim() || !crewRank.trim()) {
-          toast.success(t("page.ship.crew_need", "Enter crew name and rank"));
+          // 校验失败不是成功 —— 必须报错并中止提交（P1-26）。
+          toast.error(t("page.ship.crew_need", "Enter crew name and rank"));
           setBusy(false);
           return;
         }
@@ -243,7 +285,8 @@ export default function ShipManagementPage() {
 
   async function inboundDemo() {
     if (!fleet?.vessels?.[0]) {
-      toast.success(t("page.ship.no_vessel", "No vessel in fleet"));
+      // 校验失败不是成功 —— 必须报错并中止提交（P1-26）。
+      toast.error(t("page.ship.no_vessel", "No vessel in fleet"));
       return;
     }
     const imo = fleet.vessels[0].imo;
@@ -450,15 +493,30 @@ export default function ShipManagementPage() {
       >
         <div className="panel desk-list">
           <h2>{t("page.ship.fleet", "Technical fleet")}</h2>
-          <DataGrid<FleetRow>
-            columns={fleetColumns}
-            data={fleet?.vessels || []}
-            rowKey={(r) => String(r.vessel_id)}
-            storageKey="ship_fleet"
+          <StateView
+            loading={fleetLoading}
+            error={fleetErr || undefined}
+            empty={!fleetErr && !(fleet?.vessels || []).length}
             emptyText={t("common.empty", "No records")}
-            showFooter={false}
-            onRowClick={(r) => openVessel(r.vessel_id)}
-          />
+            onRetry={() => {
+              setFleetLoading(true);
+              setFleetErr("");
+              apiGet("/api/v1/ship/fleet")
+                .then((f) => setFleet(f))
+                .catch((e) => setFleetErr(msgOf(e, t("page.ship.module_required", "Ship management module required"))))
+                .finally(() => setFleetLoading(false));
+            }}
+          >
+            <DataGrid<FleetRow>
+              columns={fleetColumns}
+              data={fleet?.vessels || []}
+              rowKey={(r) => String(r.vessel_id)}
+              storageKey="ship_fleet"
+              emptyText={t("common.empty", "No records")}
+              showFooter={false}
+              onRowClick={(r) => openVessel(r.vessel_id)}
+            />
+          </StateView>
         </div>
 
         <div
@@ -527,13 +585,14 @@ export default function ShipManagementPage() {
                   {woWarnings.length ? (
                     <div style={{ marginTop: "0.5rem" }}>
                       {woWarnings.map((w, i) => (
-                        <p key={i} style={{ color: "var(--warn)", fontWeight: 600, margin: "0.25rem 0" }}>
+                        <p key={i} style={{ color: "var(--warn-text)", fontWeight: 600, margin: "0.25rem 0" }}>
                           {w}
                         </p>
                       ))}
                     </div>
                   ) : null}
                   <h3 style={{ fontSize: "0.95rem" }}>{t("page.ship.spares", "Spares")}</h3>
+                  {woSparesErr ? <p className="flash-err">{woSparesErr}</p> : null}
                   {woSpares.length ? (
                     <DataGrid
                       columns={spareColumns}
@@ -660,7 +719,9 @@ export default function ShipManagementPage() {
 
         {/* 右栏 = 监控/上下文区（证书告警 + 外部接口）：原底部整幅面板上移，吸顶独立滚动，⤢ 可局部放大 */}
         <div className="panel desk-side">
+          {refWarn ? <p className="flash-err">{refWarn}</p> : null}
           <DeskSection title={t("page.ship.cert_alerts", "Crew certificate alerts (60 days)")}>
+            {certAlertErr ? <p className="flash-err">{certAlertErr}</p> : null}
             {certAlerts.length ? (
               <DataGrid<CertAlert>
                 columns={certAlertColumns}
@@ -695,6 +756,12 @@ export default function ShipManagementPage() {
                 </li>
               ))}
               {!logs.length ? <li className="muted">{t("page.ship.sync_empty", "No sync yet — use Simulate PMS inbound.")}</li> : null}
+              {/* 截断必须对用户可见 —— 说明只展示了最近 8 条（P1-28）。 */}
+              {logs.length > 8 ? (
+                <li className="muted">
+                  {t("page.ship.sync_more", "Showing the 8 most recent of {n} entries.", { n: logs.length })}
+                </li>
+              ) : null}
             </ul>
           </DeskSection>
         </div>
