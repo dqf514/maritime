@@ -326,7 +326,7 @@ def sync_account(
         thread_id=thread.id,
         message_id=f"<{uuid4()}@demo.marios>",
         direction="inbound",
-        from_email="broker@example.com",
+        from_email="recaps@atlanticbrokers.co.uk",
         subject="RECAP: MV OCEAN STAR / SGSIN-NLRTM Coal",
         body_text="Vessel MV OCEAN STAR IMO 9123456. Laycan 12-18 Sep. Freight USD 18.5 PMT.",
         sent_at=datetime.now(timezone.utc),

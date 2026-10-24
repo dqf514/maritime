@@ -15,6 +15,7 @@ import { SavedViews } from "@/components/SavedViews";
 import { StateView } from "@/components/StateView";
 import { NavIcon, resolveIconId } from "@/components/NavIcon";
 import { useListHotkeys } from "@/components/useListHotkeys";
+import { formatInTz, parseUtc, utcDayDiff } from "@/lib/datetime";
 import { apiGet, apiMe, apiPost, apiPatch, type HomeSummary, type TaskOut, type TaskAssignee } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -29,13 +30,10 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 function dueInfo(dueAt: string | null, t: any, locale: string) {
   if (!dueAt) return null;
-  const due = new Date(dueAt);
-  if (Number.isNaN(due.getTime())) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const day = new Date(due);
-  day.setHours(0, 0, 0, 0);
-  const diff = Math.round((day.getTime() - today.getTime()) / 86_400_000);
+  if (!parseUtc(dueAt)) return null;
+  // 自然日按 UTC 日界比较（后端存 UTC；否则非 UTC 时区会整体偏移一天）。
+  const diff = utcDayDiff(dueAt);
+  if (diff === null) return null;
   if (diff < 0) return { text: t("page.home.overdue_days", "Overdue {n} days", { n: -diff }), overdue: true, days: diff };
   if (diff === 0) return { text: t("page.home.due_today", "Due today"), overdue: false, days: 0 };
   if (diff === 1) return { text: t("page.home.due_tomorrow", "Tomorrow"), overdue: false, days: 1 };
@@ -63,8 +61,8 @@ function actionLabel(action: string): string {
 
 function timeAgo(iso: string | null, t: any): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
+  const d = parseUtc(iso);
+  if (!d) return "";
   const s = Math.floor((Date.now() - d.getTime()) / 1000);
   if (s < 60) return t("page.home.time_just", "just now");
   if (s < 3600) return t("page.home.time_min", "{n}m", { n: Math.floor(s / 60) });
@@ -468,15 +466,16 @@ function WorkbenchPageInner() {
               <div className="wb-sched-list">
                 {summary?.schedule.length ? (
                   summary.schedule.slice(0, 6).map((s, i) => {
-                    const d = new Date(s.start);
-                    const when = Number.isNaN(d.getTime())
-                      ? s.start
-                      : d.toLocaleString(locale.startsWith("zh") ? "zh-CN" : "en-US", {
+                    const d = parseUtc(s.start);
+                    const when = d
+                      ? formatInTz(d, null, {
+                          year: undefined,
                           month: "2-digit",
                           day: "2-digit",
                           hour: "2-digit",
                           minute: "2-digit",
-                        });
+                        })
+                      : s.start;
                     return s.href ? (
                       <Link key={i} href={s.href} className="wb-sched-row">
                         <span className="wb-sched-time">{when}</span>

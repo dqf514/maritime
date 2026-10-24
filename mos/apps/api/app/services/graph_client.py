@@ -12,7 +12,7 @@ import base64
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -206,7 +206,7 @@ class GraphClient:
 
     def list_mail(self, *, top: int = 25, folder: str = "inbox") -> list[dict[str, Any]]:
         if self.mode == "stub":
-            now = datetime.now().astimezone().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             return [
                 {
                     "id": "stub-mail-1",
@@ -360,7 +360,7 @@ class GraphClient:
             "ok": True,
             "mode": self.mode,
             "user": me.get("displayName") or me.get("userPrincipalName"),
-            "tested_at": datetime.now().astimezone().isoformat(),
+            "tested_at": datetime.now(timezone.utc).isoformat(),
         }
 
     def _get(self, path: str) -> dict[str, Any]:
@@ -381,4 +381,5 @@ class GraphClient:
 
 
 def token_expiry(expires_in: int | None) -> datetime:
-    return datetime.now().astimezone() + timedelta(seconds=int(expires_in or 3600) - 60)
+    """令牌到期时刻（aware UTC）—— 落库按平台约定存 naive UTC。"""
+    return datetime.now(timezone.utc) + timedelta(seconds=int(expires_in or 3600) - 60)

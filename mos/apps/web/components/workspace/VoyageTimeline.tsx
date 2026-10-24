@@ -4,6 +4,7 @@
 // 纯 CSS 条带（绝对定位百分比），随容器横向滚动。
 
 import { useMemo, useState } from "react";
+import { formatInTz, parseUtc } from "@/lib/datetime";
 
 export type TimelinePortCall = {
   seq: number;
@@ -30,19 +31,20 @@ export type VoyageTimelineProps = {
 
 function ts(iso: string | null | undefined): number | null {
   if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d.getTime();
+  // 后端 ISO 串无偏移量即 UTC，避免按浏览器本地时区解析导致整条时间轴偏移。
+  const d = parseUtc(iso);
+  return d ? d.getTime() : null;
 }
 
+// 日刻度：浏览器本地日历（与刻度起点 setHours(0,0,0,0) 同帧）
 function fmtDay(t: number) {
   const d = new Date(t);
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+// 悬停全精度：按 UTC 展示（与全站「存 UTC、显 UTC」口径一致）
 function fmtFull(t: number) {
-  const d = new Date(t);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return formatInTz(t);
 }
 
 const DAY = 86400000;

@@ -10,6 +10,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordAttribution } from "@/components/RecordAttribution";
 import { Tabs } from "@/components/Tabs";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
@@ -603,9 +604,13 @@ export default function VesselDetailPage() {
     <AppShell>
       <PageHeader
         title={vessel?.name || t("page.vessel.card", "Vessel card")}
-        subtitle={`${vessel?.imo ? `IMO ${vessel.imo}` : "—"} · ${fmt(vessel?.flag)} · ${fmt(vessel?.vessel_type)} · ${
-          vessel?.dwt ? `${vessel.dwt} DWT` : "—"
-        }`}
+        subtitle={
+          <>
+            {`${vessel?.imo ? `IMO ${vessel.imo}` : "—"} · ${fmt(vessel?.flag)} · ${fmt(vessel?.vessel_type)} · ${
+              vessel?.dwt ? `${vessel.dwt} DWT` : "—"
+            }`} · <RecordAttribution entityType="vessel" entityId={vesselId} />
+          </>
+        }
         breadcrumb={[
           { label: t("page.ship.title", "Ship management"), href: "/ship" },
           // A5：第二项返回主数据船舶列表（list masterdata / detail shipyard）

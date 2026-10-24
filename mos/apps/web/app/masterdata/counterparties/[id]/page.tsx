@@ -10,6 +10,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordAttribution } from "@/components/RecordAttribution";
 import { Tabs } from "@/components/Tabs";
 import { FormSection } from "@/components/form/FormPanel";
 import { LookupSelect } from "@/components/LookupSelect";
@@ -217,10 +218,14 @@ export default function CounterpartyDetailPage() {
     <AppShell>
       <PageHeader
         title={party?.name || t("page.parties.card", "Counterparty")}
-        subtitle={`${party?.type || "—"} · ${party?.country || "—"} · ${t(
-          `page.parties.status_${party?.status || "active"}`,
-          party?.status || "active",
-        )}`}
+        subtitle={
+          <>
+            {`${party?.type || "—"} · ${party?.country || "—"} · ${t(
+              `page.parties.status_${party?.status || "active"}`,
+              party?.status || "active",
+            )}`} · <RecordAttribution entityType="counterparty" entityId={partyId} />
+          </>
+        }
         breadcrumb={[
           { label: t("nav.master", "Master data"), href: "/masterdata" },
           { label: t("page.parties.title", "Counterparties"), href: "/masterdata/counterparties" },

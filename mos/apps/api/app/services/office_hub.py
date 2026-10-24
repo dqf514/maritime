@@ -7,7 +7,7 @@ import hmac
 import json
 import logging
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -36,6 +36,7 @@ from app.services.graph_client import (
 from app.services.identity import soft_sign_state
 from app.services.ms_config import effective_mode, resolve_ms_config
 from app.services.ops_crypto import decrypt_token, encrypt_token
+from app.services.timeutil import utcnow_naive
 
 log = logging.getLogger("marios.office_hub")
 
@@ -153,7 +154,7 @@ def apply_oauth_tokens(
     except GraphError as exc:
         link.last_health = {"ok": False, "error": str(exc)}
         link.status = "error"
-    link.updated_at = datetime.now().astimezone()
+    link.updated_at = utcnow_naive()
     db.flush()
     return link
 
@@ -162,7 +163,8 @@ def _as_aware(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        # 平台约定：naive 即 UTC（见 app/services/timeutil.py）
+        return dt.replace(tzinfo=timezone.utc)
     return dt
 
 
@@ -184,7 +186,7 @@ def get_graph_client(db: Session, tenant_id: UUID) -> GraphClient:
     # refresh if expired
     expires = _as_aware(link.token_expires_at)
     refresh_token = decrypt_token(link.refresh_token)
-    if expires and expires < datetime.now().astimezone() and refresh_token:
+    if expires and expires < datetime.now(timezone.utc) and refresh_token:
         tokens = refresh_access_token(refresh_token, ms_config=cfg)
         apply_oauth_tokens(db, tenant_id, tokens)
         db.commit()
@@ -195,7 +197,7 @@ def get_graph_client(db: Session, tenant_id: UUID) -> GraphClient:
 
 
 def run_sync(db: Session, tenant_id: UUID, channel: str, *, direction: str = "inbound") -> OfficeSyncJob:
-    job = OfficeSyncJob(tenant_id=tenant_id, channel=channel, direction=direction, status="running", started_at=datetime.now().astimezone())
+    job = OfficeSyncJob(tenant_id=tenant_id, channel=channel, direction=direction, status="running", started_at=utcnow_naive())
     db.add(job)
     db.flush()
     try:
@@ -222,13 +224,13 @@ def run_sync(db: Session, tenant_id: UUID, channel: str, *, direction: str = "in
             raise GraphError(f"unknown_channel:{channel}", status=400)
         job.stats = stats
         job.status = "done"
-        job.finished_at = datetime.now().astimezone()
+        job.finished_at = utcnow_naive()
         link = ensure_office_link(db, tenant_id)
         link.last_health = {**(link.last_health or {}), "last_sync": channel, "at": job.finished_at.isoformat()}
     except Exception as exc:  # noqa: BLE001
         job.status = "failed"
         job.error = str(exc)
-        job.finished_at = datetime.now().astimezone()
+        job.finished_at = utcnow_naive()
     db.flush()
     return job
 
@@ -445,7 +447,7 @@ def deliver_webhook(db: Session, endpoint: WebhookEndpoint, event: str, payload:
                 if delivery.status == "failed":
                     endpoint.failure_count = (endpoint.failure_count or 0) + 1
             endpoint.last_delivery = {
-                "at": datetime.now().astimezone().isoformat(),
+                "at": datetime.now(timezone.utc).isoformat(),
                 "event": event,
                 "status": delivery.status,
                 "code": delivery.response_code,
@@ -453,7 +455,7 @@ def deliver_webhook(db: Session, endpoint: WebhookEndpoint, event: str, payload:
     except Exception as exc:  # noqa: BLE001
         delivery.status = "failed"
         endpoint.failure_count = (endpoint.failure_count or 0) + 1
-        endpoint.last_delivery = {"at": datetime.now().astimezone().isoformat(), "error": str(exc)}
+        endpoint.last_delivery = {"at": datetime.now(timezone.utc).isoformat(), "error": str(exc)}
     db.flush()
     return delivery
 

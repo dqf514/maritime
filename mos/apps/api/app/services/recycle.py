@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models_recycle import RecycleBinItem
+from app.services.timeutil import utcnow_naive
 
 # Default status when restoring if payload has no usable prior status
 DEFAULT_RESTORE_STATUS: dict[str, str] = {
@@ -32,11 +33,31 @@ DEFAULT_RESTORE_STATUS: dict[str, str] = {
     "bunker_order": "planned",
     "bunker_requirement": "draft",
     "bunker_option": "offered",
+    "counterparty": "active",
+    # —— 与各模型 status 列默认值保持一致（payload 缺失时的兜底）——
+    "ai_conversation": "active",
+    "charter_offer": "offer",
+    "coa_contract": "draft",
+    "company": "active",
+    "counterparty_contact": "active",
+    "dq_issue": "open",
+    "email_account": "active",
+    "master_contract": "draft",
+    "port_disbursement": "draft",
+    "pricing_template": "active",
+    "rate_table": "active",
+    "ship_report": "submitted",
+    "ship_terminal": "active",
+    "task": "todo",
+    "tc_contract": "draft",
+    "time_charter_contract": "draft",
+    "trade": "draft",
+    "webhook_endpoint": "active",
 }
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc).astimezone()
+    return utcnow_naive()
 
 
 def _jsonable(obj: Any) -> Any:

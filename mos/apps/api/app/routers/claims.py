@@ -66,6 +66,11 @@ def create_claim(body: ClaimIn, auth: AuthContext = Depends(require_module("clai
     assert_claim_type(body.claim_type)
     if body.subtype is not None:
         assert_claim_subtype(body.claim_type, body.subtype)
+    # 索赔必须挂靠一个业务对象或一个非零金额，否则会留下一条「谁都不知道是啥」的孤儿索赔
+    # （旧行为：空 body 也能建单，金额 0、无航次无联系人）。
+    anchored = body.voyage_id is not None or body.laytime_id is not None or body.contact_id is not None
+    if not anchored and not (body.amount is not None and body.amount != 0):
+        raise HTTPException(422, "Claim must reference a voyage, a laytime calculation or a contact, or carry a non-zero amount")
     if body.voyage_id is not None and scoped_get(db, Voyage, body.voyage_id, auth.tenant_id) is None:
         raise HTTPException(404, "Voyage not found")
     if body.laytime_id is not None and scoped_get(db, LaytimeCalc, body.laytime_id, auth.tenant_id) is None:

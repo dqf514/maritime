@@ -65,7 +65,7 @@ def login(
     db: Session = Depends(get_db),
     _rl: None = Depends(rate_limit("auth.login", max_hits=5, window_seconds=60)),
 ):
-    from app.services.identity import ensure_tenant_policy, now_local
+    from app.services.identity import ensure_tenant_policy, now_utc_naive
 
     ip = request.client.host if request.client else None
     tenant = db.scalar(select(Tenant).where(Tenant.code == body.tenant_code))
@@ -116,7 +116,7 @@ def login(
             status_code=403,
             detail={"code": "EMAIL_NOT_VERIFIED", "message": "Email verification required before sign-in"},
         )
-    user.last_login_at = now_local()
+    user.last_login_at = now_utc_naive()
     # Audit row rides this commit, atomically with last_login_at
     audit(
         db,
@@ -252,7 +252,7 @@ def _entity_hits(db: Session, auth: AuthContext, q: str, limit: int = 5) -> list
             _hit(f"vs-{r.id}", r.name, "masterdata", "/masterdata/vessels", ["vessel", "船舶"])
         for r in db.scalars(
             select(Port)
-            .where(Port.tenant_id == auth.tenant_id, Port.deleted_at.is_(None), or_(Port.name.ilike(like), Port.unlocode.ilike(like)))
+            .where(Port.deleted_at.is_(None), or_(Port.name.ilike(like), Port.unlocode.ilike(like)))
             .limit(limit)
         ).all():
             _hit(f"pt-{r.id}", f"{r.name} ({r.unlocode})", "masterdata", "/masterdata/ports", ["port", "港口"])

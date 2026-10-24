@@ -3,6 +3,7 @@
 // 3.6：Invoices 面板（自取数 + 创建/hire 排程 + 分页表 + 批量导出）。
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { CurrencyField } from "@/components/CurrencyField";
@@ -138,7 +139,16 @@ export function InvoicesPanel() {
   }
 
   const cols: GridColumnDef<Invoice>[] = [
-    { key: "invoice_no", title: t("page.finance.no", "编号") },
+    {
+      key: "invoice_no",
+      title: t("page.finance.no", "编号"),
+      // 编号做成真链接：行内点击之外还能右键新标签页打开 / 复制链接（行 onClick 不可发现）。
+      render: (v, r) => (
+        <Link href={`/finance/invoices/${r.id}`} className="row-link">
+          {String(v ?? "")}
+        </Link>
+      ),
+    },
     { key: "status", title: t("common.status", "Status") },
     {
       key: "amount",

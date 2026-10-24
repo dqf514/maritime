@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Tabs } from "@/components/Tabs";
-import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { apiGet, apiPost, apiPut, readStorage, TOKEN_STORAGE_KEY } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 
@@ -200,6 +200,46 @@ export default function DocTemplatesPage() {
     }
   }
 
+  /** PDF 预览：必须走 POST。
+   *
+   * 端点是 `POST /documents/templates/{id}/preview/pdf`（body 里带当前草稿 body/css），
+   * 之前这里用的是 <a href> → 浏览器发 GET → 后端 405，点开是一页 JSON 报错；
+   * 而且 GET 也带不了草稿，渲染出来的会是**已保存**的旧版式，与左侧 iframe 的草稿预览不一致。
+   * 现在同步开窗（避免 await 之后被弹窗拦截），再把返回的 PDF blob 塞进去。
+   */
+  async function openPdf() {
+    if (!detail) return;
+    const base = process.env.NEXT_PUBLIC_API_BASE || "";
+    const win = window.open("", "_blank");
+    setBusy(true);
+    try {
+      const token = readStorage(TOKEN_STORAGE_KEY);
+      const res = await fetch(`${base}/api/v1/documents/templates/${detail.id}/preview/pdf`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ body, css }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error(j?.detail?.code || j?.detail?.message || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (win) win.location.href = url;
+      else window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) {
+      if (win) win.close();
+      toast.error(t("page.templates.pdf_failed", "PDF preview failed: {err}", { err: String(err) }));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** 在光标处插入变量名 —— 变量速查栏点击即用，省得手抄字段名 */
   function insertVariable(name: string) {
     const plain = name.split(" ")[0];
@@ -353,14 +393,14 @@ export default function DocTemplatesPage() {
               <span>{t("page.templates.preview", "Preview")}</span>
               <span className="spacer" />
               {catalog?.pdf_available ? (
-                <a
+                <button
                   className="btn btn-sm"
-                  href={`${process.env.NEXT_PUBLIC_API_BASE || ""}/api/v1/documents/templates/${detail?.id ?? ""}/preview/pdf`}
-                  target="_blank"
-                  rel="noreferrer"
+                  type="button"
+                  onClick={() => void openPdf()}
+                  disabled={!detail || busy}
                 >
                   {t("page.templates.pdf", "PDF")}
-                </a>
+                </button>
               ) : (
                 <span title={t("page.templates.pdf_missing", "Install Chromium to enable PDF")}>
                   {t("page.templates.pdf_off", "PDF unavailable")}

@@ -9,6 +9,7 @@ import type { ColumnDef } from "@/components/grid/types";
 import { RowActions } from "@/components/RowActions";
 import { apiCreateBackup, apiDelete, apiGet, apiListBackups, apiPatch, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatInTz } from "@/lib/datetime";
 import { useToast } from "@/components/ToastProvider";
 
 type Backup = {
@@ -41,7 +42,7 @@ const DEFAULT_SCHEDULE: Schedule = {
 };
 
 export default function BackupPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const [rows, setRows] = useState<Backup[]>([]);
   const [sched, setSched] = useState<Schedule>(DEFAULT_SCHEDULE);
@@ -121,7 +122,7 @@ export default function BackupPage() {
       title: t("page.backup.when", "When"),
       width: 180,
       value: (r) => r.created_at,
-      render: (v) => new Date(String(v)).toLocaleString(),
+      render: (v) => formatInTz(v as string | null, null, undefined, locale),
     },
     { key: "status", title: t("common.status", "Status"), width: 110, value: (r) => r.status },
     {
@@ -241,9 +242,9 @@ export default function BackupPage() {
           </div>
           <p className="muted" style={{ marginTop: "0.5rem" }}>
             {t("page.backup.sched_next", "上次运行")}:{" "}
-            {sched.last_run_at ? new Date(sched.last_run_at).toLocaleString() : t("common.never", "从未")} ·{" "}
+            {sched.last_run_at ? formatInTz(sched.last_run_at) : t("common.never", "从未")} ·{" "}
             {t("page.backup.sched_next_run", "下次运行")}:{" "}
-            {sched.next_run_at ? new Date(sched.next_run_at).toLocaleString() : t("common.none", "—")}
+            {sched.next_run_at ? formatInTz(sched.next_run_at) : t("common.none", "—")}
           </p>
           <button className="btn btn-primary" type="button" disabled={schedBusy} onClick={saveSchedule}>
             {t("page.backup.sched_save", "保存计划")}

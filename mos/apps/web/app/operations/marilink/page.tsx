@@ -16,6 +16,7 @@ import { Toolbar } from "@/components/Toolbar";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
+import { formatInTz } from "@/lib/datetime";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
@@ -201,7 +202,7 @@ function MariLinkPageInner() {
       title: t("page.marilink.submitted", "Submitted"),
       width: 170,
       value: (r) => r.submitted_at,
-      render: (_v, r) => new Date(r.submitted_at).toLocaleString(),
+      render: (_v, r) => formatInTz(r.submitted_at),
     },
     {
       key: "status",

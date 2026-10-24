@@ -9,6 +9,7 @@ import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef as GridColumnDef } from "@/components/grid/types";
 import { API_BASE, apiDelete, apiGet, apiPatch, apiPost, apiUpload } from "@/lib/api";
+import { parseUtc } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 
 export type CertAttachment = {
@@ -54,11 +55,12 @@ function fmtSize(n: number): string {
 
 function daysLeft(expiresOn: string | null | undefined): number | null {
   if (!expiresOn) return null;
-  const due = new Date(expiresOn);
-  if (Number.isNaN(due.getTime())) return null;
+  // expires_on 为后端 date 字段（YYYY-MM-DD → UTC 零点）；与「今天」同按 UTC 零点比较，坐标系一致
+  const due = parseUtc(expiresOn);
+  if (!due) return null;
   const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  due.setHours(0, 0, 0, 0);
+  today.setUTCHours(0, 0, 0, 0);
+  due.setUTCHours(0, 0, 0, 0);
   return Math.round((due.getTime() - today.getTime()) / 86_400_000);
 }
 

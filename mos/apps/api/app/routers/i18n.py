@@ -20,6 +20,7 @@ from app.models_i18n import (
     UiMessage,
 )
 from app.security import AuthContext, get_current_auth, get_current_auth_optional, require_auth
+from app.services.timeutil import utcnow_naive
 
 router = APIRouter(tags=["i18n & Terminology"])
 
@@ -36,7 +37,7 @@ def require_roles(*codes: str):
 
 
 def _now() -> datetime:
-    return datetime.now().astimezone()
+    return utcnow_naive()
 
 
 def normalize_locale(raw: str | None) -> str:

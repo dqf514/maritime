@@ -8,6 +8,7 @@ import { RecordModal } from "@/components/RecordModal";
 import { useToast } from "@/components/ToastProvider";
 import type { ContextMenuItem } from "@/components/ContextMenu";
 import { apiPost } from "@/lib/api";
+import { fromUtcInput } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 
 export type TodoTarget = {
@@ -60,7 +61,9 @@ export function useTodoAdd() {
         title: draft.title.trim(),
         description: draft.description.trim() || null,
         priority: draft.priority,
-        due_at: draft.due_at ? new Date(draft.due_at).toISOString() : null,
+        // 输入框是 UTC 墙钟（平台约定：naive = UTC）——用 fromUtcInput 回写，
+        // 避免 new Date() 按浏览器本地时区解释造成整点偏移。
+        due_at: fromUtcInput(draft.due_at),
         entity_type: target.entityType,
         entity_id: target.entityId,
       });

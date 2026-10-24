@@ -498,6 +498,8 @@ export default function CoaWorkspacePage() {
             ]}
             title={contract.coa_no}
             status={contract.status}
+            entityType="coa_contract"
+            entityId={coaId}
             subtitle={`${contract.rate_basis} · ${contract.rate.toLocaleString()} ${contract.currency} · ${contract.total_qty.toLocaleString()} ${contract.qty_unit}`}
             actions={[
               ...nextStatuses.map((s) => ({

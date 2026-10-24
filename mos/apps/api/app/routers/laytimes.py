@@ -175,6 +175,20 @@ def finalize_laytime(laytime_id: UUID, auth: AuthContext = Depends(require_modul
     return {"id": str(row.id), "status": row.status, "results": row.results}
 
 
+def _laytime_out(r) -> dict:
+    """滞期费计算书对外结构（列表与单条一致，前端可直接复用）。"""
+    return {
+        "id": str(r.id),
+        "voyage_id": str(r.voyage_id) if r.voyage_id else None,
+        "port_call_id": str(r.port_call_id) if r.port_call_id else None,
+        "booking_reference": r.booking_reference,
+        "status": r.status,
+        "inputs": r.inputs or {},
+        "results": r.results or {},
+        "finalized_at": r.finalized_at.isoformat() if r.finalized_at else None,
+    }
+
+
 @router.get("/laytimes")
 def list_laytimes(
     voyage_id: UUID | None = Query(None),
@@ -187,23 +201,7 @@ def list_laytimes(
     if voyage_id is not None:
         q = q.where(LaytimeCalc.voyage_id == voyage_id)
     rows, total = paginate(db, q.order_by(LaytimeCalc.id), limit, offset)
-    return envelope(
-        [
-            {
-                "id": str(r.id),
-                "voyage_id": str(r.voyage_id) if r.voyage_id else None,
-                "port_call_id": str(r.port_call_id) if r.port_call_id else None,
-                "booking_reference": r.booking_reference,
-                "status": r.status,
-                "inputs": r.inputs or {},
-                "results": r.results or {},
-            }
-            for r in rows
-        ],
-        total,
-        limit,
-        offset,
-    )
+    return envelope([_laytime_out(r) for r in rows], total, limit, offset)
 
 
 @router.put("/laytimes/{laytime_id}")
@@ -999,6 +997,21 @@ def list_laytime_types(
             for r in rows
         ]
     }
+
+
+# 注意：本路由必须排在所有 /laytimes/{id} 形态的参数路由之后 —— FastAPI 按声明顺序匹配，
+# 参数路由在前会遮蔽字面量路径（历史缺陷：GET /laytimes/types 被 {laytime_id} 吞掉 → 422）。
+@router.get("/laytimes/{laytime_id}")
+def get_laytime(
+    laytime_id: UUID,
+    auth: AuthContext = Depends(require_module("laytime")),
+    db: Session = Depends(get_db),
+):
+    """单条滞期费计算书 —— REST 语义的 GET（详情页/外部集成都要用）。"""
+    row = scoped_get(db, LaytimeCalc, laytime_id, auth.tenant_id)
+    if row is None or row.status == "deleted":
+        raise HTTPException(404, "Laytime not found")
+    return _laytime_out(row)
 
 
 class IncludeInFreightIn(BaseModel):

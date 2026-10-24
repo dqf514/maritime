@@ -331,6 +331,8 @@ function ClaimDetailPage() {
         title={claim?.claim_no || "…"}
         status={claim?.status}
         subtitle={t("page.finance.edit_claim", "编辑索赔")}
+        entityType="claim"
+        entityId={id}
         actions={headerActions}
       />
 

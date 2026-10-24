@@ -96,7 +96,8 @@ ROLE_SCREENS = {
 
 
 def _now() -> datetime:
-    return datetime.now().astimezone()
+    """当前时刻（aware UTC）—— 面板载荷里的时间戳统一带 +00:00 偏移。"""
+    return datetime.now(timezone.utc)
 
 
 def _pulse(seed: str, amplitude: float = 1.0) -> float:

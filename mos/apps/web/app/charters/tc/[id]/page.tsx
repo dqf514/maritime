@@ -1154,6 +1154,8 @@ export default function TcWorkspacePage() {
             ]}
             title={typeLabel}
             status={contract.status}
+            entityType="time_charter"
+            entityId={cid}
             subtitle={`${nameOf(vessels, contract.vessel_id)} · ${nameOf(parties, contract.counterparty_id)}`}
             actions={[
               ...nextStatuses.map((s) => ({

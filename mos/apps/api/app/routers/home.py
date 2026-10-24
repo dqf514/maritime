@@ -108,6 +108,10 @@ def _aware(dt: datetime | None) -> datetime | None:
     return dt
 
 
+# 工作台「最近活动」里要过滤掉的噪声动作（安全审计页仍保留全量）。
+_FEED_NOISE_ACTIONS = {"auth.login_success"}
+
+
 def _tasks_section(db: Session, auth: AuthContext) -> dict:
     rows = db.scalars(
         select(Task).where(
@@ -558,7 +562,12 @@ def activity_feed(
     window = min(max(limit, 1) * 4, 200)
     rows = db.scalars(
         select(AuditLog)
-        .where(AuditLog.tenant_id == auth.tenant_id)
+        .where(
+            AuditLog.tenant_id == auth.tenant_id,
+            # 登录事件不进工作台操作日志 —— 否则首屏被「谁登录了」刷屏，
+            # 主管想看的是各模块的业务操作。安全审计另有专页（/admin/security/audit-logs）。
+            AuditLog.action.notin_(tuple(_FEED_NOISE_ACTIONS)),
+        )
         .order_by(AuditLog.created_at.desc())
         .limit(window)
     ).all()

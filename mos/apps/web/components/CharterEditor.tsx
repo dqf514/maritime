@@ -20,6 +20,7 @@ import { PartyPicker } from "@/components/DataPicker";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { useStateActions } from "@/components/useTransitions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { formatDateInTz } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { SkeletonCard } from "@/components/Skeleton";
@@ -1162,7 +1163,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
       title: t("common.created_at", "创建时间"),
       width: 110,
       value: (r) => r.created_at || "",
-      render: (_v, r) => (r.created_at ? new Date(r.created_at).toLocaleDateString() : "—"),
+      render: (_v, r) => (r.created_at ? formatDateInTz(r.created_at, null, locale) : "—"),
     },
     {
       key: "actions",
@@ -1189,6 +1190,8 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
         title={charter?.charter_no || "…"}
         status={charter?.status}
         subtitle={t("page.charters.edit", "编辑租约")}
+        entityType="charter"
+        entityId={charterId}
         badges={
           charter?.sanctions_blocked ? (
             <span className="badge badge-fail">{t("page.charters.blocked", "BLOCKED")}</span>

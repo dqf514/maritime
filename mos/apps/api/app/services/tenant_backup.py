@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.models import BackupJob, Tenant
+from app.services.timeutil import utcnow_naive
 
 # 清理时默认保留的身份/平台底座表（业务数据全部清除）
 PURGE_KEEP = {
@@ -47,8 +48,31 @@ def _data_root() -> Path:
     return Path(__file__).resolve().parent.parent / "data"
 
 
+def ensure_model_registry() -> None:
+    """确保全部模型模块已注册到 ``Base.metadata``。
+
+    ``app.models`` 只含租户/用户底座，其余 30+ 个 ``models_*.py`` 由 ``app.main``
+    在启动时导入。在应用进程内调用本服务没问题，但**以脚本/运维命令方式单独调用**
+    时，元数据里只会有 8 张表 —— 备份会「静默只备了零头」，恢复/清理同样漏表。
+    这里按模块名前缀自动补齐导入，新增 ``models_*.py`` 无需再手工登记。
+    """
+    import importlib
+    import pkgutil
+
+    import app
+
+    for mod in pkgutil.iter_modules(app.__path__):
+        if not mod.name.startswith("models"):
+            continue
+        try:
+            importlib.import_module(f"app.{mod.name}")
+        except Exception:  # pragma: no cover — 单个模型模块失败不应阻断备份
+            continue
+
+
 def tenant_tables() -> list:
     """All tables carrying a tenant_id column."""
+    ensure_model_registry()
     return [t for t in Base.metadata.sorted_tables if "tenant_id" in t.columns]
 
 
@@ -100,7 +124,7 @@ def dump_tenant(db: Session, tenant_id: UUID, *, created_by: UUID | None = None,
     return {
         "version": 2,
         "tenant_id": str(tenant_id),
-        "created_at": datetime.now().astimezone().isoformat(),
+        "created_at": utcnow_naive().isoformat(),
         "created_by": str(created_by) if created_by else None,
         "trigger": trigger,
         "row_counts": counts,
@@ -124,7 +148,7 @@ def write_backup_file(db: Session, tenant_id: UUID, payload: dict[str, Any], *, 
         storage_path=rel,
         checksum=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         created_by=created_by,
-        finished_at=datetime.now().astimezone(),
+        finished_at=utcnow_naive(),
     )
     db.add(job)
     db.commit()
@@ -134,6 +158,7 @@ def write_backup_file(db: Session, tenant_id: UUID, payload: dict[str, Any], *, 
 
 def restore_tenant(db: Session, tenant_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
     """Insert rows from a dump payload (FK order). Existing PKs are skipped."""
+    ensure_model_registry()
     tables = {t.name: t for t in Base.metadata.sorted_tables}
     inserted: dict[str, int] = {}
     skipped: dict[str, int] = {}
@@ -183,6 +208,7 @@ def purge_tenant(db: Session, tenant_id: UUID, *, include_users: bool = False) -
     The Tenant row itself is always kept.
     """
     keep = set(PURGE_KEEP)
+    ensure_model_registry()
     if not include_users:
         pass  # users already in keep
     else:

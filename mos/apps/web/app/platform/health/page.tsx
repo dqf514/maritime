@@ -5,6 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { parseUtc } from "@/lib/datetime";
 
 type TenantUsage = {
   id: string;
@@ -42,13 +43,13 @@ function fmtBytes(n?: number | null): string {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
-/** ISO 时间戳 → 本地可读 `YYYY-MM-DD HH:mm:ss`（带毫秒/时区的原始串截断展示） */
+/** ISO 时间戳 → UTC 可读 `YYYY-MM-DD HH:mm:ss`（平台存储基准为 UTC） */
 function formatTs(raw?: string): string {
   if (!raw) return "—";
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return raw;
+  const d = parseUtc(raw);
+  if (!d) return raw;
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
 }
 
 export default function PlatformHealthPage() {

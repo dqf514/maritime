@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from datetime import datetime
 from uuid import UUID
 
@@ -258,7 +259,11 @@ def test_reply_render_and_send(client, auth_headers, open_db):
     )
     assert res.status_code == 200, res.text
     out = res.json()
-    assert out["to"] == "broker@example.com"
+    # 回复收件人 = 原邮件发件人（演示信箱发件人随种子变化，这里按原发件人推导，避免写死地址）
+    src_from = detail.json().get("from_email") or ""
+    expected_to = (re.search(r"<([^<>]+@[^<>]+)>", src_from) or re.search(r"([\w.+-]+@[\w-]+\.[\w.-]+)", src_from))
+    assert expected_to, src_from
+    assert out["to"] == expected_to.group(1).strip().lower()
     assert out["subject"].startswith("Re:")
     assert out["status"] in ("sent", "fallback_console")
 

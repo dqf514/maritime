@@ -34,6 +34,7 @@ type BEPData = {
   estimate_id: string;
   bep_freight_rate: number | null;
   bep_cargo_qty: number | null;
+  has_cost_base?: boolean;
   current_freight_rate: number;
   current_cargo_qty: number;
   base_pnl: number;
@@ -242,11 +243,19 @@ export default function SensitivityPage() {
 
         <section className="card">
           <h2>Break-Even Point (BEP)</h2>
+          {bep.has_cost_base === false ? (
+            <div className="alert alert-warning">
+              {t(
+                "page.sensitivity.no_cost_base",
+                "No cost inputs were captured for this estimate, so the break-even point cannot be computed. Add bunker / port cost inputs and calculate again.",
+              )}
+            </div>
+          ) : null}
           <div className="kpi-row">
             <div className="kpi">
               <div className="kpi-label">BEP Freight Rate</div>
               <div className="kpi-value">
-                {bep.bep_freight_rate ? `$${fmtNum(bep.bep_freight_rate)}/MT` : "N/A"}
+                {bep.bep_freight_rate != null ? `$${fmtNum(bep.bep_freight_rate)}/MT` : "N/A"}
               </div>
               <div className="kpi-sub">
                 Current: ${fmtNum(bep.current_freight_rate)}/MT
@@ -255,7 +264,7 @@ export default function SensitivityPage() {
             <div className="kpi">
               <div className="kpi-label">BEP Cargo Qty</div>
               <div className="kpi-value">
-                {bep.bep_cargo_qty ? `${fmtNum(bep.bep_cargo_qty, 1)} MT` : "N/A"}
+                {bep.bep_cargo_qty != null ? `${fmtNum(bep.bep_cargo_qty, 1)} MT` : "N/A"}
               </div>
               <div className="kpi-sub">
                 Current: {fmtNum(bep.current_cargo_qty, 1)} MT
@@ -264,7 +273,7 @@ export default function SensitivityPage() {
             <div className="kpi">
               <div className="kpi-label">Margin of Safety</div>
               <div className="kpi-value">
-                {bep.current_freight_rate > 0 && bep.bep_freight_rate
+                {bep.current_freight_rate > 0 && bep.bep_freight_rate != null
                   ? `${fmtNum(((bep.current_freight_rate - bep.bep_freight_rate) / bep.current_freight_rate) * 100, 1)}%`
                   : "N/A"}
               </div>

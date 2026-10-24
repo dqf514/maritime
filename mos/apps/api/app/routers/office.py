@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -22,6 +22,7 @@ from app.services.identity import soft_sign_state, verify_signed_state
 from app.services.ms_config import resolve_ms_config
 from app.services.recycle import soft_delete
 from app.services import office_hub as hub
+from app.services.timeutil import utcnow_naive
 
 router = APIRouter(prefix="/office", tags=["Office Ecosystem"])
 
@@ -189,7 +190,7 @@ def office_disconnect(
     link.access_token = None
     link.refresh_token = None
     link.token_expires_at = None
-    link.last_health = {"ok": False, "message": "disconnected", "at": datetime.now().astimezone().isoformat()}
+    link.last_health = {"ok": False, "message": "disconnected", "at": datetime.now(timezone.utc).isoformat()}
     db.commit()
     return hub.office_status(db, auth.tenant_id)
 
@@ -207,7 +208,7 @@ def office_patch_settings(
         setattr(link, k, v)
     if defaults is not None:
         link.defaults = {**(link.defaults or {}), **defaults}
-    link.updated_at = datetime.now().astimezone()
+    link.updated_at = utcnow_naive()
     db.commit()
     return hub.office_status(db, auth.tenant_id)
 
@@ -510,7 +511,7 @@ def test_webhook(
         db,
         row,
         "office.webhook.test",
-        {"tenant_id": str(auth.tenant_id), "at": datetime.now().astimezone().isoformat()},
+        {"tenant_id": str(auth.tenant_id), "at": datetime.now(timezone.utc).isoformat()},
     )
     db.commit()
     return {"delivery_id": str(delivery.id), "status": delivery.status, "response_code": delivery.response_code}
@@ -608,7 +609,7 @@ def set_addon_status(
     row.status = body.status
     if body.version:
         row.version = body.version
-    row.updated_at = datetime.now().astimezone()
+    row.updated_at = utcnow_naive()
     db.commit()
     return {"id": addon_id, "status": row.status, "version": row.version}
 

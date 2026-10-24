@@ -1,5 +1,7 @@
 // Gantt 共享类型与时间工具（Phase 3）
 
+import { parseUtc } from "@/lib/datetime";
+
 export type GanttBlock = {
   id: string;
   block_type: string;
@@ -34,8 +36,9 @@ export const ZOOM_PX_PER_DAY: Record<GanttZoom, number> = {
 
 export function toMs(iso: string | number | Date): number {
   if (typeof iso === "number") return iso;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+  // 后端 ISO 串无偏移量即 UTC（parseUtc 补 Z），避免按浏览器本地时区解析导致整体偏移。
+  const d = parseUtc(iso);
+  return d ? d.getTime() : 0;
 }
 
 export function toIso(ms: number): string {

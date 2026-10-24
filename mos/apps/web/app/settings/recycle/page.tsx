@@ -10,6 +10,7 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatInTz } from "@/lib/datetime";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
@@ -19,10 +20,12 @@ type Item = {
   entity_id: string;
   title: string;
   deleted_at: string | null;
+  restorable?: boolean;
+  source_missing?: boolean;
 };
 
 function RecycleBinPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const router = useRouter();
   const { query, setQuery } = useListQuery();
@@ -67,23 +70,54 @@ function RecycleBinPage() {
       title: t("page.recycle.deleted_at", "Deleted at"),
       width: 180,
       value: (r) => r.deleted_at || "",
-      render: (v) => (v ? new Date(String(v)).toLocaleString() : "—"),
+      render: (v) => formatInTz(v as string | null, null, undefined, locale),
+    },
+    {
+      key: "state",
+      title: t("page.recycle.state", "State"),
+      width: 160,
+      value: (r) => (r.source_missing ? "source_missing" : r.restorable === false ? "unsupported" : "restorable"),
+      render: (v) => {
+        const key = String(v);
+        if (key === "source_missing") {
+          return <span className="muted">{t("page.recycle.source_missing", "Source record no longer exists")}</span>;
+        }
+        if (key === "unsupported") {
+          return <span className="muted">{t("page.recycle.unsupported", "This type cannot be restored")}</span>;
+        }
+        return <span>{t("page.recycle.restorable", "Restorable")}</span>;
+      },
     },
     {
       key: "_actions",
       title: "",
       width: 200,
       align: "right",
-      render: (_v, r) => (
-        <span className="row-actions">
-          <button className="btn btn-primary" type="button" onClick={() => restore(r.id).catch(() => toast.error(t("common.failed", "Failed")))}>
-            {t("page.recycle.restore", "Restore")}
-          </button>
-          <button className="btn btn-danger" type="button" onClick={() => purge(r.id).catch(() => toast.error(t("common.failed", "Failed")))}>
-            {t("page.recycle.purge", "Purge")}
-          </button>
-        </span>
-      ),
+      render: (_v, r) => {
+        const blocked = r.restorable === false || r.source_missing === true;
+        return (
+          <span className="row-actions">
+            <button
+              className="btn btn-primary"
+              type="button"
+              disabled={blocked}
+              title={
+                blocked
+                  ? r.source_missing
+                    ? t("page.recycle.source_missing", "Source record no longer exists")
+                    : t("page.recycle.unsupported", "This type cannot be restored")
+                  : t("page.recycle.restore", "Restore")
+              }
+              onClick={() => restore(r.id).catch(() => toast.error(t("common.failed", "Failed")))}
+            >
+              {t("page.recycle.restore", "Restore")}
+            </button>
+            <button className="btn btn-danger" type="button" onClick={() => purge(r.id).catch(() => toast.error(t("common.failed", "Failed")))}>
+              {t("page.recycle.purge", "Purge")}
+            </button>
+          </span>
+        );
+      },
     },
   ];
 

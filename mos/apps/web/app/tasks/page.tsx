@@ -19,6 +19,7 @@ import { useListHotkeys } from "@/components/useListHotkeys";
 import { apiDelete, apiGet, apiPatch, apiPost, type TaskAssignee, type TaskOut } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
+import { formatInTz, utcDayDiff } from "@/lib/datetime";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
@@ -66,9 +67,7 @@ function TasksPageInner() {
 
   function fmtStamp(iso?: string | null) {
     if (!iso) return "—";
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "—";
-    return d.toISOString().slice(0, 16).replace("T", " ");
+    return formatInTz(iso, null, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
   }
 
   function exportRows(selected: TaskRow[]) {
@@ -141,13 +140,8 @@ function TasksPageInner() {
 
   function dueLabel(task: TaskOut) {
     if (!task.due_at) return null;
-    const due = new Date(task.due_at);
-    if (Number.isNaN(due.getTime())) return null;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const day = new Date(due);
-    day.setHours(0, 0, 0, 0);
-    const diff = Math.round((day.getTime() - today.getTime()) / 86_400_000);
+    const diff = utcDayDiff(task.due_at);
+    if (diff === null) return null;
     if (task.status !== "done" && task.status !== "cancelled") {
       if (diff < 0) return { text: t("page.tasks.overdue_days", "Overdue by {n} days", { n: -diff }), overdue: true };
       if (diff === 0) return { text: t("page.tasks.due_today", "Due today"), overdue: false };

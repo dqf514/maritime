@@ -23,6 +23,7 @@ import { API_BASE, apiDelete, apiGet, apiPatch, apiPost, readStorage, TOKEN_STOR
 import { downloadCsv } from "@/lib/csv";
 import { fmt } from "@/lib/fmt";
 import { useI18n } from "@/lib/i18n";
+import { parseUtc } from "@/lib/datetime";
 import { useListQuery } from "@/lib/useListQuery";
 
 type Batch = {
@@ -245,7 +246,7 @@ function PaymentsPage() {
     if (colKey === "batch_date") {
       const prev = row.batch_date;
       const next = value ? String(value) : null;
-      const prevT = prev ? new Date(prev).getTime() : null;
+      const prevT = prev ? parseUtc(prev)?.getTime() ?? null : null;
       const nextT = next ? new Date(next).getTime() : null;
       if (prevT === nextT) return;
       try {

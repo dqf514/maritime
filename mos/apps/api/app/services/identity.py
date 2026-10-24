@@ -7,7 +7,7 @@ import hmac
 import re
 import secrets
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -26,15 +26,30 @@ from app.models_identity import (
 )
 from app.services.graph_client import MsConfig
 from app.services.ms_config import resolve_ms_config
+from app.services.timeutil import utcnow_aware, utcnow_naive
 
 
-def now_local() -> datetime:
-    return datetime.now().astimezone()
+def now_utc_aware() -> datetime:
+    """当前时刻（aware UTC）—— 用于与 aware 值做时刻比较。"""
+    return utcnow_aware()
+
+
+def now_utc_naive() -> datetime:
+    """当前时刻（naive UTC）—— 平台时间基准。
+
+    所有 ``DateTime`` 列存 naive UTC（见 ``app/services/timeutil.py``）。
+    此处若返回本地墙钟，写入 ``expires_at`` / ``last_login_at`` /
+    ``email_verified_at`` 等列后，会与 ``app/security.py`` 的
+    ``_as_aware``（把 naive 当 UTC 解读）产生时差 —— 表现为
+    「密码重置链接刚生成就过期」这类难查的问题。
+    """
+    return utcnow_naive()
 
 
 def as_aware(dt: datetime) -> datetime:
+    """naive 值按平台约定视作 UTC，补成 aware。"""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=now_local().tzinfo)
+        return dt.replace(tzinfo=timezone.utc)
     return dt
 
 
@@ -109,7 +124,7 @@ def create_challenge(
         purpose=purpose,
         token_hash=hash_token(raw),
         payload=payload or {},
-        expires_at=now_local() + timedelta(hours=hours),
+        expires_at=now_utc_naive() + timedelta(hours=hours),
     )
     db.add(row)
     db.flush()
@@ -126,9 +141,9 @@ def consume_challenge(db: Session, purpose: str, raw_token: str) -> AuthChalleng
     )
     if not row:
         return None
-    if as_aware(row.expires_at) < now_local():
+    if as_aware(row.expires_at) < now_utc_aware():
         return None
-    row.consumed_at = now_local()
+    row.consumed_at = now_utc_naive()
     db.flush()
     return row
 
@@ -503,7 +518,7 @@ def build_oauth_authorize_url(
 
 def mark_email_verified(user: User) -> None:
     if not user.email_verified_at:
-        user.email_verified_at = now_local()
+        user.email_verified_at = now_utc_naive()
 
 
 def soft_sign_state(secret: str, payload: str) -> str:

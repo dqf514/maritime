@@ -35,6 +35,7 @@ from app.services.shell_nav import (
     build_workspaces,
     default_workspace,
 )
+from app.services.timeutil import utcnow_naive
 
 router = APIRouter(tags=["Admin & Platform"])
 
@@ -255,7 +256,7 @@ def create_user(body: UserCreate, auth: AuthContext = Depends(require_roles("ten
         locale="en",
         timezone="UTC",
         # Admin-provisioned password accounts are treated as verified; prefer /admin/security invites for email proof
-        email_verified_at=datetime.now().astimezone(),
+        email_verified_at=utcnow_naive(),
     )
     db.add(user)
     db.flush()
@@ -522,7 +523,7 @@ def platform_create_tenant(body: TenantCreate, auth: AuthContext = Depends(requi
         status="active",
         locale="en",
         timezone="UTC",
-        email_verified_at=datetime.now(timezone.utc).astimezone(),
+        email_verified_at=utcnow_naive(),
     )
     db.add(admin)
     db.flush()
@@ -956,7 +957,7 @@ def platform_health(auth: AuthContext = Depends(require_roles("platform_admin"))
         "active": sum(1 for t in tenants if t.status == "active"),
         "suspended": sum(1 for t in tenants if t.status == "suspended"),
         "api_version": "1.4.2-platform",
-        "checked_at": datetime.now(timezone.utc).astimezone().isoformat(),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
         "resources": _resource_snapshot(db),
         "tenants_usage": _per_tenant_usage(db),
     }
@@ -1260,7 +1261,7 @@ def platform_create_tenant_user(
         locale="en",
         timezone="UTC",
         # Provisioned with a known password → treated as verified (same as tenant admin path)
-        email_verified_at=datetime.now(timezone.utc).astimezone(),
+        email_verified_at=utcnow_naive(),
     )
     db.add(user)
     db.flush()

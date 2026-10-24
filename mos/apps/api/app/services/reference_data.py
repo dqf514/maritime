@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models_reference import ReferenceDataset, ReferenceItem, TenantReferenceConfig
 from app.services.reference_packs import DATASETS, iter_system_items
+from app.services.timeutil import utcnow_naive
 
 
 def seed_reference_catalog(db: Session, *, force_refresh_system: bool = False) -> dict:
@@ -208,7 +209,7 @@ def clone_dataset(db: Session, tenant_id: UUID, dataset_code: str) -> dict:
             TenantReferenceConfig.dataset_code == dataset_code,
         )
     )
-    now = datetime.now()
+    now = utcnow_naive()
     if not cfg:
         cfg = TenantReferenceConfig(
             tenant_id=tenant_id,
@@ -240,7 +241,7 @@ def reset_dataset(db: Session, tenant_id: UUID, dataset_code: str) -> dict:
     )
     if cfg:
         cfg.mode = "system"
-        cfg.updated_at = datetime.now()
+        cfg.updated_at = utcnow_naive()
     else:
         db.add(
             TenantReferenceConfig(
@@ -273,7 +274,7 @@ def set_mode(db: Session, tenant_id: UUID, dataset_code: str, mode: str) -> dict
             TenantReferenceConfig.dataset_code == dataset_code,
         )
     )
-    now = datetime.now()
+    now = utcnow_naive()
     if not cfg:
         db.add(
             TenantReferenceConfig(
@@ -370,7 +371,7 @@ def update_item(
         row.active = active
     if meta is not None:
         row.meta = meta
-    row.updated_at = datetime.now()
+    row.updated_at = utcnow_naive()
     if row.source == "cloned":
         row.source = "cloned"  # still cloned but customized
     db.flush()

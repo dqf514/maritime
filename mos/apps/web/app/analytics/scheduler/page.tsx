@@ -14,6 +14,7 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { parseUtc } from "@/lib/datetime";
 import { useToast } from "@/components/ToastProvider";
 
 type Schedule = {
@@ -50,8 +51,8 @@ const EMPTY_FORM = {
 
 function fmtTs(value: string | null): string {
   if (!value) return "—";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toISOString().slice(0, 16).replace("T", " ");
+  const d = parseUtc(value);
+  return d ? d.toISOString().slice(0, 16).replace("T", " ") : value;
 }
 
 export default function ReportSchedulerPage() {

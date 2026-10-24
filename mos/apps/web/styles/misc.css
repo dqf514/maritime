@@ -530,3 +530,14 @@
 .twin-alerts li:last-child { border-bottom: none; }
 .twin-alert-title { font-size: var(--font-ui); }
 .twin-alert-body { font-size: var(--font-label); }
+
+/* ── 船池分配明细（池内船舶 / 结算期分配） ── */
+.pool-dist { display: grid; gap: 1px; font-size: var(--font-label); }
+.pool-dist-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+  white-space: nowrap;
+}
+.pool-dist-row.muted { color: var(--muted); }

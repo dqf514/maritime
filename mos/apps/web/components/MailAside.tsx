@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
+import { formatInTz } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 
 type RelatedMail = {
@@ -33,7 +34,7 @@ export function MailAside({
   top?: number;
   defaultOpen?: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [items, setItems] = useState<RelatedMail[]>([]);
   const q = keywords.filter(Boolean).join(",");
 
@@ -77,7 +78,7 @@ export function MailAside({
               </div>
               <div className="mail-aside-meta">
                 {m.from_email || "—"}
-                {m.sent_at ? ` · ${new Date(m.sent_at).toLocaleString()}` : ""}
+                {m.sent_at ? ` · ${formatInTz(m.sent_at, null, undefined, locale)}` : ""}
               </div>
               {m.body_preview ? (
                 <div className="mail-aside-body">{m.body_preview.slice(0, 220)}</div>

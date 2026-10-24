@@ -3,7 +3,7 @@
 // 泳道（Phase 3）：船舶/货盘/泊位一行，带时间网格背景 + 排程条。
 
 import { GanttBar } from "./GanttBar";
-import { DAY_MS, GanttBlock, GanttLaneData, GanttZoom, startOfDay, ZOOM_PX_PER_DAY } from "./types";
+import { DAY_MS, GanttBlock, GanttLaneData, GanttZoom, startOfDay, toMs, ZOOM_PX_PER_DAY } from "./types";
 
 export type GanttLaneProps = {
   lane: GanttLaneData;
@@ -17,8 +17,8 @@ export type GanttLaneProps = {
 };
 
 function ts(iso: string): number {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+  // 后端 ISO 串无偏移量即 UTC（toMs 统一补 Z），避免按浏览器本地时区解析导致排程条整体偏移。
+  return toMs(iso);
 }
 
 export function GanttLane({

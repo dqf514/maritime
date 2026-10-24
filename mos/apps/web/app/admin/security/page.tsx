@@ -11,6 +11,7 @@ import type { ColumnDef } from "@/components/grid/types";
 import { RowActions } from "@/components/RowActions";
 import { API_BASE as API, apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatInTz, parseUtc } from "@/lib/datetime";
 import { useToast } from "@/components/ToastProvider";
 
 type Policy = {
@@ -47,7 +48,7 @@ type InviteRow = {
 };
 
 export default function TenantSecurityPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [domains, setDomains] = useState("");
@@ -132,8 +133,8 @@ export default function TenantSecurityPage() {
   async function onInviteCellSave(rowId: string, colKey: string, value: unknown, row: InviteRow) {
     let payload: Record<string, unknown>;
     if (colKey === "expires_at") {
-      const prevT = row.expires_at ? new Date(row.expires_at).getTime() : null;
-      const nextIso = value ? new Date(String(value)).toISOString() : null;
+      const prevT = row.expires_at ? parseUtc(row.expires_at)?.getTime() ?? null : null;
+      const nextIso = value ? parseUtc(String(value))?.toISOString() ?? null : null;
       const nextT = nextIso ? new Date(nextIso).getTime() : null;
       if (prevT === nextT) return;
       payload = { expires_at: nextIso };
@@ -188,7 +189,7 @@ export default function TenantSecurityPage() {
       title: t("page.security.expires", "Expires"),
       width: 170,
       value: (r) => r.expires_at || "",
-      render: (v) => (v ? new Date(String(v)).toLocaleString() : "—"),
+      render: (v) => (v ? formatInTz(v as string | null, null, undefined, locale) : "—"),
       editor: { type: "datetime" },
     },
     {

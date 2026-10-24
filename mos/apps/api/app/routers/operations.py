@@ -37,7 +37,7 @@ from app.services.audit import audit
 from app.services.notifications import notify_once, role_recipients
 from app.services.recycle import soft_delete
 from app.services.report_sequence import assert_report_sequence, derive_report_stage
-from app.services.tenant_guard import scoped_get
+from app.services.tenant_guard import global_ref_get, scoped_get
 from app.services.state_machine import VOYAGE_TRANSITIONS, InvalidState, transition
 
 router = APIRouter(tags=["Operations"])
@@ -99,7 +99,11 @@ class VoyageOut(BaseModel):
     vessel_id: UUID | None
     charter_id: UUID | None
     cargo: str | None
+    # attribution (创建人/修改人 + 时间) — 行级数据范围与记录元数据的展示源
+    created_at: datetime | None = None
+    created_by: UUID | None = None
     updated_at: datetime | None = None
+    updated_by: UUID | None = None
 
 
 class PortCallIn(BaseModel):
@@ -198,6 +202,19 @@ def list_voyages(auth: AuthContext = Depends(require_module("operations")), db: 
     stmt = apply_data_scope(stmt, Voyage, auth.user_id, effective_scope(db, auth.tenant_id, auth.roles, "operations"))
     rows = db.scalars(stmt.order_by(Voyage.created_at.desc())).all()
     return [VoyageOut.model_validate(r) for r in rows]
+
+
+@router.get("/voyages/{voyage_id}", response_model=VoyageOut)
+def get_voyage(
+    voyage_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """单条航次 —— REST 语义的 GET（列表页点进去 / 外部集成都要用）。"""
+    row = scoped_get(db, Voyage, voyage_id, auth.tenant_id)
+    if row is None or row.status == "deleted":
+        raise HTTPException(404, "Voyage not found")
+    return VoyageOut.model_validate(row)
 
 
 @router.post("/voyages", response_model=VoyageOut)
@@ -1214,6 +1231,10 @@ def create_port_call(body: PortCallIn, auth: AuthContext = Depends(require_modul
     if not v or v.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Voyage not found")
     body.function_code = normalize_function_code(body.function_code)
+    # 引用完整性：港口是全局参照数据，用 global_ref_get 校验（scoped_get 对
+    # tenant_id 为 NULL 的参照数据永远匹配不到）。建挂靠港时也不允许写野端口 id。
+    if body.port_id is not None and global_ref_get(db, Port, body.port_id, auth.tenant_id) is None:
+        raise HTTPException(404, "Port not found")
     row = PortCall(tenant_id=auth.tenant_id, **body.model_dump())
     db.add(row)
     db.commit()
@@ -1234,6 +1255,19 @@ def list_port_calls(
     return [PortCallOut.model_validate(r) for r in rows]
 
 
+@router.get("/port-calls/{port_call_id}", response_model=PortCallOut)
+def get_port_call(
+    port_call_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """单条挂靠港 —— REST 语义的 GET（详情页 / 外部集成都要用）。"""
+    row = scoped_get(db, PortCall, port_call_id, auth.tenant_id)
+    if row is None or row.deleted_at is not None:
+        raise HTTPException(404, "Port call not found")
+    return PortCallOut.model_validate(row)
+
+
 @router.patch("/port-calls/{port_call_id}", response_model=PortCallOut)
 def update_port_call(
     port_call_id: UUID,
@@ -1246,7 +1280,9 @@ def update_port_call(
         raise HTTPException(404, "Port call not found")
     fields = body.model_fields_set
     if "port_id" in fields and body.port_id is not None:
-        if scoped_get(db, Port, body.port_id, auth.tenant_id) is None:
+        # 港口是全局参照数据（tenant_id 为 NULL）—— 必须用 global_ref_get，
+        # 否则租户过滤永远匹配不到，改挂靠港一律 404。
+        if global_ref_get(db, Port, body.port_id, auth.tenant_id) is None:
             raise HTTPException(404, "Port not found")
     if "function_code" in fields:
         body.function_code = normalize_function_code(body.function_code)

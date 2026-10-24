@@ -13,6 +13,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
 
 from app.models_shipshore import ShipTerminal, ShipForm, ShipReport
+from app.services.timeutil import utcnow_naive
 
 
 # ── Terminal Management ──
@@ -51,7 +52,7 @@ def terminal_heartbeat(
     terminal = db.get(ShipTerminal, terminal_id)
     if not terminal:
         raise ValueError("Terminal not found")
-    terminal.last_sync_at = datetime.now()
+    terminal.last_sync_at = utcnow_naive()
     if position:
         terminal.last_position = position
     terminal.offline_queue_size = offline_queue_size
@@ -188,7 +189,7 @@ def review_report(
         raise ValueError(f"Report already {report.status}")
 
     report.reviewed_by = reviewer_id
-    report.reviewed_at = datetime.now()
+    report.reviewed_at = utcnow_naive()
     report.review_notes = notes
 
     if approved:

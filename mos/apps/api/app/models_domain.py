@@ -257,7 +257,7 @@ class Voyage(Base):
     updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), default=func.now(), onupdate=func.now()
     )
 
 
@@ -415,9 +415,11 @@ class Claim(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     # 对方联系人（索赔通讯对象，D 闭环：counterparty_contacts 可被业务引用）
     contact_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("counterparty_contacts.id"))
-    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=func.now()
+    )
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), default=func.now(), onupdate=func.now()
     )
 
 
@@ -585,10 +587,12 @@ class Invoice(Base):
     # attribution (创建人/修改人/时间) — enables row-level data scope + record metadata
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
-    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=func.now()
+    )
     # optimistic-lock stamp (D4/D8): nullable — legacy rows stay NULL until first UPDATE
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True
+        DateTime(timezone=True), server_default=func.now(), default=func.now(), onupdate=func.now(), nullable=True
     )
 
 
@@ -604,7 +608,7 @@ class Payment(Base):
     paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     reference: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), default=func.now(), onupdate=func.now()
     )
 
 
@@ -624,7 +628,7 @@ class PaymentBatch(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), default=func.now(), onupdate=func.now()
     )
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
 

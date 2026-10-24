@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Module, Role, Tenant, TenantModuleLicense, User, UserRole
 from app.security import hash_password
+from app.services.timeutil import utcnow_naive
 
 CORE_MODULES = [
     ("platform", "Platform", True),
@@ -164,12 +165,12 @@ def _ensure_user_with_roles(db: Session, tenant_id, email: str, full_name: str, 
             status="active",
             locale="en",
             timezone="UTC",
-            email_verified_at=datetime.now().astimezone(),
+            email_verified_at=utcnow_naive(),
         )
         db.add(user)
         db.flush()
     elif getattr(user, "email_verified_at", None) is None:
-        user.email_verified_at = datetime.now().astimezone()
+        user.email_verified_at = utcnow_naive()
     existing = set(
         db.scalars(select(Role.code).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)).all()
     )

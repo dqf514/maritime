@@ -5,6 +5,7 @@
 
 import { ReactNode } from "react";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordAttribution } from "@/components/RecordAttribution";
 import { StatusBadge, StatusTone } from "@/components/StatusBadge";
 import { BreadcrumbItem } from "@/components/Breadcrumb";
 
@@ -27,9 +28,12 @@ type Props = {
   actions?: DetailAction[];
   /** 状态右侧附加徽标（旗标、锁定图标等） */
   badges?: ReactNode;
+  /** 归属条（创建人/修改人 + 时间）—— 与 entityId 同时提供时显示 */
+  entityType?: string;
+  entityId?: string;
 };
 
-export function DetailHeader({ title, status, statusTone, subtitle, breadcrumb, actions, badges }: Props) {
+export function DetailHeader({ title, status, statusTone, subtitle, breadcrumb, actions, badges, entityType, entityId }: Props) {
   return (
     <PageHeader
       breadcrumb={breadcrumb}
@@ -40,7 +44,16 @@ export function DetailHeader({ title, status, statusTone, subtitle, breadcrumb, 
           {badges}
         </>
       }
-      subtitle={subtitle}
+      subtitle={
+        entityType && entityId ? (
+          <>
+            {subtitle ? <>{subtitle} · </> : null}
+            <RecordAttribution entityType={entityType} entityId={entityId} />
+          </>
+        ) : (
+          subtitle
+        )
+      }
       actions={
         actions?.length
           ? actions.map((a) => (

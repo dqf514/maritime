@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
+import { formatInTz, parseUtc } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 
 type Attr = {
@@ -14,16 +15,16 @@ type Attr = {
   updated_at?: string | null;
 };
 
-function fmt(iso?: string | null): string {
+// 后端时间戳为 UTC（无偏移量即 UTC）；按 UTC 展示，避免浏览器时区偏移 8 小时。
+function fmt(iso: string | null | undefined, locale?: string | null): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const d = parseUtc(iso);
+  if (!d) return "";
+  return formatInTz(d, null, undefined, locale);
 }
 
 export function RecordAttribution({ entityType, entityId }: { entityType: string; entityId: string }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [attr, setAttr] = useState<Attr | null>(null);
 
   useEffect(() => {
@@ -38,12 +39,12 @@ export function RecordAttribution({ entityType, entityId }: { entityType: string
   const bits: string[] = [];
   if (attr.created_by_name || attr.created_at) {
     bits.push(
-      `${t("attr.created_by", "创建")} ${attr.created_by_name || "—"}${attr.created_at ? ` · ${fmt(attr.created_at)}` : ""}`,
+      `${t("attr.created_by", "创建")} ${attr.created_by_name || "—"}${attr.created_at ? ` · ${fmt(attr.created_at, locale)}` : ""}`,
     );
   }
   if (attr.updated_by_name || attr.updated_at) {
     bits.push(
-      `${t("attr.updated_by", "修改")} ${attr.updated_by_name || "—"}${attr.updated_at ? ` · ${fmt(attr.updated_at)}` : ""}`,
+      `${t("attr.updated_by", "修改")} ${attr.updated_by_name || "—"}${attr.updated_at ? ` · ${fmt(attr.updated_at, locale)}` : ""}`,
     );
   }
 

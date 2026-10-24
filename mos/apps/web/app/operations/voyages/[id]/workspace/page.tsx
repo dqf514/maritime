@@ -29,22 +29,23 @@ import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
 import { useTodoAdd } from "@/components/TodoQuickAdd";
 import { apiDelete, apiGet, apiPatch, apiPost, type VoyageOverview, type VoyagePnlLine } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { fromUtcInput, parseUtc } from "@/lib/datetime";
 
 // —— helpers ——
 
 function fmtDate(iso: string | null | undefined) {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  const d = parseUtc(iso);
+  if (!d) return "—";
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
 function fmtDay(iso: string | null | undefined) {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const d = parseUtc(iso);
+  if (!d) return "—";
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
 function fmtMoney(n: number | null | undefined, currency: string, locale: string) {
@@ -61,11 +62,11 @@ function varianceClass(n: number | null | undefined) {
   return n < 0 ? "neg" : "pos";
 }
 
-/** ISO → datetime-local 输入值（YYYY-MM-DDTHH:MM，本地时区） */
+/** ISO → datetime-local 输入值（YYYY-MM-DDTHH:MM，浏览器本地时区） */
 function toLocalInput(iso: string | null | undefined) {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
+  const d = parseUtc(iso);
+  if (!d) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
@@ -312,8 +313,10 @@ export default function VoyageWorkspacePage() {
           seq: Number(pcForm.seq) || 1,
           purpose: pcForm.purpose || "load",
           function_code: pcForm.function_code || null,
-          eta: pcForm.eta ? new Date(pcForm.eta).toISOString() : null,
-          etd: pcForm.etd ? new Date(pcForm.etd).toISOString() : null,
+          // 输入框是 UTC 墙钟（平台约定：naive = UTC）—— 不能用 new Date() 按浏览器本地时区解释，
+          // 否则非 UTC 客户端保存时会整体偏移一个 UTC 偏移（历史缺陷：差 8 小时）。
+          eta: fromUtcInput(pcForm.eta),
+          etd: fromUtcInput(pcForm.etd),
           agent: pcForm.agent || null,
         };
         if (pcEditId) {
@@ -359,8 +362,8 @@ export default function VoyageWorkspacePage() {
         payload = { seq: n };
       } else if (dtFields.includes(colKey)) {
         const prev = (row as Record<string, unknown>)[colKey];
-        const nextIso = value ? new Date(String(value)).toISOString() : null;
-        const prevT = prev ? new Date(String(prev)).getTime() : null;
+        const nextIso = value ? parseUtc(String(value))?.toISOString() ?? null : null;
+        const prevT = prev ? parseUtc(String(prev))?.getTime() ?? null : null;
         const nextT = nextIso ? new Date(nextIso).getTime() : null;
         if (prevT === nextT) return;
         payload = { [colKey]: nextIso };
@@ -412,9 +415,9 @@ export default function VoyageWorkspacePage() {
     async (rowId: string, colKey: string, value: unknown, row: Record<string, unknown>) => {
       let payload: Record<string, unknown>;
       if (colKey === "start_at" || colKey === "end_at") {
-        const nextIso = value ? new Date(String(value)).toISOString() : null;
+        const nextIso = value ? parseUtc(String(value))?.toISOString() ?? null : null;
         const prev = row[colKey];
-        const prevT = prev ? new Date(String(prev)).getTime() : null;
+        const prevT = prev ? parseUtc(String(prev))?.getTime() ?? null : null;
         const nextT = nextIso ? new Date(nextIso).getTime() : null;
         if (prevT === nextT) return;
         payload = { [colKey]: nextIso };
@@ -573,10 +576,10 @@ export default function VoyageWorkspacePage() {
         });
       }
     }
-    const fromTs = laycan?.from ? new Date(laycan.from).getTime() : null;
+    const fromTs = laycan?.from ? parseUtc(laycan.from)?.getTime() ?? null : null;
     if (fromTs !== null) {
       for (const pc of pcs) {
-        const eta = pc.eta ? new Date(pc.eta).getTime() : null;
+        const eta = pc.eta ? parseUtc(pc.eta)?.getTime() ?? null : null;
         if (eta === null) continue;
         if (fromTs !== null && eta < fromTs) {
           issues.push({
@@ -899,8 +902,8 @@ export default function VoyageWorkspacePage() {
       title: "ATA",
       width: 150,
       render: (v, row) => {
-        const eta = row.eta ? new Date(row.eta).getTime() : null;
-        const ata = row.ata ? new Date(row.ata).getTime() : null;
+        const eta = row.eta ? parseUtc(row.eta)?.getTime() ?? null : null;
+        const ata = row.ata ? parseUtc(row.ata)?.getTime() ?? null : null;
         const delayed = eta !== null && ata !== null && ata > eta;
         return (
           <span className={delayed ? "neg" : ""}>

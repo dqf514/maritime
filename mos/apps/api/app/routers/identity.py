@@ -38,7 +38,8 @@ from app.services.identity import (
     ensure_tenant_policy,
     exchange_login_code,
     mark_email_verified,
-    now_local,
+    now_utc_aware,
+    now_utc_naive,
     as_aware,
     provider_runtime,
     public_auth_options,
@@ -192,7 +193,7 @@ def _policy_out(p: TenantAuthPolicy) -> dict:
 
 
 def _issue_token(user: User, response: Response, db: Session, via: str) -> dict:
-    user.last_login_at = now_local()
+    user.last_login_at = now_utc_naive()
     token = create_access_token(
         user_id=user.id, tenant_id=user.tenant_id, email=user.email, pwv=user.password_version or 1
     )
@@ -301,7 +302,7 @@ def platform_identity_put(
         if isinstance(v, str):
             v = v.strip() or (None if k in {"smtp_host", "smtp_username", "oauth_redirect_base", "web_app_base"} else v)
         setattr(row, k, v)
-    row.updated_at = now_local()
+    row.updated_at = now_utc_naive()
     audit(
         db,
         tenant_id=auth.tenant_id,
@@ -405,7 +406,7 @@ def put_tenant_policy(
     p = ensure_tenant_policy(db, auth.tenant_id)
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(p, k, v)
-    p.updated_at = now_local()
+    p.updated_at = now_utc_naive()
     db.commit()
     return _policy_out(p)
 
@@ -825,7 +826,7 @@ def oauth_callback(
     )
     if not pending or not pending.tenant_id:
         return RedirectResponse(f"{web}/login?oauth_error=invalid_state")
-    if as_aware(pending.expires_at) < now_local():
+    if as_aware(pending.expires_at) < now_utc_aware():
         return RedirectResponse(f"{web}/login?oauth_error=expired_state")
 
     email = stub_email
@@ -887,11 +888,11 @@ def oauth_callback(
                 subject=sub,
                 email=email,
                 profile={"via": "oauth_callback"},
-                last_login_at=now_local(),
+                last_login_at=now_utc_naive(),
             )
         )
     else:
-        ident.last_login_at = now_local()
+        ident.last_login_at = now_utc_naive()
     try:
         _check_verified_or_raise(user, policy)
     except HTTPException:
@@ -962,7 +963,7 @@ def oauth_stub_complete(body: StubOAuthCompleteIn, response: Response, db: Sessi
                 subject=sub,
                 email=email,
                 profile={"mode": "stub"},
-                last_login_at=now_local(),
+                last_login_at=now_utc_naive(),
             )
         )
     _check_verified_or_raise(user, policy)

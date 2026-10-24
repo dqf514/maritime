@@ -14,6 +14,7 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut, generateTempPassword } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatInTz } from "@/lib/datetime";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
@@ -956,7 +957,7 @@ function PlatformTenantsPage() {
                             : b.trigger}
                       </span>
                     </td>
-                    <td>{b.created_at ? new Date(b.created_at).toLocaleString() : "-"}</td>
+                    <td>{b.created_at ? formatInTz(b.created_at) : "-"}</td>
                     <td>
                       <code style={{ fontSize: "0.75rem" }}>{b.storage_path}</code>
                     </td>

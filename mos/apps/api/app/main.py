@@ -115,7 +115,7 @@ from app.routers.field_perms import router as field_perms_router
 from app.routers.udf import router as udf_router
 from app.routers.docs import router as docs_router
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo
-from app.seed_demo_flow import seed_full_demo_flow
+from app.seed_demo_flow import seed_full_demo_flow, stamp_demo_attribution
 from app.seed_masterdata_gaps import seed_masterdata_gaps
 from app.seed_i18n import seed_i18n
 from app.services.platform_ops import bootstrap_ops_catalog
@@ -346,6 +346,14 @@ async def lifespan(_app: FastAPI):
                 seed_wave1_demo(db)
                 seed_full_demo_flow(db)
                 seed_masterdata_gaps(db)
+                # 演示数据补「创建人 / 修改人」—— 否则归属条永远显示「—」。
+                from sqlalchemy import select as _sel
+
+                from app.models import Tenant as _Tenant
+
+                demo_tenant = db.scalar(_sel(_Tenant).where(_Tenant.code == "demo"))
+                if demo_tenant is not None:
+                    stamp_demo_attribution(db, demo_tenant)
             db.commit()
     except Exception:
         log.exception("Startup seed failed")

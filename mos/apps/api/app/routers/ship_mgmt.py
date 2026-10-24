@@ -27,12 +27,13 @@ from app.models_ship import (
 from app.models_wave1 import Attachment, ConnectorInstance, Vessel
 from app.security import AuthContext, require_module
 from app.services.audit import audit
+from app.services.timeutil import utcnow_naive
 
 router = APIRouter(tags=["Ship Management"])
 
 
 def _now() -> datetime:
-    return datetime.now().astimezone()
+    return utcnow_naive()
 
 
 CERT_EXPIRING_DAYS = 30

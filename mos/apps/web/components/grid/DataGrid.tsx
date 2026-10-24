@@ -9,6 +9,7 @@ import { useCellSelection } from "./useCellSelection";
 import { useGridKeyboard } from "./useGridKeyboard";
 import { GridFooter } from "./GridFooter";
 import { copyToClipboard, readFromClipboard, coerceValue, fillSeries } from "./clipboard";
+import { parseUtc } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -16,15 +17,34 @@ function getCellValue(col: ColumnDef<any>, row: Record<string, unknown>): unknow
   return col.value ? col.value(row as any) : row[col.key];
 }
 
-/** 编辑器输入框的初值：datetime 用本地时间 YYYY-MM-DDTHH:MM（datetime-local 要求） */
+/**
+ * 复制到剪贴板的文本 —— 必须与「用户看到的」一致。
+ *
+ * 下拉列（editor.type === "select"）存的是 id（port_id / status_code …），
+ * 直接复制原始值会把 UUID 粘进 Excel，粘回来也存不进去。
+ * 这里按 options 把 id 映射成 label，粘贴时再映射回 value（见 handlePaste）。
+ */
+function copyTextFor(col: ColumnDef<any>, row: Record<string, unknown>): string {
+  const raw = getCellValue(col, row);
+  if (col?.editor?.type === "select" && col.editor.options?.length) {
+    const opt = col.editor.options.find((o) => String(o.value) === String(raw));
+    if (opt) return opt.label;
+  }
+  return raw === null || raw === undefined ? "" : String(raw);
+}
+
+/**
+ * 编辑器输入框的初值：datetime 用 UTC 墙钟 YYYY-MM-DDTHH:MM（datetime-local 要求的格式；
+ * 后端存的就是 UTC naive 串，提交时原样回传，故这里取 UTC 分量，编辑不会引入时区偏移）。
+ */
 function toInputValue(col: ColumnDef, row: Record<string, unknown>): string {
   const val = getCellValue(col, row);
   if (val === null || val === undefined) return "";
   if (col.editor?.type === "datetime") {
-    const d = new Date(val as string | number);
-    if (isNaN(d.getTime())) return "";
+    const d = parseUtc(val as string | number);
+    if (!d) return "";
     const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
   }
   return String(val);
 }
@@ -109,10 +129,12 @@ export function DataGrid<T extends Record<string, any>>({
   const editingInputRef = useRef<HTMLInputElement | HTMLSelectElement>(null);
 
   // 聚焦到网格容器以接收键盘事件
+  // 注意 preventScroll：默认 focus() 会把容器滚动进视野，实测在网格里按下鼠标会让
+  // 整个列表上跳 ~85px，行内按钮被挪离指针 → click 落空（按钮「点了没反应」）。
   useEffect(() => {
     const el = gridRef.current;
     if (el && document.activeElement !== el && el.contains(document.activeElement)) {
-      el.focus();
+      el.focus({ preventScroll: true });
     }
   }, []);
 
@@ -139,8 +161,8 @@ export function DataGrid<T extends Record<string, any>>({
       const row: string[] = [];
       for (let c = range.start.col; c <= range.end.col; c++) {
         const col = columns[c];
-        const val = col ? getCellValue(col, data[r] ?? {}) : "";
-        row.push(val === null || val === undefined ? "" : String(val));
+        const val = col ? copyTextFor(col, data[r] ?? {}) : "";
+        row.push(val);
       }
       matrix.push(row);
     }
@@ -162,7 +184,13 @@ export function DataGrid<T extends Record<string, any>>({
         if (targetCol >= columns.length) break;
         const col = columns[targetCol];
         if (!col.editor) continue;
-        const coerced = coerceValue(matrix[r][c], col.editor.type);
+        let coerced: unknown = coerceValue(matrix[r][c], col.editor.type);
+        // 下拉列：粘贴的是 label（复制时写出的就是 label）→ 还原成 value 再落库。
+        if (col.editor.type === "select" && col.editor.options?.length) {
+          const txt = String(matrix[r][c] ?? "").trim();
+          const opt = col.editor.options.find((o) => o.label === txt || String(o.value) === txt);
+          if (opt) coerced = opt.value;
+        }
         const rowData = data[targetRow] as Record<string, unknown>;
         const rk = rowKey(data[targetRow] as any, targetRow);
         onCellSave?.(rk, col.key, coerced, rowData as any);
@@ -395,8 +423,12 @@ export function DataGrid<T extends Record<string, any>>({
           key={col.key}
           className={cellClass}
           onMouseDown={(e) => {
+            // 行内交互控件（按钮/链接/输入）不触发单元格选中：否则会重绘并滚动列表，
+            // 按钮在 mouseup 之前被挪走，click 事件落空。
+            const target = e.target as HTMLElement | null;
+            if (target?.closest?.("button, a, input, select, textarea, [role='button']")) return;
             sel.selectCell(rowIdx, colIdx, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
-            gridRef.current?.focus();
+            gridRef.current?.focus({ preventScroll: true });
           }}
           onDoubleClick={() => {
             if (editable && col.editor) sel.startEdit({ row: rowIdx, col: colIdx });

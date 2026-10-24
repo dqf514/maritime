@@ -1,6 +1,8 @@
 // Excel 兼容的 TSV 剪贴板工具
 // Excel 复制 → 网格粘贴 → 网格复制 → Excel 粘贴，往返无损
 
+import { parseUtc } from "@/lib/datetime";
+
 export function parseTSV(text: string): string[][] {
   return text
     .replace(/\r\n/g, "\n")
@@ -71,9 +73,12 @@ export function fillSeries(source: unknown[], count: number, type?: string): unk
 
   // 日期序列
   if (type === "date" && source.length >= 2) {
-    const d1 = new Date(source[0] as string).getTime();
-    const d2 = new Date(source[1] as string).getTime();
-    if (!isNaN(d1) && !isNaN(d2)) {
+    // 服务端日期串按 UTC 解析（naive = UTC），保证序列步长与存储一致
+    const p1 = parseUtc(source[0] as string);
+    const p2 = parseUtc(source[1] as string);
+    if (p1 && p2) {
+      const d1 = p1.getTime();
+      const d2 = p2.getTime();
       const step = d2 - d1;
       return Array.from({ length: count }, (_, i) => {
         const d = new Date(d2 + step * (i + 1));

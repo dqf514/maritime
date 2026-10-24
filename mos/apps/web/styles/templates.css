@@ -81,7 +81,6 @@
 .tpl-code {
   width: 100%;
   border: none;
-  outline: none;
   resize: vertical;
   min-height: 340px;
   padding: var(--gap-xs) var(--cell-pad-x);

@@ -23,6 +23,7 @@ import mimetypes
 import re
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -601,6 +602,19 @@ _playwright_lock = threading.Lock()
 _playwright_cm = None
 _browser = None
 
+# Playwright sync API 的 greenlet 绑定线程 —— 所有 PDF 渲染集中到这条专属线程，
+# 浏览器单例也只在这里创建 / 关闭（见 html_to_pdf 的说明）。
+_pdf_executor = None
+_pdf_executor_lock = threading.Lock()
+
+
+def _pdf_worker() -> ThreadPoolExecutor:
+    global _pdf_executor
+    with _pdf_executor_lock:
+        if _pdf_executor is None:
+            _pdf_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="marios-pdf")
+        return _pdf_executor
+
 _PDF_MARGIN = {"top": "20mm", "bottom": "18mm", "left": "16mm", "right": "16mm"}
 
 _FOOTER = """
@@ -639,11 +653,33 @@ def _get_browser():
 
 
 def html_to_pdf(html: str, *, wait_ms: int = 150) -> bytes:
-    """HTML → PDF 字节。引擎缺失/启动失败抛 :class:`PDFEngineUnavailable`。"""
+    """HTML → PDF 字节。引擎缺失/启动失败抛 :class:`PDFEngineUnavailable`。
+
+    Playwright 的 **sync API 绑定 greenlet**：浏览器一旦在 A 线程启动，就只能在该线程
+    里调用，否则抛 ``Cannot switch to a different thread``。FastAPI 的同步路由跑在
+    anyio 线程池里、线程会轮换，所以模块级浏览器单例直接跨线程复用必然出错
+    （实测并发导出 PDF 约一半 503）。
+
+    因此把渲染全部交给一个**专属单线程**：浏览器也只在该线程里创建 / 关闭，
+    跨线程问题从根上消失，浏览器单例的性能收益保留。
+    """
     try:
-        from playwright.sync_api import Error as PWError
+        from playwright.sync_api import Error as PWError  # noqa: F401
     except Exception as exc:  # noqa: BLE001
         raise PDFEngineUnavailable(f"playwright not installed: {exc}") from exc
+
+    future = _pdf_worker().submit(_render_pdf, html, wait_ms)
+    try:
+        return future.result()
+    except PDFEngineUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001 — 工作线程异常退出等
+        raise PDFEngineUnavailable(f"pdf engine unavailable: {exc}") from exc
+
+
+def _render_pdf(html: str, wait_ms: int) -> bytes:
+    """在 PDF 专属线程里执行渲染（Playwright sync API 只能在同一线程内使用）。"""
+    from playwright.sync_api import Error as PWError
 
     with _playwright_lock:
         try:

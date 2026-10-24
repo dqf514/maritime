@@ -20,6 +20,7 @@ from app.services.integration_adapters import (
     test_adapter,
 )
 from app.services.recycle import soft_delete
+from app.services.timeutil import utcnow_naive
 
 router = APIRouter(prefix="/settings/connectors", tags=["Integration Hub"])
 
@@ -90,7 +91,7 @@ def update_connector(
         if k == "status" and v == "deleted":
             continue
         setattr(row, k, v)
-    row.updated_at = datetime.now().astimezone()
+    row.updated_at = utcnow_naive()
     db.commit()
     db.refresh(row)
     return ConnectorOut.model_validate(row, from_attributes=True)
@@ -137,7 +138,7 @@ def test_connector(
     health = test_adapter(row, office_health=office_health)
     row.last_health = health
     row.status = "active" if health.get("ok") else "error"
-    row.updated_at = datetime.now().astimezone()
+    row.updated_at = utcnow_naive()
     db.commit()
     db.refresh(row)
     return ConnectorOut.model_validate(row, from_attributes=True)
@@ -156,6 +157,6 @@ def sync_connector(
     row.last_health = {**(row.last_health or {}), "last_sync": summary}
     if summary.get("ok"):
         row.status = "active"
-    row.updated_at = datetime.now().astimezone()
+    row.updated_at = utcnow_naive()
     db.commit()
     return summary

@@ -35,6 +35,7 @@ from app.services.period_close import assert_period_open
 from app.models_wave1 import Counterparty
 from app.services.sanctions import assert_not_sanctioned
 from app.services.tenant_guard import scoped_get, scoped_query
+from app.services.timeutil import utcnow_naive
 
 router = APIRouter()
 
@@ -292,7 +293,7 @@ def invoice_transition(invoice_id: UUID, target: str, auth: AuthContext = Depend
     if target == "pending_approval" and has_wf:
         start_workflow(db, tenant_id=auth.tenant_id, entity_type="invoice", entity_id=row.id, started_by=auth.user_id)
     if target == "issued":
-        row.issued_at = datetime.now().astimezone()
+        row.issued_at = utcnow_naive()
     db.commit()
     if target == "issued":
         _office_escalate_invoice(db, auth.tenant_id, row)
@@ -373,6 +374,8 @@ def update_invoice(
         row.bill_by = body.bill_by
     if body.commission_basis is not None:
         row.commission_basis = body.commission_basis
+    # 修改人（归属条「修改」栏）——不写的话详情页永远显示旧的操作人。
+    row.updated_by = auth.user_id
     audit(
         db,
         action="invoice.update",
@@ -712,6 +715,7 @@ def list_invoices(
                 "commission_basis": r.commission_basis,
                 "created_by": str(r.created_by) if r.created_by else None,
                 "updated_by": str(r.updated_by) if r.updated_by else None,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }
             for r in rows

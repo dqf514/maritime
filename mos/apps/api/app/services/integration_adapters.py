@@ -298,7 +298,7 @@ def catalog_entry(connector_type: str) -> dict[str, Any] | None:
 
 
 def _now_iso() -> str:
-    return datetime.now().astimezone().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def test_adapter(row: ConnectorInstance, *, office_health: dict | None = None) -> dict[str, Any]:

@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
+import { formatInTz } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 
 type Revision = {
@@ -17,7 +18,7 @@ type Revision = {
 };
 
 export function RevisionsPanel({ entityType, entityId }: { entityType: string; entityId: string }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [rows, setRows] = useState<Revision[] | null>(null);
 
   useEffect(() => {
@@ -49,7 +50,7 @@ export function RevisionsPanel({ entityType, entityId }: { entityType: string; e
               <li key={r.id}>
                 <div className="revisions-line">
                   <strong>{r.action}</strong>
-                  <span className="muted">{r.created_at ? new Date(r.created_at).toLocaleString() : ""}</span>
+                  <span className="muted">{r.created_at ? formatInTz(r.created_at, null, undefined, locale) : ""}</span>
                 </div>
                 {Array.isArray(r.detail?.fields) ? (
                   <div className="muted revisions-fields">

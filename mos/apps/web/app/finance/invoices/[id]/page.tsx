@@ -16,6 +16,7 @@ import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton"
 import { useStateActions } from "@/components/useTransitions";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatInTz } from "@/lib/datetime";
 import { useToast } from "@/components/ToastProvider";
 import { SkeletonCard } from "@/components/Skeleton";
 import { PrintDoc } from "@/components/PrintDoc";
@@ -53,7 +54,7 @@ function fmt(n: number | undefined | null) {
 }
 
 function InvoiceDetailPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -311,7 +312,7 @@ function InvoiceDetailPage() {
         key: "paid_at",
         title: t("page.finance.paid_at", "时间"),
         value: (r) => r.paid_at ?? "",
-        render: (v) => (v ? new Date(String(v)).toLocaleString() : "—"),
+        render: (v) => (v ? formatInTz(v as string | null, null, undefined, locale) : "—"),
       },
       {
         key: "actions",
@@ -440,6 +441,8 @@ function InvoiceDetailPage() {
         title={inv?.invoice_no || "…"}
         status={inv?.status}
         subtitle={t("page.finance.edit_inv", "编辑发票")}
+        entityType="invoice"
+        entityId={id}
         badges={
           isMirror ? (
             <StatusBadge

@@ -94,3 +94,32 @@ def scoped_query(
         if _has_column(model, _STATUS):
             stmt = stmt.where(model.status != _DELETED_STATUS)
     return stmt
+
+
+def global_ref_get(
+    db: Session,
+    model: type[ModelT],
+    row_id: UUID,
+    tenant_id: UUID,
+    *,
+    include_deleted: bool = False,
+) -> ModelT | None:
+    """取**全局参照数据**行（港口 Port 等）—— 每个租户都能看到。
+
+    参照数据表的 ``tenant_id`` 为 NULL（由平台维护，全租户共享，见
+    ``GET /masterdata/ports`` 不做租户过滤）。用 :func:`scoped_get` 校验
+    这类引用会永远失败（NULL != 当前租户），于是「改挂靠港」这类操作
+    会以 404 收场 —— 历史缺陷：航次工作台港口列的下拉框永远存不进去。
+
+    规则：``tenant_id`` 为空（全局）或与调用租户一致即视为可见；
+    其他租户私有的行仍不可见（防止跨租户引用别人私有的参照数据）。
+    """
+    row = db.get(model, row_id)
+    if row is None:
+        return None
+    owner = getattr(row, "tenant_id", None)
+    if owner is not None and owner != tenant_id:
+        return None
+    if not include_deleted and _is_soft_deleted(row):
+        return None
+    return row

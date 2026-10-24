@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordAttribution } from "@/components/RecordAttribution";
 import { Num } from "@/components/Num";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
 import { SkeletonCard } from "@/components/Skeleton";
@@ -215,7 +216,16 @@ export default function LaytimeDetailPage() {
             {t("page.finance.lt_statement", "Laytime 计算书")} {st ? <span className="badge badge-warn">{st.status}</span> : null}
           </>
         }
-        subtitle={st ? `${st.format || "LAYTIME_STATEMENT_v1"}${st.terms ? ` · ${st.terms}` : ""}` : "…"}
+        subtitle={
+          st ? (
+            <>
+              {`${st.format || "LAYTIME_STATEMENT_v1"}${st.terms ? ` · ${st.terms}` : ""}`} ·{" "}
+              <RecordAttribution entityType="laytime" entityId={id} />
+            </>
+          ) : (
+            "…"
+          )
+        }
         actions={
           <>
             <Link href="/finance?tab=laytime" className="btn btn-ghost">

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, MouseEvent as ReactMouseEvent, Suspense, useCallback, useEffect, useState } from "react";
+import { FormEvent, MouseEvent as ReactMouseEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -19,6 +19,7 @@ import type { ColumnDef } from "@/components/grid/types";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { useTodoAdd } from "@/components/TodoQuickAdd";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { formatInTz, fromUtcInput, parseUtc, toUtcInput } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
@@ -91,22 +92,18 @@ type Twin = {
   port_calls: PortCall[];
 };
 
+// 航次页所有 datetime 一律用 UTC 墙钟：与 DataGrid 行内编辑器、其它列表页一致，
+// 避免同一列在「行内编辑」与「表单录入」两条路径上按不同时区解释而整体偏移。
 function toLocalInput(iso: string | null | undefined) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return toUtcInput(iso);
 }
 
 function fromLocalInput(v: string) {
-  if (!v) return null;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  return fromUtcInput(v);
 }
 
 function VoyagesPageInner() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const { query, setQuery } = useListQuery();
   const [rows, setRows] = useState<Voyage[]>([]);
@@ -124,6 +121,16 @@ function VoyagesPageInner() {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignOperator, setReassignOperator] = useState("");
+
+  // 列表内检索（URL 参数 q，可分享/回退）—— 与其它列表页一致：窄列表也能立刻定位航次
+  const voyageQuery = typeof query.q === "string" ? query.q : "";
+  const filteredRows = useMemo(() => {
+    const needle = voyageQuery.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((r) =>
+      [r.voyage_no, r.cargo, r.status].some((v) => String(v ?? "").toLowerCase().includes(needle)),
+    );
+  }, [rows, voyageQuery]);
 
   // 三栏宽度（列表 | 详情 | 船期块），可拖拽并记忆
   const [leftW, setLeftW] = useState(280);
@@ -232,9 +239,12 @@ function VoyagesPageInner() {
         (x) => !x.type || x.type === "agent" || x.type === "other",
       ),
     );
-    if (!pcPort && p[0]?.id) setPcPort(p[0].id);
+    // 用函数式更新：只在还没选港口时兜底成第一个港口。
+    // 这样回调不必读 pcPort —— React Compiler 才能保住这段 useCallback 的记忆化
+    // （直接读 pcPort 会让编译器跳过优化并报 preserve-manual-memoization）。
+    setPcPort((cur) => cur || (p[0]?.id ?? ""));
     return v as Voyage[];
-  }, [pcPort]);
+  }, [setPcPort]);
 
   const loadPortCalls = useCallback(async (voyageId: string, preferPc?: string) => {
     const pcs: PortCall[] = await apiGet(`/api/v1/port-calls?voyage_id=${voyageId}`);
@@ -494,8 +504,8 @@ function VoyagesPageInner() {
       payload = { seq: n };
     } else if (dtFields.includes(colKey)) {
       const prev = (row as Record<string, unknown>)[colKey];
-      const nextIso = value ? new Date(String(value)).toISOString() : null;
-      const prevT = prev ? new Date(String(prev)).getTime() : null;
+      const nextIso = value ? parseUtc(String(value))?.toISOString() ?? null : null;
+      const prevT = prev ? parseUtc(String(prev))?.getTime() ?? null : null;
       const nextT = nextIso ? new Date(nextIso).getTime() : null;
       if (prevT === nextT) return;
       payload = { [colKey]: nextIso };
@@ -532,8 +542,8 @@ function VoyagesPageInner() {
     let payload: Record<string, unknown>;
     if (colKey === "event_at") {
       const prev = row.event_at;
-      const nextIso = value ? new Date(String(value)).toISOString() : null;
-      const prevT = prev ? new Date(prev).getTime() : null;
+      const nextIso = value ? parseUtc(String(value))?.toISOString() ?? null : null;
+      const prevT = prev ? parseUtc(prev)?.getTime() ?? null : null;
       const nextT = nextIso ? new Date(nextIso).getTime() : null;
       if (prevT === nextT) return;
       payload = { event_at: nextIso };
@@ -565,8 +575,8 @@ function VoyagesPageInner() {
     let payload: Record<string, unknown>;
     if (colKey === "start_at" || colKey === "end_at") {
       const prev = src[colKey];
-      const nextIso = value ? new Date(String(value)).toISOString() : null;
-      const prevT = prev ? new Date(String(prev)).getTime() : null;
+      const nextIso = value ? parseUtc(String(value))?.toISOString() ?? null : null;
+      const prevT = prev ? parseUtc(String(prev))?.getTime() ?? null : null;
       const nextT = nextIso ? new Date(nextIso).getTime() : null;
       if (prevT === nextT) return;
       payload = { [colKey]: nextIso };
@@ -598,8 +608,8 @@ function VoyagesPageInner() {
     let payload: Record<string, unknown>;
     if (colKey === "report_at") {
       const prev = row.report_at;
-      const nextIso = value ? new Date(String(value)).toISOString() : null;
-      const prevT = prev ? new Date(prev).getTime() : null;
+      const nextIso = value ? parseUtc(String(value))?.toISOString() ?? null : null;
+      const prevT = prev ? parseUtc(String(prev))?.getTime() ?? null : null;
       const nextT = nextIso ? new Date(nextIso).getTime() : null;
       if (prevT === nextT) return;
       payload = { report_at: nextIso };
@@ -904,7 +914,7 @@ function VoyagesPageInner() {
       title: t("page.voyages.event_at", "Event at"),
       minWidth: 160,
       value: (r) => r.event_at || "",
-      render: (v) => (v ? new Date(v as string).toLocaleString() : "—"),
+      render: (v) => formatInTz(v as string | null, null, undefined, locale),
       editor: { type: "datetime" },
     },
     {
@@ -1128,6 +1138,8 @@ function VoyagesPageInner() {
       />
 
       <Toolbar
+        filterCount={voyageQuery ? 1 : 0}
+        onClearFilters={() => setQuery({ q: null })}
         right={
           <>
             {picked.size > 0 ? (
@@ -1135,7 +1147,17 @@ function VoyagesPageInner() {
                 {t("page.voyages.batch_selected", "{n} selected", { n: picked.size })}
               </span>
             ) : null}
-            <span className="hint">{t("page.voyages.count", "{n} voyages", { n: rows.length })}</span>
+            <input
+              className="input input-sm"
+              type="search"
+              value={voyageQuery}
+              onChange={(e) => setQuery({ q: e.target.value || null })}
+              placeholder={t("page.voyages.search", "Search no / cargo…")}
+              aria-label={t("common.search", "Search")}
+            />
+            <span className="hint">
+              {t("page.voyages.count", "{n} voyages", { n: filteredRows.length })}
+            </span>
           </>
         }
       >
@@ -1198,7 +1220,7 @@ function VoyagesPageInner() {
           </p>
           <DataGrid<Voyage>
             columns={voyageColumns}
-            data={rows}
+            data={filteredRows}
             rowKey={(r) => r.id}
             storageKey="voyages_list_grid"
             showFooter={false}

@@ -13,6 +13,7 @@ import { Tabs, type TabItem } from "@/components/Tabs";
 import { Toolbar } from "@/components/Toolbar";
 import { StateView } from "@/components/StateView";
 import { apiGet, type ExceptionItem, type ExceptionScan } from "@/lib/api";
+import { formatDateInTz, parseUtc } from "@/lib/datetime";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
@@ -97,13 +98,13 @@ function ExceptionsPageInner() {
   }
 
   function relTime(iso: string) {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "";
+    const d = parseUtc(iso);
+    if (!d) return "";
     const diff = (now || d.getTime()) - d.getTime();
     if (diff < 60_000) return t("notify.just_now", "Just now");
     if (diff < 3_600_000) return t("notify.minutes_ago", "{n} minutes ago", { n: Math.floor(diff / 60_000) });
     if (diff < 86_400_000) return t("notify.hours_ago", "{n} hours ago", { n: Math.floor(diff / 3_600_000) });
-    return d.toLocaleDateString(locale.startsWith("zh") ? "zh-CN" : "en-US", { month: "2-digit", day: "2-digit" });
+    return formatDateInTz(d, null, locale);
   }
 
   const summary = scan?.summary;

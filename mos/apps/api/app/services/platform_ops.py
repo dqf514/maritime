@@ -23,10 +23,11 @@ from app.models_ops import (
     TenantDatastoreBinding,
 )
 from app.services.ops_crypto import decrypt_secret, encrypt_secret, mask_connection_url
+from app.services.timeutil import utcnow_naive
 
 
 def _now() -> datetime:
-    return datetime.now().astimezone()
+    return utcnow_naive()
 
 
 def runtime_datasource_info() -> dict[str, Any]:

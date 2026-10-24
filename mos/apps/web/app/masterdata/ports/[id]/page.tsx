@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordAttribution } from "@/components/RecordAttribution";
 import { Tabs } from "@/components/Tabs";
 import { FormSection } from "@/components/form/FormPanel";
 import { LookupSelect } from "@/components/LookupSelect";
@@ -203,7 +204,12 @@ export default function PortDetailPage() {
     <AppShell>
       <PageHeader
         title={port?.name || t("page.port.card", "Port card")}
-        subtitle={`${port?.unlocode ? port.unlocode : "—"} · ${port?.country || "—"} · ${port?.timezone || "—"}`}
+        subtitle={
+          <>
+            {`${port?.unlocode ? port.unlocode : "—"} · ${port?.country || "—"} · ${port?.timezone || "—"}`} ·{" "}
+            <RecordAttribution entityType="port" entityId={portId} />
+          </>
+        }
         breadcrumb={[
           { label: t("nav.master", "Master data"), href: "/masterdata" },
           { label: t("page.ports.title", "Ports"), href: "/masterdata/ports" },

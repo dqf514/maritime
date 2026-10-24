@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models_domain import Invoice, Payment, PaymentBatch
 from app.services.doc_numbering import next_doc_number
+from app.services.timeutil import utcnow_naive
 
 
 def select_payable_invoices(
@@ -106,7 +107,7 @@ def approve_batch(db: Session, batch: PaymentBatch, user_id: UUID) -> PaymentBat
 
     batch.status = "processing"
     batch.approval_user_id = user_id
-    batch.approved_at = datetime.now()
+    batch.approved_at = utcnow_naive()
 
     stmt = select(Payment).where(Payment.batch_id == batch.id)
     payments = db.scalars(stmt).all()

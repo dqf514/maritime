@@ -137,9 +137,9 @@
   font-size: var(--font-label);
 }
 .ai-dock-form input:focus {
-  outline: none;
   border-color: var(--accent);
-  box-shadow: var(--focus-ring);
+  /* 旧写法 box-shadow: var(--focus-ring) 是非法值（颜色不能当阴影），焦点其实看不见 */
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 .ai-dock-billing {
   padding: 3px var(--gap-sm) var(--gap-xs);

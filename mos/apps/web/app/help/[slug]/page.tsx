@@ -44,9 +44,16 @@ type Article = {
 
 export default function HelpArticlePage() {
   const { slug } = useParams<{ slug: string }>();
-  const { t, locale } = useI18n();
-
+  // 注意：这里必须「先分派、再进子组件」，不能把提前 return 放在本组件的
+  // useState/useEffect 之前 —— 否则从 /help/video-demos 客户端跳到别的文章时，
+  // 同一组件的 hook 数量会从 1 变成 3，React 直接抛
+  // “Rendered more hooks than during the previous render” 整页崩掉。
   if (slug === "video-demos") return <VideoDemoArticle />;
+  return <HelpArticle slug={slug} />;
+}
+
+function HelpArticle({ slug }: { slug: string }) {
+  const { t, locale } = useI18n();
   const [art, setArt] = useState<Article | null>(null);
   const [err, setErr] = useState("");
   const loc = locale?.startsWith("zh") ? "zh-CN" : "en";

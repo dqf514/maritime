@@ -136,19 +136,14 @@ def record_attribution(
 
         row = db.get(model, _uuid_mod.UUID(str(entity_id))) if _is_uuid(entity_id) else None
         if row is not None and getattr(row, "tenant_id", None) == auth.tenant_id:
-            actor_ids = {getattr(row, "created_by", None), getattr(row, "updated_by", None)} - {None}
-            users = (
-                {u.id: u for u in db.scalars(select(User).where(User.id.in_(actor_ids))).all()}
-                if actor_ids
-                else {}
-            )
-            cu = users.get(getattr(row, "created_by", None))
-            uu = users.get(getattr(row, "updated_by", None))
+            created_by = getattr(row, "created_by", None)
+            updated_by = getattr(row, "updated_by", None)
             created_at = getattr(row, "created_at", None)
             updated_at = getattr(row, "updated_at", None) or created_at
-            # Some entities (e.g. invoice) carry no created_at column — fill from the audit ledger.
-            if created_at is None:
-                first_audit = db.scalars(
+            # 持久列缺失时回退到审计账本：存量行（种子数据）与只有 created_by 的实体
+            # （如 Estimate）也要能显示「创建人 / 修改人」，否则归属条永远空白。
+            if created_by is None or updated_by is None or created_at is None:
+                ledger = db.scalars(
                     select(AuditLog)
                     .where(
                         AuditLog.tenant_id == auth.tenant_id,
@@ -156,14 +151,35 @@ def record_attribution(
                         AuditLog.entity_id == str(entity_id),
                     )
                     .order_by(AuditLog.created_at.asc())
-                    .limit(1)
-                ).first()
-                created_at = first_audit.created_at if first_audit else None
+                ).all()
+                if ledger:
+                    def _is_create(action: str) -> bool:
+                        a = (action or "").lower()
+                        return a == "create" or a.endswith(".create") or a.endswith(".created")
+
+                    first = next((r for r in ledger if _is_create(r.action)), ledger[0])
+                    last = ledger[-1]
+                    if created_by is None and first.actor_user_id:
+                        created_by = first.actor_user_id
+                    if updated_by is None and last.actor_user_id:
+                        updated_by = last.actor_user_id
+                    if created_at is None:
+                        created_at = first.created_at
+                    if updated_at is None:
+                        updated_at = last.created_at
+            actor_ids = {created_by, updated_by} - {None}
+            users = (
+                {u.id: u for u in db.scalars(select(User).where(User.id.in_(actor_ids))).all()}
+                if actor_ids
+                else {}
+            )
+            cu = users.get(created_by)
+            uu = users.get(updated_by)
             return {
-                "created_by": str(row.created_by) if getattr(row, "created_by", None) else None,
+                "created_by": str(created_by) if created_by else None,
                 "created_by_name": (cu.full_name or cu.email) if cu else None,
                 "created_at": created_at.isoformat() if created_at else None,
-                "updated_by": str(row.updated_by) if getattr(row, "updated_by", None) else None,
+                "updated_by": str(updated_by) if updated_by else None,
                 "updated_by_name": (uu.full_name or uu.email) if uu else None,
                 "updated_at": updated_at.isoformat() if updated_at else None,
             }
@@ -176,8 +192,7 @@ def record_attribution(
             AuditLog.entity_id == str(entity_id),
         )
         .order_by(AuditLog.created_at.asc())
-        .all()
-    )
+    ).all()
     if not rows:
         return {"created_by": None, "created_by_name": None, "created_at": None,
                 "updated_by": None, "updated_by_name": None, "updated_at": None}

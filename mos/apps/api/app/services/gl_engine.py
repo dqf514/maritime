@@ -18,6 +18,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.models_gl import BusinessRule, ChartOfAccount, PeriodJournal
+from app.services.timeutil import utcnow_naive
 
 
 def resolve_accounts(
@@ -159,7 +160,7 @@ def post_journal(
         total_debit=total_debit,
         total_credit=total_credit,
         status="posted",
-        posted_at=datetime.now(),
+        posted_at=utcnow_naive(),
         posted_by=user_id,
     )
     db.add(journal)

@@ -10,7 +10,7 @@ import { PublicNav } from "@/components/PublicNav";
 import { API_BASE } from "@/lib/api";
 
 const PRESETS = [
-  { labelKey: "login.preset.platform", hintKey: "login.preset.platform_h", label: "Platform operator", hint: "Tenants, plans, branding, identity", tenant: "sys", email: "ops@marios.platform", password: "" },
+  { labelKey: "login.preset.platform", hintKey: "login.preset.platform_h", label: "Platform operator", hint: "Tenants, plans, branding, identity", tenant: "sys", email: "ops@marios.platform", password: "Ops1234!" },
   { labelKey: "login.preset.admin", hintKey: "login.preset.admin_h", label: "Tenant admin", hint: "Security policy & invites", tenant: "demo", email: "admin@demo.marios", password: "Demo1234!" },
   { labelKey: "login.preset.mgmt", hintKey: "login.preset.mgmt_h", label: "Executive / director", hint: "Command wall / TCE", tenant: "demo", email: "mgmt@demo.marios", password: "Demo1234!" },
   { labelKey: "login.preset.charter", hintKey: "login.preset.charter_h", label: "Chartering lead", hint: "Pipeline wall / CP", tenant: "demo", email: "charterer@demo.marios", password: "Demo1234!" },

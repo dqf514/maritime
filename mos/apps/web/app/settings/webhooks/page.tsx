@@ -12,6 +12,7 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatInTz } from "@/lib/datetime";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
@@ -45,7 +46,7 @@ const EVENT_OPTIONS = [
 ];
 
 function WebhooksPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const router = useRouter();
   const { query, setQuery } = useListQuery();
@@ -219,7 +220,7 @@ function WebhooksPage() {
       title: t("common.time", "Time"),
       width: 170,
       value: (r) => r.created_at,
-      render: (v) => new Date(String(v)).toLocaleString(),
+      render: (v) => formatInTz(v as string | null, null, undefined, locale),
     },
   ];
 

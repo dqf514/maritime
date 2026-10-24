@@ -15,6 +15,7 @@ from fastapi import HTTPException
 
 from app.models_config import ConfigAlertRule, TaskRule
 from app.services.rule_engine import evaluate_condition
+from app.services.timeutil import utcnow_naive
 
 # 阻断保存的严重度档（alert_priority 实际取值 low|normal|high|urgent，
 # 对应 ALERT ERROR/critical 的高危档）；低档 severity 只提醒不阻断。
@@ -124,7 +125,7 @@ def evaluate_alerts(
             # Check if already triggered recently (frequency check)
             if rule.last_triggered_at and rule.frequency_days:
                 next_trigger = rule.last_triggered_at + timedelta(days=rule.frequency_days)
-                if datetime.now() < next_trigger:
+                if utcnow_naive() < next_trigger:
                     continue
 
             triggered.append({
@@ -137,7 +138,7 @@ def evaluate_alerts(
             })
 
             # Update last triggered
-            rule.last_triggered_at = datetime.now()
+            rule.last_triggered_at = utcnow_naive()
 
     if triggered:
         db.commit()
@@ -181,7 +182,7 @@ def evaluate_task_rules(
             # Calculate due date
             due_date = None
             if rule.due_days_offset:
-                due_date = datetime.now() + timedelta(days=rule.due_days_offset)
+                due_date = utcnow_naive() + timedelta(days=rule.due_days_offset)
 
             tasks_to_create.append({
                 "rule_id": str(rule.id),

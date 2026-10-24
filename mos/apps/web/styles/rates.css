@@ -169,7 +169,6 @@
 }
 .rate-matrix td input:hover { border-color: var(--border); background: var(--bg); }
 .rate-matrix td input:focus {
-  outline: none;
   border-color: var(--accent);
   background: var(--bg);
 }

@@ -67,11 +67,18 @@ const RULES = [
     test: (src, file) => {
       if (!/page\.tsx$/.test(file)) return 0;
       if (/\[.+\]/.test(file)) return 0; // 详情路由整页编辑表单合法（A6 只针对列表页）
-      if (src.includes("RecordModal")) return 0; // 有 Modal 的页面由人工审查双入口
-      if (!/onSubmit|<form/i.test(src)) return 0;
-      // 列表页特征：同文件出现 <table 或 DataGrid
-      if (!/DataGrid|<table/i.test(src)) return 0;
-      return 1;
+      // 只统计「挂在列表上的新建表单」：<form> 内部包着 DataGrid / <table>。
+      // 整页设置表单（admin/i18n、admin/security）不含列表，不算违规；
+      // 弹窗里的表单由 RecordModal 自己的 <form> 承担，天然不在列表页里。
+      let hits = 0;
+      const re = /<form\b/g;
+      let m;
+      while ((m = re.exec(src))) {
+        const end = src.indexOf("</form>", m.index);
+        const body = src.slice(m.index, end < 0 ? src.length : end);
+        if (/DataGrid|<table/i.test(body)) hits += 1;
+      }
+      return hits;
     },
   },
   {

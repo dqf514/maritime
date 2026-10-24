@@ -7,6 +7,7 @@ import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatInTz } from "@/lib/datetime";
 
 type Kpi = { label: string; value: string | number; unit?: string; delta?: string | null; tone?: string; synthetic?: boolean };
 type SeriesPoint = { t: string | number; v: number };
@@ -207,7 +208,7 @@ export default function RoleDashboardPage() {
   const headerMeta = useMemo(() => {
     if (!snap) return "";
     return t("page.dash.live", "Live · refreshed {time}", {
-      time: new Date(snap.generated_at).toLocaleTimeString(),
+      time: formatInTz(snap.generated_at, null, { year: undefined, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }),
     });
   }, [snap, t]);
 
@@ -369,7 +370,7 @@ export default function RoleDashboardPage() {
                   <span />
                   <div>
                     <p>{f.text}</p>
-                    {f.ts ? <small>{new Date(f.ts).toLocaleTimeString()}</small> : null}
+                    {f.ts ? <small>{formatInTz(f.ts, null, { year: undefined, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</small> : null}
                   </div>
                 </li>
               ))}

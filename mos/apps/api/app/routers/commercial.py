@@ -26,7 +26,7 @@ from app.models_domain import (
     ScheduleBlock,
     Voyage,
 )
-from app.models_wave1 import Counterparty, Vessel
+from app.models_wave1 import Counterparty, Port, Vessel
 from app.models_time_charter import HireSurvey
 from app.models_charter_ext import CharterItineraryRow
 from app.security import AuthContext, require_module
@@ -52,6 +52,7 @@ from app.services.cargo_terms import freight_with_overage
 from app.services.pricing_engine import AdvancedPricingEngine, WorldscaleCalculator
 from app.services.distance_service import get_distance, get_route
 from app.models_reference import PortDistance, WorldscaleRate
+from app.services.timeutil import utcnow_naive
 
 router = APIRouter(tags=["Commercial"])
 
@@ -208,6 +209,11 @@ class CharterOut(BaseModel):
     hire_cycle_days: int | None = None
     delivery_port_id: UUID | None = None
     redelivery_port_id: UUID | None = None
+    # 港口人读名（避免前端只能显示裸 UUID）
+    delivery_port_name: str | None = None
+    redelivery_port_name: str | None = None
+    delivery_port_unlocode: str | None = None
+    redelivery_port_unlocode: str | None = None
     delivery_at: datetime | None = None
     redelivery_at: datetime | None = None
     ets_responsibility: str | None = None
@@ -670,7 +676,9 @@ def update_estimate(
         row.results = {}
         if row.status == "calculated":
             row.status = "draft"
-    row.updated_at = datetime.now().astimezone()
+    row.updated_at = utcnow_naive()
+    # 注意：Estimate 表没有 updated_by 持久列（只有 created_by），
+    # 归属条「修改人」由 /meta/attribution 的审计账本回退逻辑还原 —— 这里只落 audit。
     # 修订史（Revisions 侧栏）：记录本次改动的字段清单
     audit(
         db,
@@ -721,7 +729,7 @@ def calculate_estimate(estimate_id: UUID, auth: AuthContext = Depends(require_mo
     except ValueError as exc:
         raise HTTPException(422, detail={"code": "INVALID_ESTIMATE_INPUT", "message": str(exc)})
     row.status = "calculated"
-    row.updated_at = datetime.now().astimezone()
+    row.updated_at = utcnow_naive()
     audit(
         db,
         action="estimate.calculate",
@@ -830,7 +838,11 @@ def estimate_to_charter(estimate_id: UUID, auth: AuthContext = Depends(require_m
     est.status = "converted"
     db.commit()
     db.refresh(charter)
-    return _charter_out(charter, estimate_title=est.title)
+    return _charter_out(
+        charter,
+        estimate_title=est.title,
+        ports=_port_names(db, auth.tenant_id, [charter]),
+    )
 
 
 def _estimate_title(db: Session, tenant_id, estimate_id) -> str | None:
@@ -842,7 +854,28 @@ def _estimate_title(db: Session, tenant_id, estimate_id) -> str | None:
     )
 
 
-def _charter_out(c: Charter, estimate_title: str | None = None) -> CharterOut:
+def _port_names(db: Session, tenant_id: UUID, charter_rows: list[Charter]) -> dict[UUID, tuple[str, str | None]]:
+    """批量取港口名/UN 码，避免 CharterOut 只给裸 UUID。
+
+    港口是全局参考数据（Port 表没有 tenant_id），因此不按租户过滤。
+    """
+    ids = {r.delivery_port_id for r in charter_rows if r.delivery_port_id}
+    ids |= {r.redelivery_port_id for r in charter_rows if r.redelivery_port_id}
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(Port.id, Port.name, Port.unlocode).where(Port.id.in_(ids))
+    ).all()
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def _charter_out(
+    c: Charter,
+    estimate_title: str | None = None,
+    ports: dict[UUID, tuple[str, str | None]] | None = None,
+) -> CharterOut:
+    dp = ports.get(c.delivery_port_id) if (ports and c.delivery_port_id) else None
+    rp = ports.get(c.redelivery_port_id) if (ports and c.redelivery_port_id) else None
     return CharterOut(
         id=c.id,
         charter_no=c.charter_no,
@@ -876,6 +909,10 @@ def _charter_out(c: Charter, estimate_title: str | None = None) -> CharterOut:
         hire_cycle_days=c.hire_cycle_days,
         delivery_port_id=c.delivery_port_id,
         redelivery_port_id=c.redelivery_port_id,
+        delivery_port_name=dp[0] if dp else None,
+        redelivery_port_name=rp[0] if rp else None,
+        delivery_port_unlocode=dp[1] if dp else None,
+        redelivery_port_unlocode=rp[1] if rp else None,
         delivery_at=c.delivery_at,
         redelivery_at=c.redelivery_at,
         ets_responsibility=c.ets_responsibility,
@@ -932,7 +969,15 @@ def list_charters(
                 )
             ).all()
         )
-    return [_charter_out(r, estimate_title=titles.get(r.estimate_id) if r.estimate_id else None) for r in rows]
+    pnames = _port_names(db, auth.tenant_id, rows)
+    return [
+        _charter_out(
+            r,
+            estimate_title=titles.get(r.estimate_id) if r.estimate_id else None,
+            ports=pnames,
+        )
+        for r in rows
+    ]
 
 
 @router.get("/charters/{charter_id}", response_model=CharterOut)
@@ -951,7 +996,11 @@ def get_charter(
     )
     if row is None:
         raise HTTPException(404, "Charter not found")
-    return _charter_out(row, estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id))
+    return _charter_out(
+        row,
+        estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id),
+        ports=_port_names(db, auth.tenant_id, [row]),
+    )
 
 
 # —— 主合同（Master Contract） ——
@@ -1142,7 +1191,15 @@ def list_master_contract_charters(
                 )
             ).all()
         )
-    return [_charter_out(r, estimate_title=titles.get(r.estimate_id) if r.estimate_id else None) for r in rows]
+    pnames = _port_names(db, auth.tenant_id, rows)
+    return [
+        _charter_out(
+            r,
+            estimate_title=titles.get(r.estimate_id) if r.estimate_id else None,
+            ports=pnames,
+        )
+        for r in rows
+    ]
 
 
 # —— Cargo broker rules ——
@@ -1813,7 +1870,11 @@ def create_charter(body: CharterIn, auth: AuthContext = Depends(require_module("
     db.add(row)
     db.commit()
     db.refresh(row)
-    return _charter_out(row, estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id))
+    return _charter_out(
+        row,
+        estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id),
+        ports=_port_names(db, auth.tenant_id, [row]),
+    )
 
 
 class CharterUpdate(_CharterTermsMixin):
@@ -1891,7 +1952,7 @@ def update_charter(
         row.freight_terms = body.freight_terms
     if body.clauses is not None:
         row.clauses = body.clauses
-    row.updated_at = datetime.now().astimezone()
+    row.updated_at = utcnow_naive()
     # 修订史（Revisions 侧栏）：记录本次改动的字段清单
     audit(
         db,
@@ -1904,7 +1965,11 @@ def update_charter(
     )
     db.commit()
     db.refresh(row)
-    return _charter_out(row, estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id))
+    return _charter_out(
+        row,
+        estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id),
+        ports=_port_names(db, auth.tenant_id, [row]),
+    )
 
 
 @router.delete("/charters/{charter_id}")
@@ -2028,7 +2093,11 @@ def charter_transition(
         )
     db.commit()
     db.refresh(row)
-    return _charter_out(row, estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id))
+    return _charter_out(
+        row,
+        estimate_title=_estimate_title(db, auth.tenant_id, row.estimate_id),
+        ports=_port_names(db, auth.tenant_id, [row]),
+    )
 
 
 @router.post("/charters/{charter_id}/liftings")
@@ -2282,7 +2351,7 @@ def approve_amendment(
         if k in ("laycan_from", "laycan_to") and isinstance(v, str):
             v = date.fromisoformat(v)
         setattr(charter, k, v)
-    charter.updated_at = datetime.now().astimezone()
+    charter.updated_at = utcnow_naive()
     db.commit()
     db.refresh(amd)
     return _amendment_out(amd)
@@ -2895,6 +2964,22 @@ def list_hire_statements(
         ).order_by(HireStatement.period_start)
     ).all()
     return rows
+
+
+@router.get("/hire-statements", response_model=list[HireStatementOut])
+def list_all_hire_statements(
+    contract_id: UUID | None = None,
+    status: str | None = None,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """租户级 hire statement 台账（不分合同）。`/tc-contracts/{id}/statements` 为按合同视图。"""
+    stmt = select(HireStatement).where(HireStatement.tenant_id == auth.tenant_id)
+    if contract_id is not None:
+        stmt = stmt.where(HireStatement.contract_id == contract_id)
+    if status:
+        stmt = stmt.where(HireStatement.status == status)
+    return db.scalars(stmt.order_by(HireStatement.period_start.desc())).all()
 
 
 @router.post("/hire-statements", response_model=HireStatementOut, status_code=201)

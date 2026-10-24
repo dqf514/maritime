@@ -462,7 +462,7 @@ def export_emissions(auth: AuthContext = Depends(require_module("emissions")), d
     rows = db.scalars(select(EmissionRecord).where(EmissionRecord.tenant_id == auth.tenant_id)).all()
     return {
         "format": "EU_ETS_FuelEU_v1",
-        "generated_at": datetime.now().astimezone().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "rows": [
             {
                 "voyage_id": str(r.voyage_id) if r.voyage_id else None,

@@ -490,6 +490,8 @@ export default function CargoDetailPage() {
         ]}
         title={cargo.cargo_no}
         status={cargo.status}
+        entityType="cargo"
+        entityId={cargoId}
         subtitle={[
           cargo.commodity,
           cargo.qty != null ? `${cargo.qty.toLocaleString()} ${cargo.qty_unit || ""}` : null,

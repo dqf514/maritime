@@ -2130,6 +2130,7 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("page.voyages.remarks", "app", "Remarks", "备注"),
     ("page.voyages.sea_state", "app", "Sea state", "海况"),
     ("page.voyages.select", "app", "Select a voyage", "选择航次"),
+    ("page.voyages.search", "app", "Search no / cargo…", "搜索航次号 / 货物…"),
     ("page.voyages.seq", "app", "Seq", "序号"),
     ("page.voyages.sof", "app", "SOF events", "SOF 事件"),
     ("page.voyages.sof_ok", "app", "SOF {code} recorded", "SOF {code} 已记录"),

@@ -45,6 +45,7 @@ from app.services.saas_engine import (
     get_or_create_wallet,
     start_workflow,
 )
+from app.services.timeutil import utcnow_naive
 
 router = APIRouter(tags=["SaaS"])
 
@@ -553,7 +554,7 @@ def _apply_plan_to_tenant(
     )
     db.add(sub)
     db.flush()
-    now = datetime.now().astimezone()
+    now = utcnow_naive()
     for mod, enabled in (plan.included_modules or {}).items():
         if not enabled:
             continue
@@ -664,7 +665,7 @@ def platform_assign_plan(
         status="paid",
         ref_type="plan",
         ref_id=str(plan.id),
-        paid_at=datetime.now().astimezone(),
+        paid_at=utcnow_naive(),
         meta={"plan_code": plan.code, "fulfilled_by": "platform_admin", "note": body.note},
     )
     db.add(order)
@@ -714,7 +715,7 @@ def platform_credit_pack(
         status="paid",
         ref_type="usage_pack",
         ref_id=str(pack.id),
-        paid_at=datetime.now().astimezone(),
+        paid_at=utcnow_naive(),
         meta={"pack_code": pack.code, "fulfilled_by": "platform_admin", "note": body.note},
     )
     db.add(order)
@@ -796,7 +797,7 @@ def confirm_paid(order_id: UUID, auth: AuthContext = Depends(require_roles("plat
     if order.status == "paid":
         return {"status": "paid", "order_id": str(order.id)}
     order.status = "paid"
-    order.paid_at = datetime.now().astimezone()
+    order.paid_at = utcnow_naive()
     if order.purpose == "subscription" and order.ref_id:
         plan = db.get(SaaSPlan, UUID(order.ref_id))
         if plan:

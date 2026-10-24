@@ -31,6 +31,21 @@ from app.security import AuthContext, require_module
 from app.services.field_perms import assert_fields_writable, filter_read, get_field_modes
 from app.services.optimistic_lock import assert_fresh
 from app.services.recycle import soft_delete
+from app.services.audit import audit
+
+
+def _audit_write(db, *, action: str, auth: AuthContext, entity_type: str, row, detail: dict | None = None) -> None:
+    """主数据写入审计 —— 主数据没有 created_by/updated_by 持久列，
+    归属条（创建人/修改人）只能从审计账本还原，所以这里必须落账。"""
+    audit(
+        db,
+        action=action,
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type=entity_type,
+        entity_id=str(getattr(row, "id", "")),
+        detail=detail or {},
+    )
 
 router = APIRouter(prefix="/masterdata", tags=["Master Data"])
 
@@ -79,6 +94,7 @@ def create_company(
 ):
     row = Company(tenant_id=auth.tenant_id, **body.model_dump())
     db.add(row)
+    _audit_write(db, action="company.create", auth=auth, entity_type="company", row=row)
     db.commit()
     db.refresh(row)
     return _company_out(row)
@@ -108,6 +124,7 @@ def update_company(
     for k, v in data.items():
         setattr(row, k, v)
     row.updated_at = datetime.now(timezone.utc)
+    _audit_write(db, action="company.update", auth=auth, entity_type="company", row=row, detail={"fields": sorted(data)})
     db.commit()
     db.refresh(row)
     return _company_out(row)
@@ -149,6 +166,7 @@ def create_vessel(
 ):
     row = Vessel(tenant_id=auth.tenant_id, **body.model_dump())
     db.add(row)
+    _audit_write(db, action="vessel.create", auth=auth, entity_type="vessel", row=row)
     db.commit()
     db.refresh(row)
     return VesselOut.model_validate(row, from_attributes=True)
@@ -190,6 +208,7 @@ def update_vessel(
     for k, v in body.model_dump(exclude_unset=True, exclude={"expected_updated_at"}).items():
         setattr(row, k, v)
     row.updated_at = datetime.now(timezone.utc)
+    _audit_write(db, action="vessel.update", auth=auth, entity_type="vessel", row=row, detail={"fields": sorted(payload_fields)})
     db.commit()
     db.refresh(row)
     return VesselOut.model_validate(row, from_attributes=True)
@@ -232,6 +251,7 @@ def create_port(
     _ = auth
     row = Port(**body.model_dump())
     db.add(row)
+    _audit_write(db, action="port.create", auth=auth, entity_type="port", row=row)
     db.commit()
     db.refresh(row)
     return PortOut.model_validate(row, from_attributes=True)
@@ -273,6 +293,7 @@ def update_port(
     # exclude_unset —— 同 update_vessel：全量 model_dump() 补默认值会清掉存量值。
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(row, k, v)
+    _audit_write(db, action="port.update", auth=auth, entity_type="port", row=row, detail={"fields": sorted(body.model_fields_set)})
     db.commit()
     db.refresh(row)
     return PortOut.model_validate(row, from_attributes=True)
@@ -316,6 +337,7 @@ def create_counterparty(
 ):
     row = Counterparty(tenant_id=auth.tenant_id, **body.model_dump())
     db.add(row)
+    _audit_write(db, action="counterparty.create", auth=auth, entity_type="counterparty", row=row)
     db.commit()
     db.refresh(row)
     return CounterpartyOut.model_validate(row, from_attributes=True)
@@ -355,6 +377,7 @@ def update_counterparty(
     for k, v in body.model_dump(exclude_unset=True, exclude={"expected_updated_at"}).items():
         setattr(row, k, v)
     row.updated_at = datetime.now(timezone.utc)
+    _audit_write(db, action="counterparty.update", auth=auth, entity_type="counterparty", row=row, detail={"fields": sorted(payload_fields)})
     db.commit()
     db.refresh(row)
     return CounterpartyOut.model_validate(row, from_attributes=True)
@@ -413,6 +436,7 @@ def create_contact(
         raise HTTPException(404, "Counterparty not found")
     row = CounterpartyContact(tenant_id=auth.tenant_id, counterparty_id=party_id, **body.model_dump())
     db.add(row)
+    _audit_write(db, action="counterparty_contact.create", auth=auth, entity_type="counterparty_contact", row=row)
     db.commit()
     db.refresh(row)
     return CounterpartyContactOut.model_validate(row, from_attributes=True)
@@ -434,6 +458,7 @@ def update_contact(
         raise HTTPException(404, "Contact not found")
     for k, v in body.model_dump().items():
         setattr(row, k, v)
+    _audit_write(db, action="counterparty_contact.update", auth=auth, entity_type="counterparty_contact", row=row)
     db.commit()
     db.refresh(row)
     return CounterpartyContactOut.model_validate(row, from_attributes=True)

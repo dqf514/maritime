@@ -45,6 +45,12 @@ function PoolPageInner() {
   const [periodLabel, setPeriodLabel] = useState("2026-Q3");
   const [totalResult, setTotalResult] = useState("1000000");
   const [err, setErr] = useState("");
+  // 新建入口统一走 RecordModal（列表页禁止内联新建表单）——
+  // 面板只留「标题 + 打开弹窗」按钮，表单字段进弹窗，列表不再被表单包住。
+  const [addVesselOpen, setAddVesselOpen] = useState(false);
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const [savingVessel, setSavingVessel] = useState(false);
+  const [savingPeriod, setSavingPeriod] = useState(false);
 
   useListHotkeys(() => {
     setName("");
@@ -145,25 +151,30 @@ function PoolPageInner() {
   async function addVessel(e: FormEvent) {
     e.preventDefault();
     setErr("");
-    toast.success("");
     if (!selected || !vesselId) return;
+    setSavingVessel(true);
     try {
       await apiPost(`/api/v1/pools/${selected}/vessels?vessel_id=${vesselId}&points=${Number(points) || 1}`);
       toast.success(t("page.pool.vessel_ok", "Vessel added to pool"));
+      setAddVesselOpen(false);
       await load();
     } catch (ex: any) {
       const code = ex?.detail?.code || ex?.code;
+      let msg: string;
       if (code === "VESSEL_ALREADY_IN_POOL") {
-        setErr(t("page.pool.already_in", "Vessel is already in this pool"));
+        msg = t("page.pool.already_in", "Vessel is already in this pool");
       } else if (code === "VESSEL_IN_OTHER_POOL") {
-        setErr(
-          t("page.pool.in_other", "Vessel is already in pool {name}. Leave it before joining.", {
-            name: ex?.detail?.pool_name || "",
-          }),
-        );
+        msg = t("page.pool.in_other", "Vessel is already in pool {name}. Leave it before joining.", {
+          name: ex?.detail?.pool_name || "",
+        });
       } else {
-        setErr(String(ex?.detail?.message || ex?.message || ex));
+        msg = String(ex?.detail?.message || ex?.message || ex);
       }
+      setErr(msg);
+      // 弹窗遮住页面级错误条 —— 同时用 toast 报一次，错误必须在视线内。
+      toast.error(msg);
+    } finally {
+      setSavingVessel(false);
     }
   }
 
@@ -183,14 +194,20 @@ function PoolPageInner() {
     e.preventDefault();
     setErr("");
     if (!selected) return;
+    setSavingPeriod(true);
     try {
       await apiPost(
         `/api/v1/pools/${selected}/periods?label=${encodeURIComponent(periodLabel)}&total_pool_result=${Number(totalResult) || 0}`,
       );
       toast.success(t("page.pool.period_ok", "Period distribution generated"));
+      setPeriodOpen(false);
       await load();
     } catch (ex: any) {
-      setErr(String(ex?.detail?.message || ex?.message || ex));
+      const msg = String(ex?.detail?.message || ex?.message || ex);
+      setErr(msg);
+      toast.error(msg);
+    } finally {
+      setSavingPeriod(false);
     }
   }
 
@@ -247,9 +264,41 @@ function PoolPageInner() {
     {
       key: "distribution",
       title: t("page.pool.distribution", "Distribution"),
-      minWidth: 180,
+      minWidth: 220,
       value: (r) => JSON.stringify(r.distribution),
-      render: (v) => <code style={{ fontSize: "0.75rem" }}>{String(v)}</code>,
+      // 分配结果是 {vessel_id: 金额} + _fees —— 直接吐 JSON 没法看，
+      // 按船名 + 金额逐行列出（用户看到的是船，不是 UUID）。
+      render: (v) => {
+        let dist: Record<string, unknown> = {};
+        try {
+          dist = (typeof v === "string" ? JSON.parse(v) : (v as Record<string, unknown>)) || {};
+        } catch {
+          return <code>{String(v)}</code>;
+        }
+        const fees = (dist._fees ?? {}) as Record<string, number>;
+        const shares = Object.entries(dist).filter(([k]) => k !== "_fees");
+        if (!shares.length) return <span className="muted">{t("common.none", "None")}</span>;
+        return (
+          <div className="pool-dist">
+            {shares.map(([vid, amount]) => (
+              <div key={vid} className="pool-dist-row">
+                <span>{vessels.find((x) => x.id === vid)?.name ?? vid.slice(0, 8)}</span>
+                <span>
+                  <Num v={Number(amount)} digits={2} />
+                </span>
+              </div>
+            ))}
+            {fees.total != null ? (
+              <div className="pool-dist-row muted">
+                <span>{t("page.pool.fees", "Fees")}</span>
+                <span>
+                  <Num v={Number(fees.total)} digits={2} />
+                </span>
+              </div>
+            ) : null}
+          </div>
+        );
+      },
     },
     {
       key: "_actions",
@@ -299,32 +348,19 @@ function PoolPageInner() {
 
       {current ? (
         <>
-          <form className="panel" style={{ marginTop: "1rem" }} onSubmit={addVessel}>
-            <h3 style={{ marginTop: 0 }}>{t("page.pool.add_vessel", "Add vessel")}</h3>
-            <div className="form-grid">
-              <label>
-                {t("page.estimates.vessel", "Vessel")}
-                <select value={vesselId} onChange={(e) => setVesselId(e.target.value)} disabled={!availableVessels.length}>
-                  {!availableVessels.length ? (
-                    <option value="">{t("page.pool.no_available", "No vessels available (all already in pools)")}</option>
-                  ) : (
-                    availableVessels.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name}
-                      </option>
-                    ))
-                  )}
-                </select>
-              </label>
-              <label>
-                {t("page.pool.points", "Points")}
-                <input value={points} onChange={(e) => setPoints(e.target.value)} />
-              </label>
+          <div className="panel" style={{ marginTop: "1rem" }}>
+            <div className="panel-header">
+              <span>{t("page.pool.vessels_title", "Vessels in pool")}</span>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => setAddVesselOpen(true)}
+                disabled={!availableVessels.length}
+              >
+                {t("page.pool.add_vessel", "Add vessel")}
+              </button>
             </div>
-            <button className="btn btn-primary" type="submit" disabled={!availableVessels.length || !vesselId}>
-              {t("common.add", "Add")}
-            </button>
-            <div style={{ marginTop: "1rem" }}>
+            <div className="panel-body">
               <DataGrid<Pool["vessels"][number]>
                 columns={vesselColumns}
                 data={current.vessels}
@@ -335,24 +371,16 @@ function PoolPageInner() {
                 emptyText={t("common.none", "None")}
               />
             </div>
-          </form>
+          </div>
 
-          <form className="panel" style={{ marginTop: "1rem" }} onSubmit={createPeriod}>
-            <h3 style={{ marginTop: 0 }}>{t("page.pool.period", "Settlement period")}</h3>
-            <div className="form-grid">
-              <label>
-                {t("page.pool.label", "Label")}
-                <input value={periodLabel} onChange={(e) => setPeriodLabel(e.target.value)} />
-              </label>
-              <label>
-                {t("page.pool.total", "Pool total result")}
-                <input value={totalResult} onChange={(e) => setTotalResult(e.target.value)} />
-              </label>
+          <div className="panel" style={{ marginTop: "1rem" }}>
+            <div className="panel-header">
+              <span>{t("page.pool.period", "Settlement period")}</span>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setPeriodOpen(true)}>
+                {t("page.pool.new_period", "New settlement period")}
+              </button>
             </div>
-            <button className="btn btn-primary" type="submit">
-              {t("page.pool.distribute", "Calculate distribution")}
-            </button>
-            <div style={{ marginTop: "1rem" }}>
+            <div className="panel-body">
               <DataGrid<Pool["periods"][number]>
                 columns={periodColumns}
                 data={current.periods}
@@ -363,7 +391,7 @@ function PoolPageInner() {
                 emptyText={t("common.none", "None")}
               />
             </div>
-          </form>
+          </div>
         </>
       ) : null}
 
@@ -380,6 +408,63 @@ function PoolPageInner() {
           <label className="field">
             <span>{t("common.name", "Name")}</span>
             <input className="input" value={name} required onChange={(e) => setName(e.target.value)} />
+          </label>
+        </div>
+      </RecordModal>
+
+      <RecordModal
+        open={addVesselOpen}
+        title={t("page.pool.add_vessel_title", "Add vessel to pool")}
+        onClose={() => setAddVesselOpen(false)}
+        onSave={addVessel}
+        canDelete={false}
+        saving={savingVessel}
+        size="md"
+      >
+        <div className="form-grid">
+          <label className="field">
+            <span>{t("page.estimates.vessel", "Vessel")}</span>
+            <select
+              className="input"
+              value={vesselId}
+              onChange={(e) => setVesselId(e.target.value)}
+              disabled={!availableVessels.length}
+            >
+              {!availableVessels.length ? (
+                <option value="">{t("page.pool.no_available", "No vessels available (all already in pools)")}</option>
+              ) : (
+                availableVessels.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+          <label className="field">
+            <span>{t("page.pool.points", "Points")}</span>
+            <input className="input" value={points} onChange={(e) => setPoints(e.target.value)} />
+          </label>
+        </div>
+      </RecordModal>
+
+      <RecordModal
+        open={periodOpen}
+        title={t("page.pool.new_period", "New settlement period")}
+        onClose={() => setPeriodOpen(false)}
+        onSave={createPeriod}
+        canDelete={false}
+        saving={savingPeriod}
+        size="md"
+      >
+        <div className="form-grid">
+          <label className="field">
+            <span>{t("page.pool.label", "Label")}</span>
+            <input className="input" value={periodLabel} onChange={(e) => setPeriodLabel(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>{t("page.pool.total", "Pool total result")}</span>
+            <input className="input" value={totalResult} onChange={(e) => setTotalResult(e.target.value)} />
           </label>
         </div>
       </RecordModal>

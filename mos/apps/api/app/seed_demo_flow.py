@@ -10,11 +10,342 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Tenant
+from app.services.timeutil import utcnow_naive
 
 
 def _now() -> datetime:
-    return datetime.now().astimezone()
+    return utcnow_naive()
 
+
+
+def _apply_missing(obj, values: dict) -> bool:
+    """仅把当前为 **None** 的列补上给定值；返回是否发生修改。
+
+    用于 demo 数据的自愈式补全：新建时全量写入，既有库缺哪列补哪列，
+    既不覆盖用户已改的值，也不需要清库重建。
+    """
+    changed = False
+    for key, val in values.items():
+        if val is None:
+            continue
+        if getattr(obj, key, None) is None:
+            setattr(obj, key, val)
+            changed = True
+    return changed
+
+
+# ── 交易对手主数据 ────────────────────────────────────────────────────────────
+# demo 主数据要「像真实公司」：联系方式 / 财务条件 / GL 科目挂钩齐全，
+# 否则下游发票、往来、付款全是空值（实测 36 个字段里 30 个为空）。
+CP_SPECS = [
+    {
+        "name": "Atlantic Brokers Ltd",
+        "type": "broker",
+        "country": "GB",
+        "short_name": "ATLANTIC BRK",
+        "email": "chartering@atlanticbrokers.co.uk",
+        "phone": "+44 20 7946 0812",
+        "address": "12 Leadenhall Street, London EC3V 1RP, United Kingdom",
+        "tax_id": "GB 412 8837 21",
+        "vat_no": "GB412883721",
+        "company_no": "04128837",
+        "swift_code": "ATLGB2L",
+        "website": "https://atlanticbrokers.co.uk",
+        "currency": "USD",
+        "credit_term": 30,
+        "credit_line": Decimal("500000.00"),
+        "credit_rating": "BBB+",
+        "address_types": ["broker", "address_agent"],
+        "ap_account": "2000",
+        "default_account": "2000",
+        "main_contact": "R. Whitfield",
+        "department": "Dry Cargo Chartering",
+        "ref_no": "BRK-ATL-001",
+        "cross_ref": "ATL-BRK",
+        "reference_code": "ATL",
+        "demurrage_tb_days": Decimal("30"),
+        "notes": "Dry bulk broker；经纪佣金 1.25%，地址佣金 1.00%（港方）。",
+    },
+    {
+        "name": "Nordic Grain Traders",
+        "type": "charterer",
+        "country": "NO",
+        "short_name": "NORDIC GRAIN",
+        "email": "chartering@nordicgrain.no",
+        "phone": "+47 22 07 44 00",
+        "address": "Bryggen 6, 0157 Oslo, Norway",
+        "tax_id": "NO 987 654 321",
+        "vat_no": "NO987654321",
+        "company_no": "987654321",
+        "swift_code": "NGRANO22",
+        "website": "https://nordicgrain.no",
+        "currency": "USD",
+        "credit_term": 30,
+        "credit_line": Decimal("3000000.00"),
+        "credit_rating": "BBB",
+        "address_types": ["charterer"],
+        "ar_account": "1200",
+        "default_account": "1200",
+        "main_contact": "M. Sørensen",
+        "department": "Grain Chartering",
+        "ref_no": "CHT-NGT-001",
+        "cross_ref": "NGT",
+        "reference_code": "NGT",
+        "demurrage_tb_days": Decimal("45"),
+        "notes": "Grain charterer；账期 30 天，信用额度 USD 3,000,000。",
+    },
+    {
+        "name": "Pacific Steel Mills",
+        "type": "charterer",
+        "country": "JP",
+        "short_name": "PACIFIC STEEL",
+        "email": "chartering@pacificsteel.co.jp",
+        "phone": "+81 3 5400 2211",
+        "address": "2-1 Kaigan, Minato-ku, Tokyo 105-0012, Japan",
+        "tax_id": "JP 7010001000001",
+        "vat_no": "JP7010001000001",
+        "company_no": "0100-01-100001",
+        "swift_code": "PSMCJPJT",
+        "website": "https://pacificsteel.co.jp",
+        "currency": "USD",
+        "credit_term": 45,
+        "credit_line": Decimal("2000000.00"),
+        "credit_rating": "A-",
+        "address_types": ["charterer"],
+        "ar_account": "1200",
+        "default_account": "1200",
+        "main_contact": "K. Tanaka",
+        "department": "Raw Materials",
+        "ref_no": "CHT-PSM-001",
+        "cross_ref": "PSM",
+        "reference_code": "PSM",
+        "demurrage_tb_days": Decimal("30"),
+        "notes": "Coal offtaker；账期 45 天。",
+    },
+    {
+        "name": "Rotterdam Agency BV",
+        "type": "agent",
+        "country": "NL",
+        "short_name": "RTM AGENCY",
+        "email": "agency@rotterdamagency.nl",
+        "phone": "+31 10 411 2200",
+        "address": "Wilhelminakade 909, 3072 AP Rotterdam, Netherlands",
+        "tax_id": "NL 8123.45.678.B01",
+        "vat_no": "NL812345678B01",
+        "company_no": "34215567",
+        "swift_code": "RAGBNL2R",
+        "website": "https://rotterdamagency.nl",
+        "currency": "EUR",
+        "credit_term": 30,
+        "credit_line": Decimal("750000.00"),
+        "credit_rating": "BBB",
+        "address_types": ["agent"],
+        "ap_account": "2000",
+        "default_account": "2000",
+        "main_contact": "J. de Vries",
+        "department": "Port Agency",
+        "ref_no": "AGT-RTM-001",
+        "cross_ref": "RTMAGT",
+        "reference_code": "RTMA",
+        "demurrage_tb_days": Decimal("21"),
+        "notes": "Rotterdam 港口代理；代理费用 USD 15,000/船次。",
+    },
+    {
+        "name": "Gulf Bunker Supply",
+        "type": "supplier",
+        "country": "SG",
+        "short_name": "GULF BUNKER",
+        "email": "supply@gulfbunker.sg",
+        "phone": "+65 6222 8800",
+        "address": "9 Battery Road, #18-01, Singapore 049910",
+        "tax_id": "SG 200912345K",
+        "vat_no": "SG200912345K",
+        "company_no": "200912345K",
+        "swift_code": "GBSPGSGS",
+        "website": "https://gulfbunker.sg",
+        "currency": "USD",
+        "credit_term": 15,
+        "credit_line": Decimal("1000000.00"),
+        "credit_rating": "BB+",
+        "address_types": ["supplier"],
+        "ap_account": "2000",
+        "default_account": "2000",
+        "main_contact": "A. Rahman",
+        "department": "Bunkering",
+        "ref_no": "SUP-GBS-001",
+        "cross_ref": "GBS",
+        "reference_code": "GBS",
+        "demurrage_tb_days": Decimal("15"),
+        "notes": "新加坡燃油供应商；VLSFO/HSFO/LSGO，付款 15 天。",
+    },
+]
+
+
+
+def _charter_term_sets(today, ports) -> dict:
+    """CP 类型化条款列取值 —— 新建与「既有库回填」共用同一份真值。
+
+    过去 demo 只写了 clauses / freight_terms 两个 JSON 字段，20+ 个类型化列全空，
+    导致 CP 详情里的装卸率、滞期费、交/还船港与时间、ETS 责任方、fixture 号等
+    界面读不到值。这里给出完整取值。
+    """
+
+    def _utc_day(offset: int):
+        """平台存储约定为 naive UTC（见 app/services/timeutil.py）。"""
+        return datetime.combine(today + timedelta(days=offset), datetime.min.time())
+
+    sgsin = ports.get("SGSIN")
+    nlrtm = ports.get("NLRTM")
+    cntxg = ports.get("CNTXG")
+    jpyok = ports.get("JPYOK")
+    aubne = ports.get("AUBNE")
+
+    ch1_terms = {
+        "demurrage_rate": Decimal("22000.00"),
+        "despatch_rate": Decimal("11000.00"),
+        "laytime_terms": "SHINC",
+        "cp_form": "GENCON",
+        "freight_rate": Decimal("24.6667"),
+        "freight_basis": "per_mt",
+        "cargo_qty": Decimal("75000"),
+        "bill_by": "weight",
+        "tolerance_pct": Decimal("5.00"),
+        "overage_pct": Decimal("10.00"),
+        "load_rate_pd": Decimal("35000"),
+        "disch_rate_pd": Decimal("25000"),
+        "address_comm_pct": Decimal("1.00"),
+        "brokerage_pct": Decimal("1.25"),
+        "delivery_port_id": sgsin.id if sgsin else None,
+        "redelivery_port_id": nlrtm.id if nlrtm else None,
+        "delivery_at": _utc_day(-18),
+        "redelivery_at": _utc_day(24),
+        "commence_at": _utc_day(-18),
+        "ets_responsibility": "charterer",
+        "exposure_amount": Decimal("1850000.00"),
+        "pricing_basis": "per_mt",
+        "fixture_no": "20260001",
+        "voyage_no": "VOY-2407",
+        "opr_type": "VOY",
+        "chtr_specialist": "Alex Charterer",
+        "ops_coordinator": "Olivia Ops",
+        "piracy_routing": "default",
+        "company_code": "DEMO",
+        "lob": "Dry Bulk",
+        "trade_area": "Far East / North Europe",
+        "properties": {"cargo": "Iron ore 75kt", "incoterm": "FIOS", "loading_rate": "35,000 mt/day"},
+    }
+
+    ch2_terms = {
+        "demurrage_rate": Decimal("18000.00"),
+        "despatch_rate": Decimal("9000.00"),
+        "laytime_terms": "SHINC",
+        "cp_form": "GENCON",
+        "freight_rate": Decimal("17.6923"),
+        "freight_basis": "per_mt",
+        "cargo_qty": Decimal("52000"),
+        "bill_by": "weight",
+        "tolerance_pct": Decimal("5.00"),
+        "overage_pct": Decimal("10.00"),
+        "load_rate_pd": Decimal("30000"),
+        "disch_rate_pd": Decimal("20000"),
+        "address_comm_pct": Decimal("1.00"),
+        "brokerage_pct": Decimal("1.25"),
+        "delivery_port_id": cntxg.id if cntxg else None,
+        "redelivery_port_id": jpyok.id if jpyok else None,
+        "delivery_at": _utc_day(7),
+        "redelivery_at": _utc_day(25),
+        "ets_responsibility": "charterer",
+        "exposure_amount": Decimal("920000.00"),
+        "pricing_basis": "per_mt",
+        "fixture_no": "20260002",
+        "voyage_no": "VOY-2408",
+        "opr_type": "VOY",
+        "chtr_specialist": "Alex Charterer",
+        "ops_coordinator": "Olivia Ops",
+        "piracy_routing": "default",
+        "company_code": "DEMO",
+        "lob": "Dry Bulk",
+        "trade_area": "Middle East / Far East",
+        "properties": {"cargo": "Coal 52kt", "incoterm": "FOB", "loading_rate": "30,000 mt/day"},
+    }
+
+    coa_terms = {
+        "fixture_no": "20260003",
+        "opr_type": "COA",
+        "cp_form": "GENCON",
+        "laytime_terms": "SHINC",
+        "bill_by": "weight",
+        "tolerance_pct": Decimal("5.00"),
+        "overage_pct": Decimal("10.00"),
+        "address_comm_pct": Decimal("1.00"),
+        "brokerage_pct": Decimal("1.25"),
+        "ets_responsibility": "charterer",
+        "trade_area": "Global",
+        "chtr_specialist": "Alex Charterer",
+        "ops_coordinator": "Olivia Ops",
+        "company_code": "DEMO",
+        "lob": "Dry Bulk",
+        "piracy_routing": "default",
+        "properties": {"cargo": "Coal / grains parcels 50kt ±5%", "period": "12 months"},
+    }
+
+    tc_terms = {
+        "hire_cycle_days": 30,
+        "fixture_no": "20260004",
+        "opr_type": "TCOV",
+        "pricing_basis": "per_day",
+        "delivery_port_id": sgsin.id if sgsin else None,
+        "redelivery_port_id": aubne.id if aubne else None,
+        "delivery_at": _utc_day(10),
+        "redelivery_at": _utc_day(100),
+        "commence_at": _utc_day(10),
+        "ets_responsibility": "owner",
+        "trade_area": "Worldwide",
+        "chtr_specialist": "Alex Charterer",
+        "ops_coordinator": "Olivia Ops",
+        "company_code": "DEMO",
+        "lob": "Dry Bulk",
+        "piracy_routing": "default",
+        "properties": {"duration_days": 90, "payment_frequency": "monthly"},
+    }
+
+    return {
+        "CP-2407": ch1_terms,
+        "CP-2408": ch2_terms,
+        "CP-COA-2601": coa_terms,
+        "CP-TC-2602": tc_terms,
+    }
+
+
+def _backfill_demo_master_data(db: Session, tenant) -> None:
+    """把 demo 主数据的空列补齐（幂等、仅补 None，不覆盖用户已改的值）。
+
+    既有 demo 库是在「类型化条款列」之前建的，启动时补一次即可自愈；
+    新库走 seed_full_demo_flow 的全量写入路径，无需回填。
+    """
+    from app.models_domain import Charter
+    from app.models_wave1 import Counterparty, Port
+
+    today = date.today()
+    ports = {p.unlocode: p for p in db.scalars(select(Port)).all()}
+
+    # 1) 交易对手：联系方式 / 财务条件 / GL 科目挂钩
+    for spec in CP_SPECS:
+        c = db.scalar(
+            select(Counterparty).where(
+                Counterparty.tenant_id == tenant.id, Counterparty.name == spec["name"]
+            )
+        )
+        if c is not None and _apply_missing(c, spec):
+            db.flush()
+
+    # 2) 租约：类型化条款列
+    for charter_no, terms in _charter_term_sets(today, ports).items():
+        c = db.scalar(
+            select(Charter).where(Charter.tenant_id == tenant.id, Charter.charter_no == charter_no)
+        )
+        if c is not None and _apply_missing(c, terms):
+            db.flush()
 
 def seed_full_demo_flow(db: Session) -> None:
     """Populate estimate→charter→voyage→finance→twin→ship_mgmt for demo tenant."""
@@ -98,22 +429,23 @@ def seed_full_demo_flow(db: Session) -> None:
             db.flush()
         vessels[imo] = v
 
-    # Counterparties
-    cp_defs = [
-        ("Atlantic Brokers Ltd", "broker", "GB"),
-        ("Nordic Grain Traders", "charterer", "NO"),
-        ("Pacific Steel Mills", "charterer", "JP"),
-        ("Rotterdam Agency BV", "agent", "NL"),
-        ("Gulf Bunker Supply", "supplier", "SG"),
-    ]
+    # Counterparties —— 主数据要「像真实公司」：联系方式 / 财务条件 / GL 科目挂钩齐全，
+    # 否则下游发票、往来、付款全是空值（实测 36 个字段里 30 个为空）。
+    # 取值见模块级 CP_SPECS；既有库由 _backfill_demo_master_data 回填（仅补空值，幂等自愈）。
     cps: dict[str, Counterparty] = {}
-    for name, ctype, country in cp_defs:
-        c = db.scalar(select(Counterparty).where(Counterparty.tenant_id == tenant.id, Counterparty.name == name))
+    for spec in CP_SPECS:
+        c = db.scalar(
+            select(Counterparty).where(
+                Counterparty.tenant_id == tenant.id, Counterparty.name == spec["name"]
+            )
+        )
         if not c:
-            c = Counterparty(tenant_id=tenant.id, name=name, type=ctype, country=country, sanctions_status="clear")
+            c = Counterparty(tenant_id=tenant.id, sanctions_status="clear", **spec)
             db.add(c)
             db.flush()
-        cps[name] = c
+        else:
+            _apply_missing(c, spec)
+        cps[spec["name"]] = c
 
     v1, v2, v3, v4 = vessels["9000001"], vessels["9000002"], vessels["9000003"], vessels["9000004"]
 
@@ -161,6 +493,12 @@ def seed_full_demo_flow(db: Session) -> None:
     db.flush()
 
     # Charters
+    # 类型化条款列（IMOS 字段级对齐）——过去只写了 clauses / freight_terms 两个 JSON，
+    # 装卸率、滞期费、交/还船港与时间、ETS 责任方、fixture 号等 20+ 列全空，
+    # 租约详情页读不到值。新建与既有库回填共用 _charter_term_sets 一份真值。
+    _terms = _charter_term_sets(today, ports)
+    ch1_terms = _terms["CP-2407"]
+    ch2_terms = _terms["CP-2408"]
     ch1 = Charter(
         tenant_id=tenant.id,
         charter_no="CP-2407",
@@ -174,6 +512,7 @@ def seed_full_demo_flow(db: Session) -> None:
         commission_pct=Decimal("1.25"),
         freight_terms={"freight_usd": 1850000, "basis": "FIOS"},
         clauses={"laytime_hours": 72, "demurrage_usd_day": 22000},
+        **ch1_terms,
     )
     ch2 = Charter(
         tenant_id=tenant.id,
@@ -188,6 +527,7 @@ def seed_full_demo_flow(db: Session) -> None:
         commission_pct=Decimal("1.25"),
         freight_terms={"freight_usd": 920000},
         clauses={"laytime_hours": 48, "demurrage_usd_day": 18000},
+        **ch2_terms,
     )
     db.add_all([ch1, ch2])
     db.flush()
@@ -690,6 +1030,95 @@ def _seed_market_history(db: Session, tenant) -> None:
             )
 
 
+def _seed_demo_pool(db: Session, tenant) -> None:
+    """船池（Pooling）示例数据 —— 演示租户的「船池」页不能是空页。
+
+    幂等：船池以「名称」为自然键，成员以「池 + 船」为自然键，结算期以「池 + 标签」为自然键。
+    分配口径与 routers/pooling.py 的 calculate-fees 一致：按点数分毛收益，再扣管理费 2% + 行政费 1%。
+    """
+    from app.models_domain import Pool, PoolPeriod, PoolVessel
+    from app.models_pooling import PoolDistribution
+    from app.models_wave1 import Vessel
+
+    pool_name = "Asia-Europe Spot Pool"
+    pool = db.scalar(select(Pool).where(Pool.tenant_id == tenant.id, Pool.name == pool_name))
+    if pool is None:
+        pool = Pool(tenant_id=tenant.id, name=pool_name, currency="USD", status="active")
+        db.add(pool)
+        db.flush()
+
+    # (IMO, 份额点数)
+    member_specs = [("9000001", "1.0000"), ("9000002", "1.5000"), ("9000004", "0.7500")]
+    joined = date.today() - timedelta(days=45)
+    members: list[tuple] = []
+    for imo, pts in member_specs:
+        v = db.scalar(select(Vessel).where(Vessel.tenant_id == tenant.id, Vessel.imo == imo))
+        if v is None:
+            continue
+        row = db.scalar(
+            select(PoolVessel).where(
+                PoolVessel.pool_id == pool.id,
+                PoolVessel.vessel_id == v.id,
+                PoolVessel.left_on.is_(None),
+            )
+        )
+        if row is None:
+            row = PoolVessel(pool_id=pool.id, vessel_id=v.id, points=Decimal(pts), joined_on=joined)
+            db.add(row)
+        members.append((v, Decimal(pts)))
+    db.flush()
+
+    if not members:
+        return
+
+    quarter = (date.today().month - 1) // 3 + 1
+    label = f"{date.today().year}-Q{quarter}"
+    period = db.scalar(select(PoolPeriod).where(PoolPeriod.pool_id == pool.id, PoolPeriod.label == label))
+    if period is not None:
+        return
+
+    total_result = Decimal("1250000.00")
+    total_points = sum((p for _v, p in members), Decimal("0"))
+    dist_map: dict[str, float] = {}
+    mgmt_total = 0.0
+    admin_total = 0.0
+    period = PoolPeriod(pool_id=pool.id, label=label, status="settled", total_pool_result=total_result)
+    db.add(period)
+    db.flush()
+
+    for v, pts in members:
+        gross = round(float(total_result) * float(pts) / float(total_points), 2)
+        mgmt = round(gross * 0.02, 2)
+        admin = round(gross * 0.01, 2)
+        deduction = round(mgmt + admin, 2)
+        net = round(gross - deduction, 2)
+        mgmt_total += mgmt
+        admin_total += admin
+        dist_map[str(v.id)] = gross
+        db.add(
+            PoolDistribution(
+                tenant_id=tenant.id,
+                period_id=period.id,
+                vessel_id=v.id,
+                points=pts,
+                gross_share=Decimal(str(gross)),
+                fee_deduction=Decimal(str(deduction)),
+                net_share=Decimal(str(net)),
+                paid_status="paid",
+            )
+        )
+
+    period.distribution = {
+        **dist_map,
+        "_fees": {
+            "management": round(mgmt_total, 2),
+            "admin": round(admin_total, 2),
+            "total": round(mgmt_total + admin_total, 2),
+        },
+    }
+    db.flush()
+
+
 def _seed_demo_flow_extra(db: Session, tenant) -> None:
     """二次补种：付款批次 / GL / 应计 / COA / 期租 / 费率表 / 排期块 / MariLink / 排放。
 
@@ -705,6 +1134,14 @@ def _seed_demo_flow_extra(db: Session, tenant) -> None:
 
     if os.environ.get("SEED_DEMO_EXTRA", "1") == "0":
         return
+
+    # ── 0. demo 主数据自愈：交易对手联系方式/财务条件、租约类型化条款列 ──
+    # 既有 demo 库是在这些列之前建的，启动时补一次即可补齐；仅补 None，幂等。
+    _backfill_demo_master_data(db, tenant)
+
+    # ── 0b. 船池示例数据：Pooling 是导航里的模块，演示租户不能是空页 ──
+    _seed_demo_pool(db, tenant)
+
     from app.models_coa import CoaContract, CoaItinerary
     from app.models_domain import (
         Charter,
@@ -724,7 +1161,7 @@ def _seed_demo_flow_extra(db: Session, tenant) -> None:
     )
     from app.models_rates import RateTable, RateTableRow
     from app.models_shipshore import ShipForm, ShipReport, ShipTerminal
-    from app.models_time_charter import TimeCharterContract
+    from app.models_time_charter import HireStatement, TimeCharterContract
     from app.models_wave1 import Counterparty, Port, Vessel
 
     now = _now()
@@ -841,6 +1278,7 @@ def _seed_demo_flow_extra(db: Session, tenant) -> None:
                                  line_type=line, amount=amt, status="posted", notes=notes))
 
     # ── 5. COA 合同（Charter parent + CoaContract + itineraries）──
+    _terms = _charter_term_sets(today, ports)
     if not db.scalar(select(CoaContract).where(CoaContract.tenant_id == tenant.id)):
         ch_coa = Charter(
             tenant_id=tenant.id, charter_no="CP-COA-2601", charter_type="coa", status="active",
@@ -848,6 +1286,7 @@ def _seed_demo_flow_extra(db: Session, tenant) -> None:
             counterparty_id=cps.get("Nordic Grain Traders").id if cps.get("Nordic Grain Traders") else None,
             laycan_from=today, laycan_to=today + timedelta(days=180),
             clauses={"description": "COA parent fixture (seed)"},
+            **_terms["CP-COA-2601"],
         )
         db.add(ch_coa)
         db.flush()
@@ -882,6 +1321,7 @@ def _seed_demo_flow_extra(db: Session, tenant) -> None:
             hire_per_day=Decimal("15500"), commission_pct=Decimal("1.25"),
             laycan_from=today + timedelta(days=5), laycan_to=today + timedelta(days=15),
             clauses={"duration_days": 90},
+            **_terms["CP-TC-2602"],
         )
         db.add(ch_tc)
         db.flush()
@@ -893,6 +1333,21 @@ def _seed_demo_flow_extra(db: Session, tenant) -> None:
             hire_rate=Decimal("15500"), hire_currency="USD", payment_frequency="monthly",
             cancel_date=today + timedelta(days=3), status="active",
         ))
+        db.flush()
+
+    # 期租租金单（hire statements）——demo 里此前为 0 行，期租台账与
+    # GET /hire-statements 都看不到东西。按月生成整个合同期（幂等：已有则跳过）。
+    if not db.scalar(select(HireStatement).where(HireStatement.tenant_id == tenant.id)):
+        from app.services.hire_engine import generate_all_statements
+
+        tc_contract = db.scalar(
+            select(TimeCharterContract).where(
+                TimeCharterContract.tenant_id == tenant.id,
+                TimeCharterContract.contract_type == "tci",
+            )
+        )
+        if tc_contract is not None:
+            generate_all_statements(db, tc_contract)
 
     # ── 7. 费率表 ──
     if not db.scalar(select(RateTable).where(RateTable.tenant_id == tenant.id)):
@@ -1029,3 +1484,81 @@ def _seed_demo_flow_extra(db: Session, tenant) -> None:
         db.add_all(rows)
 
     db.commit()
+
+
+def stamp_demo_attribution(db: Session, tenant) -> None:
+    """给演示数据补「创建人 / 修改人」—— 归属条才有内容可显示。
+
+    种子数据是脚本写的：既没有 created_by / updated_by 持久列，审计账本里也没有
+    「创建」记录，于是详情页顶部的归属条（RecordAttribution）永远显示「—」。
+    这里统一按演示租户管理员补齐：
+
+    * 有持久列的表（voyages / invoices / estimates）—— 直接回填空列；
+    * 只有审计账本的主数据（counterparties / vessels / ports / companies）
+      —— 补一条 ``<entity>.create`` 账本记录，归属条从账本还原。
+
+    幂等：只补空值；账本已有记录的主数据不再重复写。
+    审计时间取记录自身的 created_at（而不是写库时刻），
+    这样补录的条目不会挤占工作台「最近活动」的首屏。
+    """
+    from sqlalchemy import update
+
+    from app.models_audit import AuditLog
+    from app.models_domain import Estimate, Invoice, Voyage
+    from app.models import User
+    from app.models_wave1 import Company, Counterparty, Port, Vessel
+
+    admin = db.scalar(
+        select(User).where(User.tenant_id == tenant.id, User.email == "admin@demo.marios")
+    ) or db.scalars(
+        select(User).where(User.tenant_id == tenant.id).order_by(User.created_at.asc())
+    ).first()
+    if admin is None:
+        return
+
+    # 1) 有持久归属列的表：回填空列（不覆盖已有值）
+    for model in (Voyage, Invoice, Estimate):
+        db.execute(
+            update(model)
+            .where(model.tenant_id == tenant.id, model.created_by.is_(None))
+            .values(created_by=admin.id)
+        )
+    for model in (Voyage, Invoice):
+        db.execute(
+            update(model)
+            .where(model.tenant_id == tenant.id, model.updated_by.is_(None))
+            .values(updated_by=admin.id)
+        )
+
+    # 2) 只有审计账本的主数据：补一条创建记录
+    for model, entity_type in (
+        (Counterparty, "counterparty"),
+        (Vessel, "vessel"),
+        (Port, "port"),
+        (Company, "company"),
+    ):
+        rows = db.scalars(select(model)).all()
+        for row in rows:
+            if getattr(row, "tenant_id", None) is not None and row.tenant_id != tenant.id:
+                continue  # 其他租户 / 全局参考数据不写入本租户账本
+            exists = db.scalar(
+                select(AuditLog.id).where(
+                    AuditLog.tenant_id == tenant.id,
+                    AuditLog.entity_type == entity_type,
+                    AuditLog.entity_id == str(row.id),
+                ).limit(1)
+            )
+            if exists:
+                continue
+            db.add(
+                AuditLog(
+                    tenant_id=tenant.id,
+                    actor_user_id=admin.id,
+                    action=f"{entity_type}.create",
+                    entity_type=entity_type,
+                    entity_id=str(row.id),
+                    detail={"seeded": True},
+                    created_at=getattr(row, "created_at", None) or utcnow_naive(),
+                )
+            )
+    db.flush()

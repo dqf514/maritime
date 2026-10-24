@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiPost } from "@/lib/api";
+import { formatDateInTz, parseUtc } from "@/lib/datetime";
 import { useI18n } from "@/lib/i18n";
 
 export type NotificationItem = {
@@ -69,16 +70,13 @@ export function NotificationBell() {
   const recent = items.slice(0, 10);
 
   function fmtTime(iso: string): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "";
+    const d = parseUtc(iso);
+    if (!d) return "";
     const diff = (now || d.getTime()) - d.getTime();
     if (diff < 60_000) return t("notify.just_now", "刚刚");
     if (diff < 3_600_000) return t("notify.minutes_ago", "{n} 分钟前", { n: Math.floor(diff / 60_000) });
     if (diff < 86_400_000) return t("notify.hours_ago", "{n} 小时前", { n: Math.floor(diff / 3_600_000) });
-    return d.toLocaleDateString(locale.startsWith("zh") ? "zh-CN" : "en-US", {
-      month: "2-digit",
-      day: "2-digit",
-    });
+    return formatDateInTz(d, null, locale);
   }
 
   async function openItem(n: NotificationItem) {

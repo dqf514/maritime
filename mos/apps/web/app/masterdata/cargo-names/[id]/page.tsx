@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { RecordAttribution } from "@/components/RecordAttribution";
 import { Tabs } from "@/components/Tabs";
 import { FormSection } from "@/components/form/FormPanel";
 import { VesselCrudGrid } from "@/components/ship/VesselCrudGrid";
@@ -151,7 +152,12 @@ export default function CargoNameDetailPage() {
     <AppShell>
       <PageHeader
         title={cargo?.short_name || t("page.cargo.card", "Cargo name")}
-        subtitle={`${cargo?.full_name || "—"} · ${groups.find((g) => g.id === cargo?.cargo_group_id)?.name || "—"}`}
+        subtitle={
+          <>
+            {`${cargo?.full_name || "—"} · ${groups.find((g) => g.id === cargo?.cargo_group_id)?.name || "—"}`} ·{" "}
+            <RecordAttribution entityType="cargo_name" entityId={cargoId} />
+          </>
+        }
         breadcrumb={[
           { label: t("nav.master", "Master data"), href: "/masterdata" },
           { label: t("page.cargo_names.title", "Cargo names"), href: "/masterdata/cargo-names" },
