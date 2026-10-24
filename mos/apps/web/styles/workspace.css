@@ -122,7 +122,8 @@
 .ws-grid-2 {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
-  align-items: start;
+  /* stretch：面板随行/容器拉伸，短内容页不留底部空白（行本身随容器伸高靠 align-content 默认值） */
+  align-items: stretch;
   gap: var(--gap-md);
 }
 @media (max-width: 1100px) {
@@ -224,12 +225,49 @@
 }
 .ws-tab-body { padding: 0.65rem 0 0; min-width: 0; }
 
-/* —— 工作区标签条复用全站统一 Tabs 组件，但保留工作区原本的紧凑外观 —— */
+/* —— 工作区标签条复用全站统一 Tabs 组件，但保留工作区原本的紧凑外观 ——
+   外层 .ui-tabs 现在是纵向容器（tab 条 + 面板），条的底色/内边距落在
+   .ui-tabs-bar 上，不要刷到外层否则面板区也被染色。 */
+/* —— 面板区吃满剩余高度 ——
+   链条：.ws-main > .ws-tabs-wrap > .ui-tabs > .ws-tab-body（面板）> 内容。
+   flex-grow 不收缩（1 0 auto）：短内容页（概览/备注/活动）的面板延伸到
+   视口底，消除下方大片空白；内容超过一屏时容器按内容撑高，
+   .ws-main（侧栏开）/ .ws-body（侧栏关）照常滚动，不会被裁切。 */
+.ws-main > .ws-tabs-wrap {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .ws-tabs-wrap .ui-tabs {
+  flex: 1 0 auto;
+  margin-bottom: 0;
+}
+.ws-tabs-wrap .ws-tab-body {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+.ws-tabs-wrap .ws-tab-body > * {
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+/* 纵向堆叠的 tab 内容列（港口动态：时间轴 + 挂靠港表格） */
+.ws-tab-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-md);
+}
+/* 首面板保持内容高；末面板吃满剩余高度 */
+.ws-tab-col > .ws-panel:last-child {
+  flex: 1 0 auto;
+  min-height: 0;
+}
+.ws-tabs-wrap .ui-tabs-bar {
   background: var(--surface);
   padding: 0 0.35rem;
   gap: 2px;
-  margin-bottom: 0;
 }
 .ws-tabs-wrap .ui-tabs-list { gap: 2px; }
 .ws-tabs-wrap .ui-tab {

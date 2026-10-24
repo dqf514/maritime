@@ -65,6 +65,14 @@ function varianceClass(n: number | null | undefined) {
   return n < 0 ? "neg" : "pos";
 }
 
+// 状态流转按钮的英文兜底文案（i18n 键缺失时不再显示裸的 "in progress"）。
+// completed → in_progress 是「重开」，单独走 ws.go_reopen。
+const GO_FALLBACK: Record<string, string> = {
+  in_progress: "Start",
+  completed: "Complete",
+  cancelled: "Cancel",
+};
+
 // datetime-local 输入值一律用 **UTC 墙钟**（lib/datetime 的 toUtcInput）。
 // 历史缺陷：用 getFullYear()/getHours() 等本地分量回填输入框，而提交时又按 UTC
 // 解释 —— 非 UTC 客户端来回差一个 UTC 偏移（8 小时）。现在读写两端都用 UTC。
@@ -1047,7 +1055,7 @@ export default function VoyageWorkspacePage() {
   ], [deletePortCall, fnByCode, locale, openPortCallModal, ports, t]);
 
   const portCallsTab = (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--gap-md)" }}>
+    <div className="ws-tab-col">
       <Panel title={t("ws.timeline", "Voyage timeline")} collapsible>
         <VoyageTimeline portCalls={timelinePortCalls} events={timelineEvents} />
       </Panel>
@@ -1436,11 +1444,17 @@ export default function VoyageWorkspacePage() {
             actions={
               <>
                 <ValidateButton onValidate={runValidate} disabled={!data} />
-                {nextStatuses.map((s) => (
-                  <button key={s} type="button" className="btn btn-sm" onClick={() => goStatus(s)}>
-                    {t(`ws.go_${s}`, s.replace(/_/g, " "))}
-                  </button>
-                ))}
+                {nextStatuses.map((s) => {
+                  // completed → in_progress 是「重开」，措辞与 planned → in_progress 的「开始」不同
+                  const reopen = s === "in_progress" && voyage?.status === "completed";
+                  const key = reopen ? "ws.go_reopen" : `ws.go_${s}`;
+                  const fb = reopen ? "Reopen" : (GO_FALLBACK[s] ?? s);
+                  return (
+                    <button key={s} type="button" className="btn btn-sm" onClick={() => goStatus(s)}>
+                      {t(key, fb)}
+                    </button>
+                  );
+                })}
                 <Link href="/operations/schedule" className="btn btn-ghost btn-sm">
                   {t("ws.open_schedule", "Schedule")}
                 </Link>

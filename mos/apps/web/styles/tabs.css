@@ -1,12 +1,21 @@
 /* ── 统一 Tab 组件样式（全站唯一 tab 实现） ── */
 
+/* 外层纵向容器：tab 条（.ui-tabs-bar）在上，面板（如传 panels）在下 */
 .ui-tabs {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-bottom: var(--gap-sm);
+}
+
+/* tab 条：横排（list 在左、可选 right 插槽在右），底边下划线落在这里 ——
+   这样 line 变体的分隔线只分隔 tab 条，不会跑到面板内容下面去 */
+.ui-tabs-bar {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--gap-md);
   min-width: 0;
-  margin-bottom: var(--gap-sm);
 }
 
 .ui-tabs-list {
@@ -39,8 +48,8 @@
   cursor: not-allowed;
 }
 
-/* line 变体：底边下划线（详情页 / 工作区） */
-.ui-tabs--line {
+/* line 变体：底边下划线（详情页 / 工作区）—— 落在 tab 条上，不在面板下方 */
+.ui-tabs--line .ui-tabs-bar {
   border-bottom: 1px solid var(--border);
 }
 .ui-tabs--line .ui-tab {
@@ -58,10 +67,7 @@
   background: transparent;
 }
 
-/* pill 变体：药丸式（页内分段） */
-.ui-tabs--pill {
-  border-bottom: none;
-}
+/* pill 变体：药丸式（页内分段）—— 分隔线本来就只属于 line 变体，pill 无需处理 */
 .ui-tabs--pill .ui-tab {
   border: 1px solid transparent;
   border-radius: var(--radius-sm);

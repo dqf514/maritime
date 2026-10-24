@@ -7,6 +7,11 @@
 //   line （默认）：底边下划线式 — 详情页/工作区
 //   pill          ：药丸式 — 页内分段
 //
+// 布局：外层 `.ui-tabs` 是**纵向**容器 —— tab 条（`.ui-tabs-bar`，横排：
+// list 在左、可选 right 插槽在右）在上，`panels` 渲染的面板在下。
+// 历史缺陷：`panels` 曾直接塞进 tab 条的横排 flex 里，导致航次工作台的
+// 面板被排到 tab 条**右侧**（tab 扎堆在左半边、内容区下方大片空白）。
+//
 // 无障碍：tab 按钮用 role="tab" + aria-selected；**只有当页面真的提供了
 // 对应的面板 id 时才写 aria-controls** —— 指向不存在的 id 比不写更糟
 // （审计项：aria-controls 指向不存在的 id）。
@@ -88,37 +93,41 @@ export function Tabs({
 
   return (
     <div className={`ui-tabs ui-tabs--${variant} ui-tabs--${size}${className ? ` ${className}` : ""}`} {...rest}>
-      <div className="ui-tabs-list" role="tablist" ref={listRef} onKeyDown={onKeyDown}>
-        {items.map((it) => {
-          const active = it.key === value;
-          return (
-            <button
-              key={it.key}
-              type="button"
-              role="tab"
-              id={tabId(it.key)}
-              data-tab-key={it.key}
-              aria-selected={active}
-              aria-controls={prefix ? panelId(it.key) : undefined}
-              tabIndex={active ? 0 : -1}
-              disabled={it.disabled}
-              title={it.title}
-              className={`ui-tab${active ? " active" : ""}`}
-              onClick={() => onChange(it.key)}
-            >
-              <span className="ui-tab-label">{it.label}</span>
-              {it.badge != null && it.badge !== "" ? (
-                typeof it.badge === "string" || typeof it.badge === "number" ? (
-                  <span className="ui-tab-badge">{it.badge}</span>
-                ) : (
-                  it.badge
-                )
-              ) : null}
-            </button>
-          );
-        })}
+      {/* tab 条：横排容器（list 在左、right 插槽在右）。面板必须放在它**外面** ——
+          历史缺陷是面板和 list 同处一个横排 flex，导致内容被排到 tab 右侧。 */}
+      <div className="ui-tabs-bar">
+        <div className="ui-tabs-list" role="tablist" ref={listRef} onKeyDown={onKeyDown}>
+          {items.map((it) => {
+            const active = it.key === value;
+            return (
+              <button
+                key={it.key}
+                type="button"
+                role="tab"
+                id={tabId(it.key)}
+                data-tab-key={it.key}
+                aria-selected={active}
+                aria-controls={prefix ? panelId(it.key) : undefined}
+                tabIndex={active ? 0 : -1}
+                disabled={it.disabled}
+                title={it.title}
+                className={`ui-tab${active ? " active" : ""}`}
+                onClick={() => onChange(it.key)}
+              >
+                <span className="ui-tab-label">{it.label}</span>
+                {it.badge != null && it.badge !== "" ? (
+                  typeof it.badge === "string" || typeof it.badge === "number" ? (
+                    <span className="ui-tab-badge">{it.badge}</span>
+                  ) : (
+                    it.badge
+                  )
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+        {right ? <div className="ui-tabs-right">{right}</div> : null}
       </div>
-      {right ? <div className="ui-tabs-right">{right}</div> : null}
       {panels && prefix
         ? items.map((it) => (
             <TabPanel
