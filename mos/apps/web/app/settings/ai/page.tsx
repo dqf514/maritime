@@ -515,6 +515,15 @@ function AiSettingsPage() {
     setSkillsLoading(false);
   }, []);
 
+  const loadBindings = useCallback(async () => {
+    try {
+      const binds = await apiGet("/api/v1/settings/ai/skills/bindings");
+      setBindings(Array.isArray(binds) ? binds : []);
+    } catch (ex) {
+      setSkillsErr(msgOf(ex));
+    }
+  }, []);
+
   useEffect(() => {
     if (tab === "skills") loadSkills();
   }, [tab, loadSkills]);
@@ -555,7 +564,8 @@ function AiSettingsPage() {
       });
       toast.success(t("ai.bind.saved", { en: "Binding saved", zh: "绑定已保存" }));
       setBindOpen(false);
-      await loadSkills();
+      // Catalog is static — only refresh bindings to avoid burning the rate limit.
+      await loadBindings();
     } catch (err) {
       toast.error(
         t("ai.bind.save_fail", { en: "Save failed: {msg}", zh: "保存失败：{msg}" }, {

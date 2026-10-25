@@ -85,7 +85,10 @@ def rate_limit(scope: str, *, max_hits: int = 5, window_seconds: float = 60.0) -
 
 _PATH_POLICIES: tuple[tuple[str, str, int, float], ...] = (
     ("ai", "/api/v1/ai", 30, 60.0),
-    ("ai", "/api/v1/settings/ai", 20, 60.0),
+    # Settings CRUD is interactive admin work (tab loads issue several GETs and
+    # each save reloads the grid). 20/min was too tight and surfaced as
+    # "请求过于频繁" while editing skill bindings. Inference stays at 30/min.
+    ("ai", "/api/v1/settings/ai", 120, 60.0),
     ("export", "/api/v1/export", 60, 60.0),
     ("export", "/api/v1/exports", 60, 60.0),
     ("export", "/api/v1/imports", 30, 60.0),
