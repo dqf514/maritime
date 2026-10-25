@@ -1555,6 +1555,7 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("common.value", "app", "Value", "值"),
     ("common.yes", "app", "Yes", "是"),
     ("density.toggle", "app", "Toggle density", "切换密度"),
+    ("lookup.none", "app", "No matches", "无匹配项"),
     ("lookup.recent", "app", "Recently used", "最近使用"),
     ("page.finance.accrual_net", "app", "Accrual net", "应计净额"),
     ("page.finance.accrual_period_fmt", "app", "Format: YYYY-MM", "格式：YYYY-MM"),

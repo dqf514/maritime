@@ -208,6 +208,77 @@ dl.kv-grid > div { min-width: 0; }
   flex: 0 0 auto;
 }
 
+/* ── LookupSelect：单框 combobox（输入即过滤，选项浮层下拉，空间不足向上翻）── */
+.lookup-combobox {
+  position: relative;
+  min-width: 0;
+}
+.lookup-combobox > input {
+  width: 100%;
+}
+.lookup-combobox.is-disabled {
+  opacity: 0.6;
+}
+.lookup-menu {
+  position: absolute;
+  z-index: 60;
+  left: 0;
+  right: 0;
+  top: calc(100% + 2px);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+.lookup-menu.flip-up {
+  top: auto;
+  bottom: calc(100% + 2px);
+}
+.lookup-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h);
+  padding: 0 var(--gap-xs);
+  font-size: var(--font-ui);
+  color: var(--ink);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lookup-menu-item.is-active {
+  background: var(--toolbar-bg);
+}
+.lookup-menu-item.is-selected {
+  font-weight: 600;
+}
+.lookup-menu-group {
+  padding: var(--gap-xs) var(--gap-xs) 2px;
+  font-size: var(--font-label);
+  color: var(--muted);
+}
+.lookup-menu-empty {
+  padding: var(--gap-xs);
+  font-size: var(--font-ui);
+  color: var(--muted);
+}
+
+/* 表单多选区块（div 而非 label —— 内部是多个 checkbox label）：沿用
+   record-modal-body label 的「小字标题 + 控件」排版 */
+.form-type-multi {
+  display: grid;
+  gap: 1px;
+  min-width: 180px;
+}
+.form-type-multi .field-label {
+  font-size: var(--font-label);
+  color: var(--muted);
+}
+
 /* RecordModal 表单内的校验行（ValidateButton 容器） */
 .record-modal-validate {
   display: flex;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { msgOf } from "@/lib/errors";
@@ -72,25 +72,16 @@ function recentPush(dataset: string, code: string) {
   }
 }
 
-export function LookupSelect({
-  dataset,
-  value,
-  onChange,
-  allowEmpty = true,
-  emptyLabel,
-  required,
-  disabled,
-  className,
-  showCode = true,
-}: Props) {
+/** 拉取参照表条目（带内存缓存 + locale 打标）。LookupSelect 与直接渲染
+ *  checkbox 的页面（如对手方类型多选）共用同一份缓存。 */
+export function useLookupItems(dataset: string): { items: LookupItem[]; loaded: boolean; error: string } {
   const { t, locale } = useI18n();
   const [items, setItems] = useState<LookupItem[]>([]);
-  const [filter, setFilter] = useState("");
   const [loaded, setLoaded] = useState(false);
-  // P1-4：参照表取不到时不能只剩一个**空**下拉框 —— 用户会以为"这个表
-  // 没有可选值"，其实是没取到。单独留一个错误状态，明确说出来。
-  // 错误按「数据集 + 语言」打标：换参照表时旧错误自动失效（不必在
-  // effect 里 setState 清空 —— 那会触发 react-hooks/set-state-in-effect）。
+  // P1-4：参照表取不到时不能只剩一个空控件 —— 用户会以为「这个表没有可选值」，
+  // 其实是没取到。单独留一个错误状态，明确说出来。
+  // 错误按「数据集 + 语言」打标：换参照表时旧错误自动失效（不必在 effect 里
+  // setState 清空 —— 那会触发 react-hooks/set-state-in-effect）。
   const [err, setErr] = useState<{ key: string; msg: string } | null>(null);
   const errKey = `${dataset}:${locale?.startsWith("zh") ? "zh-CN" : "en"}`;
   const loadError = err && err.key === errKey ? err.msg : "";
@@ -127,8 +118,69 @@ export function LookupSelect({
     };
   }, [dataset, locale, t]);
 
+  return { items, loaded, error: loadError };
+}
+
+/** 选项行文案：showCode 时「代码 — 标签」 */
+function itemText(it: LookupItem, showCode: boolean): string {
+  return showCode ? `${it.code} — ${it.label}` : it.label;
+}
+
+/** 参照表选择控件 —— 单框 combobox：点开/输入即过滤，选项浮层下拉（下方空间
+ *  不足时向上翻），键盘 ↑↓ 选择、Enter 确认、Esc 关闭。历史版本对长列表渲染
+ *  「筛选输入框 + 原生 select」两个框叠放，观感割裂 —— 合并为一个框。 */
+export function LookupSelect({
+  dataset,
+  value,
+  onChange,
+  allowEmpty = true,
+  emptyLabel,
+  required,
+  disabled,
+  className,
+  showCode = true,
+}: Props) {
+  const { t } = useI18n();
+  const { items, loaded, error: loadError } = useLookupItems(dataset);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(-1);
+  const [flipUp, setFlipUp] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // 浮层菜单：输入框下方空间不够（视口或滚动容器内）时向上翻
+  const updateFlip = () => {
+    const el = inputRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    setFlipUp(spaceBelow < 240 && rect.top > spaceBelow);
+  };
+
+  // 点击浮层外关闭（pointerdown 先于 input blur，选项上的点击用 preventDefault 保住焦点）
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [open]);
+
+  // 键盘高亮项滚动进可视区
+  useEffect(() => {
+    if (!open || active < 0 || !listRef.current) return;
+    const el = listRef.current.children[active] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
   const filtered = useMemo(() => {
-    const q = filter.trim().toLowerCase();
+    const q = query.trim().toLowerCase();
     if (!q) return items;
     return items.filter(
       (it) =>
@@ -137,66 +189,153 @@ export function LookupSelect({
         (it.label_en || "").toLowerCase().includes(q) ||
         (it.label_zh || "").toLowerCase().includes(q),
     );
-  }, [items, filter]);
+  }, [items, query]);
 
-  // U9：未过滤时最近使用置顶（optgroup），过滤时走普通列表
+  // U9：未过滤时最近使用置顶，过滤时走普通列表
   const recents = useMemo(() => {
-    if (filter.trim()) return [];
+    if (query.trim()) return [];
     return recentGet(dataset)
       .map((c) => items.find((it) => it.code === c))
       .filter((it): it is LookupItem => Boolean(it));
-  }, [items, dataset, filter]);
+  }, [items, dataset, query]);
   const rest = useMemo(
     () => filtered.filter((it) => !recents.some((r) => r.code === it.code)),
     [filtered, recents],
   );
 
-  const longList = items.length > 40;
   const valueInList = items.some((it) => it.code === value);
+  const selected = items.find((it) => it.code === value);
+
+  // 浮层选项（与过滤/最近使用同序）：空值项 + 值不在表内的历史值项 + 常规项
+  const menuItems = useMemo(() => {
+    const rows: { code: string; text: string; kind: "empty" | "legacy" | "item"; group?: string }[] = [];
+    if (allowEmpty) {
+      rows.push({ code: "", text: emptyLabel || t("common.select", "请选择"), kind: "empty" });
+    }
+    if (value && !valueInList) {
+      rows.push({
+        code: value,
+        text: `${value} (${t("lookup.legacy", "legacy value")})`,
+        kind: "legacy",
+      });
+    }
+    for (const it of recents) rows.push({ code: it.code, text: itemText(it, showCode), kind: "item", group: t("lookup.recent", "最近使用") });
+    for (const it of rest) rows.push({ code: it.code, text: itemText(it, showCode), kind: "item" });
+    return rows;
+  }, [allowEmpty, emptyLabel, t, value, valueInList, recents, rest, showCode]);
+
+  function commit(code: string) {
+    if (code) recentPush(dataset, code);
+    onChange(code);
+    setOpen(false);
+    setQuery("");
+    setActive(-1);
+  }
+
+  function openMenu() {
+    if (disabled || !loaded) return;
+    updateFlip();
+    setOpen(true);
+    // 打开时定位到当前值（空值项之后的第一项附近：直接落在当前值上）
+    const idx = menuItems.findIndex((r) => r.code === value);
+    setActive(idx >= 0 ? idx : 0);
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Escape") {
+      if (open) {
+        e.stopPropagation(); // 只关浮层，不触发 RecordModal 的 Esc 关闭
+        e.preventDefault();
+        setOpen(false);
+        setQuery("");
+      }
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) {
+        openMenu();
+        return;
+      }
+      const dir = e.key === "ArrowDown" ? 1 : -1;
+      setActive((a) => {
+        const n = a + dir;
+        return Math.max(0, Math.min(menuItems.length - 1, n));
+      });
+      return;
+    }
+    if (e.key === "Enter") {
+      // 浮层开着时 Enter = 选中高亮项，不能落进表单 submit
+      if (open && active >= 0 && active < menuItems.length) {
+        e.preventDefault();
+        commit(menuItems[active].code);
+      }
+    }
+  }
+
+  const display = open
+    ? query
+    : selected
+      ? itemText(selected, showCode)
+      : value
+        ? `${value} (${t("lookup.legacy", "legacy value")})`
+        : "";
 
   return (
-    <div className={className} style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-      {longList ? (
-        <input
-          type="search"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder={t("lookup.filter", "Filter…")}
-          disabled={disabled}
-          aria-label={t("lookup.filter", "Filter…")}
-        />
-      ) : null}
-      <select
-        value={value}
-        onChange={(e) => {
-          recentPush(dataset, e.target.value);
-          onChange(e.target.value);
-        }}
-        required={required}
+    <div className={`lookup-combobox${disabled ? " is-disabled" : ""}${className ? ` ${className}` : ""}`} ref={rootRef}>
+      <input
+        ref={inputRef}
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        autoComplete="off"
         disabled={disabled || !loaded}
-      >
-        {allowEmpty ? <option value="">{emptyLabel || t("common.select", "Select…")}</option> : null}
-        {value && !valueInList ? (
-          <option value={value}>
-            {value} ({t("lookup.legacy", "legacy value")})
-          </option>
-        ) : null}
-        {recents.length ? (
-          <optgroup label={t("lookup.recent", "最近使用")}>
-            {recents.map((it) => (
-              <option key={`r-${it.code}`} value={it.code}>
-                {showCode ? `${it.code} — ${it.label}` : it.label}
-              </option>
-            ))}
-          </optgroup>
-        ) : null}
-        {rest.map((it) => (
-          <option key={it.code} value={it.code}>
-            {showCode ? `${it.code} — ${it.label}` : it.label}
-          </option>
-        ))}
-      </select>
-      {!loaded ? <span className="muted">{t("common.loading", "Loading…")}</span> : null}
+        required={required}
+        value={display}
+        placeholder={emptyLabel || t("common.select", "请选择")}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setActive(0);
+          if (!open) {
+            updateFlip();
+            setOpen(true);
+          }
+        }}
+        onFocus={openMenu}
+        // Tab/程序化失焦关浮层；选项点击在 onMouseDown 里 preventDefault，不会走到这
+        onBlur={() => {
+          setOpen(false);
+          setQuery("");
+        }}
+        onKeyDown={onKeyDown}
+      />
+      {open ? (
+        <div className={`lookup-menu${flipUp ? " flip-up" : ""}`} ref={listRef} role="listbox">
+          {menuItems.length === 0 ? (
+            <div className="lookup-menu-empty">{t("lookup.none", "无匹配项")}</div>
+          ) : null}
+          {menuItems.map((row, i) => (
+            <div key={`${row.kind}-${row.code || "empty"}-${i}`}>
+              {row.group && (i === 0 || menuItems[i - 1].group !== row.group) ? (
+                <div className="lookup-menu-group">{row.group}</div>
+              ) : null}
+              <div
+                className={`lookup-menu-item${i === active ? " is-active" : ""}${row.code === value ? " is-selected" : ""}`}
+                role="option"
+                aria-selected={row.code === value}
+                // mousedown 抢先把 blur 摄走，保证 click 能落到选项上
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => commit(row.code)}
+              >
+                {row.text}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {!loaded ? <span className="muted">{t("common.loading", "加载中…")}</span> : null}
       {loadError ? (
         <span className="field-error" role="alert">
           {loadError}

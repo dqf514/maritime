@@ -16,7 +16,7 @@ import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
-import { LookupSelect } from "@/components/LookupSelect";
+import { LookupSelect, useLookupItems } from "@/components/LookupSelect";
 import { PartyPicker } from "@/components/DataPicker";
 import { RecordModal } from "@/components/RecordModal";
 import { SavedViews } from "@/components/SavedViews";
@@ -73,7 +73,7 @@ type Contact = {
 };
 
 const emptyEdit = {
-  name: "", type: "charterer", country: "", sanctions_status: "clear",
+  name: "", types: ["charterer"] as string[], country: "", sanctions_status: "clear",
   address: "", tax_id: "", swift_code: "", registration_no: "",
   website: "", phone: "", email: "", notes: "",
 };
@@ -84,8 +84,15 @@ const emptyContact = {
 
 type Tab = "parties" | "contacts";
 
+/** 「代码 — 标签」选项文案（与 LookupSelect 展示口径一致） */
+function showCodeLabel(it: { code: string; label: string }): string {
+  return `${it.code} — ${it.label}`;
+}
+
 function CounterpartiesPage() {
   const { t } = useI18n();
+  // 类型多选项清单（与 LookupSelect 共用参照表缓存）
+  const { items: typeItems, error: typeErr } = useLookupItems("counterparty_types");
   const toast = useToast();
   const router = useRouter();
   const pathname = usePathname();
@@ -213,7 +220,10 @@ function CounterpartiesPage() {
   const openRow = useCallback((r: Party) => {
     setOpen(r);
     setEdit({
-      name: r.name, type: r.type, country: r.country || "", sanctions_status: r.sanctions_status || "clear",
+      name: r.name,
+      // 类型多选：优先读 IMOS 多角色集合；老数据只有单值 type 时退化为一项
+      types: r.address_types?.length ? r.address_types : r.type ? [r.type] : [],
+      country: r.country || "", sanctions_status: r.sanctions_status || "clear",
       address: r.address || "", tax_id: r.tax_id || "", swift_code: r.swift_code || "",
       registration_no: r.registration_no || "", website: r.website || "", phone: r.phone || "",
       email: r.email || "", notes: r.notes || "",
@@ -224,7 +234,11 @@ function CounterpartiesPage() {
 
   function editorBody() {
     return {
-      name: edit.name, type: edit.type, country: edit.country || null,
+      name: edit.name,
+      // type 保留单值（历史筛选字段，取首个勾选）；完整多选集合写 address_types
+      type: edit.types[0] || "other",
+      address_types: edit.types.length ? edit.types : null,
+      country: edit.country || null,
       sanctions_status: edit.sanctions_status, address: edit.address || null,
       tax_id: edit.tax_id || null, swift_code: edit.swift_code || null,
       registration_no: edit.registration_no || null, website: edit.website || null,
@@ -392,7 +406,14 @@ function CounterpartiesPage() {
       value: (r) => r.short_name || "",
       render: (_v, r) => r.short_name || "—",
     },
-    { key: "type", title: t("common.type", "Type"), width: 120, value: (r) => r.type },
+    {
+      key: "type",
+      title: t("common.type", "Type"),
+      width: 120,
+      value: (r) => r.type,
+      // 多角色公司展示完整集合；老数据只有单值
+      render: (_v, r) => (r.address_types?.length ? r.address_types.join(", ") : r.type),
+    },
     {
       key: "company_no",
       title: t("page.parties.company_no", "Company no."),
@@ -743,9 +764,36 @@ function CounterpartiesPage() {
         <label>{t("common.name", "Name")}
           <input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} required />
         </label>
-        <label style={{ minWidth: 180 }}>{t("common.type", "Type")}
-          <LookupSelect dataset="counterparty_types" value={edit.type} onChange={(v) => setEdit({ ...edit, type: v })} />
-        </label>
+        <div className="form-type-multi">
+          <span className="field-label">{t("common.type", "Type")}</span>
+          {/* 类型多选：一家公司常同时是船东+经纪人。勾选集合写 IMOS address_types，
+              type 单值字段取首个勾选（历史筛选兼容） */}
+          <div className="check-grid">
+            {typeItems.map((it) => (
+              <label key={it.code} className="check-row">
+                <input
+                  type="checkbox"
+                  checked={edit.types.includes(it.code)}
+                  onChange={(e) =>
+                    setEdit({
+                      ...edit,
+                      types: e.target.checked
+                        ? [...edit.types, it.code]
+                        : edit.types.filter((c) => c !== it.code),
+                    })
+                  }
+                />
+                {showCodeLabel(it)}
+              </label>
+            ))}
+          </div>
+          {!typeItems.length && !typeErr ? (
+            <span className="muted">{t("common.loading", "加载中…")}</span>
+          ) : null}
+          {typeErr ? (
+            <span className="field-error" role="alert">{typeErr}</span>
+          ) : null}
+        </div>
         <label>{t("page.ports.country", "Country")}
           <LookupSelect dataset="countries" value={edit.country} onChange={(v) => setEdit({ ...edit, country: v })} />
         </label>
