@@ -511,6 +511,9 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("page.connectors.test_fail", "app", "Test failed", "测试失败"),
     ("page.email.accounts", "app", "Mailbox accounts", "邮箱账户"),
     ("page.email.confidence", "app", "Confidence", "置信度"),
+    ("page.email.confidence_hint", "app", "Confidence = how sure the AI is about the parsed fields (0–100%); double-check the parsed fields before confirming when it is low.", "置信度 = AI 对解析字段的把握程度（0–100%）：偏低时请重点核对「解析字段」再确认。"),
+    ("page.email.confirm_btn", "app", "Confirm parse", "确认解析"),
+    ("page.email.confirm_hint", "app", "Accept the AI parse result — the email leaves the review queue.", "采纳 AI 解析结果，该邮件移出复核队列。"),
     ("page.email.confirm_fail", "app", "Confirm failed", "确认失败"),
     ("page.email.confirmed", "app", "Parse result confirmed.", "Parse result confirmed."),
     ("page.email.display_name", "app", "Display name", "显示名称"),
@@ -3262,6 +3265,7 @@ UI_MESSAGES_EXTRA += [
     # email review — 闭环动作（解析落单 / 生成回复）
     ("page.email.parse_fields", "app", "Parsed fields", "解析字段"),
     ("page.email.apply_btn", "app", "Create draft", "生成业务草稿"),
+    ("page.email.apply_hint", "app", "Create a business draft from the parsed fields (estimate / laytime / NOR off-hire time). Creates a real record.", "用解析字段一键生成业务草稿（估算 / 装卸时间 / NOR 停租时间等），会创建真实记录"),
     ("page.email.apply_done", "app", "Draft created: {kind} — {title}", "已生成草稿：{kind} — {title}"),
     ("page.email.apply_none", "app", "This email type has no auto-draft yet.", "该邮件类型暂不支持自动落单。"),
     ("page.email.apply_fail", "app", "Create draft failed", "生成草稿失败"),
@@ -3307,6 +3311,7 @@ UI_MESSAGES_EXTRA += [
     ("ai.fill.applied", "app", "AI suggestions applied — review and save", "已应用 AI 建议值 — 请复核后保存"),
     # ── 邮件 AI 动作推荐 ──
     ("page.email.ai_rec", "app", "AI suggest", "AI 建议"),
+    ("page.email.ai_rec_hint", "app", "Let the AI suggest the next step for this email (create draft / reply) — suggestions only, nothing runs automatically.", "让 AI 根据这封邮件推荐下一步操作（落单 / 回复），仅建议不自动执行"),
     ("page.email.rec_title", "app", "Suggested next step", "AI 建议的下一步"),
     ("page.email.rec_loading", "app", "Analyzing…", "正在分析…"),
     ("page.email.rec_fail", "app", "AI suggestion failed", "AI 推荐失败"),
@@ -4150,8 +4155,8 @@ UI_MESSAGES_EXTRA += [
     ("omni.search_failed", "app", "Search failed: {err}", "Search failed: {err}"),
     ("picker.search_failed", "app", "Search failed: {err}", "Search failed: {err}"),
     ("market.history_alt", "app", "30-day trend for {symbol}: from {from} to {to}, lowest {min}, highest {max}, latest {last}.", "30-day trend for {symbol}: from {from} to {to}, lowest {min}, highest {max}, latest {last}."),
-    ("page.email.confirm_apply_title", "app", "Create business draft", "Create business draft"),
-    ("page.email.confirm_parse_title", "app", "Confirm parse result", "Confirm parse result"),
+    # confirm_apply_title / confirm_parse_title 移到 seed_i18n_parity（zh 曾漏翻，
+    # 存量库只有 parity 的 force-upsert 才能治愈）
     ("page.rb.datasets_fail", "app", "Datasets could not be loaded: {err}", "Datasets could not be loaded: {err}"),
     ("page.rb.preview_rows", "app", "Showing {shown} of {total} rows", "Showing {shown} of {total} rows"),
 ]

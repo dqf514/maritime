@@ -87,6 +87,10 @@ export type DataGridProps<T = any> = {
   rowHeight?: number;
   /** 虚拟滚动阈值（超过此行数启用） */
   virtualThreshold?: number;
+  /** 客户端分页：设置后组件内按页切片，超过一页时表格下方渲染 dt-pagination
+   *  翻页条（行索引/选择/复制/聚合 footer 均按当前页计，页码在数据长度变化时
+   *  回到第一页）。与服务端分页互斥 —— 传进来的 data 应是待展示的全量行。 */
+  pageSize?: number;
   /** 外部控制选中行 */
   selectedKeys?: Set<string>;
   onSelectedKeysChange?: (keys: Set<string>) => void;

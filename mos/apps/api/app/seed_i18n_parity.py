@@ -253,6 +253,8 @@ UI_MESSAGES_PARITY: list[tuple[str, str, str, str]] = [
     ("page.email.confirmed", "app", "Parse result confirmed.", "解析结果已确认。"),
     ("page.email.no_subject", "app", "(no subject)", "（无主题）"),
     ("page.email.preview", "app", "Parse preview", "解析预览"),
+    ("page.email.confirm_apply_title", "app", "Create business draft", "生成业务草稿"),
+    ("page.email.confirm_parse_title", "app", "Confirm parse result", "确认解析结果"),
     ("page.estimates.calc_msg", "app", "Calculated TCE for {title}", "已计算 {title} 的 TCE"),
     ("page.finance.quick_invoice", "app", "Quick issue invoice", "快速开票"),
     ("page.identity.domains", "app", "Default allowed domains (comma-separated, empty = any)", "默认允许的邮箱域名（逗号分隔，留空表示不限）"),

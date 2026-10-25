@@ -91,7 +91,8 @@ function formatDisplay(
 
 export function DataGrid<T extends Record<string, any>>({
   columns: allColumns,
-  data,
+  data: allData,
+  pageSize,
   rowKey,
   editable = false,
   onCellSave,
@@ -115,6 +116,21 @@ export function DataGrid<T extends Record<string, any>>({
 }: DataGridProps<T>) {
   // status/state 类裸值的中文化翻译函数（无 provider 时 useI18n 返回直通实现）
   const { t } = useI18n();
+
+  // ── 客户端分页（pageSize 设置时生效）──
+  // data 重导出为「当前页切片」：行索引、选择、复制、编辑、聚合 footer、虚拟
+  // 滚动全部自动按页计算，后续代码无需感知分页。
+  // 页码连同「设置它时的数据长度」一起存：长度变了（换文件夹/筛选/同步刷新）
+  // 即视为换了列表、派生回落第一页；同长度重排（排序）保持页码 —— 纯派生无 effect。
+  const [pageState, setPageState] = useState(() => ({ p: 1, len: allData.length }));
+  const pages = pageSize && pageSize > 0 ? Math.max(1, Math.ceil(allData.length / pageSize)) : 1;
+  const safePage =
+    pageState.len === allData.length ? Math.min(Math.max(1, pageState.p), pages) : 1;
+  const data = useMemo(() => {
+    if (!pageSize || pages <= 1) return allData;
+    return allData.slice((safePage - 1) * pageSize, safePage * pageSize);
+  }, [allData, pages, safePage, pageSize]);
+
   // 列可见性（支持 storageKey 持久化）
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(() => {
     if (!storageKey) return new Set();
@@ -932,6 +948,36 @@ export function DataGrid<T extends Record<string, any>>({
           {showFooter && <GridFooter columns={columns} data={data as Record<string, unknown>[]} selection={sel.selection} />}
         </table>
       </div>
+      {/* 客户端分页翻页条（pageSize 设置且超过一页时；样式复用站内 dt-pagination） */}
+      {pages > 1 && pageSize ? (
+        <div className="dt-pagination">
+          <span className="dt-page-info">
+            {t("common.page_of", "{from}-{to} of {n}", {
+              from: (safePage - 1) * pageSize + 1,
+              to: Math.min(safePage * pageSize, allData.length),
+              n: allData.length,
+            })}
+          </span>
+          <span className="dt-page-btns">
+            <button
+              type="button"
+              onClick={() => setPageState({ p: safePage - 1, len: allData.length })}
+              disabled={safePage <= 1}
+              aria-label={t("common.prev_page", "Previous page")}
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              onClick={() => setPageState({ p: safePage + 1, len: allData.length })}
+              disabled={safePage >= pages}
+              aria-label={t("common.next_page", "Next page")}
+            >
+              ›
+            </button>
+          </span>
+        </div>
+      ) : null}
       {/* P1-11 撤销 + P1-25 校验状态条 */}
       {errCount > 0 || canUndo ? (
         <div className="dt-pager">

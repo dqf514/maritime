@@ -142,6 +142,8 @@ export default function EmailReviewPage() {
   const [folderList, setFolderList] = useState<FolderInfo[]>(FALLBACK_FOLDERS);
   /** 文件夹勾选弹窗（原 details 弹层会在工具栏里挤出上下滚动条 —— 改 modal） */
   const [foldersOpen, setFoldersOpen] = useState(false);
+  /** 文件夹弹窗草稿：勾选只改草稿，点「保存」才写回 syncFolders，「取消」丢弃 */
+  const [foldersDraft, setFoldersDraft] = useState<string[]>([]);
   const [activeFolder, setActiveFolder] = useState("inbox");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("review");
   const [sortKey, setSortKey] = useState<string>("sent_at");
@@ -516,7 +518,7 @@ export default function EmailReviewPage() {
           },
           {
             key: "confirm",
-            label: t("common.confirm", "Confirm"),
+            label: t("page.email.confirm_btn", "确认解析"),
             onClick: () => requestConfirm(m),
           },
         ]
@@ -731,41 +733,19 @@ export default function EmailReviewPage() {
       {
         key: "actions",
         title: "",
-        width: 250,
+        width: 90,
+        // 行内只留「查看详情」：AI 建议 / 回复 / 生成业务草稿 / 确认解析都收进详情弹窗，
+        // 快捷操作走右键菜单 —— 一排 5 个按钮看不过来，且「确认」脱离上下文没人看得懂
         render: (_v, r) => (
           <span className="row-actions" onClick={(e) => e.stopPropagation()}>
             <button className="btn btn-sm" type="button" onClick={() => void openDetail(r)}>
               {t("page.email.detail_btn", "查看详情")}
             </button>
-            <button className="btn btn-sm" type="button" onClick={() => void openRecommend(r)}>
-              ✦ {t("page.email.ai_rec", "AI 建议")}
-            </button>
-            <button className="btn btn-sm" type="button" onClick={() => void openReply(r)}>
-              {t("page.email.reply_btn", "Reply")}
-            </button>
-            {r.parse_status === "review" ? (
-              <>
-                <button
-                  className="btn btn-sm btn-primary"
-                  type="button"
-                  onClick={() => requestApply(r)}
-                >
-                  {t("page.email.apply_btn", "Create draft")}
-                </button>
-                <button
-                  className="btn btn-sm"
-                  type="button"
-                  onClick={() => requestConfirm(r)}
-                >
-                  {t("common.confirm", "Confirm")}
-                </button>
-              </>
-            ) : null}
           </span>
         ),
       },
     ],
-    [t, openDetail, openRecommend, openReply, requestApply, requestConfirm],
+    [t, openDetail],
   );
 
   /** 状态筛选芯片把行全筛没了、但未筛时有行 → 提示被隐藏的数量 */
@@ -826,7 +806,14 @@ export default function EmailReviewPage() {
             ))}
           </select>
         </label>
-        <button className="btn btn-sm" type="button" onClick={() => setFoldersOpen(true)}>
+        <button
+          className="btn btn-sm"
+          type="button"
+          onClick={() => {
+            setFoldersDraft(syncFolders);
+            setFoldersOpen(true);
+          }}
+        >
           {t("page.email.folders_btn", "文件夹")} ({syncFolders.length})
         </button>
         {m365 ? <span className="badge badge-pass">{t("page.email.m365_connected", "Microsoft 365 已连接")}</span> : null}
@@ -863,6 +850,12 @@ export default function EmailReviewPage() {
         </p>
       ) : null}
       <StatusLegend statuses={["pending", "review", "parsed", "failed"]} />
+      <p className="hint">
+        {t(
+          "page.email.confidence_hint",
+          "置信度 = AI 对解析字段的把握程度（0–100%）：偏低时请重点核对「解析字段」再确认。",
+        )}
+      </p>
       <div className="panel">
         <h3>{t("page.email.accounts", "Mailbox accounts")}</h3>
         {accErr ? (
@@ -896,6 +889,8 @@ export default function EmailReviewPage() {
             onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
             onSortChange={onSortChange}
             storageKey="email_review_grid"
+            // 客户端分页：邮件一屏放不下（48+ 行），按页浏览；换 Tab/筛选自动回第一页
+            pageSize={25}
             emptyText={t("page.email.empty_folder", "No messages in this folder.")}
           />
         </StateView>
@@ -908,8 +903,11 @@ export default function EmailReviewPage() {
         open={foldersOpen}
         title={t("page.email.folders_btn", "文件夹")}
         onClose={() => setFoldersOpen(false)}
-        canEdit={false}
         canDelete={false}
+        onSave={() => {
+          setSyncFolders(foldersDraft);
+          setFoldersOpen(false);
+        }}
       >
         <div className="email-folders-list">
           {folderList.map((f) => (
@@ -917,9 +915,9 @@ export default function EmailReviewPage() {
             <label key={f.key} className="check-row">
               <input
                 type="checkbox"
-                checked={syncFolders.includes(f.key)}
+                checked={foldersDraft.includes(f.key)}
                 onChange={(e) =>
-                  setSyncFolders((prev) =>
+                  setFoldersDraft((prev) =>
                     e.target.checked ? [...prev, f.key] : prev.filter((k) => k !== f.key),
                   )
                 }
@@ -928,16 +926,17 @@ export default function EmailReviewPage() {
             </label>
           ))}
         </div>
-        {/* 勾选即时生效；关闭走 RecordModal 页脚的「取消」 */}
+        {/* 草稿式：勾选只改 foldersDraft，页脚「保存」才写回同步参数，「取消」丢弃
+            （RecordModal 的 U5 未保存守卫会先弹「有未保存的修改」确认） */}
         <p className="row-actions">
           <button
             className="btn btn-sm"
             type="button"
-            onClick={() => setSyncFolders(folderList.map((f) => f.key))}
+            onClick={() => setFoldersDraft(folderList.map((f) => f.key))}
           >
             {t("common.select_all", "全选")}
           </button>
-          <button className="btn btn-sm" type="button" onClick={() => setSyncFolders([])}>
+          <button className="btn btn-sm" type="button" onClick={() => setFoldersDraft([])}>
             {t("common.clear", "清空")}
           </button>
         </p>
@@ -1030,6 +1029,10 @@ export default function EmailReviewPage() {
                   <button
                     className="btn btn-sm btn-primary"
                     type="button"
+                    title={t(
+                      "page.email.apply_hint",
+                      "用解析字段一键生成业务草稿（估算 / 装卸时间 / NOR 停租时间等），会创建真实记录",
+                    )}
                     onClick={() => {
                       const m = detail;
                       setDetailFor(null);
@@ -1042,6 +1045,7 @@ export default function EmailReviewPage() {
                   <button
                     className="btn btn-sm"
                     type="button"
+                    title={t("page.email.confirm_hint", "采纳 AI 解析结果，该邮件移出复核队列")}
                     onClick={() => {
                       const id = detail.id;
                       setDetailFor(null);
@@ -1049,10 +1053,23 @@ export default function EmailReviewPage() {
                       void confirm(id).catch((ex) => toast.error(msgOf(ex, t("page.email.confirm_fail", "Confirm failed"))));
                     }}
                   >
-                    {t("common.confirm", "Confirm")}
+                    {t("page.email.confirm_btn", "确认解析")}
                   </button>
                 </>
               ) : null}
+              <button
+                className="btn btn-sm"
+                type="button"
+                title={t("page.email.ai_rec_hint", "让 AI 根据这封邮件推荐下一步操作（落单 / 回复），仅建议不自动执行")}
+                onClick={() => {
+                  const m = detail;
+                  setDetailFor(null);
+                  setDetail(null);
+                  void openRecommend(m);
+                }}
+              >
+                ✦ {t("page.email.ai_rec", "AI 建议")}
+              </button>
               <button
                 className="btn btn-sm"
                 type="button"
