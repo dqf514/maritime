@@ -140,6 +140,8 @@ export default function EmailReviewPage() {
   const [syncCount, setSyncCount] = useState<(typeof COUNT_OPTIONS)[number]>(200);
   const [syncFolders, setSyncFolders] = useState<string[]>(["inbox", "sentitems"]);
   const [folderList, setFolderList] = useState<FolderInfo[]>(FALLBACK_FOLDERS);
+  /** 文件夹勾选弹窗（原 details 弹层会在工具栏里挤出上下滚动条 —— 改 modal） */
+  const [foldersOpen, setFoldersOpen] = useState(false);
   const [activeFolder, setActiveFolder] = useState("inbox");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("review");
   const [sortKey, setSortKey] = useState<string>("sent_at");
@@ -649,8 +651,11 @@ export default function EmailReviewPage() {
       {
         key: "subject",
         title: t("page.email.subject", "Subject"),
+        width: 360,
         minWidth: 200,
         sortable: true,
+        // truncate=true：长主题截断显示（td title 提示全文），不再把后面的列挤出视口
+        truncate: true,
         value: (r) => r.subject || "",
         render: (_v, r) => r.subject || t("page.email.no_subject", "(no subject)"),
       },
@@ -659,6 +664,7 @@ export default function EmailReviewPage() {
         title: t("page.email.from", "From"),
         width: 160,
         sortable: true,
+        truncate: true,
         value: (r) => r.from_email || "",
         render: (_v, r) => {
           if ((r.direction || "inbound") === "outbound") {
@@ -695,7 +701,10 @@ export default function EmailReviewPage() {
       {
         key: "parse_preview",
         title: t("page.email.parse_fields", "Parsed fields"),
+        width: 320,
         minWidth: 260,
+        // block 截断：限宽换行（行高随内容），解析字段再长也顶不宽列
+        truncate: "block",
         value: (r) => JSON.stringify(r.parse_result),
         render: (_v, r) => {
           const { etype, pairs } = parseFields(r);
@@ -817,27 +826,9 @@ export default function EmailReviewPage() {
             ))}
           </select>
         </label>
-        <details className="email-folders-pop">
-          <summary className="btn btn-sm">
-            {t("page.email.folders_btn", "文件夹")} ({syncFolders.length})
-          </summary>
-          <div className="email-folders-pop-body">
-            {folderList.map((f) => (
-              <label key={f.key} className="email-folders-pop-item">
-                <input
-                  type="checkbox"
-                  checked={syncFolders.includes(f.key)}
-                  onChange={(e) =>
-                    setSyncFolders((prev) =>
-                      e.target.checked ? [...prev, f.key] : prev.filter((k) => k !== f.key),
-                    )
-                  }
-                />
-                {f.parent_key ? `└ ${f.display_name}` : f.display_name}
-              </label>
-            ))}
-          </div>
-        </details>
+        <button className="btn btn-sm" type="button" onClick={() => setFoldersOpen(true)}>
+          {t("page.email.folders_btn", "文件夹")} ({syncFolders.length})
+        </button>
         {m365 ? <span className="badge badge-pass">{t("page.email.m365_connected", "Microsoft 365 已连接")}</span> : null}
         {officeErr ? (
           <span className="badge badge-warn" title={officeErr}>
@@ -910,6 +901,47 @@ export default function EmailReviewPage() {
         </StateView>
         <ContextMenu controller={rowCtx} items={menuItems} />
       </div>
+
+      {/* 同步文件夹勾选 —— 原工具栏 details 弹层改 modal：弹层挂在 overflow-x:auto 的
+          工具栏里会把 overflow-y 也顶成 auto，右缘冒出上下滚动条、滚动才看到弹层 */}
+      <RecordModal
+        open={foldersOpen}
+        title={t("page.email.folders_btn", "文件夹")}
+        onClose={() => setFoldersOpen(false)}
+        canEdit={false}
+        canDelete={false}
+      >
+        <div className="email-folders-list">
+          {folderList.map((f) => (
+            // check-row：复用站内复选行样式（压过 .record-modal-body label 的纵向 grid 布局）
+            <label key={f.key} className="check-row">
+              <input
+                type="checkbox"
+                checked={syncFolders.includes(f.key)}
+                onChange={(e) =>
+                  setSyncFolders((prev) =>
+                    e.target.checked ? [...prev, f.key] : prev.filter((k) => k !== f.key),
+                  )
+                }
+              />
+              {f.parent_key ? `└ ${f.display_name}` : f.display_name}
+            </label>
+          ))}
+        </div>
+        {/* 勾选即时生效；关闭走 RecordModal 页脚的「取消」 */}
+        <p className="row-actions">
+          <button
+            className="btn btn-sm"
+            type="button"
+            onClick={() => setSyncFolders(folderList.map((f) => f.key))}
+          >
+            {t("common.select_all", "全选")}
+          </button>
+          <button className="btn btn-sm" type="button" onClick={() => setSyncFolders([])}>
+            {t("common.clear", "清空")}
+          </button>
+        </p>
+      </RecordModal>
 
       {/* 邮件详情 —— 纯文本正文 + 干净解析字段 + 填入航次计算入口 */}
       <RecordModal

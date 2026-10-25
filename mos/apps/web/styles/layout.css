@@ -269,35 +269,13 @@
   font-size: var(--font-label);
   padding: 0 4px;
 }
-.email-folders-pop { position: relative; display: inline-block; }
-.email-folders-pop > summary { list-style: none; cursor: pointer; user-select: none; }
-.email-folders-pop > summary::-webkit-details-marker { display: none; }
-.email-folders-pop[open] > summary { border-color: var(--accent); }
-.email-folders-pop-body {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 90;
-  min-width: 180px;
-  max-height: 260px;
-  overflow-y: auto;
+/* 文件夹勾选改为点击弹窗（原 details 弹层挂在 overflow-x:auto 的工具栏里 ——
+   单轴 auto 会把另一轴也算 auto，工具栏右缘因此冒出上下滚动条，滚动才看到弹层）。
+   复选项复用站内 check-row 样式（forms.css，压过 .record-modal-body label 布局）。 */
+.email-folders-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: var(--gap-xs) var(--gap-sm);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-md);
-}
-.email-folders-pop-item {
-  display: flex;
-  align-items: center;
-  gap: var(--gap-xs);
-  font-size: var(--font-label);
-  color: var(--ink);
-  white-space: nowrap;
-  cursor: pointer;
+  gap: 4px;
 }
 .email-detail-body {
   margin: 0;

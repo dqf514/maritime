@@ -28,6 +28,11 @@ export type ColumnDef<T = any> = {
   value?: (row: T) => unknown;
   /** 显示渲染 — 仅影响视觉 */
   render?: (value: unknown, row: T, index: number) => ReactNode;
+  /** 单元格截断：
+   *  true   —— 单行省略 + td title 全文提示；内容脱离文档流，长文本不再把列撑宽
+   *             （width: max-content 的表格里，行内内容会顶掉表头 width）。
+   *  "block" —— 块级限宽（跟随列宽/拖宽），行内换行，行高随内容增长（多行单元格）。 */
+  truncate?: boolean | "block";
   /** 编辑器配置 — 有此项列可编辑 */
   editor?: ColumnEditor;
   /** 聚合函数 — 显示在 footer */

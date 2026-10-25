@@ -127,6 +127,73 @@ export function DataGrid<T extends Record<string, any>>({
   });
   const [showColMenu, setShowColMenu] = useState(false);
 
+  // ── 列宽拖动（表头右缘手柄）：覆盖值优先于 col.width，随 storageKey 持久化 ──
+  // ref 为真源：drag/mouseup 回调里直接算好下一个对象，避免 setState updater 副作用
+  const [colW, setColW] = useState<Record<string, number>>(() => {
+    if (!storageKey) return {};
+    try {
+      const raw = localStorage.getItem(`marios_colw_${storageKey}`);
+      return raw ? (JSON.parse(raw) as Record<string, number>) : {};
+    } catch {
+      return {};
+    }
+  });
+  const colWRef = useRef(colW);
+  const persistColW = useCallback(() => {
+    if (storageKey) localStorage.setItem(`marios_colw_${storageKey}`, JSON.stringify(colWRef.current));
+  }, [storageKey]);
+  /** 拖动手柄后紧跟的 click 不应触发表头排序（mouseup 落回表头时 click 仍会冒泡） */
+  const resizeClickGuard = useRef(false);
+  const resizeState = useRef<{ key: string; startX: number; startW: number } | null>(null);
+
+  const startResize = useCallback(
+    (e: React.MouseEvent, key: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resizeClickGuard.current = true;
+      const th = (e.currentTarget as HTMLElement).closest("th");
+      resizeState.current = {
+        key,
+        startX: e.clientX,
+        startW: th?.getBoundingClientRect().width ?? 120,
+      };
+      const onMove = (ev: MouseEvent) => {
+        const st = resizeState.current;
+        if (!st) return;
+        const w = Math.max(60, Math.round(st.startW + (ev.clientX - st.startX)));
+        const next = { ...colWRef.current, [st.key]: w };
+        colWRef.current = next;
+        setColW(next);
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.style.cursor = "";
+        resizeState.current = null;
+        persistColW();
+        // click 在 mouseup 之后派发 —— 等它消费掉守卫再放行下一次表头点击
+        setTimeout(() => {
+          resizeClickGuard.current = false;
+        }, 0);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+      document.body.style.cursor = "col-resize";
+    },
+    [persistColW],
+  );
+
+  const resetColWidth = useCallback(
+    (key: string) => {
+      const next = { ...colWRef.current };
+      delete next[key];
+      colWRef.current = next;
+      setColW(next);
+      persistColW();
+    },
+    [persistColW],
+  );
+
   const columns = useMemo(
     () => allColumns.filter((c) => !c.hidden && !hiddenCols.has(c.key)),
     [allColumns, hiddenCols],
@@ -534,6 +601,7 @@ export function DataGrid<T extends Record<string, any>>({
         isFocus ? "cell-focus" : "",
         col.align === "right" ? "dt-align-right" : "",
         col.align === "center" ? "dt-align-center" : "",
+        col.truncate === true ? "dt-td-trunc" : "",
       ]
         .filter(Boolean)
         .join(" ");
@@ -595,10 +663,41 @@ export function DataGrid<T extends Record<string, any>>({
         );
       }
 
+      // 截断列：true = 内容脱流（列宽只由表头宽度决定，长文本撑不宽列），hover td 出全文；
+      // "block" = 限宽换行（跟随拖宽），行高随内容。title 对两种模式都给（原文提示）。
+      const body = formatDisplay(col, row, rowIdx, t);
+      let shown = body;
+      if (col.truncate === true) {
+        shown = (
+          <span className="dt-trunc">
+            <span className="dt-trunc-in">{body}</span>
+          </span>
+        );
+      } else if (col.truncate === "block") {
+        const w = colW[col.key] ?? col.width ?? col.minWidth;
+        shown = w ? (
+          <span className="dt-clamp" style={{ maxWidth: `calc(${w}px - 2 * var(--cell-pad-x, 6px))` }}>
+            {body}
+          </span>
+        ) : (
+          body
+        );
+      }
+      const truncTitle = (() => {
+        if (!col.truncate) return undefined;
+        // 优先用屏幕上的文本（render 可能改写过值，如出站邮件的「→ 收件人」）；
+        // render 返回结构化节点时退回原始 value 的字符串化。
+        if (typeof body === "string") return body || undefined;
+        const v = getCellValue(col, row);
+        const s = v === null || v === undefined ? "" : String(v);
+        return s || undefined;
+      })();
+
       return (
         <td
           key={col.key}
           className={cellClass}
+          title={truncTitle}
           // P1-25：出错单元格标红 + aria-describedby 指向错误文案，读屏也能听到。
           aria-invalid={cellErr ? true : undefined}
           aria-describedby={cellErr ? cellErrId : undefined}
@@ -614,7 +713,7 @@ export function DataGrid<T extends Record<string, any>>({
             if (editable && col.editor) sel.startEdit({ row: rowIdx, col: colIdx });
           }}
         >
-          {formatDisplay(col, row, rowIdx, t)}
+          {shown}
           {cellErr ? (
             <span className="grid-cell-error" id={cellErrId} role="alert">
               {t(
@@ -627,7 +726,7 @@ export function DataGrid<T extends Record<string, any>>({
         </td>
       );
     },
-    [sel, editable, commitEdit, columns, t, cellErrs, gridId],
+    [sel, editable, commitEdit, columns, t, cellErrs, gridId, colW],
   );
 
   // 空状态
@@ -692,19 +791,42 @@ export function DataGrid<T extends Record<string, any>>({
                   />
                 </th>
               ) : null}
-              {columns.map((col, ci) => (
-                <th
-                  key={col.key}
-                  className={`dt-sort-th${col.align === "right" ? " dt-align-right" : ""}${col.sticky ? " dt-sticky-col" : ""}`}
-                  style={col.width ?? col.minWidth ? { width: col.width ?? col.minWidth, minWidth: col.minWidth ?? col.width } : undefined}
-                  onClick={() => handleSort(col.key)}
-                >
-                  <span className="dt-th-inner">
-                    <span className="dt-th-title">{col.title}</span>
-                    {sortKey === col.key && <span className="dt-sort-icon">{sortDir === "asc" ? "↑" : "↓"}</span>}
-                  </span>
-                </th>
-              ))}
+              {columns.map((col) => {
+                const override = colW[col.key];
+                const baseW = col.width ?? col.minWidth;
+                return (
+                  <th
+                    key={col.key}
+                    className={`dt-sort-th${col.align === "right" ? " dt-align-right" : ""}${col.sticky ? " dt-sticky-col" : ""}`}
+                    // 拖动覆盖值优先，且不再叠加 minWidth 兜底（否则 CSS min-width 会顶住拖窄）
+                    style={
+                      override != null
+                        ? { width: override }
+                        : baseW
+                          ? { width: baseW, minWidth: col.minWidth ?? col.width }
+                          : undefined
+                    }
+                    onClick={() => {
+                      // 表头右缘拖宽后 mouseup 落回表头时会补一次 click —— 不应触发排序
+                      if (resizeClickGuard.current) return;
+                      handleSort(col.key);
+                    }}
+                  >
+                    <span className="dt-th-inner">
+                      <span className="dt-th-title">{col.title}</span>
+                      {sortKey === col.key && <span className="dt-sort-icon">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                    </span>
+                    <span
+                      className="dt-resize-handle"
+                      onMouseDown={(e) => startResize(e, col.key)}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        resetColWidth(col.key);
+                      }}
+                    />
+                  </th>
+                );
+              })}
             </tr>
           </thead>
 

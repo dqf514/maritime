@@ -153,13 +153,18 @@
   right: 0;
   top: 0;
   bottom: 0;
-  width: 4px;
+  width: 5px;
   cursor: col-resize;
   user-select: none;
+  /* 平时隐形，悬停表头才露出 —— 避免每列右缘常驻一条灰条 */
+  opacity: 0;
+  z-index: 1;
+}
+.dt-sort-th:hover .dt-resize-handle {
+  opacity: 1;
 }
 .dt-resize-handle:hover {
   background: var(--accent);
-  opacity: 0.4;
 }
 
 /* Pagination */

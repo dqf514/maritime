@@ -63,6 +63,35 @@
   background: var(--accent-bg);
 }
 
+/* ── 列内容截断（ColumnDef.truncate）──
+ * true：内容脱离文档流 —— width:max-content 的表格会拿行内内容顶掉表头 width，
+ * 长主题把整列撑开、后面的列全被挤出视口；脱流后列宽只由表头宽度决定，
+ * td 溢出隐藏，hover 由 td title 提示全文。
+ * "block"：块级限宽（max-width 跟随列宽/拖宽），换行展示、行高随内容（多行单元格）。 */
+.grid-table td.dt-td-trunc {
+  position: relative;
+}
+.dt-trunc {
+  position: absolute;
+  inset: var(--cell-pad-y) var(--cell-pad-x);
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.dt-trunc-in {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.dt-clamp {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .grid-row:hover td {
   background: var(--row-hover);
 }
