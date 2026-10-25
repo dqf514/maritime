@@ -66,6 +66,7 @@ type ModelsResponse = {
 };
 
 type AgentRow = {
+  id: string;
   agent_name: string;
   display_name: string;
   model_name: string;
@@ -416,13 +417,28 @@ function AiSettingsPage() {
       setModelEntries([]);
     }
     try {
-      const ags = await apiGet("/api/v1/ai/agents");
+      // Use the settings router: it returns the agent UUID required by PATCH.
+      const ags = await apiGet("/api/v1/settings/ai/agents");
       const list: AgentRow[] = Array.isArray(ags) ? ags : [];
       setAgents(list);
       setAgentSel((prev) => prev || list[0]?.agent_name || "");
     } catch (ex) {
       setModelsErr(msgOf(ex));
       setAgents([]);
+    }
+    try {
+      const defs = (await apiGet("/api/v1/settings/ai/defaults")) as {
+        model?: string | null;
+        temperature?: number | null;
+        max_tokens?: number | null;
+        timeout_s?: number | null;
+      };
+      if (defs?.model != null) setGlobalModel(String(defs.model));
+      if (defs?.temperature != null) setGlobalTemp(String(defs.temperature));
+      if (defs?.max_tokens != null) setGlobalMaxTokens(String(defs.max_tokens));
+      if (defs?.timeout_s != null) setGlobalTimeout(String(defs.timeout_s));
+    } catch {
+      // Defaults endpoint is optional; leave the fields as-is.
     }
   }, []);
 
@@ -439,13 +455,14 @@ function AiSettingsPage() {
   async function saveGlobalDefaults() {
     setSavingModels(true);
     try {
-      await apiPatch("/api/v1/settings/ai/agents/global", {
+      await apiPut("/api/v1/settings/ai/defaults", {
         model: globalModel.trim() || null,
         temperature: num(globalTemp),
         max_tokens: num(globalMaxTokens),
         timeout_s: num(globalTimeout),
       });
       toast.success(t("ai.models.global_saved", { en: "Global defaults saved", zh: "全局默认已保存" }));
+      await loadModelsTab();
     } catch (err) {
       toast.error(
         t("ai.models.save_fail", { en: "Save failed: {msg}", zh: "保存失败：{msg}" }, {
@@ -457,15 +474,17 @@ function AiSettingsPage() {
   }
 
   async function saveAgentOverride() {
-    if (!agentSel) return;
+    const row = agents.find((a) => a.agent_name === agentSel);
+    if (!row?.id) return;
     setSavingModels(true);
     try {
-      await apiPatch(`/api/v1/settings/ai/agents/${encodeURIComponent(agentSel)}`, {
-        model: agentModel.trim() || null,
-        model_name: agentModel.trim() || null,
+      await apiPatch(`/api/v1/settings/ai/agents/${row.id}`, {
+        // "default" = inherit the global default (model_name is NOT NULL).
+        model_name: agentModel.trim() || "default",
         temperature: num(agentTemp),
       });
       toast.success(t("ai.models.agent_saved", { en: "Agent model override saved", zh: "Agent 模型覆盖已保存" }));
+      await loadModelsTab();
     } catch (err) {
       toast.error(
         t("ai.models.save_fail", { en: "Save failed: {msg}", zh: "保存失败：{msg}" }, {

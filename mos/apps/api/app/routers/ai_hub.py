@@ -84,6 +84,15 @@ class ProviderModelsOut(BaseModel):
     source: str  # live | catalog
 
 
+class AiDefaultsIn(BaseModel):
+    """Tenant global LLM defaults — stored on the tenant's default provider row."""
+
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    timeout_s: int | None = None
+
+
 # ── Skills ──
 
 
@@ -338,6 +347,75 @@ def list_models(
             )
         )
     return out
+
+
+def _default_provider(db: Session, tenant_id: UUID) -> AiProvider | None:
+    """Tenant's default provider — the row that carries global model defaults."""
+    return db.scalar(
+        select(AiProvider)
+        .where(AiProvider.tenant_id == tenant_id, AiProvider.status != "deleted")
+        .order_by(AiProvider.created_at)
+        .limit(1)
+    )
+
+
+def _defaults_out(row: AiProvider | None) -> dict:
+    if row is None:
+        return {
+            "model": None,
+            "temperature": None,
+            "max_tokens": None,
+            "timeout_s": None,
+            "provider_id": None,
+            "provider_name": None,
+        }
+    cfg = row.config or {}
+    return {
+        "model": row.model_default,
+        "temperature": cfg.get("temperature"),
+        "max_tokens": cfg.get("max_tokens"),
+        "timeout_s": cfg.get("timeout_s"),
+        "provider_id": str(row.id),
+        "provider_name": row.name,
+    }
+
+
+@router.get("/defaults")
+def get_defaults(
+    auth: AuthContext = Depends(require_module("ai")),
+    db: Session = Depends(get_db),
+):
+    """Global LLM defaults (model / temperature / max_tokens / timeout)."""
+    return _defaults_out(_default_provider(db, auth.tenant_id))
+
+
+@router.put("/defaults")
+def put_defaults(
+    body: AiDefaultsIn,
+    auth: AuthContext = Depends(require_module("ai")),
+    db: Session = Depends(get_db),
+):
+    """Persist global defaults on the tenant's default provider row."""
+    row = _default_provider(db, auth.tenant_id)
+    if row is None:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "NO_PROVIDER",
+                "message": "Create an AI provider first, then set global defaults.",
+            },
+        )
+    if body.model is not None:
+        row.model_default = body.model.strip() or None
+    cfg = dict(row.config or {})
+    for key in ("temperature", "max_tokens", "timeout_s"):
+        value = getattr(body, key)
+        if value is not None:
+            cfg[key] = value
+    row.config = encrypt_secret_keys(cfg)
+    db.commit()
+    db.refresh(row)
+    return _defaults_out(row)
 
 
 @router.get("/usage")

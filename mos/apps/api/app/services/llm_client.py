@@ -148,10 +148,22 @@ def _config_from_row(row: Any) -> LLMProviderConfig:
         except Exception:  # noqa: BLE001 — 密钥不可解密时不阻断，走 SDK 环境凭证
             log.warning("llm_client: cannot decrypt provider secret_ref, using ambient creds")
             api_key = ""
+    cfg = getattr(row, "config", None) or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
     if not api_key:
-        cfg = getattr(row, "config", None) or {}
-        if isinstance(cfg, dict):
-            api_key = str(cfg.get("api_key") or "")
+        api_key = str(cfg.get("api_key") or "")
+
+    def _cfg_number(key: str, default, cast):
+        """Provider-level override (AiProvider.config) → platform default."""
+        value = cfg.get(key)
+        if value is None or value == "":
+            return default
+        try:
+            return cast(value)
+        except (TypeError, ValueError):
+            return default
+
     ptype = (getattr(row, "provider_type", None) or "anthropic").lower()
     if ptype in ("openai_compatible", "openai-compatible", "azure_openai"):
         ptype = "openai"
@@ -166,9 +178,9 @@ def _config_from_row(row: Any) -> LLMProviderConfig:
         api_key=api_key,
         base_url=str(base_url),
         model=str(model),
-        max_tokens=s.llm_max_tokens,
-        temperature=s.llm_temperature,
-        timeout_seconds=s.llm_timeout_seconds,
+        max_tokens=_cfg_number("max_tokens", s.llm_max_tokens, int),
+        temperature=_cfg_number("temperature", s.llm_temperature, float),
+        timeout_seconds=_cfg_number("timeout_s", s.llm_timeout_seconds, int),
         provider_id=str(getattr(row, "id", "") or "") or None,
         provider_name=getattr(row, "name", None),
         source="tenant",
