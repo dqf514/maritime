@@ -114,7 +114,8 @@ _path_limiters: dict[str, tuple[str, SlidingWindowLimiter]] = {}
 def _path_limiter(key: str) -> tuple[str, SlidingWindowLimiter]:
     hit = _path_limiters.get(key)
     if hit is None:
-        scope, max_hits, window = next(
+        # 策略是 4 元组 (scope, path, max_hits, window) —— path 已由 key 命中。
+        scope, _path, max_hits, window = next(
             p for p in (_PATH_POLICIES + _SUFFIX_POLICIES) if p[1] == key
         )
         hit = (scope, SlidingWindowLimiter(max_hits, window))
