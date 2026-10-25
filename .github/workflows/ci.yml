@@ -1,0 +1,187 @@
+# MariOS CI —— 后端 / 前端 / 部署契约三道门禁
+#
+# 路径约定：仓库根 = maritime/，后端在 mos/apps/api、前端在 mos/apps/web、
+# 部署编排在 mos/deploy/compose。
+# （若日后把 mos/ 拆成独立仓库，把下面所有 working-directory /
+#   cache-dependency-path 的 "mos/" 前缀去掉即可。）
+#
+# 门禁说明：
+#   api            —— Postgres：空库 `alembic upgrade head` 必须成功、`alembic check`
+#                     必须无漂移，再跑核心链路测试（PG 语义：LIKE 大小写 / JSON /
+#                     RETURNING / ON CONFLICT / 时区）。
+#   api-sqlite     —— SQLite：全量用例，与本地开发者跑法一致（模板库，快）。
+#   web            —— 前端 lint + 生产构建。
+#   lint-consistency —— 一致性 lint（菜单/术语/权限/导出防回退）。
+#   compose-lint   —— 部署契约：`docker compose config` 必须能解析。
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API · Postgres（迁移契约 + 核心链路）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: voyageos
+          POSTGRES_PASSWORD: voyageos
+          POSTGRES_DB: voyageos
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: mos/apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: mos/apps/api/requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Alembic · 空库 upgrade head（退出码必须为 0）
+        env:
+          DATABASE_URL: postgresql+psycopg://voyageos:voyageos@127.0.0.1:5432/voyageos
+        run: |
+          alembic upgrade head
+          alembic current
+
+      - name: Alembic · 无 schema 漂移（alembic check 必须无 diff）
+        env:
+          DATABASE_URL: postgresql+psycopg://voyageos:voyageos@127.0.0.1:5432/voyageos
+        run: alembic check
+
+      # 说明：PG 模式下 conftest 每个用例都会 drop_all + create_all（实测 ~11s/用例），
+      # 全量 900+ 用例在 PG 上要 3 小时以上，塞不进 20 分钟的门禁。
+      # 因此：全量用例交给 api-sqlite（SQLite 模板库，秒级），PG 门禁覆盖
+      # 端到端主链 + 分页 + 任务队列 + 租户隔离（PG 与 SQLite 语义差异最大的部分）。
+      - name: 核心链路测试（Postgres）
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://voyageos:voyageos@127.0.0.1:5432/voyageos
+          LICENSE_DEV_UNLOCK: all
+          JWT_SECRET: ci-secret
+          OPS_DATA_KEY: ci-ops-data-key
+        run: |
+          python -m pytest -q \
+            tests/test_full_chain.py \
+            tests/test_job_queue.py \
+            tests/test_pagination.py \
+            tests/test_tenant_isolation.py \
+            tests/test_finance_depth.py \
+            tests/test_laytime_once_on_demurrage.py
+
+  api-sqlite:
+    name: API · SQLite（全量用例）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mos/apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: mos/apps/api/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: 全量测试（E2E 链 + 金样 + 架构守卫）
+        env:
+          LICENSE_DEV_UNLOCK: all
+          JWT_SECRET: ci-secret
+          OPS_DATA_KEY: ci-ops-data-key
+        run: python -m pytest -q
+
+  web:
+    name: Web · lint + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mos/apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mos/apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_API_BASE: http://localhost:8000
+
+  lint-consistency:
+    name: 一致性 lint（防回退宪法）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mos/apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: node scripts/lint-consistency.mjs 必须退出 0
+        run: node scripts/lint-consistency.mjs
+
+  docker-build:
+    name: 镜像构建 · API（含 Chromium 与 Alembic）
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建 API 镜像（构建上下文必须是 mos/ 根）
+        run: |
+          docker build \
+            -f mos/apps/api/Dockerfile \
+            --build-arg PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright \
+            -t marios-api:ci mos/
+      - name: 镜像里必须有 alembic 与 Chromium
+        run: |
+          docker run --rm marios-api:ci alembic heads
+          docker run --rm marios-api:ci python -c "import os,glob;print(sorted(os.listdir('/ms-playwright')))"
+
+  compose-lint:
+    name: 部署契约 · docker compose config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mos/deploy/compose
+    steps:
+      - uses: actions/checkout@v4
+      - name: 生成临时 .env（CI 里只为了让 compose 能解析）
+        run: |
+          cp .env.example .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-pass/' .env
+          sed -i 's/^JWT_SECRET=.*/JWT_SECRET=ci-secret/' .env
+          sed -i 's/^OPS_DATA_KEY=.*/OPS_DATA_KEY=ci-ops-key/' .env
+      - name: docker compose config 必须通过
+        run: docker compose config -q
+      - name: 缺 JWT_SECRET 时必须直接报错（不允许随机密钥兜底）
+        run: |
+          sed -i 's/^JWT_SECRET=.*/JWT_SECRET=/' .env
+          if docker compose config -q; then
+            echo "::error::JWT_SECRET 为空时 compose 仍能启动 —— 生产会退化成每进程随机密钥"
+            exit 1
+          fi
