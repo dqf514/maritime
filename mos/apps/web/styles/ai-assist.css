@@ -226,6 +226,58 @@
   margin-top: 2px;
 }
 
+/* ── AiExtractFill：粘贴文本 → 逐字段预览确认 ── */
+.ai-extract-list {
+  list-style: none;
+  margin: var(--gap-xs) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: var(--gap-xs);
+}
+.ai-extract-row {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  font-size: var(--font-label);
+}
+.ai-extract-row.info-only {
+  opacity: 0.62;
+}
+.ai-extract-ref {
+  width: 14px;
+  text-align: center;
+  color: var(--muted);
+}
+.ai-extract-key {
+  flex-shrink: 0;
+  min-width: 110px;
+  color: var(--muted);
+}
+.ai-extract-val {
+  flex: 1;
+  min-width: 0;
+  height: var(--input-h, 28px);
+  padding: 0 6px;
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--font-label);
+}
+.ai-extract-val:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+.ai-extract-val:disabled {
+  background: var(--chrome-bg);
+}
+
 /* 邮件复核页的 AI 推荐条 */
 .ai-rec {
   display: inline-flex;

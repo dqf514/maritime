@@ -204,15 +204,42 @@ class GraphClient:
             }
         return self._get("/me")
 
-    def list_mail(self, *, top: int = 25, folder: str = "inbox") -> list[dict[str, Any]]:
+    #: messages 列表的显式字段选择 —— 缺省 Graph 会漏发 body/toRecipients
+    _MAIL_SELECT = (
+        "id,subject,from,sender,toRecipients,receivedDateTime,sentDateTime,"
+        "body,bodyPreview,conversationId,hasAttachments,webLink"
+    )
+    #: nextLink 翻页保护：单次同步最多跟 10 页（页大小 ≤100 → ≤1000 封/文件夹）
+    _MAX_PAGES = 10
+
+    def list_mail(
+        self,
+        *,
+        top: int = 25,
+        folder: str = "inbox",
+        since: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """拉取某文件夹的邮件（receivedDateTime desc），可选时间窗过滤。
+
+        ``since`` 给了则加 ``$filter=receivedDateTime ge ...``；按
+        ``@odata.nextLink`` 翻页拼接直到凑满 ``top`` 条或到达页数上限。
+        stub 模式仅 inbox 返回固定样例（保持既有测试的 synced:2 断言）。
+        """
         if self.mode == "stub":
             now = datetime.now(timezone.utc).isoformat()
+            if folder != "inbox":
+                return []
             return [
                 {
                     "id": "stub-mail-1",
                     "subject": "FIRM OFFER — MV DEMO WAVE / SGSIN-NLRTM",
                     "from": {"emailAddress": {"address": "charterer@broker.com", "name": "Atlantic Brokers"}},
+                    "toRecipients": [
+                        {"emailAddress": {"address": "ops@demo.marios", "name": "MariOS Demo"}}
+                    ],
                     "receivedDateTime": now,
+                    "sentDateTime": now,
+                    "body": {"contentType": "HTML", "content": "<p>We are pleased to offer MV DEMO WAVE for your cargo...</p>"},
                     "bodyPreview": "We are pleased to offer MV DEMO WAVE for your cargo...",
                     "hasAttachments": True,
                     "webLink": "https://outlook.office.com/mail/stub-mail-1",
@@ -221,14 +248,86 @@ class GraphClient:
                     "id": "stub-mail-2",
                     "subject": "NOR tendered — Rotterdam",
                     "from": {"emailAddress": {"address": "master@vessel.demo", "name": "Master"}},
+                    "toRecipients": [
+                        {"emailAddress": {"address": "ops@demo.marios", "name": "MariOS Demo"}}
+                    ],
                     "receivedDateTime": now,
+                    "sentDateTime": now,
+                    "body": {"contentType": "Text", "content": "NOR tendered at 08:00 LT awaiting free pratique."},
                     "bodyPreview": "NOR tendered at 08:00 LT awaiting free pratique.",
                     "hasAttachments": False,
                     "webLink": "https://outlook.office.com/mail/stub-mail-2",
                 },
             ][:top]
-        data = self._get(f"/me/mailFolders/{folder}/messages?$top={top}&$orderby=receivedDateTime desc")
-        return data.get("value") or []
+        params: dict[str, str] = {
+            "$orderby": "receivedDateTime desc",
+            "$select": self._MAIL_SELECT,
+        }
+        if since is not None:
+            params["$filter"] = f"receivedDateTime ge {since.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        messages: list[dict[str, Any]] = []
+        page_size = min(top, 100)
+        path: str | None = (
+            f"/me/mailFolders/{folder}/messages?"
+            f"{urlencode({'$top': page_size, **params})}"
+        )
+        for _ in range(self._MAX_PAGES):
+            if path is None or len(messages) >= top:
+                break
+            data = self._get(path)
+            batch = data.get("value") or []
+            messages.extend(batch)
+            next_link = data.get("@odata.nextLink")
+            if not next_link or not batch:
+                break
+            # nextLink 是绝对 URL；_get 只拼 GRAPH_BASE，这里截掉前缀
+            path = next_link[len(GRAPH_BASE):] if next_link.startswith(GRAPH_BASE) else None
+            if path is None:
+                break
+            remaining = top - len(messages)
+            if remaining <= 0:
+                break
+            # 重设页大小：把 $top 替换为剩余量
+            path = _replace_query_param(path, "$top", str(min(remaining, 100)))
+        return messages[:top]
+
+    def list_mail_folders(self) -> list[dict[str, Any]]:
+        """收件箱（含一级子文件夹）+ 常用系统文件夹清单。
+
+        归一化为 ``{key, display_name, well_known, parent_key}``；key 可直接
+        用于 list_mail 的 folder 参数（wellKnownName 优先，退回 folder id）。
+        """
+        if self.mode == "stub":
+            return [
+                {"key": "inbox", "display_name": "Inbox", "well_known": "inbox", "parent_key": None},
+                {"key": "sentitems", "display_name": "Sent Items", "well_known": "sentitems", "parent_key": None},
+            ]
+        seen: dict[str, dict[str, Any]] = {}
+
+        def _add(folders: list[dict[str, Any]], parent_key: str | None) -> None:
+            for f in folders:
+                key = f.get("wellKnownName") or f.get("id") or ""
+                if not key or key in seen:
+                    continue
+                seen[key] = {
+                    "key": key,
+                    "display_name": f.get("displayName") or key,
+                    "well_known": f.get("wellKnownName"),
+                    "parent_key": parent_key,
+                }
+
+        _add(self._get("/me/mailFolders").get("value") or [], None)
+        inbox_key = next(
+            (k for k, v in seen.items() if v.get("well_known") == "inbox"), "inbox"
+        )
+        try:
+            _add(
+                self._get(f"/me/mailFolders/{inbox_key}/childFolders").get("value") or [],
+                inbox_key,
+            )
+        except GraphError:
+            pass  # 无子文件夹权限/层级时忽略，主文件夹清单已可用
+        return list(seen.values())
 
     def send_mail(
         self,
@@ -378,6 +477,17 @@ class GraphClient:
             if res.status_code == 202 or not res.content:
                 return {"status": "accepted"}
             return res.json()
+
+
+def _replace_query_param(path: str, key: str, value: str) -> str:
+    """把路径里的查询参数 ``key`` 换成 ``value``（翻页时重设 $top 用）。"""
+    from urllib.parse import parse_qsl
+
+    if "?" not in path:
+        return path
+    base, query = path.split("?", 1)
+    pairs = [(k, value if k == key else v) for k, v in parse_qsl(query, keep_blank_values=True)]
+    return f"{base}?{urlencode(pairs)}"
 
 
 def token_expiry(expires_in: int | None) -> datetime:

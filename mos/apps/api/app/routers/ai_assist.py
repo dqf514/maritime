@@ -107,6 +107,26 @@ def assist_fill(
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+class ExtractIn(BaseModel):
+    """粘贴文本 → 结构化字段（航次计算 AI 填充）。
+
+    body 上限 200k：超长聊天记录直接 422 太粗暴，服务端会在
+    ``ai_assist.EXTRACT_BODY_MAX``（50k）处截断并标注 ``truncated``。
+    """
+
+    subject: str | None = Field(default=None, max_length=500)
+    body: str = Field(min_length=1, max_length=200000)
+
+
+@router.post("/extract")
+def assist_extract(
+    body: ExtractIn,
+    auth: AuthContext = Depends(require_module("ai")),
+):
+    """粘贴邮件/聊天记录 → AI 分析出结构化字段（预览确认后人工填表，不落库）。"""
+    return ai_assist.extract_from_text(body.subject, body.body)
+
+
 @router.post("/recommend/email/{message_id}")
 def recommend_email(
     message_id: UUID,

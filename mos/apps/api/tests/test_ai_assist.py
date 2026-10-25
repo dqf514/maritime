@@ -194,6 +194,89 @@ def test_recommend_email_404_for_unknown(client, auth_headers):
     assert r.status_code == 404, r.text
 
 
+# ── 4b. 粘贴文本 → 结构化字段（航次计算 AI 填充） ─────────────────────────
+
+_RECAP_SAMPLE = """Fixture Recap
+Vessel: MV PACIFIC STAR
+Cargo: Iron Ore 62%
+Load Port: Tubarao
+Discharge Port: Qingdao
+Laycan: 10-15 Nov 2026
+Freight Rate: 24.75
+Demurrage: 32000
+Commission: 2.5%
+"""
+
+_NOR_SAMPLE = """Notice of Readiness
+Vessel: MV PACIFIC STAR
+Port: at Rotterdam
+Date: 25/10/2026 08:30
+Draft: 12.5 m
+"""
+
+
+def test_extract_recap_text_returns_fields(client, auth_headers):
+    """recap 样文 → kind=fixture_recap，规则兜底抽出船舶/港口/运价。"""
+    r = client.post(
+        f"{API}/ai/assist/extract",
+        headers=auth_headers,
+        json={"subject": "Fixture Recap MV PACIFIC STAR", "body": _RECAP_SAMPLE},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "fixture_recap"
+    assert body["_source"] == "rules"  # MARIOS_LLM_OFF
+    fields = body["fields"]
+    assert "PACIFIC" in fields["vessel"]
+    assert fields["load_port"] == "Tubarao"
+    assert fields["discharge_port"] == "Qingdao"
+    assert fields["freight_rate"] == 24.75
+    assert body["truncated"] is False
+
+
+def test_extract_nor_text(client, auth_headers):
+    r = client.post(
+        f"{API}/ai/assist/extract",
+        headers=auth_headers,
+        json={"body": _NOR_SAMPLE},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "nor"
+    assert "PACIFIC" in body["fields"]["vessel"]
+    assert "Rotterdam" in body["fields"]["port"]
+
+
+def test_extract_empty_body_422(client, auth_headers):
+    r = client.post(f"{API}/ai/assist/extract", headers=auth_headers, json={"body": ""})
+    assert r.status_code == 422
+
+
+def test_extract_long_body_truncated_flag(client, auth_headers):
+    """超过 50k 的粘贴 → 截断处理 + truncated 标注（不 422）。"""
+    long_body = _RECAP_SAMPLE + ("filler text " * 6000)  # ~70k chars
+    assert len(long_body) > 50000
+    r = client.post(
+        f"{API}/ai/assist/extract",
+        headers=auth_headers,
+        json={"body": long_body},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["truncated"] is True
+
+
+def test_extract_general_text_still_returns(client, auth_headers):
+    """普通文本（无法分类）→ kind=general，fields 为空但不报错。"""
+    r = client.post(
+        f"{API}/ai/assist/extract",
+        headers=auth_headers,
+        json={"body": "Please arrange the crew transfer for next Tuesday."},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "general"
+
+
 # ── 5. 计费 ──────────────────────────────────────────────────────────────
 
 

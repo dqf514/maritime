@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -161,6 +162,13 @@ def delete_account(
 
 GRAPH_PROVIDERS = {"microsoft", "m365", "graph", "outlook"}
 
+#: 非收件箱的系统文件夹：出站语义 —— 只做参考浏览，不进复核队列
+OUTBOUND_FOLDERS = {"sentitems", "drafts", "deleteditems", "junkemail", "archive", "outbox"}
+#: 文件夹 key 的安全字符（Graph wellKnownName / 自定义文件夹名 / folder id）
+_FOLDER_RE = re.compile(r"^[A-Za-z0-9=_.-]{1,128}$")
+#: 单次同步的全局条数预算 —— 杜绝多文件夹 × 大条数把系统拖垮
+SYNC_GLOBAL_BUDGET = 2000
+
 
 def _graph_dt(raw: str | None) -> datetime | None:
     if not raw:
@@ -171,13 +179,32 @@ def _graph_dt(raw: str | None) -> datetime | None:
         return None
 
 
-def _sync_graph_inbox(db: Session, auth: AuthContext, account: EmailAccount, top: int) -> dict:
+def _clean_body(raw) -> str:
+    """Graph body → 纯文本（HTML 片段统一转文本，防止标签进入解析字段）。"""
+    from app.services.html_to_text import html_to_text
+
+    if isinstance(raw, dict):
+        content = raw.get("content") or ""
+    else:
+        content = str(raw or "")
+    return html_to_text(content)
+
+
+def _sync_graph_mails(
+    db: Session,
+    auth: AuthContext,
+    account: EmailAccount,
+    *,
+    days: int,
+    count: int,
+    folders: list[str],
+) -> dict:
     """Pull the connected mailbox via Microsoft Graph and persist new messages
     into the review pipeline (dedupe by Graph message id).
 
-    Business mail (fixture recap / NOR / laytime statement) lands in the review
-    queue with rule-based parse results; general mail is stored as parsed so it
-    doesn't clog the human review queue but remains searchable everywhere.
+    多文件夹拉取：inbox 优先，然后其余（sentitems 等出站文件夹只做参考浏览，
+    强制 parsed 不进复核队列）。单次总量受 SYNC_GLOBAL_BUDGET 预算保护。
+    正文在 classify/规则解析**之前**统一 html_to_text 转纯文本。
     """
     from app.services import office_hub
     from app.services.email_intelligence import (
@@ -189,93 +216,130 @@ def _sync_graph_inbox(db: Session, auth: AuthContext, account: EmailAccount, top
 
     try:
         client = office_hub.get_graph_client(db, auth.tenant_id)
-        mails = client.list_mail(top=top)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, detail={"code": "GRAPH_SYNC_FAILED", "message": str(exc)}) from exc
 
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    # inbox 永远排第一：复核队列优先于参考浏览
+    ordered = sorted(set(folders), key=lambda f: (f.lower() != "inbox", f.lower()))
+
     synced = 0
     review = 0
-    for m in mails:
-        mid = m.get("id")
-        if not mid:
-            continue
-        exists = db.scalar(
-            select(EmailMessage.id).where(
-                EmailMessage.tenant_id == auth.tenant_id, EmailMessage.message_id == str(mid)
+    capped = False
+    folder_counts: dict[str, int] = {}
+    for folder in ordered:
+        if synced >= SYNC_GLOBAL_BUDGET:
+            capped = True
+            break
+        try:
+            mails = client.list_mail(top=min(count, SYNC_GLOBAL_BUDGET - synced), folder=folder, since=since)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                502, detail={"code": "GRAPH_SYNC_FAILED", "message": f"{folder}: {exc}"}
+            ) from exc
+        folder_key = folder.lower()
+        inbound = folder_key == "inbox"
+        for m in mails:
+            mid = m.get("id")
+            if not mid:
+                continue
+            exists = db.scalar(
+                select(EmailMessage.id).where(
+                    EmailMessage.tenant_id == auth.tenant_id, EmailMessage.message_id == str(mid)
+                )
             )
-        )
-        if exists:
-            continue
-        subject = (m.get("subject") or "").strip() or "(no subject)"
-        # Graph body 形状 = {"content": ...}；部分包装层会直接给纯文本，两种都收
-        body_raw = m.get("body")
-        if isinstance(body_raw, dict):
-            body = body_raw.get("content") or ""
-        else:
-            body = str(body_raw or "")
-        body = body or m.get("bodyPreview") or ""
-        frm = (m.get("from") or {}).get("emailAddress") or {}
-        from_email = frm.get("address") or m.get("sender", {}).get("emailAddress", {}).get("address")
-        sent_at = _graph_dt(m.get("receivedDateTime")) or datetime.now(timezone.utc)
+            if exists:
+                continue
+            subject = (m.get("subject") or "").strip() or "(no subject)"
+            # Graph body 形状 = {"content": ...}；先 html_to_text 转纯文本再解析
+            body = _clean_body(m.get("body")) or m.get("bodyPreview") or ""
+            frm = (m.get("from") or {}).get("emailAddress") or {}
+            from_email = frm.get("address") or m.get("sender", {}).get("emailAddress", {}).get("address")
+            sent_at = (
+                _graph_dt(m.get("receivedDateTime"))
+                or _graph_dt(m.get("sentDateTime"))
+                or datetime.now(timezone.utc)
+            )
 
-        conv = m.get("conversationId") or mid
-        thread_key = f"graph-{conv}"
-        thread = db.scalar(
-            select(EmailThread).where(
-                EmailThread.tenant_id == auth.tenant_id, EmailThread.thread_key == thread_key
+            conv = m.get("conversationId") or mid
+            thread_key = f"graph-{conv}"
+            thread = db.scalar(
+                select(EmailThread).where(
+                    EmailThread.tenant_id == auth.tenant_id, EmailThread.thread_key == thread_key
+                )
             )
-        )
-        if not thread:
-            thread = EmailThread(
-                tenant_id=auth.tenant_id,
-                account_id=account.id,
-                subject_norm=subject.lower(),
-                thread_key=thread_key,
-                last_message_at=sent_at,
-                message_count=0,
-            )
-            db.add(thread)
-            db.flush()
+            if not thread:
+                thread = EmailThread(
+                    tenant_id=auth.tenant_id,
+                    account_id=account.id,
+                    subject_norm=subject.lower(),
+                    thread_key=thread_key,
+                    last_message_at=sent_at,
+                    message_count=0,
+                )
+                db.add(thread)
+                db.flush()
 
-        # Classify + rule-based parse (fast & deterministic; the LLM pipeline
-        # remains available separately via /email-intelligence/process).
-        cls = classify_email(subject, body)
-        ctype = cls["type"]
-        parse_result: dict = {"email_type": ctype, "source": "graph", "graph_id": str(mid)}
-        status = "parsed"
-        if ctype == "fixture_recap":
-            parse_result.update(parse_fixture_recap(body))
-            status = "review"
-        elif ctype == "nor":
-            parse_result.update(parse_nor(body))
-            status = "review"
-        elif ctype == "laytime_statement":
-            parse_result.update(parse_laytime_statement(body))
-            status = "review"
+            if not inbound:
+                # 出站/杂项文件夹：强制 parsed（不进复核队列），收件人存档供参考
+                to_recipients = [
+                    ((r or {}).get("emailAddress") or {}).get("address")
+                    for r in (m.get("toRecipients") or [])
+                ]
+                to_recipients = [t for t in to_recipients if t][:5]
+                parse_result: dict = {
+                    "email_type": "outbound",
+                    "source": "graph",
+                    "graph_id": str(mid),
+                    "to_recipients": to_recipients,
+                }
+                status = "parsed"
+                cls = {"confidence": 1.0}
+            else:
+                # Classify + rule-based parse (fast & deterministic; the LLM pipeline
+                # remains available separately via /email-intelligence/process).
+                cls = classify_email(subject, body)
+                ctype = cls["type"]
+                parse_result = {"email_type": ctype, "source": "graph", "graph_id": str(mid)}
+                status = "parsed"
+                if ctype == "fixture_recap":
+                    parse_result.update(parse_fixture_recap(body))
+                    status = "review"
+                elif ctype == "nor":
+                    parse_result.update(parse_nor(body))
+                    status = "review"
+                elif ctype == "laytime_statement":
+                    parse_result.update(parse_laytime_statement(body))
+                    status = "review"
 
-        db.add(
-            EmailMessage(
-                tenant_id=auth.tenant_id,
-                account_id=account.id,
-                thread_id=thread.id,
-                message_id=str(mid),
-                direction="inbound",
-                from_email=from_email,
-                subject=subject,
-                body_text=body[:20000],
-                sent_at=sent_at,
-                parse_status=status,
-                parse_confidence=Decimal(str(cls["confidence"])),
-                parse_result=parse_result,
+            db.add(
+                EmailMessage(
+                    tenant_id=auth.tenant_id,
+                    account_id=account.id,
+                    thread_id=thread.id,
+                    message_id=str(mid),
+                    direction="inbound" if inbound else "outbound",
+                    folder=folder_key,
+                    from_email=from_email,
+                    subject=subject,
+                    body_text=body[:20000],
+                    sent_at=sent_at,
+                    parse_status=status,
+                    parse_confidence=Decimal(str(cls["confidence"])),
+                    parse_result=parse_result,
+                )
             )
-        )
-        thread.message_count = (thread.message_count or 0) + 1
-        # SQLite returns naive datetimes; Graph timestamps are timezone-aware.
-        prev = as_aware(thread.last_message_at) if thread.last_message_at else sent_at
-        thread.last_message_at = max(prev, sent_at)
-        synced += 1
-        if status == "review":
-            review += 1
+            thread.message_count = (thread.message_count or 0) + 1
+            # SQLite returns naive datetimes; Graph timestamps are timezone-aware.
+            prev = as_aware(thread.last_message_at) if thread.last_message_at else sent_at
+            thread.last_message_at = max(prev, sent_at)
+            synced += 1
+            folder_counts[folder_key] = folder_counts.get(folder_key, 0) + 1
+            if status == "review":
+                review += 1
+            if synced >= SYNC_GLOBAL_BUDGET:
+                capped = True
+                break
 
     account.last_sync_at = datetime.now(timezone.utc)
     db.add(account)
@@ -311,23 +375,49 @@ def _sync_graph_inbox(db: Session, auth: AuthContext, account: EmailAccount, top
         "review_queue": review,
         "provider": "microsoft",
         "mode": getattr(client, "mode", "live"),
+        "window_days": days,
+        "count_cap": count,
+        "folders": folder_counts,
+        "capped": capped,
     }
+
+
+def _parse_folders(folders: str) -> list[str]:
+    """解析逗号分隔的文件夹列表，正则校验 + 去重 + 上限 10 个。"""
+    parts = [f.strip() for f in (folders or "").split(",") if f.strip()]
+    if not parts:
+        return ["inbox"]
+    if len(parts) > 10:
+        raise HTTPException(422, detail={"code": "TOO_MANY_FOLDERS", "message": "max 10 folders per sync"})
+    for p in parts:
+        if not _FOLDER_RE.match(p):
+            raise HTTPException(422, detail={"code": "INVALID_FOLDER", "folder": p})
+    return list(dict.fromkeys(parts))
 
 
 @router.post("/email/accounts/{account_id}/sync")
 def sync_account(
     account_id: UUID,
-    top: int = Query(20, ge=1, le=100),
+    days: int = Query(7, ge=1, le=30),
+    count: int = Query(200, ge=1, le=1000),
+    folders: str = Query("inbox,sentitems"),
+    top: int | None = Query(None, ge=1, le=1000, description="deprecated: use count"),
     auth: AuthContext = Depends(require_module("email")),
     db: Session = Depends(get_db),
 ):
+    """按「天数 + 条数」双控拉取邮件（days ≤30，count/folder ≤1000，全局预算 2000）。"""
     account = db.get(EmailAccount, account_id)
     if not account or account.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Account not found")
+    if top is not None:
+        count = top  # deprecated alias
+    folder_list = _parse_folders(folders)
 
     if (account.provider or "").strip().lower() in GRAPH_PROVIDERS:
         # Real (or stub) Microsoft 365 mailbox — persisted into the review pipeline
-        return _sync_graph_inbox(db, auth, account, top)
+        return _sync_graph_mails(
+            db, auth, account, days=days, count=count, folders=folder_list
+        )
 
     thread = EmailThread(
         tenant_id=auth.tenant_id,
@@ -345,6 +435,7 @@ def sync_account(
         thread_id=thread.id,
         message_id=f"<{uuid4()}@demo.marios>",
         direction="inbound",
+        folder="inbox",
         from_email="recaps@atlanticbrokers.co.uk",
         subject="RECAP: MV OCEAN STAR / SGSIN-NLRTM Coal",
         body_text="Vessel MV OCEAN STAR IMO 9123456. Laycan 12-18 Sep. Freight USD 18.5 PMT.",
@@ -374,19 +465,37 @@ def sync_account(
         )
     )
     db.commit()
-    return {"synced": 1, "review_queue": 1}
+    return {
+        "synced": 1,
+        "review_queue": 1,
+        "window_days": days,
+        "count_cap": count,
+        "folders": {"inbox": 1},
+        "capped": False,
+    }
 
 
 @router.get("/email/messages", response_model=list[EmailMessageOut])
 def list_messages(
     parse_status: str | None = None,
+    folder: str | None = Query(None, max_length=128),
+    days: int | None = Query(None, ge=1, le=30),
+    limit: int = Query(200, ge=1, le=1000),
     auth: AuthContext = Depends(require_module("email")),
     db: Session = Depends(get_db),
 ):
     stmt = select(EmailMessage).where(EmailMessage.tenant_id == auth.tenant_id)
     if parse_status:
         stmt = stmt.where(EmailMessage.parse_status == parse_status)
-    rows = db.scalars(stmt.order_by(EmailMessage.created_at.desc()).limit(100)).all()
+    if folder:
+        stmt = stmt.where(EmailMessage.folder == folder.lower())
+    if days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        stmt = stmt.where(EmailMessage.sent_at >= cutoff)
+    rows = db.scalars(
+        stmt.order_by(EmailMessage.sent_at.desc().nullslast(), EmailMessage.created_at.desc())
+        .limit(limit)
+    ).all()
     return [
         EmailMessageOut(
             id=r.id,
@@ -396,9 +505,47 @@ def list_messages(
             parse_confidence=float(r.parse_confidence) if r.parse_confidence is not None else None,
             parse_result=r.parse_result or {},
             sent_at=r.sent_at,
+            folder=r.folder or "inbox",
+            direction=r.direction or "inbound",
         )
         for r in rows
     ]
+
+
+@router.get("/email/folders")
+def list_folders(
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """当前邮箱的文件夹清单（Graph 实时拉取；demo/未连 → 静态双 Tab）。
+
+    UI 用它渲染文件夹 Tab；Graph 失败返回 502 GRAPH_FOLDERS_FAILED，
+    前端降级为静态 inbox/sentitems 两个 Tab。
+    """
+    accounts = db.scalars(
+        select(EmailAccount).where(
+            EmailAccount.tenant_id == auth.tenant_id, EmailAccount.status != "deleted"
+        )
+    ).all()
+    graph_acct = next(
+        (a for a in accounts if (a.provider or "").strip().lower() in GRAPH_PROVIDERS), None
+    )
+    if graph_acct is None:
+        return {
+            "folders": [
+                {"key": "inbox", "display_name": "Inbox", "well_known": "inbox", "parent_key": None},
+                {"key": "sentitems", "display_name": "Sent Items", "well_known": "sentitems", "parent_key": None},
+            ],
+            "source": "static",
+        }
+    from app.services import office_hub
+
+    try:
+        client = office_hub.get_graph_client(db, auth.tenant_id)
+        folders = client.list_mail_folders()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, detail={"code": "GRAPH_FOLDERS_FAILED", "message": str(exc)}) from exc
+    return {"folders": folders, "source": getattr(client, "mode", "live")}
 
 
 @router.get("/email/related")
@@ -446,7 +593,7 @@ def review_queue(
     rows = db.scalars(
         select(EmailMessage)
         .where(EmailMessage.tenant_id == auth.tenant_id, EmailMessage.parse_status == "review")
-        .order_by(EmailMessage.created_at.desc())
+        .order_by(EmailMessage.sent_at.desc().nullslast(), EmailMessage.created_at.desc())
     ).all()
     return [
         EmailMessageOut(
@@ -457,6 +604,8 @@ def review_queue(
             parse_confidence=float(r.parse_confidence) if r.parse_confidence is not None else None,
             parse_result=r.parse_result or {},
             sent_at=r.sent_at,
+            folder=r.folder or "inbox",
+            direction=r.direction or "inbound",
         )
         for r in rows
     ]
@@ -490,6 +639,7 @@ def get_message_detail(
         "id": str(row.id),
         "message_id": row.message_id,
         "direction": row.direction,
+        "folder": row.folder or "inbox",
         "subject": row.subject,
         "from_email": row.from_email,
         "body_text": row.body_text or "",

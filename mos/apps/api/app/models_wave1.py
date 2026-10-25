@@ -436,12 +436,17 @@ class EmailThread(Base):
 class EmailMessage(Base):
     __tablename__ = "email_messages"
 
+    # 文件夹浏览按 (tenant_id, folder) 过滤 —— 模型声明让 create_all（空库自举/测试库）
+    # 与 Alembic 迁移建出同一份索引
+    __table_args__ = (Index("ix_email_messages_tenant_folder", "tenant_id", "folder"),)
+
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("email_accounts.id"))
     thread_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("email_threads.id"))
     message_id: Mapped[str] = mapped_column(Text, nullable=False)
     direction: Mapped[str] = mapped_column(Text, default="inbound")
+    folder: Mapped[str] = mapped_column(Text, nullable=False, default="inbox", server_default="inbox")
     from_email: Mapped[str | None] = mapped_column(String(320))
     subject: Mapped[str | None] = mapped_column(Text)
     body_text: Mapped[str | None] = mapped_column(Text)

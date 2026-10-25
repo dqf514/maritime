@@ -47,8 +47,9 @@ def _seed_vessel_voyage(client, h, name="Ocean Star", voyage_no="DW-001"):
 
 
 def _rich_inbox(mails):
-    def _list_mail(self, *, top: int = 25, folder: str = "inbox"):
-        return mails[:top]
+    def _list_mail(self, *, top: int = 25, folder: str = "inbox", since=None, **kwargs):
+        # since 忽略：测试样例日期固定，过滤会把样例全滤掉
+        return mails[:top] if folder == "inbox" else []
 
     return _list_mail
 

@@ -638,6 +638,8 @@ class EmailMessageOut(BaseModel):
     parse_confidence: float | None = None
     parse_result: dict = Field(default_factory=dict)
     sent_at: datetime | None = None
+    folder: str = "inbox"
+    direction: str = "inbound"
 
 
 class NotificationOut(BaseModel):

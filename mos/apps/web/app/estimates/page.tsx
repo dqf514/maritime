@@ -20,6 +20,7 @@ import { StatusLegend } from "@/components/StatusLegend";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
 import { PageGuide } from "@/components/PageGuide";
 import { AiFill } from "@/components/ai/AiFill";
+import { AiExtractFill, type ExtractedValues } from "@/components/ai/AiExtractFill";
 import { useAiContextBinder } from "@/components/ai/aiContextStore";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
 import { StateView } from "@/components/StateView";
@@ -262,6 +263,8 @@ type PayloadExtras = {
   bunker_grade?: string;
   bunker_eca_grade?: string;
   bunker_prices?: Record<string, number>;
+  /** 邮件来源溯源元数据（email_message_db_id/message_id/subject/from_email） */
+  source_email?: Record<string, unknown> | null;
 };
 
 function buildPayload(fields: InputFields, extras?: PayloadExtras): Record<string, unknown> {
@@ -280,6 +283,7 @@ function buildPayload(fields: InputFields, extras?: PayloadExtras): Record<strin
   if (extras?.bunker_grade) out.bunker_grade = extras.bunker_grade;
   if (extras?.bunker_eca_grade) out.bunker_eca_grade = extras.bunker_eca_grade;
   if (extras?.bunker_prices && Object.keys(extras.bunker_prices).length) out.bunker_prices = extras.bunker_prices;
+  if (extras?.source_email) out.source_email = extras.source_email;
   return out;
 }
 
@@ -366,6 +370,12 @@ function EstimatesPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  /** 粘贴文本 → AI 解析 → 预览确认弹窗（估算页入口） */
+  const [extractOpen, setExtractOpen] = useState(false);
+  /** 跨页 prefill 载荷（sessionStorage 读出，主数据就绪后应用） */
+  const [pendingPrefill, setPendingPrefill] = useState<Record<string, unknown> | null>(null);
+  /** 邮件来源溯源元数据（prefill/解析确认后随 inputs.source_email 落库） */
+  const [sourceEmail, setSourceEmail] = useState<Record<string, unknown> | null>(null);
   const rowCtx = useContextMenu<Estimate>();
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) || null, [rows, selectedId]);
@@ -431,6 +441,28 @@ function EstimatesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // B4: 跨页 prefill（邮件详情/工作台「填入航次计算」写入 sessionStorage）—— 读取即删
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("marios_estimate_prefill");
+      if (!raw) return;
+      sessionStorage.removeItem("marios_estimate_prefill");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") setPendingPrefill(parsed as Record<string, unknown>);
+    } catch {
+      /* 非 JSON / 存储不可用 — 静默忽略 */
+    }
+  }, []);
+
+  // 主数据（船/对手方）就绪后再落位 —— applyExtracted 需要列表做名称匹配
+  useEffect(() => {
+    if (!pendingPrefill || loading) return;
+    applyExtracted(pendingPrefill);
+    setPendingPrefill(null);
+    toast.success(t("page.estimates.prefilled", "已从文本填充 — 请核对后保存"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPrefill, loading]);
+
   const filteredRows = useMemo(() => {
     const q = searchQ.trim().toLowerCase();
     return rows.filter((r) => {
@@ -453,6 +485,12 @@ function EstimatesPage() {
     const inp = (est.inputs || {}) as Record<string, unknown>;
     setLegRows(legRowsFromEst(inp));
     setCargoRows(cargoRowsFromEst(inp));
+    // 保留既有邮件溯源（无则清空，避免串到别的估算上）
+    setSourceEmail(
+      inp.source_email && typeof inp.source_email === "object" && !Array.isArray(inp.source_email)
+        ? (inp.source_email as Record<string, unknown>)
+        : null,
+    );
     setBunkerGrade(typeof inp.bunker_grade === "string" ? inp.bunker_grade : "VLSFO");
     setBunkerEcaGrade(typeof inp.bunker_eca_grade === "string" ? inp.bunker_eca_grade : "MGO");
     const bp = inp.bunker_prices;
@@ -505,7 +543,7 @@ function EstimatesPage() {
         if (c.disch_port.trim()) cargo.disch_port = c.disch_port.trim();
         return cargo;
       });
-    return { legs, cargoes, bunker_grade: bunkerGrade, bunker_eca_grade: bunkerEcaGrade, bunker_prices };
+    return { legs, cargoes, bunker_grade: bunkerGrade, bunker_eca_grade: bunkerEcaGrade, bunker_prices, source_email: sourceEmail };
   }
 
   function setLeg(idx: number, key: keyof LegRow, value: string) {
@@ -522,6 +560,67 @@ function EstimatesPage() {
 
   function setField(key: keyof InputFields, value: string) {
     setFields((prev) => ({ ...prev, [key]: value }));
+  }
+
+  /** 解析字段 → 表单落位（AiExtractFill 确认回调与跨页 prefill 共用）。
+   *  船舶/对手方做名称匹配；港口同时落到票货与已存在的航段首段。 */
+  function applyExtracted(values: Record<string, unknown>) {
+    const s = (v: unknown) => (v == null ? "" : String(v).trim());
+    const vesselName = s(values.vessel || values.vessel_name);
+    const loadPort = s(values.load_port);
+    const dischPort = s(values.discharge_port || values.disch_port);
+    const cargoType = s(values.cargo);
+    const freightRate = s(values.freight_rate);
+    const commission = s(values.commission);
+    const cpName = s(values.charterers) || s(values.owners);
+
+    // 船名 → vesselId：剥 MV/M.V./SS 前缀后精确 → 包含（同后端 _match_vessel 思路）
+    if (vesselName) {
+      const norm = (x: string) =>
+        x.toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^M?V/, "");
+      const target = norm(vesselName);
+      const hit =
+        vessels.find((v) => norm(v.name) === target) ||
+        vessels.find((v) => norm(v.name).includes(target) || target.includes(norm(v.name)));
+      if (hit) setVesselId(hit.id);
+    }
+    // charterers/owners → 对手方（voyage 模式优先 charterers）
+    if (cpName) {
+      const target = cpName.toLowerCase();
+      const hit =
+        parties.find((p) => p.name.toLowerCase() === target) ||
+        parties.find((p) => p.name.toLowerCase().includes(target) || target.includes(p.name.toLowerCase()));
+      if (hit) setPartyId(hit.id);
+    }
+    // 票货首行：货名/装卸港/运价
+    if (cargoType || loadPort || dischPort || freightRate) {
+      setCargoRows((prev) => {
+        const row = prev[0] ? { ...prev[0] } : { ...EMPTY_CARGO };
+        if (cargoType) row.cargo_type = cargoType;
+        if (loadPort) row.load_port = loadPort;
+        if (dischPort) row.disch_port = dischPort;
+        if (freightRate) row.freight_rate = freightRate;
+        return [row, ...prev.slice(1)];
+      });
+    }
+    // 航段：仅更新已存在的首段 —— 新建无距离/航速的段会被提交过滤，还会锁死手工天数输入
+    if ((loadPort || dischPort) && legRows.length > 0) {
+      setLegRows((prev) => {
+        const row = { ...prev[0] };
+        if (loadPort) row.from_port = loadPort;
+        if (dischPort) row.to_port = dischPort;
+        return [row, ...prev.slice(1)];
+      });
+    }
+    // 顶层：运价 + 佣金（v1 佣金整体落 address comm %，可在表单再拆分）
+    setFields((prev) => {
+      const next = { ...prev };
+      if (freightRate) next.freight_rate = freightRate;
+      if (commission) next.address_comm_pct = commission.replace(/%$/, "");
+      return next;
+    });
+    const srcEmail = (values as { source_email?: Record<string, unknown> }).source_email;
+    if (srcEmail && typeof srcEmail === "object") setSourceEmail(srcEmail);
   }
 
   async function createDraft(preset?: Partial<InputFields>, presetTitle?: string) {
@@ -969,6 +1068,9 @@ function EstimatesPage() {
               {t("page.estimates.to_cp", "To CP")}
             </button>
             <ValidateButton onValidate={validateEstimate} disabled={!selectedId} />
+            <button className="btn btn-sm" type="button" onClick={() => setExtractOpen(true)}>
+              {t("page.estimates.extract_btn", "从文本填充")}
+            </button>
             <AiFill
               formFields={fields as unknown as Record<string, unknown>}
               entityType="estimate"
@@ -1426,6 +1528,15 @@ function EstimatesPage() {
           removeEstimate();
         }}
         onCancel={() => setConfirmDel(false)}
+      />
+      {/* 粘贴邮件/聊天记录 → AI 解析 → 逐字段预览确认后落位表单 */}
+      <AiExtractFill
+        open={extractOpen}
+        onClose={() => setExtractOpen(false)}
+        onApply={(values) => {
+          applyExtracted(values);
+          toast.success(t("ai.fill.applied", "已应用 AI 建议值 — 请复核后保存"));
+        }}
       />
     </AppShell>
   );

@@ -4,7 +4,7 @@
 // Summary / P&L / Port Calls / Finance / Map / Notes / Instructions / Activity。
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -20,6 +20,7 @@ import { useStateActions } from "@/components/useTransitions";
 import { StateView } from "@/components/StateView";
 import { useToast } from "@/components/ToastProvider";
 import { ValidateButton, type ValidateIssue } from "@/components/ValidateButton";
+import { AiExtractFill } from "@/components/ai/AiExtractFill";
 import { DataGrid } from "@/components/grid/DataGrid";
 import type { ColumnDef as GridColumnDef } from "@/components/grid/types";
 import { Panel } from "@/components/workspace/Panel";
@@ -221,6 +222,7 @@ export default function VoyageWorkspacePage() {
   const { t, locale } = useI18n();
   const toast = useToast();
   const params = useParams();
+  const router = useRouter();
   const id = String(params.id || "");
 
   const [data, setData] = useState<VoyageOverview | null>(null);
@@ -251,6 +253,8 @@ export default function VoyageWorkspacePage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // 不可逆操作二次确认（P1-8）：待执行动作 + 指名对象的确认文案
   const [confirm, setConfirm] = useState<{ message: string; action: () => void } | null>(null);
+  // P&L tab:粘贴文本 → AI 解析 → 生成估算（sessionStorage 转运到估算页）
+  const [extractOpen, setExtractOpen] = useState(false);
 
   // port-call create/edit (C2: function_code select)
   const [pcModalOpen, setPcModalOpen] = useState(false);
@@ -943,8 +947,17 @@ export default function VoyageWorkspacePage() {
     },
   ], [currency, locale, t]);
 
-  const pnlTab = pnl ? (
-    <Panel title={t("ws.pnl_title", "P&L attribution")}>
+  const pnlTab = (
+    <Panel
+      title={t("ws.pnl_title", "P&L attribution")}
+      actions={
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setExtractOpen(true)}>
+          {t("ws.extract_estimate", "从文本生成估算")}
+        </button>
+      }
+    >
+      {pnl ? (
+        <>
       <div className="desk-results pnl-summary">
         <div className="kv-box">
           <span>{t("ws.pnl_estimated", "Estimated P&L")}</span>
@@ -969,10 +982,10 @@ export default function VoyageWorkspacePage() {
           emptyText={t("common.no_data", "No data")}
         />
       </div>
-    </Panel>
-  ) : (
-    <Panel title={t("ws.pnl_title", "P&L attribution")}>
-      <p className="muted">{t("common.no_data", "No data")}</p>
+        </>
+      ) : (
+        <p className="muted">{t("common.no_data", "No data")}</p>
+      )}
     </Panel>
   );
 
@@ -1639,6 +1652,36 @@ export default function VoyageWorkspacePage() {
           fn?.();
         }}
         onCancel={() => setConfirm(null)}
+      />
+
+      {/* P&L tab:粘贴文本 → AI 解析 → 确认后转运估算页 */}
+      <AiExtractFill
+        open={extractOpen}
+        onClose={() => setExtractOpen(false)}
+        context={{
+          vessel_name: voyage?.vessel_name || undefined,
+          load_port: (() => {
+            const pc = (data?.port_calls || []).find((c) => (c.purpose || "") === "load");
+            return pc?.port_name || (pc?.port_id ? portById.get(pc.port_id)?.name : undefined) || undefined;
+          })(),
+          disch_port: (() => {
+            const pcs = (data?.port_calls || []).filter((c) => (c.purpose || "") === "discharge");
+            const pc = pcs[pcs.length - 1] || (data?.port_calls || [])[(data?.port_calls || []).length - 1];
+            return pc?.port_name || (pc?.port_id ? portById.get(pc.port_id)?.name : undefined) || undefined;
+          })(),
+          counterparty: data?.charter?.counterparty_name || undefined,
+        }}
+        onApply={(values) => {
+          try {
+            sessionStorage.setItem("marios_estimate_prefill", JSON.stringify(values));
+          } catch {
+            toast.error(t("ws.prefill_fail", "无法写入浏览器缓存 — 请在估算页手动填写。"));
+            return;
+          }
+          setExtractOpen(false);
+          toast.success(t("ws.prefill_ok", "已带入估算页 — 请复核后保存。"));
+          router.push("/estimates");
+        }}
       />
 
       {todo.element}

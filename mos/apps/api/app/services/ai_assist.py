@@ -261,6 +261,61 @@ def fill(
     }
 
 
+# ── 粘贴文本 → 结构化字段（航次计算 AI 填充） ────────────────────────────
+
+#: 超长粘贴截断上限 —— 聊天记录/邮件全文足够覆盖，再长只是浪费 tokens
+EXTRACT_BODY_MAX = 50000
+
+_RULE_PARSERS = {
+    "fixture_recap": "parse_fixture_recap",
+    "nor": "parse_nor",
+    "laytime_statement": "parse_laytime_statement",
+}
+
+
+def extract_from_text(subject: str | None, body: str) -> dict[str, Any]:
+    """粘贴的邮件/聊天记录 → 分类 + 结构化字段（AI 建议，人工勾选后填表）。
+
+    与邮件同步管线同源：``classify_email`` 定类 → 对应规则解析器出底稿 →
+    ``llm_extract.extract_fields``（LLM 结构化抽取，失败自动回落规则）。
+    不需要 EmailMessage —— 纯文本进、结构化字段出。
+    """
+    from app.services import llm_extract
+    from app.services.email_intelligence import (
+        classify_email,
+        parse_fixture_recap,
+        parse_laytime_statement,
+        parse_nor,
+    )
+
+    truncated = len(body) > EXTRACT_BODY_MAX
+    body_use = body[:EXTRACT_BODY_MAX]
+    subject = (subject or "").strip()
+
+    cls = classify_email(subject, body_use)
+    kind = cls["type"]
+    rule_fields: dict[str, Any] = {}
+    parser = _RULE_PARSERS.get(kind)
+    if parser == "parse_fixture_recap":
+        rule_fields = parse_fixture_recap(body_use)
+    elif parser == "parse_nor":
+        rule_fields = parse_nor(body_use)
+    elif parser == "parse_laytime_statement":
+        rule_fields = parse_laytime_statement(body_use)
+
+    fields = llm_extract.extract_fields(kind, subject, body_use, rule_fields)
+    source = fields.pop("_source", "rules")
+    rule_diffs = fields.pop("_rule_diffs", [])
+    return {
+        "kind": kind,
+        "classification": {"type": kind, "confidence": cls["confidence"]},
+        "fields": fields,
+        "_source": source,
+        "_rule_diffs": rule_diffs,
+        "truncated": truncated,
+    }
+
+
 # ── 邮件动作推荐 ──────────────────────────────────────────────────────────
 
 # 与 email_actions.REPLY_TEMPLATES 对齐
