@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -109,6 +109,8 @@ function msgEmailType(m: { parse_result?: Record<string, unknown> }): string {
 
 const DAY_OPTIONS = [7, 14, 30] as const;
 const COUNT_OPTIONS = [200, 500, 1000] as const;
+/** 切文件夹自动同步的冷却时间 —— 5 分钟内不重复自动拉（手动同步同样重置计时） */
+const AUTO_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 const FALLBACK_FOLDERS: FolderInfo[] = [
   { key: "inbox", display_name: "Inbox", well_known: "inbox", parent_key: null },
   { key: "sentitems", display_name: "Sent Items", well_known: "sentitems", parent_key: null },
@@ -254,6 +256,9 @@ export default function EmailReviewPage() {
   const [recFor, setRecFor] = useState<Msg | null>(null);
   const [rec, setRec] = useState<Recommend | null>(null);
   const [recBusy, setRecBusy] = useState(false);
+  /** 同步并发守卫 + 自动同步冷却计时（切文件夹触发的自动拉取 5 分钟内不重复） */
+  const syncingRef = useRef(false);
+  const lastSyncAtRef = useRef(0);
 
   /**
    * 取数：四个来源彼此独立（allSettled），主列表失败走错误态，参考数据失败只做局部提示。
@@ -306,6 +311,13 @@ export default function EmailReviewPage() {
     setLoading(false);
   }, [activeFolder, syncDays, syncCount]);
 
+  // sync 完成后的刷新要用「最新」的 load —— 否则切文件夹触发的自动同步
+  // 会用旧 activeFolder 的闭包把新文件夹的列表覆写掉
+  const loadRef = useRef(load);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+
   // 租户默认时区（Asia/Singapore 等）—— 邮件时间按它格式化。
   useEffect(() => {
     apiGet("/api/v1/me")
@@ -346,36 +358,52 @@ export default function EmailReviewPage() {
     });
   }
 
-  async function sync() {
-    toast.success(
-      m365
-        ? t("page.email.syncing_m365", "正在从 Microsoft 365 同步邮件…")
-        : t("page.email.syncing", "Syncing demo mailbox…"),
-    );
-    const acc = await ensureSyncAccount();
-    const qs = new URLSearchParams({
-      days: String(syncDays),
-      count: String(syncCount),
-      folders: syncFolders.join(",") || "inbox",
-    });
-    const result = (await apiPost(`/api/v1/email/accounts/${acc.id}/sync?${qs.toString()}`)) as {
-      synced?: number;
-      capped?: boolean;
-      folders?: Record<string, number>;
-    };
-    await load();
-    // 各文件夹拉取条数 —— 按勾选逐项显示（去重后 0 条也显示），让用户确认勾选的文件夹确实被同步了
-    const folderMap = result.folders && typeof result.folders === "object" ? result.folders : {};
-    const perFolder = syncFolders
-      .map((f) => `${f} ${folderMap[f] ?? 0}`)
-      .join(" · ");
-    toast.success(
-      t("page.email.synced", "Synced {n} message(s).", { n: result.synced ?? 1 }) + (perFolder ? ` (${perFolder})` : ""),
-    );
-    if (result.capped) {
-      toast.error(
-        t("page.email.sync_capped", "达到单次同步总量上限（2000 条），部分邮件未拉取 — 可缩小天数/条数再同步。"),
-      );
+  async function sync(opts?: { folders?: string[]; auto?: boolean }) {
+    const auto = Boolean(opts?.auto);
+    const folders = (opts?.folders?.length ? opts.folders : syncFolders).slice(0, 10);
+    // 并发守卫 + 自动同步 5 分钟冷却（手动同步同样重置计时 —— 刚拉过就不再自动拉）
+    if (syncingRef.current) return;
+    if (auto && Date.now() - lastSyncAtRef.current < AUTO_SYNC_COOLDOWN_MS) return;
+    syncingRef.current = true;
+    try {
+      if (!auto) {
+        toast.success(
+          m365
+            ? t("page.email.syncing_m365", "正在从 Microsoft 365 同步邮件…")
+            : t("page.email.syncing", "Syncing demo mailbox…"),
+        );
+      }
+      const acc = await ensureSyncAccount();
+      const qs = new URLSearchParams({
+        days: String(syncDays),
+        count: String(syncCount),
+        folders: folders.join(",") || "inbox",
+      });
+      const result = (await apiPost(`/api/v1/email/accounts/${acc.id}/sync?${qs.toString()}`)) as {
+        synced?: number;
+        capped?: boolean;
+        folders?: Record<string, number>;
+      };
+      lastSyncAtRef.current = Date.now();
+      await loadRef.current(); // 用最新 load —— 自动同步横跨文件夹切换
+      // 各文件夹拉取条数 —— 按勾选逐项显示（去重后 0 条也显示），让用户确认勾选的文件夹确实被同步了
+      const folderMap = result.folders && typeof result.folders === "object" ? result.folders : {};
+      const perFolder = folders
+        .map((f) => `${f} ${folderMap[f] ?? 0}`)
+        .join(" · ");
+      // 自动同步保持安静：0 条不打扰，有新邮件才提示
+      if (!auto || (result.synced ?? 0) > 0) {
+        toast.success(
+          t("page.email.synced", "Synced {n} message(s).", { n: result.synced ?? 1 }) + (perFolder ? ` (${perFolder})` : ""),
+        );
+      }
+      if (result.capped) {
+        toast.error(
+          t("page.email.sync_capped", "达到单次同步总量上限（2000 条），部分邮件未拉取 — 可缩小天数/条数再同步。"),
+        );
+      }
+    } finally {
+      syncingRef.current = false;
     }
   }
 
@@ -770,11 +798,21 @@ export default function EmailReviewPage() {
     setSortDir(dir === "asc" ? "asc" : "desc");
   }, []);
 
-  /** Tab 切换：inbox 默认复核队列，其他文件夹看全量 */
-  const changeFolder = useCallback((key: string) => {
-    setActiveFolder(key);
-    setStatusFilter(key === "inbox" ? "review" : "");
-  }, []);
+  /** Tab 切换：inbox 默认复核队列，其他文件夹看全量；顺手自动同步该文件夹（5 分钟冷却） */
+  const changeFolder = useCallback(
+    (key: string) => {
+      setActiveFolder(key);
+      setStatusFilter(key === "inbox" ? "review" : "");
+      // 切到哪个文件夹就补拉哪个（只拉当前 Tab，不按勾选全拉）；
+      // 未连邮箱账户且非 M365 时不自动建账户 —— 首次仍走手动同步按钮
+      if (m365 || accounts.length) {
+        void sync({ folders: [key], auto: true }).catch((ex) =>
+          toast.error(msgOf(ex, t("page.email.sync_fail", "Sync failed"))),
+        );
+      }
+    },
+    [accounts.length, m365, sync, t, toast],
+  );
 
   const folderTabs = useMemo<TabItem[]>(
     () =>
