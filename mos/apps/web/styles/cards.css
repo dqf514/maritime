@@ -60,3 +60,38 @@
 .flash { color: var(--ok); font-weight: 600; }
 .flash-err { color: var(--danger); font-weight: 600; }
 .error { color: #ffb4a8; font-size: 0.85rem; margin-bottom: 0.75rem; }
+
+/* —— 航次收尾面板（ClosingPanel） —— */
+.closing-status { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); margin-bottom: 0.75rem; }
+.closing-ready { background: #e5f6ec; color: #146c36; }
+.closing-blocked { background: #fff4de; color: #8a5a00; }
+.closing-tce { border: 1px solid var(--border, #2a3a44); border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; margin-bottom: 0.75rem; }
+.closing-tce > span { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.closing-tce-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; margin-top: 0.4rem; }
+.closing-tce-grid em { display: block; font-style: normal; font-size: 0.75rem; color: var(--muted); }
+.closing-tce-grid strong { font-size: 1rem; }
+.closing-neg { color: var(--danger, #9b1c1c); }
+.closing-list { list-style: none; margin: 0; padding: 0; }
+.closing-list li { display: flex; gap: 0.6rem; padding: 0.45rem 0; border-bottom: 1px solid var(--border, #2a3a44); }
+.closing-list li:last-child { border-bottom: none; }
+.closing-list p { margin: 0.15rem 0 0; }
+.closing-mark { flex: none; width: 1.25rem; height: 1.25rem; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; margin-top: 0.1rem; }
+.closing-ok .closing-mark { background: #e5f6ec; color: #146c36; }
+.closing-missing .closing-mark { background: #fff4de; color: #8a5a00; }
+.closing-info { margin-top: 0.5rem; }
+.closing-info summary { cursor: pointer; font-size: 0.82rem; color: var(--muted); }
+
+/* —— COA 履约进度条（CharterEditor） —— */
+.coa-progress { margin-bottom: 0.75rem; }
+.coa-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.35rem; }
+.coa-progress-badges { display: inline-flex; gap: 0.3rem; }
+.coa-progress-bar { height: 0.55rem; border-radius: 999px; background: #e7f0f3; overflow: hidden; }
+.coa-progress-over .coa-progress-bar { outline: 1px solid #9b1c1c; }
+.coa-progress-fill { height: 100%; border-radius: 999px; background: #2f7d4f; transition: width 0.3s ease; }
+.coa-progress-over .coa-progress-fill { background: #9b1c1c; }
+.coa-fill-0 { width: 0%; } .coa-fill-5 { width: 5%; } .coa-fill-10 { width: 10%; } .coa-fill-15 { width: 15%; }
+.coa-fill-20 { width: 20%; } .coa-fill-25 { width: 25%; } .coa-fill-30 { width: 30%; } .coa-fill-35 { width: 35%; }
+.coa-fill-40 { width: 40%; } .coa-fill-45 { width: 45%; } .coa-fill-50 { width: 50%; } .coa-fill-55 { width: 55%; }
+.coa-fill-60 { width: 60%; } .coa-fill-65 { width: 65%; } .coa-fill-70 { width: 70%; } .coa-fill-75 { width: 75%; }
+.coa-fill-80 { width: 80%; } .coa-fill-85 { width: 85%; } .coa-fill-90 { width: 90%; } .coa-fill-95 { width: 95%; }
+.coa-fill-100 { width: 100%; }

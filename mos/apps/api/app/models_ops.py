@@ -116,3 +116,23 @@ class AlertRule(Base):
     description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DomainEvent(Base):
+    """Append-only domain event log —— 事件驱动自动化的可追溯轨迹。
+
+    ``emit()`` 落一行事件并同步跑注册处理器（生成跟进任务 / 通知 /
+    日程清理等）；处理器异常记入 ``handler_errors``，不回滚业务事务。
+    """
+
+    __tablename__ = "domain_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False, index=True)  # voyage.completed / lifting.fixed / …
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    handler_errors: Mapped[list] = mapped_column(JSON, default=list)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

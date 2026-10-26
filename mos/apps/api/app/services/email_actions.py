@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models_domain import Estimate, LaytimeCalc, PortCall, Voyage
+from app.services.domain_events import emit
 from app.models_wave1 import (
     Counterparty,
     CounterpartyContact,
@@ -319,6 +320,17 @@ def apply_message(db: Session, tenant_id: UUID, user_id: UUID | None, message_id
             }
             db.flush()
             _link_source_email(db, tenant_id, "voyage", voyage.id, msg)
+            # 域事件：NOR 落位 → Ops 通知（services/automation.py）
+            emit(
+                db, tenant_id, "portcall.nor_updated", "voyage", voyage.id,
+                payload={
+                    "voyage_no": voyage.voyage_no,
+                    "nor_at": nor_dt.isoformat(),
+                    "port": fields.get("port"),
+                    "port_call_id": str(pc.id) if pc is not None else None,
+                },
+                user_id=user_id,
+            )
             created.append(
                 {
                     "entity": "voyage",
@@ -347,6 +359,16 @@ def apply_message(db: Session, tenant_id: UUID, user_id: UUID | None, message_id
         db.add(calc)
         db.flush()
         _link_source_email(db, tenant_id, "laytime", calc.id, msg)
+        # 域事件：邮件生成装卸时间草稿 → Ops 复核任务（services/automation.py）
+        emit(
+            db, tenant_id, "laytime.draft_created", "laytime", calc.id,
+            payload={
+                "voyage_id": str(voyage.id) if voyage else None,
+                "voyage_no": voyage.voyage_no if voyage else None,
+                "events": len(inputs["sof_events"] or []),
+            },
+            user_id=user_id,
+        )
         if voyage is None:
             warnings.append("voyage_not_matched")
         created.append(

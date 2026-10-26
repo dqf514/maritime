@@ -158,6 +158,18 @@ type Lifting = {
   voyage_id?: string | null;
 };
 
+type CoaProgress = {
+  total_qty: number;
+  planned_qty: number;
+  fixed_qty: number;
+  lifted_qty: number;
+  remaining_qty: number | null;
+  progress_pct: number | null;
+  open_count: number;
+  over_lifted: boolean;
+  under_lifted: boolean;
+};
+
 type AmendForm = {
   freight_rate: string;
   demurrage_rate: string;
@@ -455,6 +467,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
   const [amendments, setAmendments] = useState<Amendment[]>([]);
   const [amendForm, setAmendForm] = useState<AmendForm>(EMPTY_AMEND);
   const [liftings, setLiftings] = useState<Lifting[]>([]);
+  const [coaProgress, setCoaProgress] = useState<CoaProgress | null>(null);
   const [liftAction, setLiftAction] = useState<{ id: string; kind: "nominate" | "fix" | "complete" } | null>(null);
   const [nomFrom, setNomFrom] = useState("");
   const [nomTo, setNomTo] = useState("");
@@ -693,6 +706,12 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
         .then((rows: Lifting[]) => setLiftings(Array.isArray(rows) ? rows : []))
         .catch((ex: unknown) => {
           setLiftings([]);
+          setSubErr(msgOf(ex));
+        });
+      apiGet(`/api/v1/charters/${charter.id}/coa-progress`)
+        .then((p: CoaProgress) => setCoaProgress(p))
+        .catch((ex: unknown) => {
+          setCoaProgress(null);
           setSubErr(msgOf(ex));
         });
     }
@@ -1891,6 +1910,47 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
               + {t("page.charters.add_lifting", "添加 lifting")}
             </button>
           </div>
+          {coaProgress ? (
+            <div className="coa-progress">
+              <div className="coa-progress-head">
+                <span>
+                  {t("page.charters.coa_progress", "履约进度")}:{" "}
+                  <strong>
+                    {coaProgress.lifted_qty.toLocaleString()} / {coaProgress.total_qty.toLocaleString()}
+                  </strong>
+                  {coaProgress.progress_pct != null ? ` (${coaProgress.progress_pct}%)` : ""}
+                </span>
+                <span className="coa-progress-badges">
+                  {coaProgress.over_lifted ? (
+                    <span className="pill critical">{t("page.charters.coa_over", "超装")}</span>
+                  ) : null}
+                  {coaProgress.under_lifted ? (
+                    <span className="pill warn">{t("page.charters.coa_under", "短装")}</span>
+                  ) : null}
+                  {coaProgress.open_count > 0 ? (
+                    <span className="pill pending">
+                      {t("page.charters.coa_open", "开放 lifting")}: {coaProgress.open_count}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+              <div
+                className={`coa-progress-bar${coaProgress.over_lifted ? " coa-progress-over" : ""}`}
+                role="progressbar"
+                aria-valuenow={coaProgress.progress_pct ?? 0}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <div
+                  className={`coa-progress-fill coa-fill-${Math.min(Math.max(Math.round((coaProgress.progress_pct ?? 0) / 5) * 5, 0), 100)}`}
+                />
+              </div>
+              <p className="muted">
+                {t("page.charters.coa_remaining", "剩余")}:{" "}
+                {coaProgress.remaining_qty != null ? coaProgress.remaining_qty.toLocaleString() : "—"}
+              </p>
+            </div>
+          ) : null}
           {liftings.length ? (
             <DataGrid<Lifting>
               columns={liftingColumns}

@@ -27,6 +27,7 @@ from app.models_domain import (
 )
 from app.models_finance_ext import BunkerInquiry
 from app.services.bunker_procurement import next_requirement_no
+from app.services.domain_events import emit
 from app.services.money import money
 from app.services.recycle import soft_delete
 from app.services.state_machine import BUNKER_REQUIREMENT_TRANSITIONS, BUNKER_TRANSITIONS, transition
@@ -271,6 +272,21 @@ def bunker_transition(
     ):
         if value is not None:
             setattr(row, name, value)
+    if target == "delivered":
+        # 域事件：BDN 偏差/ROB 校验告警 + ops 核对任务（services/automation.py）
+        emit(
+            db, auth.tenant_id, "bunker.delivered", "bunker_order", row.id,
+            payload={
+                "order_no": row.order_no,
+                "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+                "vessel_id": str(row.vessel_id) if row.vessel_id else None,
+                "qty_ordered": float(row.qty_ordered or 0),
+                "qty_delivered": float(row.qty_delivered or 0),
+                "bdn_qty": float(row.bdn_qty) if row.bdn_qty is not None else None,
+                "warnings": warnings,
+            },
+            user_id=auth.user_id,
+        )
     db.commit()
     return {
         "id": str(row.id),

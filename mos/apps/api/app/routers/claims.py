@@ -28,6 +28,7 @@ from app.services.claim_taxonomy import (
     is_valid_claim_subtype,
 )
 from app.services.doc_numbering import next_doc_number
+from app.services.domain_events import emit
 from app.services.money import FX_RATE_NOT_FOUND, FxRateUnavailable, require_fx_rate, to_base_amount
 from app.services.performance_engine import compute_performance
 from app.services.recycle import soft_delete
@@ -147,6 +148,18 @@ def claim_transition(
             Decimal(str(settlement_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             if settlement_amount is not None
             else row.amount
+        )
+        # 域事件：财务「索赔转结算」任务（services/automation.py）
+        emit(
+            db, auth.tenant_id, "claim.settled", "claim", row.id,
+            payload={
+                "claim_no": row.claim_no,
+                "amount": float(row.amount or 0),
+                "settlement_amount": float(row.settlement_amount or 0),
+                "currency": row.currency or "USD",
+                "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+            },
+            user_id=auth.user_id,
         )
     db.commit()
     return {"id": str(row.id), "status": row.status, "settlement_amount": float(row.settlement_amount or 0) if row.settlement_amount is not None else None}

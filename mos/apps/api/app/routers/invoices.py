@@ -27,6 +27,7 @@ from app.services.finance_workflow import (
 )
 from app.services.hire_engine import _off_hire_in_period, create_hire_statement
 from app.services.audit import audit
+from app.services.domain_events import emit
 from app.services.recycle import soft_delete
 from app.services.state_machine import INVOICE_TRANSITIONS, transition
 from app.services.optimistic_lock import assert_fresh
@@ -340,6 +341,19 @@ def invoice_transition(invoice_id: UUID, target: str, auth: AuthContext = Depend
         start_workflow(db, tenant_id=auth.tenant_id, entity_type="invoice", entity_id=row.id, started_by=auth.user_id)
     if target == "issued":
         row.issued_at = utcnow_naive()
+        # 域事件：财务过账任务 + 有计提时的计提对账任务（services/automation.py）
+        emit(
+            db, auth.tenant_id, "invoice.issued", "invoice", row.id,
+            payload={
+                "invoice_no": row.invoice_no,
+                "amount": float(row.amount or 0),
+                "tax_amount": float(row.tax_amount or 0),
+                "currency": row.currency or "USD",
+                "invoice_type": invoice_type_code(row),
+                "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+            },
+            user_id=auth.user_id,
+        )
     db.commit()
     if target == "issued":
         _office_escalate_invoice(db, auth.tenant_id, row)

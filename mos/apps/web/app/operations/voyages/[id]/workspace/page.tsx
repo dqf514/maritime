@@ -25,6 +25,7 @@ import { DataGrid } from "@/components/grid/DataGrid";
 import type { ColumnDef as GridColumnDef } from "@/components/grid/types";
 import { Panel } from "@/components/workspace/Panel";
 import { PanelTabs } from "@/components/workspace/PanelTabs";
+import { ClosingPanel } from "@/components/workspace/ClosingPanel";
 import { PortTime } from "@/components/PortTime";
 import { VoyageTimeline, type TimelineEvent, type TimelinePortCall } from "@/components/workspace/VoyageTimeline";
 import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
@@ -1500,6 +1501,11 @@ export default function VoyageWorkspacePage() {
               { id: "pnl", label: t("ws.tab_pnl", "P&L"), content: pnlTab },
               { id: "ports", label: t("ws.tab_ports", "Port activity"), content: portCallsTab },
               { id: "finance", label: t("ws.tab_finance", "Finance"), content: financeTab },
+              {
+                id: "closing",
+                label: t("ws.tab_closing", "收尾"),
+                content: id ? <ClosingPanel voyageId={id} /> : null,
+              },
               { id: "map", label: t("ws.tab_map", "Map"), content: mapTab },
               {
                 id: "notes",

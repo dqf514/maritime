@@ -36,7 +36,9 @@ from app.services.port_functions import normalize_function_code
 from app.services.alert_engine import assert_no_blocking_alerts
 from app.services.audit import audit
 from app.services.data_scope import apply_module_scope
+from app.services.domain_events import emit
 from app.services.notifications import notify_once, role_recipients
+from app.services.voyage_close import closing_check
 from app.services.recycle import soft_delete
 from app.services.report_sequence import assert_report_sequence, derive_report_stage
 from app.services.tenant_guard import global_ref_get, scoped_get
@@ -402,6 +404,19 @@ def voyage_transition(
         row.completed_at = now
     # Tasks & Alerts 可阻断保存：状态落地后、提交前评估 blocking 规则
     assert_no_blocking_alerts(db, auth.tenant_id, "voyage", _voyage_alert_context(row))
+    # 域事件：完成 → 收尾链（日程收缩 + 缺项任务 + TCE 快照 + 规则任务）；重开仅留痕
+    if body.target == "completed":
+        emit(
+            db, auth.tenant_id, "voyage.completed", "voyage", row.id,
+            payload={"voyage_no": row.voyage_no, "from": prev},
+            user_id=auth.user_id,
+        )
+    elif body.target == "in_progress" and prev == "completed":
+        emit(
+            db, auth.tenant_id, "voyage.reopened", "voyage", row.id,
+            payload={"voyage_no": row.voyage_no},
+            user_id=auth.user_id,
+        )
     audit(
         db,
         action="voyage.transition",
@@ -414,6 +429,22 @@ def voyage_transition(
     db.commit()
     db.refresh(row)
     return VoyageOut.model_validate(row)
+
+
+@router.get("/voyages/{voyage_id}/closing-check")
+def voyage_closing_check(
+    voyage_id: UUID,
+    auth: AuthContext = Depends(require_module("operations")),
+    db: Session = Depends(get_db),
+):
+    """航次收尾清单：逐项齐备/缺失 + 缺项的跟进任务定义 + Actual TCE vs Estimate。
+
+    完成航次时缺项会自动生成分部门跟进任务（见 services/automation.py）。
+    """
+    row = scoped_get(db, Voyage, voyage_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Voyage not found")
+    return closing_check(db, auth.tenant_id, row)
 
 
 # ── Batch operations (C2-P2) ──────────────────────────────────────────────

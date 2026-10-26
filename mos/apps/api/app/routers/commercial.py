@@ -52,6 +52,8 @@ from app.services.data_scope import apply_module_scope
 from app.services.cargo_terms import freight_with_overage
 from app.services.pricing_engine import AdvancedPricingEngine, WorldscaleCalculator
 from app.services.distance_service import get_distance, get_route
+from app.services.domain_events import emit
+from app.services.sanctions import assert_not_sanctioned
 from app.models_reference import PortDistance, WorldscaleRate
 from app.services.timeutil import utcnow_naive
 
@@ -2176,6 +2178,9 @@ def charter_transition(
         raise HTTPException(404, "Charter not found")
     if body.target == "active" and row.sanctions_blocked:
         raise HTTPException(status_code=409, detail={"code": "SANCTIONS_BLOCKED", "message": "Cannot activate sanctioned counterparty charter"})
+    if body.target == "active" and row.counterparty_id is not None:
+        # 实时复查（缓存字段可能过期）——命中即 409 + 留存筛查审计
+        assert_not_sanctioned(db, auth.tenant_id, row.counterparty_id)
 
     from app.models_saas import WorkflowDefinition, WorkflowInstance
     from app.services.saas_engine import start_workflow
@@ -2349,20 +2354,35 @@ def fix_lifting(
     db: Session = Depends(get_db),
 ):
     lift = _get_lifting(db, auth, lifting_id)
+    contract = db.get(Charter, lift.charter_id)
+    if contract is None or contract.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Charter not found")
+    # 订租即锁定对手方交易 —— 实时制裁复查（命中 409 + 留存筛查审计）
+    if contract.counterparty_id is not None:
+        assert_not_sanctioned(db, auth.tenant_id, contract.counterparty_id)
     if body.voyage_id is not None:
         voyage = db.get(Voyage, body.voyage_id)
         if not voyage or voyage.tenant_id != auth.tenant_id:
             raise HTTPException(404, "Voyage not found")
     else:
         # 未指定航次 → 按 COA 合同 + lifting 代建（与租约激活同一套建航次逻辑）
-        contract = db.get(Charter, lift.charter_id)
-        if contract is None or contract.tenant_id != auth.tenant_id:
-            raise HTTPException(404, "Charter not found")
         terms = contract.freight_terms or {}
         lift_cargo = terms.get("cargo") or (f"qty {lift.planned_qty}" if lift.planned_qty else None)
         voyage = _auto_create_charter_voyage(db, auth.tenant_id, contract, cargo=lift_cargo)
     lift.status = transition("coa_lifting", lift.status, "fixed", COA_LIFTING_TRANSITIONS)
     lift.voyage_id = voyage.id
+    emit(
+        db, auth.tenant_id, "lifting.fixed", "coa_lifting", lift.id,
+        payload={
+            "charter_id": str(contract.id),
+            "charter_no": contract.charter_no,
+            "period_label": lift.period_label,
+            "planned_qty": float(lift.planned_qty or 0),
+            "voyage_id": str(voyage.id),
+            "voyage_no": voyage.voyage_no,
+        },
+        user_id=auth.user_id,
+    )
     db.commit()
     db.refresh(lift)
     return _lifting_out(lift)
@@ -2383,9 +2403,86 @@ def complete_lifting(
     lift.status = transition("coa_lifting", lift.status, "completed", COA_LIFTING_TRANSITIONS)
     if body and body.actual_qty is not None:
         lift.actual_qty = body.actual_qty
+    # 履约进度：合同量 vs 累计已装（completed 取实际量，缺省回退计划量）
+    contract = db.get(Charter, lift.charter_id)
+    lifted_total = 0.0
+    has_open = False
+    if contract is not None:
+        siblings = db.scalars(
+            select(CoaLifting).where(
+                CoaLifting.tenant_id == auth.tenant_id,
+                CoaLifting.charter_id == contract.id,
+            )
+        ).all()
+        for s in siblings:
+            if s.status == "completed":
+                lifted_total += float(s.actual_qty if s.actual_qty is not None else s.planned_qty or 0)
+            elif s.id != lift.id and s.status not in ("cancelled",):
+                has_open = True
+    emit(
+        db, auth.tenant_id, "lifting.completed", "coa_lifting", lift.id,
+        payload={
+            "charter_id": str(lift.charter_id),
+            "period_label": lift.period_label,
+            "planned_qty": float(lift.planned_qty or 0),
+            "actual_qty": float(lift.actual_qty or 0),
+            "total_qty": float(contract.cargo_qty or 0) if contract is not None else 0.0,
+            "lifted_total": lifted_total,
+            "has_open_liftings": has_open,
+        },
+        user_id=auth.user_id,
+    )
     db.commit()
     db.refresh(lift)
     return _lifting_out(lift)
+
+
+@router.get("/charters/{charter_id}/coa-progress")
+def coa_progress(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """COA 履约进度：合同量 vs 计划/已订/已装累计 + 超装短装标记。"""
+    row = scoped_get(db, Charter, charter_id, auth.tenant_id)
+    if row is None:
+        raise HTTPException(404, "Charter not found")
+    liftings = db.scalars(
+        select(CoaLifting).where(
+            CoaLifting.tenant_id == auth.tenant_id,
+            CoaLifting.charter_id == row.id,
+        )
+    ).all()
+    total = float(row.cargo_qty or 0)
+    planned = fixed = lifted = 0.0
+    open_count = 0
+    for l in liftings:
+        if l.status == "cancelled":
+            continue
+        pq = float(l.planned_qty or 0)
+        planned += pq
+        if l.status == "completed":
+            lifted += float(l.actual_qty if l.actual_qty is not None else l.planned_qty or 0)
+        elif l.status == "fixed":
+            fixed += pq
+        else:
+            open_count += 1
+    remaining = total - lifted if total > 0 else None
+    pct = round(lifted / total * 100, 1) if total > 0 else None
+    return {
+        "charter_id": str(row.id),
+        "charter_no": row.charter_no,
+        "total_qty": total,
+        "planned_qty": round(planned, 3),
+        "fixed_qty": round(fixed, 3),
+        "lifted_qty": round(lifted, 3),
+        "remaining_qty": round(remaining, 3) if remaining is not None else None,
+        "progress_pct": pct,
+        "lifting_count": len([l for l in liftings if l.status != "cancelled"]),
+        "open_count": open_count,
+        "over_lifted": bool(total > 0 and lifted > total * 1.02),
+        "under_lifted": bool(total > 0 and lifted < total * 0.95 and open_count == 0),
+    }
 
 
 # ---- Charter amendments (change orders for locked key terms) ----
@@ -2499,6 +2596,17 @@ def approve_amendment(
             v = date.fromisoformat(v)
         setattr(charter, k, v)
     charter.updated_at = utcnow_naive()
+    # 域事件：通知三部门 + 有未结发票/计提时生成财务复核任务
+    emit(
+        db, auth.tenant_id, "charter.amendment_approved", "charter_amendment", amd.id,
+        payload={
+            "charter_id": str(charter.id),
+            "charter_no": charter.charter_no,
+            "changes": amd.changes or {},
+            "reason": amd.reason,
+        },
+        user_id=auth.user_id,
+    )
     db.commit()
     db.refresh(amd)
     return _amendment_out(amd)

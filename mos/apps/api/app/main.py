@@ -53,6 +53,7 @@ import app.models_interface  # noqa: F401
 import app.models_field_perms  # noqa: F401
 import app.models_doc  # noqa: F401
 import app.models_voyage_ext  # noqa: F401
+import app.services.automation  # noqa: F401 — 注册域事件处理器（与路由导入顺序无关）
 from app.routers.admin_platform import router as admin_router
 from app.routers.ai_chat import router as ai_chat_router
 from app.routers.ai_actions import router as ai_actions_router

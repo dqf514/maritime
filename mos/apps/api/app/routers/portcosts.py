@@ -19,6 +19,7 @@ from app.models_domain import PortDisbursement, Voyage
 from app.services.state_machine import PDA_TRANSITIONS, transition
 
 from app.routers._finance_common import _alive
+from app.services.domain_events import emit
 from app.services.port_cost_benchmark import benchmark_for_port, over_benchmark
 from app.services.recycle import soft_delete
 
@@ -78,6 +79,18 @@ def pda_transition(
     if target == "fda" and fda_amount is not None:
         row.fda_amount = Decimal(str(fda_amount))
         row.variance = Decimal(str(fda_amount)) - Decimal(str(row.pda_amount or 0))
+    if target == "closed":
+        # 域事件：尝试自动过账 GL，失败降级为财务任务（services/automation.py）
+        emit(
+            db, auth.tenant_id, "pda.closed", "port_disbursement", row.id,
+            payload={
+                "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+                "pda_amount": float(row.pda_amount or 0),
+                "fda_amount": float(row.fda_amount or 0) if row.fda_amount is not None else None,
+                "currency": row.currency or "USD",
+            },
+            user_id=auth.user_id,
+        )
     db.commit()
     return {
         "id": str(row.id),
@@ -85,6 +98,28 @@ def pda_transition(
         "pda_amount": float(row.pda_amount or 0),
         "fda_amount": float(row.fda_amount or 0),
         "variance": float(row.variance or 0),
+    }
+
+
+@router.post("/port-disbursements/{pda_id}/gl-post")
+def pda_gl_post(
+    pda_id: UUID,
+    auth: AuthContext = Depends(require_module("finance")),
+    db: Session = Depends(get_db),
+):
+    """PDA/FDA 手动触发 GL 过账（与关闭时的自动过账同一引擎，幂等）。"""
+    from app.services.automation import try_post_pda_journal
+
+    row = db.get(PortDisbursement, pda_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "PDA not found")
+    journal, outcome = try_post_pda_journal(db, auth.tenant_id, row, user_id=auth.user_id)
+    db.commit()
+    return {
+        "id": str(row.id),
+        "posted": journal is not None,
+        "journal_id": str(journal.id) if journal is not None else None,
+        "outcome": outcome,
     }
 
 
