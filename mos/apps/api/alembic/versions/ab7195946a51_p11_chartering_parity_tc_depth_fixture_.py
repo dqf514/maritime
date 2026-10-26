@@ -19,7 +19,10 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = 'ab7195946a51'
-down_revision = '26c3fccfee50'
+# Upstream references revision 26c3fccfee50 (P10 masterdata parity), which is
+# missing from the repository. This deployment chains P11 after the document
+# migration; the missing P10 schema is reconstructed in a follow-up revision.
+down_revision = 'fa29e6429092'
 branch_labels = None
 depends_on = None
 

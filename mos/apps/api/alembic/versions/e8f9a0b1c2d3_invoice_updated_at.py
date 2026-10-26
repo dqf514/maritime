@@ -22,9 +22,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # SQLite cannot ADD COLUMN with a non-constant default (CURRENT_TIMESTAMP);
+    # legacy rows deliberately stay NULL (assert_fresh is permissive on NULL).
     op.add_column(
         "invoices",
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
 
 

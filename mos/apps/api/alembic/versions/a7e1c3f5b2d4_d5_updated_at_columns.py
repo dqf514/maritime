@@ -24,15 +24,19 @@ _TABLES = ("voyages", "claims", "payments", "payment_batches", "chart_of_account
 
 
 def upgrade() -> None:
+    # SQLite cannot ADD COLUMN with a non-constant default (CURRENT_TIMESTAMP),
+    # so add the nullable column first, then backfill existing rows.
     for table in _TABLES:
         op.add_column(
             table,
-            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True, server_default=sa.func.now()),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         )
+        op.execute(sa.text(f'UPDATE "{table}" SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL'))
     op.add_column(
         "claims",
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
     )
+    op.execute(sa.text('UPDATE "claims" SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL'))
 
 
 def downgrade() -> None:
