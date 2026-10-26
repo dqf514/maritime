@@ -30,6 +30,14 @@ import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
 type RefItem = { id: string; name: string; unlocode?: string };
+type CharterRow = {
+  id: string;
+  charter_no?: string;
+  charter_type?: string;
+  status: string;
+  vessel_id: string | null;
+  freight_terms?: { cargo?: string; cargo_qty?: number | string } | null;
+};
 type Voyage = { id: string; voyage_no: string; status: string; cargo: string | null; vessel_id: string | null; updated_at?: string | null };
 type PortCall = {
   id: string;
@@ -198,8 +206,51 @@ function VoyagesPageInner() {
   const [newVoyageNo, setNewVoyageNo] = useState("");
   const [newCargo, setNewCargo] = useState("");
   const [creating, setCreating] = useState(false);
+  // 关联租约（可选）：选中后自动带出船舶与货名 —— 激活租约本会自动建航次，
+  // 这里服务的是手工补建/未挂船舶的场景。
+  const [charterOpts, setCharterOpts] = useState<
+    Array<{ id: string; label: string; vessel_id: string | null; cargo: string }>
+  >([]);
+  const [newCharterId, setNewCharterId] = useState("");
+  const [charterOptErr, setCharterOptErr] = useState("");
 
   useListHotkeys(() => setCreating(true));
+
+  // 打开新建弹窗时拉 active 租约参照（失败不阻断手工新建）
+  useEffect(() => {
+    if (!creating) return;
+    let cancelled = false;
+    Promise.all([
+      apiGet("/api/v1/charters"),
+      apiGet("/api/v1/masterdata/vessels"),
+    ])
+      .then(([cs, vs]) => {
+        if (cancelled) return;
+        const vmap = new Map<string, string>();
+        for (const v of Array.isArray(vs) ? vs : []) vmap.set(v.id, v.name || v.id);
+        const opts = (Array.isArray(cs) ? cs : [])
+          .filter((c: { status: string }) => c.status === "active")
+          .map((c: CharterRow) => {
+            const terms = c.freight_terms || {};
+            const cargo = terms.cargo || (terms.cargo_qty ? `qty ${terms.cargo_qty}` : "");
+            const vname = c.vessel_id ? vmap.get(c.vessel_id) || "" : "";
+            const label = [c.charter_no || c.id.slice(0, 8), c.charter_type, vname, cargo]
+              .filter(Boolean)
+              .join(" · ");
+            return { id: c.id, label, vessel_id: c.vessel_id || null, cargo };
+          });
+        setCharterOpts(opts);
+        setCharterOptErr(opts.length === 0 && (Array.isArray(cs) ? cs.length > 0 : false)
+          ? t("page.voyages.charter_none_active", "暂无已激活的租约 — 可直接手工新建，或先在租船页激活租约")
+          : "");
+      })
+      .catch(() => {
+        if (!cancelled) setCharterOptErr(t("page.voyages.charter_opts_fail", "租约列表加载失败 — 可重试或直接手工新建"));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [creating, t]);
 
   // 行右键菜单：打开 / 工作台 / 添加到个人待办 / 复制 id
   const router = useRouter();
@@ -420,14 +471,22 @@ function VoyagesPageInner() {
     e.preventDefault();
     setBusy(true);
     try {
+      const picked = charterOpts.find((c) => c.id === newCharterId) || null;
       const vno = newVoyageNo.trim() || `V-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-MAN`;
       const created = await apiPost("/api/v1/voyages", {
         voyage_no: vno,
-        cargo: newCargo || null,
+        cargo: newCargo || picked?.cargo || null,
+        charter_id: picked ? picked.id : null,
+        vessel_id: picked ? picked.vessel_id : null,
       });
-      toast.success(t("page.voyages.created", "Voyage {no} created", { no: created.voyage_no }));
+      toast.success(
+        picked
+          ? t("page.voyages.created_from_charter", "Voyage {no} created — linked to charter", { no: created.voyage_no })
+          : t("page.voyages.created", "Voyage {no} created", { no: created.voyage_no }),
+      );
       setNewVoyageNo("");
       setNewCargo("");
+      setNewCharterId("");
       setCreating(false);
       const list = await load();
       if (created.id) {
@@ -1765,6 +1824,27 @@ function VoyagesPageInner() {
         size="md"
       >
         <div className="form-grid">
+          <label className="field span-all">
+            <span>{t("page.voyages.charter", "关联租约（可选）")}</span>
+            <select
+              className="input"
+              value={newCharterId}
+              onChange={(e) => {
+                const id = e.target.value;
+                setNewCharterId(id);
+                const opt = charterOpts.find((c) => c.id === id);
+                // 选中租约 → 货名留空时自动带出（用户已输入的不覆盖）
+                if (opt?.cargo && !newCargo.trim()) setNewCargo(opt.cargo);
+              }}
+            >
+              <option value="">{t("common.none", "不关联")}</option>
+              {charterOpts.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="field">
             <span>{t("page.voyages.no", "No")}</span>
             <input
@@ -1778,6 +1858,17 @@ function VoyagesPageInner() {
             <span>{t("page.voyages.cargo", "Cargo")}</span>
             <input className="input" value={newCargo} onChange={(e) => setNewCargo(e.target.value)} />
           </label>
+          {newCharterId ? (
+            <p className="field-hint span-all">
+              {t("page.voyages.charter_linked_hint", "将自动关联所选租约及其船舶；租约详情页可随时查看航次。")}
+            </p>
+          ) : charterOptErr ? (
+            <p className="field-hint span-all">{charterOptErr}</p>
+          ) : (
+            <p className="field-hint span-all">
+              {t("page.voyages.create_hint", "Or activate a charter to auto-create a voyage + schedule block.")}
+            </p>
+          )}
         </div>
       </RecordModal>
 

@@ -2061,6 +2061,109 @@ class CharterTransition(BaseModel):
     target: str
 
 
+def _auto_create_charter_voyage(
+    db: Session, tenant_id: UUID, charter: Charter, *, cargo: str | None = None, commit: bool = False
+) -> Voyage:
+    """租约 → 航次：激活副作用与「补建航次」共用的建航次逻辑。
+
+    自动编号 V-…，带上 charter 关联与船舶；有船舶时同步占用 14 天 ScheduleBlock
+    （冲突仅标记 hard_conflict，不阻断）。不 commit（调用方统一提交），
+    除非传 commit=True（供 lifting fix 这类独立端点直接收尾）。
+    """
+    from datetime import timedelta
+
+    if cargo is None:
+        terms = charter.freight_terms or {}
+        cargo = terms.get("cargo") or (f"qty {terms.get('cargo_qty')}" if terms.get("cargo_qty") else None)
+    vno = next_doc_number(db, tenant_id, Voyage, Voyage.voyage_no, "V")
+    voyage = Voyage(
+        tenant_id=tenant_id,
+        voyage_no=vno,
+        status="planned",
+        vessel_id=charter.vessel_id,
+        charter_id=charter.id,
+        cargo=cargo,
+        cp_date=date.today(),
+    )
+    db.add(voyage)
+    db.flush()
+    if charter.vessel_id:
+        start = datetime.now(timezone.utc)
+        end = start + timedelta(days=14)
+        conflict = _has_conflict(db, tenant_id, charter.vessel_id, start, end)
+        db.add(
+            ScheduleBlock(
+                tenant_id=tenant_id,
+                vessel_id=charter.vessel_id,
+                block_type="voyage",
+                title=vno,
+                start_at=start,
+                end_at=end,
+                voyage_id=voyage.id,
+                hard_conflict=conflict,
+            )
+        )
+    if commit:
+        db.commit()
+        db.refresh(voyage)
+    return voyage
+
+
+@router.post("/charters/{charter_id}/voyage")
+def create_charter_voyage(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """补建航次 —— 已激活租约的航次被删/漏建时一键补上（幂等）。
+
+    已有存活航次则直接返回它（created=false），不重复建。
+    """
+    row = db.get(Charter, charter_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Charter not found")
+    if row.status != "active":
+        raise HTTPException(
+            409,
+            detail={"code": "INVALID_STATE", "message": "Charter must be active to create a voyage"},
+        )
+    existing = db.scalars(
+        select(Voyage).where(
+            Voyage.tenant_id == auth.tenant_id,
+            Voyage.charter_id == row.id,
+            Voyage.status != "deleted",
+        )
+    ).first()
+    if existing is not None:
+        return {"created": False, "voyage": {"id": str(existing.id), "voyage_no": existing.voyage_no, "status": existing.status}}
+    voyage = _auto_create_charter_voyage(db, auth.tenant_id, row)
+    db.commit()
+    db.refresh(voyage)
+    return {"created": True, "voyage": {"id": str(voyage.id), "voyage_no": voyage.voyage_no, "status": voyage.status}}
+
+
+@router.get("/charters/{charter_id}/voyages")
+def list_charter_voyages(
+    charter_id: UUID,
+    auth: AuthContext = Depends(require_module("chartering")),
+    db: Session = Depends(get_db),
+):
+    """租约关联的航次清单 —— 租约详情「航次」弹窗用。"""
+    row = db.get(Charter, charter_id)
+    if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
+        raise HTTPException(404, "Charter not found")
+    rows = db.scalars(
+        select(Voyage)
+        .where(
+            Voyage.tenant_id == auth.tenant_id,
+            Voyage.charter_id == row.id,
+            Voyage.status != "deleted",
+        )
+        .order_by(Voyage.created_at)
+    ).all()
+    return [{"id": str(v.id), "voyage_no": v.voyage_no, "status": v.status} for v in rows]
+
+
 @router.post("/charters/{charter_id}/transition", response_model=CharterOut)
 def charter_transition(
     charter_id: UUID,
@@ -2124,41 +2227,8 @@ def charter_transition(
         start_workflow(db, tenant_id=auth.tenant_id, entity_type="charter", entity_id=row.id, started_by=auth.user_id)
 
     if body.target == "active" and row.vessel_id:
-        # auto-create voyage + schedule occupancy
-        vno = next_doc_number(db, auth.tenant_id, Voyage, Voyage.voyage_no, "V")
-        voyage = Voyage(
-            tenant_id=auth.tenant_id,
-            voyage_no=vno,
-            status="planned",
-            vessel_id=row.vessel_id,
-            charter_id=row.id,
-            cargo=(row.freight_terms or {}).get("cargo")
-            or (
-                f"qty {(row.freight_terms or {}).get('cargo_qty')}"
-                if (row.freight_terms or {}).get("cargo_qty")
-                else None
-            ),
-            cp_date=date.today(),
-        )
-        db.add(voyage)
-        db.flush()
-        from datetime import timedelta
-
-        start = datetime.now(timezone.utc)
-        end = start + timedelta(days=14)
-        conflict = _has_conflict(db, auth.tenant_id, row.vessel_id, start, end)
-        db.add(
-            ScheduleBlock(
-                tenant_id=auth.tenant_id,
-                vessel_id=row.vessel_id,
-                block_type="voyage",
-                title=vno,
-                start_at=start,
-                end_at=end,
-                voyage_id=voyage.id,
-                hard_conflict=conflict,
-            )
-        )
+        # auto-create voyage + schedule occupancy（与「补建航次」共用 _auto_create_charter_voyage）
+        _auto_create_charter_voyage(db, auth.tenant_id, row)
     db.commit()
     db.refresh(row)
     return _charter_out(
@@ -2268,7 +2338,7 @@ def nominate_lifting(
 
 
 class LiftingFixIn(BaseModel):
-    voyage_id: UUID
+    voyage_id: UUID | None = None
 
 
 @router.post("/coa-liftings/{lifting_id}/fix", response_model=CoaLiftingOut)
@@ -2279,9 +2349,18 @@ def fix_lifting(
     db: Session = Depends(get_db),
 ):
     lift = _get_lifting(db, auth, lifting_id)
-    voyage = db.get(Voyage, body.voyage_id)
-    if not voyage or voyage.tenant_id != auth.tenant_id:
-        raise HTTPException(404, "Voyage not found")
+    if body.voyage_id is not None:
+        voyage = db.get(Voyage, body.voyage_id)
+        if not voyage or voyage.tenant_id != auth.tenant_id:
+            raise HTTPException(404, "Voyage not found")
+    else:
+        # 未指定航次 → 按 COA 合同 + lifting 代建（与租约激活同一套建航次逻辑）
+        contract = db.get(Charter, lift.charter_id)
+        if contract is None or contract.tenant_id != auth.tenant_id:
+            raise HTTPException(404, "Charter not found")
+        terms = contract.freight_terms or {}
+        lift_cargo = terms.get("cargo") or (f"qty {lift.planned_qty}" if lift.planned_qty else None)
+        voyage = _auto_create_charter_voyage(db, auth.tenant_id, contract, cargo=lift_cargo)
     lift.status = transition("coa_lifting", lift.status, "fixed", COA_LIFTING_TRANSITIONS)
     lift.voyage_id = voyage.id
     db.commit()

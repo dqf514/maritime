@@ -131,6 +131,24 @@ dl.kv-grid > div { min-width: 0; }
   min-width: 0;
 }
 
+/* 表单网格内的说明行（无标签、贴着控件的小字提示） */
+.field-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-label);
+  line-height: 1.4;
+}
+
+/* 租约「航次」弹窗：航次入口按钮行 */
+.voyage-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs);
+}
+.voyage-chip-row-actions {
+  margin-top: var(--gap-sm);
+}
+
 .field-row {
   display: flex;
   flex-direction: column;

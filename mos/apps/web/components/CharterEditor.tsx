@@ -407,6 +407,9 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
   const [vessels, setVessels] = useState<RefItem[]>([]);
   const [parties, setParties] = useState<RefItem[]>([]);
   const [voyages, setVoyages] = useState<Array<{ id: string; voyage_no: string }>>([]);
+  // 本租约关联的航次（「航次」弹窗）—— 与上面的全局 voyage options 分开
+  const [charterVoyages, setCharterVoyages] = useState<Array<{ id: string; voyage_no: string; status: string }>>([]);
+  const [voyModalOpen, setVoyModalOpen] = useState(false);
   const [clauseCatalog, setClauseCatalog] = useState<ClauseOpt[]>([]);
   const [clauseCodes, setClauseCodes] = useState<string[]>([]);
   const [edit, setEdit] = useState({
@@ -844,6 +847,42 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
     }
   }
 
+  // 「航次」弹窗：列出本租约关联的航次；漏建/误删时一键补建（幂等，后端已有则返回既有）
+  async function openVoyageModal() {
+    if (!charter) return;
+    setVoyModalOpen(true);
+    setBusy(true);
+    try {
+      const rows = await apiGet(`/api/v1/charters/${charter.id}/voyages`);
+      setCharterVoyages(Array.isArray(rows) ? rows : []);
+    } catch (ex) {
+      setCharterVoyages([]);
+      setErr(msgOf(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createCharterVoyage() {
+    if (!charter) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await apiPost(`/api/v1/charters/${charter.id}/voyage`);
+      toast.success(
+        res.created
+          ? t("page.charters.voyage_created", "航次 {no} 已创建", { no: res.voyage?.voyage_no })
+          : t("page.charters.voyage_exists", "航次 {no} 已存在 — 未重复创建", { no: res.voyage?.voyage_no }),
+      );
+      const rows = await apiGet(`/api/v1/charters/${charter.id}/voyages`);
+      setCharterVoyages(Array.isArray(rows) ? rows : []);
+    } catch (ex) {
+      setErr(msgOf(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function addLifting() {
     if (!charter) return;
     setBusy(true);
@@ -982,10 +1021,11 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
     setLiftAction({ id, kind });
     setNomFrom("");
     setNomTo("");
-    setFixVoyage(voyages[0]?.id || "");
+    // 默认「自动创建航次」—— 直观优先：不想代建再从下拉里挑现成的
+    setFixVoyage("auto");
     setDoneQty("");
     setErr("");
-  }, [voyages]);
+  }, []);
 
   async function runLiftAction() {
     if (!liftAction || !charter) return;
@@ -1001,12 +1041,16 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
         }
         body = { laycan_from: `${nomFrom}T00:00:00`, laycan_to: `${nomTo}T23:59:59` };
       } else if (liftAction.kind === "fix") {
-        if (!fixVoyage) {
+        // "auto" = 不指定航次，后端按合同 + lifting 代建并回填
+        if (fixVoyage && fixVoyage !== "auto") {
+          body = { voyage_id: fixVoyage };
+        } else if (!fixVoyage) {
           setErr(t("page.charters.need_voyage", "请选择航次"));
           setBusy(false);
           return;
+        } else {
+          body = {};
         }
-        body = { voyage_id: fixVoyage };
       } else {
         body = doneQty !== "" ? { actual_qty: Number(doneQty) } : {};
       }
@@ -1313,6 +1357,16 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
             disabled: busy || saving,
             onClick: () => void move(s),
           })),
+          ...(charter?.status === "active"
+            ? [
+                {
+                  key: "voyages",
+                  label: t("page.charters.action_voyages", "航次"),
+                  disabled: busy || saving,
+                  onClick: () => void openVoyageModal(),
+                },
+              ]
+            : []),
           {
             key: "back",
             label: t("common.back", "返回"),
@@ -1868,6 +1922,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 <label>
                   {t("page.voyages.list", "Voyages")}
                   <select value={fixVoyage} onChange={(e) => setFixVoyage(e.target.value)}>
+                    <option value="auto">{t("page.charters.fix_auto_voyage", "自动创建航次（按合同代建）")}</option>
                     <option value="">{t("common.select", "Select…")}</option>
                     {voyages.map((v) => (
                       <option key={v.id} value={v.id}>
@@ -1958,6 +2013,38 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
             <option value="demurrage">demurrage</option>
           </select>
         </label>
+      </RecordModal>
+
+      <RecordModal
+        open={voyModalOpen}
+        title={t("page.charters.voyages_title", "关联航次")}
+        onClose={() => setVoyModalOpen(false)}
+        canEdit={false}
+        canDelete={false}
+      >
+        {charterVoyages.length ? (
+          <div className="voyage-chip-row">
+            {charterVoyages.map((v) => (
+              <Link
+                key={v.id}
+                href={`/operations/voyages?v=${v.id}`}
+                className="btn btn-sm"
+                onClick={() => setVoyModalOpen(false)}
+              >
+                {v.voyage_no} · {v.status}
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <p className="field-hint">
+            {t("page.charters.no_charter_voyages", "暂无关联航次 — 可一键补建（自动编号并占用船期 14 天）。")}
+          </p>
+        )}
+        <div className="voyage-chip-row voyage-chip-row-actions">
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void createCharterVoyage()}>
+            + {t("page.charters.create_voyage", "补建航次")}
+          </button>
+        </div>
       </RecordModal>
 
       <RecordModal
