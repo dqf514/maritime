@@ -1,35 +1,32 @@
 /* ── Mari Copilot — 全局弹出助手 + 表单内 AI 填充 ──
    全部走设计 token，暗色主题（slate/indigo）自动适配。 */
 
-/* 悬浮唤起按钮（右下角） */
-.ai-fab {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 85;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: #fff;
-  font-size: 17px;
-  line-height: 1;
+/* 状态栏唤起链接（原右下角悬浮按钮会挡住表格分页等贴底内容，已移入状态栏） */
+.statusbar-ai {
+  margin-left: auto;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--font-label);
   cursor: pointer;
-  box-shadow: var(--shadow-md);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  white-space: nowrap;
 }
-.ai-fab:hover {
-  filter: brightness(1.08);
+.statusbar-ai:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+.statusbar-ai[aria-expanded="true"] {
+  color: var(--accent-text);
+  font-weight: 600;
 }
 
-/* 滑出面板 */
+/* 滑出面板（贴在状态栏上方） */
 .ai-dock {
   position: fixed;
   right: 12px;
-  bottom: 66px;
+  bottom: calc(var(--statusbar) + 8px);
   z-index: 86;
   width: min(392px, calc(100vw - 24px));
   max-height: min(70vh, 620px);

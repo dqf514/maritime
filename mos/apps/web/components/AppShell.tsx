@@ -104,6 +104,8 @@ export function AppShell({
   const [navHint, setNavHint] = useState<{ text: string; x: number; y: number } | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // AI 助手面板开关 —— 触发器是状态栏链接（原右下角悬浮按钮会挡住表格分页）
+  const [aiOpen, setAiOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   // 用户菜单是「非模态下拉」：复用共享 hook 只做打开时移入焦点 / 关闭时归还焦点，
   // 不做焦点陷阱——用户要能 Tab 出去继续操作页面。
@@ -511,6 +513,15 @@ export function AppShell({
             <span className="muted">{roleLabel}</span>
             <span className="statusbar-search-hint">{t("shell.omni_search", "搜索 (Ctrl+K)")}</span>
             <span className="ok-dot">{t("common.online", "在线")}</span>
+            <button
+              type="button"
+              className="statusbar-ai"
+              title={`${t("ai.assist.open", "AI 助手")} (Ctrl+J)`}
+              aria-expanded={aiOpen}
+              onClick={() => setAiOpen((o) => !o)}
+            >
+              ✦ {t("ai.assist.open", "AI 助手")}
+            </button>
           </footer>
         </div>
         {/* Right contextual panel — AI / properties / details */}
@@ -560,8 +571,8 @@ export function AppShell({
             ‹
           </button>
         ) : null}
-        {/* 全局 AI 助手（悬浮按钮 + 滑出面板，Ctrl+J 切换） */}
-        <AiAssistant />
+        {/* 全局 AI 助手（状态栏链接唤起滑出面板，Ctrl+J 切换） */}
+        <AiAssistant open={aiOpen} onOpenChange={setAiOpen} />
       </div>
     </div>
   );

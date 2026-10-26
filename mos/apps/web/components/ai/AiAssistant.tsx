@@ -10,8 +10,9 @@ import { useAiContext } from "./aiContextStore";
 /**
  * Mari Copilot —— 全局弹出式 AI 助手。
  *
- * 右下角悬浮按钮（或 Ctrl+J）唤起滑出面板；自动带上当前页面/实体上下文，
+ * 底部状态栏链接（或 Ctrl+J）唤起滑出面板；自动带上当前页面/实体上下文，
  * 支持问答与一键总结/日报。**AI 只建议，人工确认**：面板不写任何业务数据。
+ * （原右下角悬浮按钮会挡住表格分页等贴底内容 —— 已移入状态栏。）
  *
  * 计费：平台公用网关按量付费时后端返回 402 QUOTA_EXCEEDED，此处给出充值提示。
  */
@@ -32,10 +33,16 @@ const QUICK_ACTIONS = [
   { task: "explain", key: "ai.assist.quick_explain" },
 ] as const;
 
-export function AiAssistant() {
+type Props = {
+  /** 面板开关由宿主（AppShell 状态栏链接）控制 */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
+
+export function AiAssistant({ open, onOpenChange }: Props) {
   const { t } = useI18n();
   const ctx = useAiContext();
-  const [open, setOpen] = useState(false);
+  const setOpen = onOpenChange;
   const [status, setStatus] = useState<Status | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -54,7 +61,7 @@ export function AiAssistant() {
     function onKey(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && (e.key === "j" || e.key === "J")) {
         e.preventDefault();
-        setOpen((o) => !o);
+        setOpen(!open);
         return;
       }
       if (e.key === "Escape" && open) {
@@ -65,7 +72,7 @@ export function AiAssistant() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, setOpen]);
 
   // 打开时拉一次可用性（含计费余额）
   useEffect(() => {
@@ -147,17 +154,6 @@ export function AiAssistant() {
 
   return createPortal(
     <>
-      <button
-        type="button"
-        className="ai-fab"
-        title={`${t("ai.assist.open", "AI 助手")} (Ctrl+J)`}
-        aria-label={t("ai.assist.open", "AI 助手")}
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        {open ? "×" : "✦"}
-      </button>
-
       {open ? (
         <aside className="ai-dock" role="dialog" aria-label={t("ai.assist.title", "Mari Copilot")}>
           <div className="ai-dock-head">
