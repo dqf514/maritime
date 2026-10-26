@@ -163,6 +163,9 @@ export default function EmailReviewPage() {
   const [rows, setRows] = useState<Msg[]>([]);
   const [m365, setM365] = useState(false);
   const [loading, setLoading] = useState(true);
+  // 邮件时间按租户默认时区展示（lestarigroup = Asia/Singapore，UTC+8）；
+  // 未取到时回退 UTC，避免不同浏览器本地时区造成同屏不一致。
+  const [tz, setTz] = useState<string>("UTC");
   /** 主列表加载失败 —— 绝不能与「没有邮件」混淆 */
   const [err, setErr] = useState<string | null>(null);
   /** 邮箱账号面板（次级列表）加载失败 —— 局部提示，不影响主列表 */
@@ -260,6 +263,16 @@ export default function EmailReviewPage() {
     }
     setLoading(false);
   }, [activeFolder, syncDays, syncCount]);
+
+  // 租户默认时区（Asia/Singapore 等）—— 邮件时间按它格式化。
+  useEffect(() => {
+    apiGet("/api/v1/me")
+      .then((me) => {
+        const t = (me as { tenant?: { default_timezone?: string } } | null)?.tenant?.default_timezone;
+        if (t) setTz(t);
+      })
+      .catch(() => undefined);
+  }, []);
 
   // 挂载时恢复上次的同步偏好（天数/条数/文件夹勾选）—— 刷新不丢
   useEffect(() => {
@@ -735,7 +748,7 @@ export default function EmailReviewPage() {
         width: 150,
         sortable: true,
         value: (r) => (r.sent_at ? parseUtc(r.sent_at)?.getTime() ?? null : null),
-        render: (_v, r) => (r.sent_at ? formatInTz(r.sent_at) : "—"),
+        render: (_v, r) => (r.sent_at ? formatInTz(r.sent_at, tz) : "—"),
       },
       {
         key: "parse_status",
@@ -798,7 +811,7 @@ export default function EmailReviewPage() {
         ),
       },
     ],
-    [t, openDetail],
+    [t, openDetail, tz],
   );
 
   /** 状态筛选芯片把行全筛没了、但未筛时有行 → 提示被隐藏的数量 */
@@ -1041,7 +1054,7 @@ export default function EmailReviewPage() {
               </div>
               <div className="ws-kv">
                 <span>{t("page.email.time", "Time")}</span>
-                <strong>{detail.sent_at ? formatInTz(detail.sent_at) : "—"}</strong>
+                <strong>{detail.sent_at ? formatInTz(detail.sent_at, tz) : "—"}</strong>
               </div>
               <div className="ws-kv">
                 <span>{t("page.email.folder", "文件夹")}</span>
