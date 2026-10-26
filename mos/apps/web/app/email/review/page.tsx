@@ -8,7 +8,6 @@ import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
-import { RowActions } from "@/components/RowActions";
 import { StateView } from "@/components/StateView";
 import { StatusLegend } from "@/components/StatusLegend";
 import { Tabs, type TabItem } from "@/components/Tabs";
@@ -16,8 +15,8 @@ import { Toolbar } from "@/components/Toolbar";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { AiExtractFill, type ExtractedValues } from "@/components/ai/AiExtractFill";
-import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
-import { msgOf } from "@/lib/errors";
+import { apiGet, apiPost } from "@/lib/api";
+import { handled, msgOf } from "@/lib/errors";
 import { downloadCsv } from "@/lib/csv";
 import { formatInTz, parseUtc } from "@/lib/datetime";
 import { htmlToText } from "@/lib/htmlText";
@@ -168,8 +167,6 @@ export default function EmailReviewPage() {
   const [tz, setTz] = useState<string>("UTC");
   /** 主列表加载失败 —— 绝不能与「没有邮件」混淆 */
   const [err, setErr] = useState<string | null>(null);
-  /** 邮箱账号面板（次级列表）加载失败 —— 局部提示，不影响主列表 */
-  const [accErr, setAccErr] = useState<string | null>(null);
   /** M365 连接状态（参考数据）加载失败 —— 只影响徽标 */
   const [officeErr, setOfficeErr] = useState<string | null>(null);
   /** 文件夹清单加载失败 —— 降级静态双 Tab */
@@ -233,13 +230,8 @@ export default function EmailReviewPage() {
       setRows([]);
       setErr(msgOf(msgsR.reason));
     }
-    if (accR.status === "fulfilled") {
-      setAccounts(accR.value as Account[]);
-      setAccErr(null);
-    } else {
-      setAccounts([]);
-      setAccErr(msgOf(accR.reason));
-    }
+    // 账户列表仅供同步按钮 ensure 用；加载失败时置空，由 ensureSyncAccount 重建
+    setAccounts(accR.status === "fulfilled" ? (accR.value as Account[]) : []);
     if (foldersR.status === "fulfilled") {
       const fl = (foldersR.value as { folders?: FolderInfo[] } | null)?.folders || [];
       // inbox / sentitems 永远并入（Graph 权限不给全时至少有双 Tab 可看）
@@ -271,7 +263,7 @@ export default function EmailReviewPage() {
         const t = (me as { tenant?: { default_timezone?: string } } | null)?.tenant?.default_timezone;
         if (t) setTz(t);
       })
-      .catch(() => undefined);
+      .catch(handled); // 时区取不到回退 UTC（tz state 默认值），无需打扰用户
   }, []);
 
   // 挂载时恢复上次的同步偏好（天数/条数/文件夹勾选）—— 刷新不丢
@@ -515,32 +507,6 @@ export default function EmailReviewPage() {
     // "review" → 保持人工复核，无需自动动作
   }
 
-  async function onAccountCellSave(rowId: string, colKey: string, value: unknown, row: Account) {
-    const src = row as unknown as Record<string, unknown>;
-    if ((src[colKey] ?? "") === (value ?? "")) return;
-    try {
-      // config only replaced when explicitly sent — never include it here
-      await apiPatch(`/api/v1/email/accounts/${rowId}`, { [colKey]: value === "" ? null : value });
-      toast.success(t("common.saved", "Saved"));
-      await load();
-    } catch (ex: any) {
-      toast.error(msgOf(ex));
-    }
-  }
-
-  const deleteAccount = useCallback(
-    async (id: string) => {
-      try {
-        await apiDelete(`/api/v1/email/accounts/${id}`);
-        toast.success(t("common.recycled", "Moved to recycle bin"));
-        await load();
-      } catch (ex: any) {
-        toast.error(msgOf(ex));
-      }
-    },
-    [t, toast, load],
-  );
-
   function copyMsgId(m: Msg) {
     void navigator.clipboard.writeText(m.id);
     toast.success(t("ctx.copied_id", "ID copied"));
@@ -664,54 +630,6 @@ export default function EmailReviewPage() {
         title: f.key,
       })),
     [folderList],
-  );
-
-  const accountColumns = useMemo<ColumnDef<Account>[]>(
-    () => [
-      {
-        key: "email",
-        title: t("common.email", "Email"),
-        minWidth: 180,
-        value: (r) => r.email,
-        editor: { type: "text" },
-      },
-      {
-        key: "display_name",
-        title: t("page.email.display_name", "Display name"),
-        minWidth: 140,
-        value: (r) => r.display_name || "",
-        editor: { type: "text" },
-        render: (v) => (v ? String(v) : "—"),
-      },
-      {
-        key: "provider",
-        title: t("page.email.provider", "Provider"),
-        width: 120,
-        value: (r) => r.provider,
-        editor: { type: "text" },
-      },
-      {
-        key: "status",
-        title: t("common.status", "Status"),
-        width: 110,
-        value: (r) => r.status,
-        editor: {
-          type: "select",
-          options: [
-            { value: "active", label: t("page.email.status_active", "Active") },
-            { value: "paused", label: t("page.email.status_paused", "Paused") },
-          ],
-        },
-      },
-      {
-        key: "_actions",
-        title: "",
-        width: 70,
-        align: "right",
-        render: (_v, a) => <RowActions label={a.email} onDelete={() => deleteAccount(a.id)} />,
-      },
-    ],
-    [t, deleteAccount],
   );
 
   const columns = useMemo<ColumnDef<Msg>[]>(
@@ -930,29 +848,8 @@ export default function EmailReviewPage() {
         </p>
       ) : null}
       <StatusLegend statuses={["pending", "review", "parsed", "failed"]} />
-      <p className="hint">
-        {t(
-          "page.email.confidence_hint",
-          "置信度 = AI 对解析字段的把握程度（0–100%）：偏低时请重点核对「解析字段」再确认。",
-        )}
-      </p>
-      <div className="panel">
-        <h3>{t("page.email.accounts", "Mailbox accounts")}</h3>
-        {accErr ? (
-          <p className="state-view-error" role="alert">
-            {t("page.email.accounts_fail", "Mailbox accounts could not be loaded: {err}", { err: accErr })}
-          </p>
-        ) : null}
-        <DataGrid<Account>
-          columns={accountColumns}
-          data={accounts}
-          rowKey={(a) => a.id}
-          editable
-          onCellSave={onAccountCellSave}
-          storageKey="email_accounts_grid"
-          emptyText={t("page.email.no_accounts", "No mailbox accounts")}
-        />
-      </div>
+      {/* 置信度说明与邮箱账户面板已移除（用户反馈占高度无用）；
+          账户由同步按钮自动 ensure 创建，无需常驻展示 */}
       <div className="panel">
         <StateView
           loading={loading}
