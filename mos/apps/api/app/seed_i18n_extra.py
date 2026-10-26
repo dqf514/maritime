@@ -2456,6 +2456,7 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("page.billing.sub_readonly", "app", "View current plan and usage. Subscriptions and top-ups are enabled by the platform admin; self-service checkout comes after online payments launch.", "查看当前套餐与用量。订阅与充值由平台管理员开通；线上支付开通后再支持自助下单"),
     ("page.billing.wallet_empty", "app", "No usage balance yet", "尚无用量余额"),
     ("page.branding.bad_type", "app", "Only png / jpg / webp images are supported", "仅支持 png / jpg / webp 图片"),
+    ("page.branding.company_logo", "app", "Company logo", "公司 Logo"),
     ("page.branding.favicon", "app", "Favicon", "网站图标"),
     ("page.branding.fields", "app", "Copy and links", "文案与链接"),
     ("page.branding.icon", "app", "Icon", "图标"),

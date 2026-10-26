@@ -199,7 +199,7 @@ export default function CompanyBrandPage() {
 
       <ImageCropModal
         open={Boolean(crop)}
-        kind="logo"
+        kind="company_logo"
         file={crop}
         busy={uploading}
         error={uploadErr}

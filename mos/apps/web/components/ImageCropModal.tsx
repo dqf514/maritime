@@ -4,10 +4,13 @@ import { PointerEvent, useEffect, useRef, useState } from "react";
 import { useFocusTrap } from "@/components/useFocusTrap";
 import { useI18n } from "@/lib/i18n";
 
-export type CropKind = "logo" | "icon" | "favicon";
+export type CropKind = "logo" | "company_logo" | "icon" | "favicon";
 
 const SPECS: Record<CropKind, { ratio: number; outW: number; outH: number }> = {
+  // 产品门户 logo 是横版字标（登录/门户页宽条展示）
   logo: { ratio: 3, outW: 600, outH: 200 },
+  // 租户公司 logo 展示在壳层左上角的正方形槽位（28×28）与单据信头 —— 1:1
+  company_logo: { ratio: 1, outW: 512, outH: 512 },
   icon: { ratio: 1, outW: 512, outH: 512 },
   favicon: { ratio: 1, outW: 64, outH: 64 },
 };
