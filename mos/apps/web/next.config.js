@@ -19,6 +19,18 @@ const nextConfig = {
   output: "standalone",
   // 隐藏 dev 模式悬浮指示器（N 徽标）；编译/运行时错误仍会正常提示
   devIndicators: false,
+  // Tenant logos live on the API (/uploads/branding/...). The public origin only
+  // proxies /api, so serve them through the web origin with a server-side rewrite.
+  // API_INTERNAL_BASE is the in-host API address (Docker: http://api:8000).
+  async rewrites() {
+    const apiInternal = process.env.API_INTERNAL_BASE || "http://127.0.0.1:8800";
+    return [
+      {
+        source: "/uploads/branding/:path*",
+        destination: `${apiInternal}/uploads/branding/:path*`,
+      },
+    ];
+  },
   headers() {
     return [
       {
