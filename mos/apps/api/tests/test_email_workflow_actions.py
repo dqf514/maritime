@@ -78,10 +78,12 @@ def test_apply_fixture_recap_creates_estimate_draft(client, auth_headers, open_d
     body = res.json()
     assert body["email_type"] in ("fixture_recap", "recap")
     created = body["created"]
-    assert len(created) == 1 and created[0]["entity"] == "estimate"
+    # Request XIV：recap 落单从「只有估算」变成「估算 + 租约草稿」
+    assert {c["entity"] for c in created} == {"estimate", "charter"}
+    est_created = [c for c in created if c["entity"] == "estimate"]
 
     with open_db() as s:
-        est = s.get(Estimate, UUID(created[0]["id"]))
+        est = s.get(Estimate, UUID(est_created[0]["id"]))
         assert est is not None
         assert est.status == "draft"
         assert est.inputs["load_port"] == "SGSIN"

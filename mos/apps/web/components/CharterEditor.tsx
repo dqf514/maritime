@@ -12,6 +12,7 @@ import type { ColumnDef } from "@/components/grid";
 import { DateInput } from "@/components/DateInput";
 import { DetailHeader } from "@/components/DetailHeader";
 import { Num } from "@/components/Num";
+import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { RecordModal } from "@/components/RecordModal";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
 import { StatusLegend } from "@/components/StatusLegend";
@@ -2033,6 +2034,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
         )}
       </div>
 
+      {charter ? <AttachmentsPanel entityType="charter" entityId={charter.id} /> : null}
       {charter ? <RevisionsPanel entityType="charter" entityId={charter.id} /> : null}
 
       <RecordModal

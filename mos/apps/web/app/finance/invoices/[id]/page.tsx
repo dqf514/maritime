@@ -7,6 +7,7 @@ import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { CurrencyField } from "@/components/CurrencyField";
 import { DetailHeader, type DetailAction } from "@/components/DetailHeader";
+import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { Num } from "@/components/Num";
@@ -712,6 +713,7 @@ function InvoiceDetailPage() {
       </PrintDoc>
       </div>
 
+      {id ? <AttachmentsPanel entityType="invoice" entityId={id} /> : null}
       {id ? <RevisionsPanel entityType="invoice" entityId={id} /> : null}
 
       <ConfirmDialog

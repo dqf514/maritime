@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -208,10 +208,14 @@ def _sync_graph_mails(
     """
     from app.services import office_hub
     from app.services.email_intelligence import (
-        classify_email,
+        classify_with_memory,
+        parse_bunker_offer,
+        parse_claim,
         parse_fixture_recap,
+        parse_invoice,
         parse_laytime_statement,
         parse_nor,
+        parse_port_disbursement,
     )
 
     try:
@@ -298,9 +302,13 @@ def _sync_graph_mails(
             else:
                 # Classify + rule-based parse (fast & deterministic; the LLM pipeline
                 # remains available separately via /email-intelligence/process).
-                cls = classify_email(subject, body)
+                # 反馈记忆（忽略并记住）命中时分类降级为 general —— 不再进复核队列。
+                cls, suppressed = classify_with_memory(db, auth.tenant_id, subject, body, from_email)
                 ctype = cls["type"]
                 parse_result = {"email_type": ctype, "source": "graph", "graph_id": str(mid)}
+                if suppressed:
+                    parse_result["suppressed_by_rule"] = suppressed["rule"]
+                    parse_result["original_classification"] = suppressed["original"]
                 status = "parsed"
                 if ctype == "fixture_recap":
                     parse_result.update(parse_fixture_recap(body))
@@ -310,6 +318,18 @@ def _sync_graph_mails(
                     status = "review"
                 elif ctype == "laytime_statement":
                     parse_result.update(parse_laytime_statement(body))
+                    status = "review"
+                elif ctype == "bunker_offer":
+                    parse_result.update(parse_bunker_offer(body))
+                    status = "review"
+                elif ctype == "port_disbursement":
+                    parse_result.update(parse_port_disbursement(body))
+                    status = "review"
+                elif ctype == "invoice":
+                    parse_result.update(parse_invoice(body))
+                    status = "review"
+                elif ctype == "claim":
+                    parse_result.update(parse_claim(body))
                     status = "review"
 
             db.add(
@@ -656,13 +676,250 @@ def apply_parse_to_drafts(
     auth: AuthContext = Depends(require_module("email")),
     db: Session = Depends(get_db),
 ):
-    """解析结果一键落单：recap→估算草稿 / NOR→盖 nor_at / SOF→装卸时间草稿。"""
+    """解析结果一键落单：recap→估算+租约草稿 / NOR→盖 nor_at / SOF→装卸时间草稿 /
+    bunkers→订油单 / PDA→使费草稿 / invoice→发票草稿 / claim→索赔记录。"""
     from app.services.email_actions import apply_message
 
     try:
         return apply_message(db, auth.tenant_id, auth.user_id, message_id)
     except LookupError as exc:
         raise HTTPException(404, "Message not found") from exc
+
+
+class EmailIgnoreIn(BaseModel):
+    remember: bool = True  # 记住这次误判（同源同类型不再提示）
+
+
+def _email_type_of_row(row: EmailMessage) -> str:
+    parse = row.parse_result or {}
+    etype = str(parse.get("email_type") or "")
+    if not etype:
+        cls = parse.get("classification")
+        if isinstance(cls, dict):
+            etype = str(cls.get("type") or "")
+    return etype or "general"
+
+
+@router.post("/email/review/{message_id}/ignore")
+def ignore_parse(
+    message_id: UUID,
+    body: EmailIgnoreIn | None = None,
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """忽略这封邮件的自动判定；可选「记住」—— 同发件人/域名不再识别为该类型。
+
+    记忆落在 ConfigService（租户作用域 JSON，key=email.classifier_ignore_rules），
+    分类时经 classify_with_memory 命中即降级为 general，不再进复核队列。
+    """
+    from app.services.email_intelligence import add_ignore_rule
+
+    row = db.get(EmailMessage, message_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Message not found")
+    remember = True if body is None else bool(body.remember)
+    etype = _email_type_of_row(row)
+    rule = None
+    if remember and etype not in ("general", "outbound", "outbound_reply"):
+        from_pattern = str(row.from_email or "").strip().lower()
+        if from_pattern:
+            rule = add_ignore_rule(db, auth.tenant_id, etype, from_pattern, user_id=auth.user_id)
+    parse = dict(row.parse_result or {})
+    parse["ignored_at"] = datetime.now(timezone.utc).isoformat()
+    if rule:
+        parse["ignore_rule"] = rule
+    row.parse_result = parse
+    row.parse_status = "parsed"
+    db.commit()
+    return {"id": str(row.id), "status": "parsed", "remembered": rule}
+
+
+@router.get("/email/ignore-rules")
+def list_ignore_rules(
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """已记住的误判规则清单（可在 UI 里逐条撤销）。"""
+    from app.services.email_intelligence import load_ignore_rules
+
+    return {"rules": load_ignore_rules(db, auth.tenant_id)}
+
+
+class EmailIgnoreRuleIn(BaseModel):
+    email_type: str
+    from_pattern: str
+
+
+@router.delete("/email/ignore-rules")
+def delete_ignore_rule(
+    body: EmailIgnoreRuleIn,
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """撤销一条「忽略并记住」的规则 —— 该来源同类型邮件恢复进复核队列。"""
+    from app.services.email_intelligence import remove_ignore_rule
+
+    removed = remove_ignore_rule(db, auth.tenant_id, body.email_type, body.from_pattern)
+    if not removed:
+        raise HTTPException(404, "Rule not found")
+    return {"removed": removed}
+
+
+#: 邮件可存档到的实体类型 → (模块码, 展示名)
+ARCHIVE_ENTITY_TYPES: dict[str, str] = {
+    "voyage": "operations",
+    "port_disbursement": "operations",
+    "bunker_order": "bunker",
+    "claim": "claims",
+    "invoice": "finance",
+    "charter": "chartering",
+    "estimate": "estimate",
+    "laytime": "laytime",
+}
+
+
+class EmailArchiveIn(BaseModel):
+    entity_type: str
+    entity_id: UUID
+
+
+@router.post("/email/messages/{message_id}/archive")
+def archive_message(
+    message_id: UUID,
+    body: EmailArchiveIn,
+    auth: AuthContext = Depends(require_module("email")),
+    db: Session = Depends(get_db),
+):
+    """把邮件正文存档为项目附件（Attachment 版本化）+ OfficeResourceLink 关联。
+
+    实体必须存在且属于本租户；附件落在 uploads/attachments/{tenant}/{type}/{id}/，
+    与人工上传的附件同一列表、同一版本语义。
+    """
+    from app.models_wave1 import Attachment
+    from app.security import tenant_has_module
+    from app.services.audit import audit
+
+    row = db.get(EmailMessage, message_id)
+    if not row or row.tenant_id != auth.tenant_id:
+        raise HTTPException(404, "Message not found")
+    etype = body.entity_type
+    if etype not in ARCHIVE_ENTITY_TYPES:
+        raise HTTPException(
+            422, detail={"code": "UNKNOWN_ENTITY_TYPE", "allowed": sorted(ARCHIVE_ENTITY_TYPES)}
+        )
+    if not tenant_has_module(db, auth.tenant_id, ARCHIVE_ENTITY_TYPES[etype]):
+        raise HTTPException(
+            403, detail={"code": "MODULE_NOT_LICENSED", "module": ARCHIVE_ENTITY_TYPES[etype]}
+        )
+    from app.models_domain import (
+        BunkerOrder,
+        Charter,
+        Claim,
+        Estimate,
+        Invoice,
+        LaytimeCalc,
+        PortDisbursement,
+        Voyage,
+    )
+
+    entity_model = {
+        "voyage": Voyage,
+        "port_disbursement": PortDisbursement,
+        "bunker_order": BunkerOrder,
+        "claim": Claim,
+        "invoice": Invoice,
+        "charter": Charter,
+        "estimate": Estimate,
+        "laytime": LaytimeCalc,
+    }[etype]
+    entity = db.get(entity_model, body.entity_id)
+    if entity is None or getattr(entity, "tenant_id", None) != auth.tenant_id:
+        raise HTTPException(404, f"{etype} not found")
+
+    # 正文落盘为 .eml 风格纯文本（Outlook 导出惯例 —— 带头信息，可直接打开核对）
+    from app.services.files_store import store_entity_file
+
+    stamp = (row.sent_at or row.created_at or datetime.now(timezone.utc)).strftime("%Y%m%d_%H%M%S")
+    safe_subject = re.sub(r"[^A-Za-z0-9._ -]+", "_", (row.subject or "email").strip())[:60].strip() or "email"
+    filename = f"mail_{stamp}_{safe_subject}.eml.txt"
+    content = (
+        f"From: {row.from_email or ''}\n"
+        f"Subject: {row.subject or ''}\n"
+        f"Date: {row.sent_at.isoformat() if row.sent_at else ''}\n"
+        f"Message-ID: {row.message_id or ''}\n"
+        f"\n{row.body_text or ''}\n"
+    ).encode("utf-8")
+
+    next_version = (
+        db.scalar(
+            select(func.max(Attachment.version_no)).where(
+                Attachment.tenant_id == auth.tenant_id,
+                Attachment.entity_type == etype,
+                Attachment.entity_id == body.entity_id,
+            )
+        )
+        or 0
+    ) + 1
+    dest = store_entity_file(auth.tenant_id, etype, body.entity_id, next_version, filename, content)
+    for prev in db.scalars(
+        select(Attachment).where(
+            Attachment.tenant_id == auth.tenant_id,
+            Attachment.entity_type == etype,
+            Attachment.entity_id == body.entity_id,
+        )
+    ).all():
+        prev.is_current = False
+    attachment = Attachment(
+        tenant_id=auth.tenant_id,
+        entity_type=etype,
+        entity_id=body.entity_id,
+        file_name=filename,
+        file_path=str(dest),
+        mime_type="text/plain",
+        size=len(content),
+        version_no=next_version,
+        is_current=True,
+        note=f"Archived email: {row.subject or ''}",
+        uploaded_by=auth.user_id,
+    )
+    db.add(attachment)
+    db.flush()
+
+    # OfficeResourceLink：实体页「关联资源」里回溯原始邮件
+    from app.services import office_hub
+
+    office_hub.link_resource(
+        db,
+        auth.tenant_id,
+        entity_type=etype,
+        entity_id=body.entity_id,
+        resource_kind="mail",
+        resource_id=row.message_id or str(row.id),
+        display_name=row.subject,
+        meta={"email_message_db_id": str(row.id), "attachment_id": str(attachment.id)},
+    )
+    parse = dict(row.parse_result or {})
+    archived = parse.get("archived_to") if isinstance(parse.get("archived_to"), list) else []
+    archived.append({"entity_type": etype, "entity_id": str(body.entity_id), "attachment_id": str(attachment.id)})
+    parse["archived_to"] = archived
+    row.parse_result = parse
+    audit(
+        db,
+        action="email.archive_to_entity",
+        tenant_id=auth.tenant_id,
+        actor_user_id=auth.user_id,
+        entity_type=etype,
+        entity_id=body.entity_id,
+        detail={"email_message_db_id": str(row.id), "attachment_id": str(attachment.id)},
+    )
+    db.commit()
+    return {
+        "attachment_id": str(attachment.id),
+        "entity_type": etype,
+        "entity_id": str(body.entity_id),
+        "version_no": next_version,
+        "download_url": f"/api/v1/files/{attachment.id}/download",
+    }
 
 
 class EmailReplyIn(BaseModel):

@@ -13,6 +13,7 @@ import { MailAside } from "@/components/MailAside";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
+import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
 import { RecordAttribution } from "@/components/RecordAttribution";
 import { StatusBadge, type StatusTone } from "@/components/StatusBadge";
@@ -1488,7 +1489,14 @@ export default function VoyageWorkspacePage() {
             }
           />
         }
-        sidebar={id ? <RevisionsPanel entityType="voyage" entityId={id} /> : null}
+        sidebar={
+          id ? (
+            <>
+              <AttachmentsPanel entityType="voyage" entityId={id} />
+              <RevisionsPanel entityType="voyage" entityId={id} />
+            </>
+          ) : null
+        }
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
       >

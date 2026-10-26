@@ -77,13 +77,43 @@ type Recommend = {
 const REPLY_TEMPLATES = ["ack_recap", "counter_offer", "nor_ack", "laytime_query", "general"] as const;
 type ReplyTemplate = (typeof REPLY_TEMPLATES)[number];
 
+/** 逐类型落单按钮文案（Request XIV：油/使费/发票/索赔等新分支各有具名按钮） */
+const APPLY_LABEL_KEYS: Record<string, [string, string]> = {
+  fixture_recap: ["page.email.apply_recap", "Create estimate & charter drafts"],
+  recap: ["page.email.apply_recap", "Create estimate & charter drafts"],
+  nor: ["page.email.apply_nor", "Stamp NOR time"],
+  laytime_statement: ["page.email.apply_laytime", "Create laytime calc"],
+  bunker_offer: ["page.email.apply_bunker_order", "Create bunker order"],
+  port_disbursement: ["page.email.apply_pda", "Create PDA draft"],
+  invoice: ["page.email.apply_invoice", "Create invoice draft"],
+  claim: ["page.email.apply_claim", "Create claim record"],
+};
+
+/** 存档目标实体 → 列表端点 + 选项文案（列表端点形状不一，统一防御式取值） */
+const ARCHIVE_SOURCES: Record<string, { url: string; label: (e: Record<string, unknown>) => string }> = {
+  voyage: { url: "/api/v1/voyages", label: (e) => String(e.voyage_no || e.name || e.id || "") },
+  port_disbursement: { url: "/api/v1/port-disbursements", label: (e) => String(e.port || e.voyage_no || e.id || "") },
+  bunker_order: { url: "/api/v1/bunker-orders", label: (e) => String(e.order_no || e.id || "") },
+  claim: { url: "/api/v1/claims", label: (e) => String(e.claim_no || e.id || "") },
+  invoice: { url: "/api/v1/invoices", label: (e) => String(e.invoice_no || e.id || "") },
+  charter: { url: "/api/v1/charters", label: (e) => String(e.charter_no || e.id || "") },
+  estimate: { url: "/api/v1/estimates", label: (e) => String(e.title || e.id || "") },
+  laytime: { url: "/api/v1/laytimes", label: (e) => String(e.voyage_no || e.port || e.id || "") },
+};
+
+function msgEmailType(m: { parse_result?: Record<string, unknown> }): string {
+  const p = (m.parse_result || {}) as Record<string, unknown>;
+  const cls = (p.classification || {}) as Record<string, unknown>;
+  return String(p.email_type || cls.type || "");
+}
+
 const DAY_OPTIONS = [7, 14, 30] as const;
 const COUNT_OPTIONS = [200, 500, 1000] as const;
 const FALLBACK_FOLDERS: FolderInfo[] = [
   { key: "inbox", display_name: "Inbox", well_known: "inbox", parent_key: null },
   { key: "sentitems", display_name: "Sent Items", well_known: "sentitems", parent_key: null },
 ];
-type StatusFilter = "" | "review" | "parsed" | "pending";
+type StatusFilter = "" | "review" | "parsed" | "pending" | "ignored";
 
 /** 同步偏好（天数/条数/文件夹）持久化 —— 刷新不丢勾选；值非法时回退默认 */
 const SYNC_PREFS_KEY = "marios_email_sync_prefs";
@@ -130,7 +160,9 @@ function parseFields(r: { parse_result: Record<string, unknown> }): {
   const p = (r.parse_result || {}) as Record<string, unknown>;
   const cls = (p.classification || {}) as Record<string, unknown>;
   const etype = String(p.email_type || cls.type || "");
-  const sub = ((p.fixture_recap || p.nor || p.laytime) as Record<string, unknown>) || p;
+  const sub =
+    ((p.fixture_recap || p.nor || p.laytime || p.bunker_offer || p.port_disbursement || p.invoice ||
+      p.claim) as Record<string, unknown>) || p;
   const pairs: Array<[string, unknown]> = [];
   const pick = (src: Record<string, unknown>, keys: string[]) => {
     for (const k of keys) {
@@ -144,6 +176,14 @@ function parseFields(r: { parse_result: Record<string, unknown> }): {
   } else if (etype === "laytime_statement") {
     if (Array.isArray(sub.events)) pairs.push(["events", sub.events.length]);
     pick(sub, ["allowed_days"]);
+  } else if (etype === "bunker_offer") {
+    pick(sub, ["port", "grade", "unit_price", "qty_ordered", "supplier", "currency"]);
+  } else if (etype === "port_disbursement") {
+    pick(sub, ["port", "pda_amount", "fda_amount", "agent", "currency"]);
+  } else if (etype === "invoice") {
+    pick(sub, ["invoice_no_ref", "amount", "currency", "due_date"]);
+  } else if (etype === "claim") {
+    pick(sub, ["claim_type", "amount", "currency", "time_bar"]);
   } else if (etype === "outbound") {
     pick(sub, ["to_recipients"]);
   } else {
@@ -200,6 +240,16 @@ export default function EmailReviewPage() {
   /** 待确认的破坏性动作：落单（创建真实记录）/ 确认解析（出队）/ 发信 */
   const [pending, setPending] = useState<{ kind: "apply" | "confirm"; msg: Msg } | null>(null);
   const [pendingSend, setPendingSend] = useState(false);
+  /** 忽略并记住 —— 弹窗带「记住」勾选（默认勾上，用户的诉求就是「别再犯」） */
+  const [ignoreFor, setIgnoreFor] = useState<Msg | null>(null);
+  const [ignoreRemember, setIgnoreRemember] = useState(true);
+  /** 邮件存档弹窗：选目标项目 → 正文作为附件（带版本）挂上去 */
+  const [archiveFor, setArchiveFor] = useState<Msg | null>(null);
+  const [archiveType, setArchiveType] = useState<string>("voyage");
+  const [archiveEntityId, setArchiveEntityId] = useState("");
+  const [archiveOptions, setArchiveOptions] = useState<Array<{ id: string; label: string }>>([]);
+  const [archiveErr, setArchiveErr] = useState<string | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
   // AI 推荐
   const [recFor, setRecFor] = useState<Msg | null>(null);
   const [rec, setRec] = useState<Recommend | null>(null);
@@ -343,11 +393,15 @@ export default function EmailReviewPage() {
       const hints: string[] = res.hints || [];
       if (created.length) {
         const c = created[0];
+        const more =
+          created.length > 1
+            ? ` ${t("page.email.created_more", "+{n} more draft(s) created", { n: created.length - 1 })}`
+            : "";
         toast.success(
           t("page.email.apply_done", "Draft created: {kind} — {title}", {
             kind: c.entity,
             title: c.title || c.voyage_no || c.id,
-          }),
+          }) + more,
         );
       } else if (hints.length) {
         toast.error(hints.join(", "));
@@ -369,6 +423,85 @@ export default function EmailReviewPage() {
   const requestConfirm = useCallback((m: Msg) => {
     setPending({ kind: "confirm", msg: m });
   }, []);
+
+  /** 忽略并记住：出复核队列 + 记发件人规则（可选），同源同类型后续不再识别 */
+  async function ignoreMsg(m: Msg, remember: boolean) {
+    try {
+      await apiPost(`/api/v1/email/review/${m.id}/ignore`, { remember });
+      toast.success(
+        remember
+          ? t("page.email.ignore_ok", "Ignored — rule saved for this sender")
+          : t("page.email.ignored", "Ignored"),
+      );
+      await load();
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.email.ignore_fail", "Ignore failed")));
+    }
+  }
+
+  /** 存档目标清单：按实体类型取前 200 条（各端点形状不一，统一成 {id,label}） */
+  const loadArchiveOptions = useCallback(
+    async (etype: string) => {
+      const src = ARCHIVE_SOURCES[etype];
+      if (!src) {
+        setArchiveOptions([]);
+        return;
+      }
+      setArchiveBusy(true);
+      setArchiveErr(null);
+      try {
+        // 列表端点两种形状：裸数组（bunker/PDA/charters/estimates）或分页信封 {items}
+        const raw = (await apiGet(`${src.url}?limit=200`)) as
+          | Array<Record<string, unknown>>
+          | { items?: Array<Record<string, unknown>> };
+        const list = Array.isArray(raw) ? raw : Array.isArray(raw?.items) ? raw.items : [];
+        setArchiveOptions(
+          list.map((e) => ({
+            id: String(e.id),
+            label: src.label(e),
+          })),
+        );
+      } catch (ex) {
+        setArchiveOptions([]);
+        setArchiveErr(msgOf(ex, t("page.email.archive_load_fail", "Could not load the entity list")));
+      } finally {
+        setArchiveBusy(false);
+      }
+    },
+    [t],
+  );
+
+  /** 打开存档弹窗：默认 voyage，首次进入即拉清单 */
+  const openArchive = useCallback(
+    (m: Msg) => {
+      setArchiveFor(m);
+      setArchiveType("voyage");
+      setArchiveEntityId("");
+      void loadArchiveOptions("voyage");
+    },
+    [loadArchiveOptions],
+  );
+
+  async function saveArchive() {
+    if (!archiveFor || !archiveEntityId) return;
+    try {
+      const res = (await apiPost(`/api/v1/email/messages/${archiveFor.id}/archive`, {
+        entity_type: archiveType,
+        entity_id: archiveEntityId,
+      })) as { version_no?: number };
+      const opt = archiveOptions.find((o) => o.id === archiveEntityId);
+      toast.success(
+        t("page.email.archive_done", "Archived to {title} (v{n})", {
+          title: opt?.label || archiveEntityId,
+          n: res?.version_no ?? 1,
+        }),
+      );
+      setArchiveFor(null);
+      await load();
+    } catch (ex) {
+      toast.error(msgOf(ex, t("page.email.archive_fail", "Archive failed")));
+    }
+  }
 
   /** 行点击 → 详情（正文 + 解析字段；DataGrid 行 onClick 不阻止冒泡，行内按钮需 stopPropagation） */
   const openDetail = useCallback(
@@ -530,44 +663,65 @@ export default function EmailReviewPage() {
     );
   }
 
-  const menuItems = (m: Msg): ContextMenuItem[] => [
-    {
-      key: "detail",
-      label: t("page.email.detail_btn", "查看详情"),
-      onClick: () => void openDetail(m),
-    },
-    {
-      key: "ai",
-      label: t("page.email.ai_rec", "AI 建议"),
-      onClick: () => void openRecommend(m),
-    },
-    ...(m.parse_status === "review"
-      ? [
-          {
-            key: "apply",
-            label: t("page.email.apply_btn", "Create draft"),
-            onClick: () => requestApply(m),
-          },
-          {
-            key: "confirm",
-            label: t("page.email.confirm_btn", "确认解析"),
-            onClick: () => requestConfirm(m),
-          },
-        ]
-      : []),
-    {
-      key: "reply",
-      label: t("page.email.reply_btn", "Reply"),
-      onClick: () => void openReply(m),
-    },
-    { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyMsgId(m) },
-    { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportMsgs([m]) },
-  ];
+  const menuItems = (m: Msg): ContextMenuItem[] => {
+    const etype = msgEmailType(m);
+    const applyLabel = APPLY_LABEL_KEYS[etype];
+    return [
+      {
+        key: "detail",
+        label: t("page.email.detail_btn", "查看详情"),
+        onClick: () => void openDetail(m),
+      },
+      {
+        key: "ai",
+        label: t("page.email.ai_rec", "AI 建议"),
+        onClick: () => void openRecommend(m),
+      },
+      ...(m.parse_status === "review"
+        ? [
+            {
+              key: "apply",
+              label: applyLabel ? t(applyLabel[0], applyLabel[1]) : t("page.email.apply_btn", "Create draft"),
+              onClick: () => requestApply(m),
+            },
+            {
+              key: "ignore",
+              label: t("page.email.ignore_btn", "忽略"),
+              onClick: () => {
+                setIgnoreRemember(true);
+                setIgnoreFor(m);
+              },
+            },
+            {
+              key: "confirm",
+              label: t("page.email.confirm_btn", "确认解析"),
+              onClick: () => requestConfirm(m),
+            },
+          ]
+        : []),
+      {
+        key: "archive",
+        label: t("page.email.archive_btn", "存档"),
+        onClick: () => openArchive(m),
+      },
+      {
+        key: "reply",
+        label: t("page.email.reply_btn", "Reply"),
+        onClick: () => void openReply(m),
+      },
+      { key: "copy", label: t("ctx.copy_id", "Copy id"), onClick: () => copyMsgId(m) },
+      { key: "export", label: t("ctx.export_selected", "Export selected"), onClick: () => exportMsgs([m]) },
+    ];
+  };
 
   // ── 前端状态筛选 + 客户端排序（finance/pnl 模式：useMemo 比较器） ──────
   const statusFiltered = useMemo(() => {
     if (!statusFilter) return rows;
-    return rows.filter((m) => m.parse_status === statusFilter);
+    // 忽略过的邮件 parse_status 已置 parsed —— 「已忽略」芯片按 ignored_at 判
+    if (statusFilter === "ignored") {
+      return rows.filter((m) => Boolean((m.parse_result || {}).ignored_at));
+    }
+    return rows.filter((m) => m.parse_status === statusFilter && !(m.parse_result || {}).ignored_at);
   }, [rows, statusFilter]);
 
   const sorted = useMemo(() => {
@@ -674,6 +828,12 @@ export default function EmailReviewPage() {
         width: 100,
         sortable: true,
         value: (r) => r.parse_status,
+        render: (_v, r) =>
+          (r.parse_result || {}).ignored_at ? (
+            <span className="badge">{t("page.email.ignored", "已忽略")}</span>
+          ) : (
+            r.parse_status
+          ),
       },
       {
         key: "parse_confidence",
@@ -838,6 +998,7 @@ export default function EmailReviewPage() {
         {statusChip("review", t("page.email.filter_review", "待复核"))}
         {statusChip("parsed", t("page.email.filter_parsed", "已解析"))}
         {statusChip("pending", t("page.email.filter_pending", "待处理"))}
+        {statusChip("ignored", t("page.email.filter_ignored", "已忽略"))}
       </div>
       {hiddenByFilter > 0 && statusFiltered.length === 0 ? (
         <p className="hint">
@@ -1003,38 +1164,75 @@ export default function EmailReviewPage() {
                 </button>
               ) : null}
               {detail.parse_status === "review" ? (
-                <>
-                  <button
-                    className="btn btn-sm btn-primary"
-                    type="button"
-                    title={t(
-                      "page.email.apply_hint",
-                      "用解析字段一键生成业务草稿（估算 / 装卸时间 / NOR 停租时间等），会创建真实记录",
-                    )}
-                    onClick={() => {
-                      const m = detail;
-                      setDetailFor(null);
-                      setDetail(null);
-                      requestApply(m);
-                    }}
-                  >
-                    {t("page.email.apply_btn", "Create draft")}
-                  </button>
-                  <button
-                    className="btn btn-sm"
-                    type="button"
-                    title={t("page.email.confirm_hint", "采纳 AI 解析结果，该邮件移出复核队列")}
-                    onClick={() => {
-                      const id = detail.id;
-                      setDetailFor(null);
-                      setDetail(null);
-                      void confirm(id).catch((ex) => toast.error(msgOf(ex, t("page.email.confirm_fail", "Confirm failed"))));
-                    }}
-                  >
-                    {t("page.email.confirm_btn", "确认解析")}
-                  </button>
-                </>
+                (() => {
+                  const applyLabel = APPLY_LABEL_KEYS[msgEmailType(detail)];
+                  return (
+                    <>
+                      <button
+                        className="btn btn-sm btn-primary"
+                        type="button"
+                        title={t(
+                          "page.email.apply_hint",
+                          "用解析字段一键生成业务草稿（估算 / 装卸时间 / NOR 停租时间等），会创建真实记录",
+                        )}
+                        onClick={() => {
+                          const m = detail;
+                          setDetailFor(null);
+                          setDetail(null);
+                          requestApply(m);
+                        }}
+                      >
+                        {applyLabel
+                          ? t(applyLabel[0], applyLabel[1])
+                          : t("page.email.apply_btn", "Create draft")}
+                      </button>
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        title={t(
+                          "page.email.ignore_hint",
+                          "忽略本次建议；勾选记住后，同一发件人不会再被识别为此类型。",
+                        )}
+                        onClick={() => {
+                          const m = detail;
+                          setDetailFor(null);
+                          setDetail(null);
+                          setIgnoreRemember(true);
+                          setIgnoreFor(m);
+                        }}
+                      >
+                        {t("page.email.ignore_btn", "忽略")}
+                      </button>
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        title={t("page.email.confirm_hint", "采纳 AI 解析结果，该邮件移出复核队列")}
+                        onClick={() => {
+                          const id = detail.id;
+                          setDetailFor(null);
+                          setDetail(null);
+                          void confirm(id).catch((ex) => toast.error(msgOf(ex, t("page.email.confirm_fail", "Confirm failed"))));
+                        }}
+                      >
+                        {t("page.email.confirm_btn", "确认解析")}
+                      </button>
+                    </>
+                  );
+                })()
               ) : null}
+              <button
+                className="btn btn-sm"
+                type="button"
+                title={t("page.email.archive_entity_hint", "邮件正文将作为附件（带版本）挂到所选记录下。")}
+                onClick={() => {
+                  const m = detail;
+                  setDetailFor(null);
+                  setDetail(null);
+                  openArchive(m);
+                }}
+              >
+                {t("page.email.archive_btn", "存档")}
+              </button>
               <button
                 className="btn btn-sm"
                 type="button"
@@ -1169,6 +1367,91 @@ export default function EmailReviewPage() {
         ) : (
           <p className="muted">{t("page.email.rec_none", "无推荐")}</p>
         )}
+      </RecordModal>
+
+      {/* 忽略并记住 —— 出复核队列；勾选记住则同源同类型后续降级为普通邮件 */}
+      <RecordModal
+        open={Boolean(ignoreFor)}
+        title={t("page.email.ignore_title", "忽略建议")}
+        onClose={() => setIgnoreFor(null)}
+        onSave={() => {
+          const m = ignoreFor;
+          const remember = ignoreRemember;
+          setIgnoreFor(null);
+          if (m) void ignoreMsg(m, remember);
+        }}
+        canDelete={false}
+        size="md"
+      >
+        <p>{t("page.email.ignore_hint", "忽略本次建议；勾选记住后，同一发件人不会再被识别为此类型。")}</p>
+        <p className="muted">{ignoreFor?.subject || ignoreFor?.from_email || ""}</p>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={ignoreRemember}
+            onChange={(e) => setIgnoreRemember(e.target.checked)}
+          />
+          {t("page.email.ignore_remember", "记住这次误判")}
+        </label>
+      </RecordModal>
+
+      {/* 存档 —— 邮件正文作为附件（带版本）挂到所选业务记录 */}
+      <RecordModal
+        open={Boolean(archiveFor)}
+        title={t("page.email.archive_title", "存档邮件到项目")}
+        onClose={() => {
+          setArchiveFor(null);
+          setArchiveEntityId("");
+        }}
+        onSave={() => void saveArchive()}
+        saving={archiveBusy}
+        canDelete={false}
+        size="md"
+      >
+        <p className="muted">{archiveFor?.subject || archiveFor?.from_email || ""}</p>
+        <p className="hint">{t("page.email.archive_entity_hint", "邮件正文将作为附件（带版本）挂到所选记录下。")}</p>
+        <div className="form-row">
+          <label>
+            {t("page.email.archive_entity", "目标项目")}
+            <select
+              value={archiveType}
+              onChange={(e) => {
+                setArchiveType(e.target.value);
+                setArchiveEntityId("");
+                void loadArchiveOptions(e.target.value);
+              }}
+            >
+              {Object.keys(ARCHIVE_SOURCES).map((k) => (
+                <option key={k} value={k}>
+                  {t(`email.type.${k}`, k)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="form-row">
+          <label>
+            {t("page.email.archive_pick", "选择项目")}
+            {archiveErr ? (
+              <span className="state-view-error" role="alert">
+                {archiveErr}
+              </span>
+            ) : (
+              <select
+                value={archiveEntityId}
+                onChange={(e) => setArchiveEntityId(e.target.value)}
+                disabled={archiveBusy || !archiveOptions.length}
+              >
+                <option value="">{t("page.email.archive_placeholder", "请选择…")}</option>
+                {archiveOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+        </div>
       </RecordModal>
 
       {/* 落单 / 确认解析 —— 都会改变真实数据，先二次确认 */}

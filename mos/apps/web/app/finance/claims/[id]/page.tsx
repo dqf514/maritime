@@ -10,6 +10,7 @@ import { DetailHeader, type DetailAction } from "@/components/DetailHeader";
 import { ContactPicker } from "@/components/DataPicker";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
+import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
 import { StateView } from "@/components/StateView";
 import { useStateActions } from "@/components/useTransitions";
@@ -540,6 +541,7 @@ function ClaimDetailPage() {
         </div>
       </div>
 
+      {id ? <AttachmentsPanel entityType="claim" entityId={id} /> : null}
       {id ? <RevisionsPanel entityType="claim" entityId={id} /> : null}
 
       <ConfirmDialog

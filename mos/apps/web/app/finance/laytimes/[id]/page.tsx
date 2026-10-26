@@ -10,6 +10,7 @@ import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordAttribution } from "@/components/RecordAttribution";
 import { Num } from "@/components/Num";
+import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { RevisionsPanel } from "@/components/RevisionsPanel";
 import { SkeletonCard } from "@/components/Skeleton";
 import { StateView } from "@/components/StateView";
@@ -379,6 +380,7 @@ export default function LaytimeDetailPage() {
         </PrintDoc>
       )}
 
+      {id ? <AttachmentsPanel entityType="laytime" entityId={id} /> : null}
       {id ? <RevisionsPanel entityType="laytime" entityId={id} /> : null}
     </AppShell>
   );

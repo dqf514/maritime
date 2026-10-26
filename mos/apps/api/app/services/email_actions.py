@@ -15,14 +15,25 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models_domain import Estimate, LaytimeCalc, PortCall, Voyage
+from app.models_domain import (
+    BunkerOrder,
+    Charter,
+    Claim,
+    Estimate,
+    Invoice,
+    LaytimeCalc,
+    PortDisbursement,
+    PortCall,
+    Voyage,
+)
 from app.services.domain_events import emit
 from app.models_wave1 import (
     Counterparty,
@@ -87,7 +98,7 @@ def _extract_email_address(raw: str | None) -> str | None:
 def _flat_fields(parse: dict) -> dict:
     """合并多代落库形状：graph 同步存平铺字段；LLM 管线存 fixture_recap/nor/laytime 子字典。"""
     merged: dict[str, Any] = {}
-    for key in ("fixture_recap", "nor", "laytime"):
+    for key in ("fixture_recap", "nor", "laytime", "bunker_offer", "port_disbursement", "invoice", "claim"):
         sub = parse.get(key)
         if isinstance(sub, dict):
             merged.update({k: v for k, v in sub.items() if k not in ("_source", "_rule_diffs") and v is not None})
@@ -126,6 +137,19 @@ def _match_vessel(db: Session, tenant_id: UUID, name: str | None) -> Vessel | No
         .where(Vessel.tenant_id == tenant_id, Vessel.name.ilike(f"%{clean}%"))
         .limit(1)
     )
+
+
+def _vessel_from_subject(db: Session, tenant_id: UUID, subject: str | None) -> Vessel | None:
+    """主题里的船名回退匹配 —— 新类型（油/使费/发票/索赔）规则抽取不出 vessel，
+    但航运惯例把船名写在主题（"Bunker offer — Ocean Star"），按租户船舶逐条探测。"""
+    if not subject:
+        return None
+    text = str(subject)
+    for v in db.scalars(select(Vessel).where(Vessel.tenant_id == tenant_id)).all():
+        clean = re.sub(r"^(?:m\.?v\.?|mv\.?|ss\.?)\s*", "", v.name.strip(), flags=re.I)
+        if v.name.lower() in text.lower() or (clean and clean.lower() in text.lower()):
+            return v
+    return None
 
 
 def _match_voyage(db: Session, tenant_id: UUID, vessel: Vessel | None, hint: str | None = None) -> Voyage | None:
@@ -217,6 +241,37 @@ def _source_meta(msg: EmailMessage) -> dict:
     }
 
 
+def _dec(value: Any, places: str) -> Decimal | None:
+    """邮件解析值 → Decimal 量化（Numeric 列写入边界，ROUND_HALF_UP 显式舍入）。"""
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value)).quantize(Decimal(places), rounding=ROUND_HALF_UP)
+    except Exception:  # noqa: BLE001 — 解析值不可信，回 None 由人工补
+        return None
+
+
+def _parse_date(raw: Any) -> date | None:
+    dt = _parse_dt(str(raw) if raw is not None else None)
+    return dt.date() if dt else None
+
+
+def _match_counterparty_name(db: Session, tenant_id: UUID, name: str | None) -> tuple[UUID | None, str | None]:
+    """按名称模糊匹配对手方（供油方/代理/账单方）。"""
+    if not isinstance(name, str) or not name.strip():
+        return None, None
+    hit = db.scalar(
+        select(Counterparty)
+        .where(
+            Counterparty.tenant_id == tenant_id,
+            Counterparty.name.ilike(f"%{name.strip()[:60]}%"),
+            Counterparty.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
+    return (hit.id, hit.name) if hit else (None, None)
+
+
 def apply_message(db: Session, tenant_id: UUID, user_id: UUID | None, message_id: UUID) -> dict:
     """把一封已解析的业务邮件落成业务草稿；成功后消息置为 parsed 并记录 applied 清单。
 
@@ -241,13 +296,18 @@ def apply_message(db: Session, tenant_id: UUID, user_id: UUID | None, message_id
         }
     etype = _email_type_of(parse)
     fields = _flat_fields(parse)
-    # 键名兼容：规则抽取用 vessel；demo/旧落库形状用 vessel_name
+    # 键名兼容：规则抽取用 vessel；demo/旧落库形状用 vessel_name；
+    # 都没有时按主题里的船名回退（"Bunker offer — Ocean Star" 这类航运惯例）
     vessel = _match_vessel(db, tenant_id, fields.get("vessel") or fields.get("vessel_name"))
+    if vessel is None:
+        vessel = _vessel_from_subject(db, tenant_id, msg.subject)
     created: list[dict] = []
     warnings: list[str] = []
     hints: list[str] = []
 
     if etype in ("fixture_recap", "recap"):
+        from app.services.doc_numbering import next_doc_number
+
         cp_id, cp_name = _counterparty_from(db, tenant_id, parse, fields)
         inputs = {
             k: fields.get(k)
@@ -295,6 +355,40 @@ def apply_message(db: Session, tenant_id: UUID, user_id: UUID | None, message_id
         )
         if not vessel:
             warnings.append("vessel_not_matched")
+        # 租约草稿（P2）：recap 落估算的同时挂一份 CP 草稿，商务可在租约页接着谈条款
+        laycan = str(fields.get("laycan") or "")
+        laycan_from = _parse_date(laycan.split("-")[0]) if laycan else None
+        laycan_to = _parse_date(laycan.split("-")[-1]) if laycan else None
+        charter = Charter(
+            tenant_id=tenant_id,
+            created_by=user_id,
+            charter_no=next_doc_number(db, tenant_id, Charter, Charter.charter_no, "CP"),
+            charter_type="voyage",
+            status="draft",
+            vessel_id=vessel.id if vessel else None,
+            counterparty_id=cp_id,
+            estimate_id=est.id,
+            laycan_from=laycan_from,
+            laycan_to=laycan_to,
+            commission_pct=_dec(fields.get("commission"), "0.01"),
+            freight_rate=_dec(fields.get("freight_rate"), "0.0001"),
+            demurrage_rate=_dec(fields.get("demurrage_rate"), "0.01"),
+            despatch_rate=_dec(fields.get("despatch_rate"), "0.01"),
+            freight_terms={"source_email": _source_meta(msg), "laycan_raw": laycan or None},
+        )
+        db.add(charter)
+        db.flush()
+        _link_source_email(db, tenant_id, "charter", charter.id, msg)
+        created.append(
+            {
+                "entity": "charter",
+                "id": str(charter.id),
+                "title": charter.charter_no,
+                "href": f"/charters/{charter.id}",
+                "counterparty": cp_name,
+                "vessel": vessel.name if vessel else None,
+            }
+        )
 
     elif etype == "nor":
         voyage = _match_voyage(db, tenant_id, vessel, hint=msg.subject)
@@ -381,6 +475,168 @@ def apply_message(db: Session, tenant_id: UUID, user_id: UUID | None, message_id
                 "href": f"/finance/laytimes?id={calc.id}",
             }
         )
+
+    elif etype == "bunker_offer":
+        voyage = _match_voyage(db, tenant_id, vessel, hint=msg.subject)
+        supplier_cp_id, supplier_name = _match_counterparty_name(db, tenant_id, fields.get("supplier"))
+        cp_id, cp_name = _counterparty_from(db, tenant_id, parse, fields)
+        order = BunkerOrder(
+            tenant_id=tenant_id,
+            created_by=user_id,
+            order_no=f"BNK-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:5].upper()}",
+            status="planned",
+            vessel_id=vessel.id if vessel else None,
+            voyage_id=voyage.id if voyage else None,
+            grade=str(fields.get("grade") or "VLSFO"),
+            qty_ordered=_dec(fields.get("qty_ordered"), "0.001"),
+            unit_price=_dec(fields.get("unit_price"), "0.01"),
+            currency=str(fields.get("currency") or "USD").upper()[:3],
+            supplier=fields.get("supplier"),
+            counterparty_id=supplier_cp_id or cp_id,
+        )
+        db.add(order)
+        db.flush()
+        _link_source_email(db, tenant_id, "bunker_order", order.id, msg)
+        if not vessel:
+            warnings.append("vessel_not_matched")
+        if order.unit_price is None:
+            warnings.append("unit_price_missing")
+        created.append(
+            {
+                "entity": "bunker_order",
+                "id": str(order.id),
+                "title": order.order_no,
+                "action": "draft_created",
+                "href": f"/bunker?order={order.id}",
+                "vessel": vessel.name if vessel else None,
+                "supplier": supplier_name or cp_name,
+            }
+        )
+
+    elif etype == "port_disbursement":
+        voyage = _match_voyage(db, tenant_id, vessel, hint=msg.subject)
+        pc = None
+        if voyage is not None:
+            pc = db.scalar(
+                select(PortCall)
+                .where(PortCall.tenant_id == tenant_id, PortCall.voyage_id == voyage.id)
+                .order_by(PortCall.seq)
+                .limit(1)
+            )
+        pda = PortDisbursement(
+            tenant_id=tenant_id,
+            voyage_id=voyage.id if voyage else None,
+            port_call_id=pc.id if pc is not None else None,
+            status="draft",
+            pda_amount=_dec(fields.get("pda_amount"), "0.01"),
+            fda_amount=_dec(fields.get("fda_amount"), "0.01"),
+            currency=str(fields.get("currency") or "USD").upper()[:3],
+            lines={
+                "source_email": _source_meta(msg),
+                "port": fields.get("port"),
+                "agent": fields.get("agent"),
+            },
+        )
+        db.add(pda)
+        db.flush()
+        _link_source_email(db, tenant_id, "port_disbursement", pda.id, msg)
+        if voyage is None:
+            warnings.append("voyage_not_matched")
+        created.append(
+            {
+                "entity": "port_disbursement",
+                "id": str(pda.id),
+                "action": "draft_created",
+                "href": f"/operations/voyages{f'?tab=pda&id={pda.id}' if voyage else ''}",
+                "voyage": voyage.voyage_no if voyage else None,
+                "port": fields.get("port"),
+            }
+        )
+
+    elif etype == "invoice":
+        from app.services.doc_numbering import next_doc_number
+
+        voyage = _match_voyage(db, tenant_id, vessel, hint=msg.subject)
+        cp_id, cp_name = _counterparty_from(db, tenant_id, parse, fields)
+        amount = _dec(fields.get("amount"), "0.01")
+        if amount is None or amount <= 0:
+            # 与 /invoices 的 INVALID_AMOUNT 口径一致 —— 零金额发票没有业务含义
+            hints.append("invoice_amount_missing")
+            warnings.append("invoice_amount_missing")
+        else:
+            inv = Invoice(
+                tenant_id=tenant_id,
+                invoice_no=next_doc_number(db, tenant_id, Invoice, Invoice.invoice_no, "INV"),
+                invoice_type="freight",
+                status="draft",
+                counterparty_id=cp_id,
+                voyage_id=voyage.id if voyage else None,
+                currency=str(fields.get("currency") or "USD").upper()[:3],
+                amount=amount,
+                tax_amount=Decimal("0.00"),
+                paid_amount=Decimal("0.00"),
+                due_date=_parse_date(fields.get("due_date")),
+                meta={"source_email": _source_meta(msg), "invoice_no_ref": fields.get("invoice_no_ref")},
+                created_by=user_id,
+            )
+            db.add(inv)
+            db.flush()
+            _link_source_email(db, tenant_id, "invoice", inv.id, msg)
+            if voyage is None:
+                warnings.append("voyage_not_matched")
+            created.append(
+                {
+                    "entity": "invoice",
+                    "id": str(inv.id),
+                    "title": inv.invoice_no,
+                    "action": "draft_created",
+                    "href": f"/finance/invoices/{inv.id}",
+                    "counterparty": cp_name,
+                    "amount": float(amount),
+                }
+            )
+
+    elif etype == "claim":
+        voyage = _match_voyage(db, tenant_id, vessel, hint=msg.subject)
+        cp_id, cp_name = _counterparty_from(db, tenant_id, parse, fields)
+        amount = _dec(fields.get("amount"), "0.01")
+        # 索赔必须挂靠一个业务对象或一个非零金额（与 /claims 创建口径一致）
+        if voyage is None and (amount is None or amount == 0):
+            hints.append("claim_needs_anchor")
+            warnings.append("claim_needs_anchor")
+        else:
+            claim_type = str(fields.get("claim_type") or "demurrage")
+            from app.services.claim_taxonomy import is_valid_claim_type
+
+            if not is_valid_claim_type(claim_type):
+                claim_type = "demurrage"
+            claim = Claim(
+                tenant_id=tenant_id,
+                created_by=user_id,
+                claim_no=f"CL-{datetime.now().strftime('%Y%m%d')}-{str(uuid4())[:5].upper()}",
+                claim_type=claim_type,
+                status="open",
+                voyage_id=voyage.id if voyage else None,
+                amount=amount,
+                currency=str(fields.get("currency") or "USD").upper()[:3],
+                time_bar=_parse_date(fields.get("time_bar")),
+                notes=f"From email: {msg.subject or msg.id}",
+                contact_id=None,
+            )
+            db.add(claim)
+            db.flush()
+            _link_source_email(db, tenant_id, "claim", claim.id, msg)
+            created.append(
+                {
+                    "entity": "claim",
+                    "id": str(claim.id),
+                    "title": claim.claim_no,
+                    "action": "draft_created",
+                    "href": f"/finance/claims/{claim.id}",
+                    "counterparty": cp_name,
+                    "voyage": voyage.voyage_no if voyage else None,
+                }
+            )
 
     else:
         hints.append(f"no_auto_draft_for_{etype or 'unknown'}")

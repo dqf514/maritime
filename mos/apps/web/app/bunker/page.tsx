@@ -4,6 +4,7 @@ import { msgOf } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { BunkerRequirementsPanel } from "@/components/BunkerRequirementsPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
@@ -865,6 +866,11 @@ export default function BunkerDeskPage() {
                 ) : null}
               </div>
             ) : null}
+            {/* 附件面板自带保存语义（上传即落库）—— 拦掉 onChange 冒泡，
+                避免 RecordModal 的未保存守卫误报 */}
+            <div onChange={(e) => e.stopPropagation()}>
+              <AttachmentsPanel entityType="bunker_order" entityId={open.id} />
+            </div>
             <div className="desk-toolbar">
               {open && !orderLocked(open) ? (
                 <button

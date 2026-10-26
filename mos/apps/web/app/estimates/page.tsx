@@ -5,6 +5,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { PageHeader } from "@/components/PageHeader";
 import { SavedViews } from "@/components/SavedViews";
 import { Toolbar } from "@/components/Toolbar";
@@ -1468,6 +1469,8 @@ function EstimatesPage() {
               />
             </div>
           ) : null}
+
+          {selectedId ? <AttachmentsPanel entityType="estimate" entityId={selectedId} /> : null}
 
         </div>
       </div>
