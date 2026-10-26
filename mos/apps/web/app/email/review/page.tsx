@@ -86,6 +86,43 @@ const FALLBACK_FOLDERS: FolderInfo[] = [
 ];
 type StatusFilter = "" | "review" | "parsed" | "pending";
 
+/** 同步偏好（天数/条数/文件夹）持久化 —— 刷新不丢勾选；值非法时回退默认 */
+const SYNC_PREFS_KEY = "marios_email_sync_prefs";
+type SyncPrefs = {
+  days: (typeof DAY_OPTIONS)[number];
+  count: (typeof COUNT_OPTIONS)[number];
+  folders: string[];
+};
+const SYNC_PREFS_DEFAULT: SyncPrefs = { days: 7, count: 200, folders: ["inbox", "sentitems"] };
+
+function loadSyncPrefs(): SyncPrefs {
+  if (typeof window === "undefined") return SYNC_PREFS_DEFAULT;
+  try {
+    const raw = window.localStorage.getItem(SYNC_PREFS_KEY);
+    if (!raw) return SYNC_PREFS_DEFAULT;
+    const p = JSON.parse(raw) as Partial<SyncPrefs>;
+    return {
+      days: DAY_OPTIONS.includes(p.days as never) ? (p.days as SyncPrefs["days"]) : SYNC_PREFS_DEFAULT.days,
+      count: COUNT_OPTIONS.includes(p.count as never) ? (p.count as SyncPrefs["count"]) : SYNC_PREFS_DEFAULT.count,
+      folders:
+        Array.isArray(p.folders) && p.folders.length
+          ? p.folders.filter((f): f is string => typeof f === "string" && f.length > 0).slice(0, 10)
+          : SYNC_PREFS_DEFAULT.folders,
+    };
+  } catch {
+    return SYNC_PREFS_DEFAULT;
+  }
+}
+
+function saveSyncPrefs(next: SyncPrefs) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SYNC_PREFS_KEY, JSON.stringify(next));
+  } catch {
+    /* 隐私模式/存储满 → 不持久化，不影响本次会话 */
+  }
+}
+
 /** 解析结果 → 结构化字段 chips（替代原始 JSON 预览） */
 function parseFields(r: { parse_result: Record<string, unknown> }): {
   etype: string;
@@ -224,6 +261,14 @@ export default function EmailReviewPage() {
     setLoading(false);
   }, [activeFolder, syncDays, syncCount]);
 
+  // 挂载时恢复上次的同步偏好（天数/条数/文件夹勾选）—— 刷新不丢
+  useEffect(() => {
+    const p = loadSyncPrefs();
+    setSyncDays(p.days);
+    setSyncCount(p.count);
+    setSyncFolders(p.folders);
+  }, []);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -261,9 +306,17 @@ export default function EmailReviewPage() {
     const result = (await apiPost(`/api/v1/email/accounts/${acc.id}/sync?${qs.toString()}`)) as {
       synced?: number;
       capped?: boolean;
+      folders?: Record<string, number>;
     };
     await load();
-    toast.success(t("page.email.synced", "Synced {n} message(s).", { n: result.synced ?? 1 }));
+    // 各文件夹拉取条数 —— 按勾选逐项显示（去重后 0 条也显示），让用户确认勾选的文件夹确实被同步了
+    const folderMap = result.folders && typeof result.folders === "object" ? result.folders : {};
+    const perFolder = syncFolders
+      .map((f) => `${f} ${folderMap[f] ?? 0}`)
+      .join(" · ");
+    toast.success(
+      t("page.email.synced", "Synced {n} message(s).", { n: result.synced ?? 1 }) + (perFolder ? ` (${perFolder})` : ""),
+    );
     if (result.capped) {
       toast.error(
         t("page.email.sync_capped", "达到单次同步总量上限（2000 条），部分邮件未拉取 — 可缩小天数/条数再同步。"),
@@ -788,7 +841,14 @@ export default function EmailReviewPage() {
         </button>
         <label className="email-sync-opt">
           {t("page.email.days", "天数")}
-          <select value={syncDays} onChange={(e) => setSyncDays(Number(e.target.value) as 7 | 14 | 30)}>
+          <select
+            value={syncDays}
+            onChange={(e) => {
+              const days = Number(e.target.value) as 7 | 14 | 30;
+              setSyncDays(days);
+              saveSyncPrefs({ days, count: syncCount, folders: syncFolders });
+            }}
+          >
             {DAY_OPTIONS.map((d) => (
               <option key={d} value={d}>
                 {t("page.email.days_opt", "{n} 天", { n: d })}
@@ -798,7 +858,14 @@ export default function EmailReviewPage() {
         </label>
         <label className="email-sync-opt">
           {t("page.email.limit", "条数")}
-          <select value={syncCount} onChange={(e) => setSyncCount(Number(e.target.value) as 200 | 500 | 1000)}>
+          <select
+            value={syncCount}
+            onChange={(e) => {
+              const count = Number(e.target.value) as 200 | 500 | 1000;
+              setSyncCount(count);
+              saveSyncPrefs({ days: syncDays, count, folders: syncFolders });
+            }}
+          >
             {COUNT_OPTIONS.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -906,6 +973,7 @@ export default function EmailReviewPage() {
         canDelete={false}
         onSave={() => {
           setSyncFolders(foldersDraft);
+          saveSyncPrefs({ days: syncDays, count: syncCount, folders: foldersDraft });
           setFoldersOpen(false);
         }}
       >
