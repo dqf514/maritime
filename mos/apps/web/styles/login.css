@@ -332,6 +332,41 @@
 .login-text-btn:hover { text-decoration: underline; }
 .login-magic-note { margin: 0.5rem 0 0; text-align: center; }
 
+/* 最近登录身份回填（localStorage 只存租户+邮箱，绝不存密码） */
+.login-recent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+.login-recent-label {
+  font-size: 0.72rem;
+  color: rgba(232, 241, 245, 0.45);
+  margin-right: 0.1rem;
+}
+.login-recent-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  max-width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: transparent;
+  color: #9fd4d1;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.6rem;
+  cursor: pointer;
+}
+.login-recent-chip:hover { border-color: rgba(159, 212, 209, 0.55); }
+.login-recent-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.login-recent-tenant { color: rgba(232, 241, 245, 0.5); }
+
 .login-demo-details {
   width: min(380px, 100%);
   color: #9eb2bf;

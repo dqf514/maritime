@@ -28,6 +28,35 @@ type Branding = {
   primary_color: string;
 };
 
+/** 最近使用的登录身份（租户+邮箱，绝不存密码）——回填登录页，免得每次 demo+空邮箱 */
+type RecentIdentity = { tenant: string; email: string; at: number };
+const RECENT_KEY = "marios_recent_logins";
+const RECENT_MAX = 5;
+
+function readRecents(): RecentIdentity[] {
+  try {
+    const arr = JSON.parse(window.localStorage.getItem(RECENT_KEY) || "[]");
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(
+      (r): r is RecentIdentity =>
+        Boolean(r) && typeof r.tenant === "string" && typeof r.email === "string" && Boolean(r.email),
+    );
+  } catch {
+    return []; // 损坏/隐私模式 — 当作没有记录
+  }
+}
+
+function rememberIdentity(tenantVal: string, emailVal: string) {
+  if (!emailVal) return;
+  try {
+    const prev = readRecents().filter((r) => !(r.tenant === tenantVal && r.email === emailVal));
+    prev.unshift({ tenant: tenantVal, email: emailVal, at: Date.now() });
+    window.localStorage.setItem(RECENT_KEY, JSON.stringify(prev.slice(0, RECENT_MAX)));
+  } catch {
+    // 存储不可用 — 静默降级为不回填
+  }
+}
+
 type AuthMethods = {
   password: boolean;
   microsoft: boolean;
@@ -81,6 +110,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [tenant, setTenant] = useState("demo");
+  const [recents, setRecents] = useState<RecentIdentity[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [brand, setBrand] = useState<Branding | null>(null);
@@ -101,6 +131,16 @@ export default function LoginPage() {
   // 绑定 SSO 且密码仍开放：SSO 按钮是主操作（回车即 SSO），密码收起为「改用密码登录」备选
   const collapsePassword = showSso && showPassword;
   const passwordVisible = showPassword && (!collapsePassword || pwOpen);
+
+  // 打开登录页即回填最近一次使用的租户+邮箱（无记录则保持 demo+空）
+  useEffect(() => {
+    const r = readRecents();
+    setRecents(r);
+    if (r.length) {
+      setTenant(r[0].tenant);
+      setEmail(r[0].email);
+    }
+  }, []);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/v1/public/branding`)
@@ -205,6 +245,7 @@ export default function LoginPage() {
     try {
       // Session cookie is planted by the server (HttpOnly) — no localStorage.
       await apiLogin(email, passwordVal, tenant);
+      rememberIdentity(tenant, email);
       router.replace(tenant === "sys" ? "/platform" : "/home");
     } catch (err: any) {
       // 失败即清空密码 + 焦点回密码框（成功路径不变，仍直接跳转）。
@@ -242,8 +283,10 @@ export default function LoginPage() {
       return;
     }
     const data = await res.json();
-    if (data.authorize_url) window.location.href = data.authorize_url;
-    else setError(t("login.error_oauth_cfg", "OAuth not configured"));
+    if (data.authorize_url) {
+      rememberIdentity(code, mail); // 身份意图已确认 — 回来时回填
+      window.location.href = data.authorize_url;
+    } else setError(t("login.error_oauth_cfg", "OAuth not configured"));
   }
 
   async function sendMagic(tenantVal?: string, emailVal?: string) {
@@ -257,6 +300,7 @@ export default function LoginPage() {
       setError(t("login.error_magic", "Magic link disabled or domain not allowed"));
       return;
     }
+    rememberIdentity((tenantVal ?? tenant) || "demo", emailVal ?? email);
     setMagicSent("sent");
   }
 
@@ -328,6 +372,26 @@ export default function LoginPage() {
             placeholder={t("login.email_ph", "you@company.com")}
             required
           />
+
+          {recents.length ? (
+            <div className="login-recent">
+              <span className="login-recent-label">{t("login.recent", "Recent sign-ins")}</span>
+              {recents.map((r) => (
+                <button
+                  key={`${r.tenant}/${r.email}`}
+                  type="button"
+                  className="login-recent-chip"
+                  onClick={() => {
+                    setTenant(r.tenant);
+                    setEmail(r.email);
+                  }}
+                >
+                  <span className="login-recent-email">{r.email}</span>
+                  <span className="login-recent-tenant">{r.tenant}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           <button className="btn btn-primary login-submit" disabled={loading} type="submit">
             {loading ? "…" : t("login.continue", "Continue")}
