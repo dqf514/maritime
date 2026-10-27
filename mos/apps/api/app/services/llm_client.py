@@ -21,6 +21,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -168,7 +169,10 @@ def _config_from_row(row: Any) -> LLMProviderConfig:
     if ptype in ("openai_compatible", "openai-compatible", "azure_openai"):
         ptype = "openai"
     if ptype not in ("anthropic", "openai"):
-        ptype = "anthropic"
+        # 未知类型（minimax / ollama / deepseek / qwen …）几乎都是 OpenAI 兼容
+        # 端点。旧逻辑强制 anthropic 会走错协议 → 调用 100% 失败，而 mari_ai
+        # 只能静默回落规则 —— 用户看到的就是「无论问什么都是同一句万能话术」。
+        ptype = "openai"
     base_url = getattr(row, "base_url", None) or (
         s.anthropic_base_url if ptype == "anthropic" else s.openai_base_url
     )
@@ -248,7 +252,10 @@ def _config_from_platform_row(row: Any) -> LLMProviderConfig | None:
     if ptype in ("openai_compatible", "openai-compatible", "azure_openai"):
         ptype = "openai"
     if ptype not in ("anthropic", "openai"):
-        ptype = "anthropic"
+        # 未知类型（minimax / ollama / deepseek / qwen …）几乎都是 OpenAI 兼容
+        # 端点。旧逻辑强制 anthropic 会走错协议 → 调用 100% 失败，而 mari_ai
+        # 只能静默回落规则 —— 用户看到的就是「无论问什么都是同一句万能话术」。
+        ptype = "openai"
     base_url = getattr(row, "base_url", None) or (
         s.anthropic_base_url if ptype == "anthropic" else s.openai_base_url
     )
@@ -465,6 +472,26 @@ def anthropic_accepts_sampling(model: str) -> bool:
     return not bool(_NO_SAMPLING_RE.match((model or "").strip()))
 
 
+@lru_cache(maxsize=1)
+def _anthropic_sdk_accepts_temperature() -> bool:
+    """anthropic SDK 1.x 的 ``messages.create`` 移除了 ``temperature`` 参数。
+
+    ``requirements.txt`` 是 ``anthropic>=0.79.0``（不锁大版本）—— 装到 1.x 后
+    再发 temperature 直接 ``TypeError``，从 ``mari_ai.chat`` 逃逸成 500。
+    按已安装 SDK 探测一次：不支持就不发（采样语义让位于连通性）。
+    """
+    import inspect
+
+    import anthropic
+
+    try:
+        return "temperature" in inspect.signature(
+            anthropic.resources.messages.Messages.create
+        ).parameters
+    except Exception:  # noqa: BLE001 — 探测失败按不支持处理（省略参数最安全）
+        return False
+
+
 # ── chat completion ──
 
 
@@ -517,7 +544,11 @@ def _chat_anthropic(
     ant_tools = _to_anthropic_tools(tools)
     if ant_tools:
         kwargs["tools"] = ant_tools
-    if temperature is not None and anthropic_accepts_sampling(model):
+    if (
+        temperature is not None
+        and anthropic_accepts_sampling(model)
+        and _anthropic_sdk_accepts_temperature()
+    ):
         kwargs["temperature"] = temperature
     start = time.time()
     try:

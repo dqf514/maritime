@@ -238,6 +238,133 @@ def test_chat_fallback_default_response(db_session, tenant_id, user_id, agents):
     assert result["tool_calls"] == []
 
 
+def test_chat_fallback_surfaces_llm_error_text(db_session, tenant_id, user_id, agents, monkeypatch):
+    """provider 已配置但调用失败 → 回复带真实错误原因，而不是万能话术。
+
+    用户反馈「AI助手无论问什么都一个回答」：旧逻辑把 LLMError 静默吞掉，
+    规则不命中就永远回同一句 default —— 错误必须回到回复里可见。
+    """
+    monkeypatch.setattr(
+        llm_client,
+        "resolve_provider_config",
+        lambda *a, **k: LLMProviderConfig(api_key="k", model="m"),
+    )
+
+    def boom(*a, **k):
+        raise LLMError("API error 404: model not found")
+
+    monkeypatch.setattr(llm_client, "chat_completion", boom)
+    conv = _make_conversation(db_session, tenant_id, user_id)
+    result = mari_ai.chat(db_session, tenant_id, user_id, conv.id, "hello there")
+    assert result["source"] == "fallback"
+    assert "API error 404" in result["response"]
+    assert "Please describe what you need" not in result["response"]
+
+
+def test_chat_degrades_on_unexpected_exception(db_session, tenant_id, user_id, agents, monkeypatch):
+    """非 LLM 异常（如 SDK 签名漂移 TypeError）也降级成规则回复，不 500。"""
+    monkeypatch.setattr(
+        llm_client,
+        "resolve_provider_config",
+        lambda *a, **k: LLMProviderConfig(api_key="k", model="m"),
+    )
+
+    def boom(*a, **k):
+        raise TypeError("Messages.create() got an unexpected keyword argument 'temperature'")
+
+    monkeypatch.setattr(llm_client, "chat_completion", boom)
+    conv = _make_conversation(db_session, tenant_id, user_id)
+    result = mari_ai.chat(db_session, tenant_id, user_id, conv.id, "hello there")
+    assert result["source"] == "fallback"
+    assert "temperature" in result["response"]
+    assert "Please describe what you need" not in result["response"]
+
+
+def test_chat_fallback_lists_voyages_for_chinese_question(db_session, tenant_id, user_id, agents):
+    """规则模式回答「当前有哪些航次在跑的」—— 落地 list_voyages 而非万能话术。"""
+    from app.models_domain import Voyage
+
+    db_session.add(Voyage(tenant_id=tenant_id, voyage_no="VOY-FB-001", status="in_progress"))
+    db_session.commit()
+    conv = _make_conversation(db_session, tenant_id, user_id)
+    result = mari_ai.chat(db_session, tenant_id, user_id, conv.id, "当前有哪些航次在跑的?")
+    assert result["source"] == "fallback"
+    assert any(tc["tool"] == "list_voyages" for tc in result["tool_calls"])
+    assert "VOY-FB-001" in result["response"]
+    assert "Please describe what you need" not in result["response"]
+
+
+def test_unknown_provider_type_maps_to_openai():
+    """minimax/ollama 等未知 provider_type → OpenAI 兼容协议，不再强扭 anthropic。
+
+    旧逻辑把未知类型强制 anthropic → 走错协议必然失败 → 静默回落规则 →
+    助手永远同一句（用户截图场景：provider 徽标 minimax，回答恒定）。
+    """
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(
+        id="p1",
+        name="minimax",
+        provider_type="minimax",
+        base_url="https://api.minimax.io/v1",
+        model_default="MiniMax-Text-01",
+        secret_ref=None,
+        config={"api_key": "sk-x"},
+    )
+    assert llm_client._config_from_row(row).provider_type == "openai"
+    row.provider_type = "ollama"
+    assert llm_client._config_from_row(row).provider_type == "openai"
+    row.provider_type = "openai_compatible"
+    assert llm_client._config_from_row(row).provider_type == "openai"
+    row.provider_type = "anthropic"
+    assert llm_client._config_from_row(row).provider_type == "anthropic"
+
+
+def test_anthropic_path_omits_temperature_when_sdk_lacks_param(monkeypatch):
+    """anthropic SDK 1.x 的 ``messages.create`` 没有 temperature 参数 ——
+    照发就是 TypeError 从 chat() 逃逸成 500。按已安装 SDK 探测后决定发不发。"""
+    import inspect
+    from types import SimpleNamespace
+
+    import anthropic as ant
+
+    recorded: dict = {}
+
+    class _FakeMessages:
+        def create(self, **kw):
+            recorded.update(kw)
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="ok")],
+                usage=SimpleNamespace(input_tokens=3, output_tokens=4),
+                model="claude-test",
+                stop_reason="end_turn",
+            )
+
+    class _FakeClient:
+        def __init__(self, **_kw):
+            self.messages = _FakeMessages()
+
+    monkeypatch.setattr(ant, "Anthropic", _FakeClient)
+    monkeypatch.setattr(llm_client, "llm_off", lambda: False)  # conftest 熔断
+    cfg = LLMProviderConfig(
+        provider_type="anthropic",
+        api_key="k",
+        base_url="https://api.anthropic.com",
+        model="claude-sonnet-4-5",
+    )
+    resp = llm_client.chat_completion(
+        [{"role": "user", "content": "hi"}], provider=cfg, temperature=0.3
+    )
+    assert resp.text == "ok"
+    sdk_ok = "temperature" in inspect.signature(
+        ant.resources.messages.Messages.create
+    ).parameters
+    if sdk_ok and llm_client.anthropic_accepts_sampling("claude-sonnet-4-5"):
+        assert recorded.get("temperature") == 0.3
+    else:
+        assert "temperature" not in recorded
+
+
 # ── 4. Chat with mocked LLM (tool loop + usage tracking) ──
 
 

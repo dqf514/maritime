@@ -13,6 +13,7 @@ chat degrades to the deterministic keyword rules in :func:`_fallback_chat`
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import date, datetime
 from decimal import Decimal
@@ -27,6 +28,8 @@ from app.security import tenant_has_module
 from app.services import llm_client
 from app.services.llm_client import LLMError, LLMNotConfigured
 from app.services.money import round_half_up
+
+log = logging.getLogger("marios.mari_ai")
 
 # Agentic loop bound: assistant may call tools this many rounds before we take
 # the last text as final (prevents unbounded tool spirals).
@@ -1326,9 +1329,14 @@ def chat(
     definitions → tool_use loop → final text. Records tokens_used and
     latency_ms on the assistant AIMessage.
 
-    Fallback: LLMNotConfigured / LLMError (kill switch, missing creds,
-    provider error) → deterministic keyword rules (:func:`_fallback_chat`).
+    Fallback: LLMNotConfigured (kill switch, missing creds) → deterministic
+    keyword rules (:func:`_fallback_chat`); LLMError / unexpected provider
+    exceptions → same rules, but the reply **carries the real error reason**
+    instead of the generic default line (never a silent canned answer).
+    HTTPException (402 quota / 403 outbound block) keeps propagating.
     """
+    from fastapi import HTTPException
+
     conv = get_conversation(db, conv_id, tenant_id)
     if not conv:
         return {"error": "Conversation not found"}
@@ -1342,8 +1350,26 @@ def chat(
 
     try:
         return _llm_chat(db, tenant_id, conv, conv_id, agent_def)
-    except (LLMNotConfigured, LLMError):
+    except LLMNotConfigured:
         return _fallback_chat(db, tenant_id, conv, conv_id, agent_def, user_message)
+    except LLMError as exc:
+        log.warning("mari_ai: LLM call failed, rule fallback: %s", exc)
+        return _fallback_chat(
+            db, tenant_id, conv, conv_id, agent_def, user_message, llm_error=str(exc)
+        )
+    except HTTPException:
+        raise  # 402 QUOTA_EXCEEDED / 403 OUTBOUND_URL_BLOCKED —— 明确语义上抛
+    except Exception as exc:  # noqa: BLE001 — 未知异常同样降级，助手永不 500
+        log.exception("mari_ai: unexpected LLM failure, rule fallback")
+        return _fallback_chat(
+            db,
+            tenant_id,
+            conv,
+            conv_id,
+            agent_def,
+            user_message,
+            llm_error=str(exc) or type(exc).__name__,
+        )
 
 
 def _llm_chat(
@@ -1424,7 +1450,9 @@ def _llm_chat(
     if not text and last_resp is not None:
         text = (last_resp.text or "").strip()
     if not text:
-        text = _default_response(conv.agent_name, "")
+        # 调用成功但模型没给文本（空 content / 工具轮耗尽）—— 按失败处理：
+        # 旧逻辑在这里塞万能话术却标 source=llm，用户看到「AI」徽标 + 废话。
+        raise LLMError("model returned an empty reply")
 
     msg = add_message(
         db,
@@ -1513,11 +1541,17 @@ def _fallback_chat(
     conv_id: UUID,
     agent_def: AIAgentDefinition,
     user_message: str,
+    *,
+    llm_error: str | None = None,
 ) -> dict:
     """Deterministic keyword-rule response when no LLM is available.
 
     Zero network — this is the degradation path for MARIOS_LLM_OFF, missing
     credentials, and provider errors.
+
+    ``llm_error``：provider 已配置但本轮调用失败的原因。规则命中时仍优先给
+    规则答案；规则也没命中时把原因写进回复 —— 不能再用万能话术冒充回答
+    （那正是「无论问什么都是同一句」的根源）。
     """
     tool_results = []
     available_tools = agent_def.tools_json or []
@@ -1606,8 +1640,51 @@ def _fallback_chat(
                 if "error" not in result:
                     response_parts.append(f"Laytime: {result['time_saved_days']} days {result['result']} → ${result['amount_usd']:,.2f}")
 
+    # 航次清单（中英关键词）—— 规则模式下「当前有哪些航次在跑」也要能落地
+    # 回答（list_voyages 在 copilot/voyage_advisor 的 tools_json 里）。
+    # 放在最后且仅当前面没有命中任何规则，避免 TCE/P&L 答案被清单刷掉。
+    if not response_parts and any(
+        kw in user_message.lower() for kw in ["voyage", "航次", "在跑", "fleet"]
+    ):
+        if "list_voyages" in available_tools:
+            low = user_message.lower()
+            want_running = any(
+                k in low for k in ["in_progress", "在跑", "running", "active", "进行中"]
+            )
+            params: dict = {"status": "in_progress"} if want_running else {}
+            result = execute_tool(db, tenant_id, "list_voyages", params)
+            if "error" not in result and not (result.get("voyages") or []) and params:
+                # 「在跑」没有命中 → 退一步给全量清单，别误报「没有航次」
+                params = {}
+                result = execute_tool(db, tenant_id, "list_voyages", params)
+            tool_results.append(
+                {"tool": "list_voyages", "parameters": params, "result": result}
+            )
+            if "error" not in result:
+                voyages = result.get("voyages") or []
+                if voyages:
+                    lines = [
+                        f"- {v.get('voyage_no') or v.get('id')} ({v.get('status')})"
+                        for v in voyages[:10]
+                    ]
+                    header = (
+                        "Voyages in progress"
+                        if params.get("status") == "in_progress"
+                        else "Voyages"
+                    )
+                    count = result.get("count", len(voyages))
+                    response_parts.append(f"{header} ({count}):\n" + "\n".join(lines))
+                else:
+                    response_parts.append("No voyages found.")
+
     if response_parts:
         ai_content = "\n".join(response_parts)
+    elif llm_error:
+        # provider 已配置但本轮失败 —— 把真实原因带回回复，别用万能话术糊弄
+        ai_content = (
+            f"The AI model call failed: {llm_error}. "
+            "Check Settings → AI Hub for provider, model and API key."
+        )
     else:
         ai_content = _default_response(conv.agent_name, user_message)
 
@@ -1631,5 +1708,6 @@ def _default_response(agent_name: str, message: str) -> str:
         "voyage_advisor": "I can help with voyage optimization. Try asking about:\n- TCE calculation (provide freight revenue, bunker cost, port costs, voyage days)\n- Voyage P&L (provide a voyage ID)\n- Port distances (provide two UNLOCODEs like CNSHA JPtyO)\n- Laytime/demurrage calculations\n- Fleet/voyage listings",
         "compliance_assistant": "I can help with emissions compliance. Try asking about:\n- Fuel compliance at a position (provide lat/lon and fuel type)\n- ECA requirements\n- EU ETS zone checking",
         "market_analyst": "I can help with market analysis. Try asking about:\n- TCE calculations for route comparison\n- Port distance lookups for voyage planning\n- Market quotes (freight/bunker)",
+        "copilot": "I can help with the record on screen — try asking about:\n- Voyages in progress / fleet status\n- TCE calculation (freight revenue, bunker, port costs, voyage days)\n- Voyage P&L, laytime/demurrage, port distances",
     }
     return responses.get(agent_name, "I'm here to help. Please describe what you need assistance with.")
