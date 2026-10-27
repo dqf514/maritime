@@ -259,6 +259,30 @@ export default function EmailReviewPage() {
   /** 同步并发守卫 + 自动同步冷却计时（切文件夹触发的自动拉取 5 分钟内不重复） */
   const syncingRef = useRef(false);
   const lastSyncAtRef = useRef(0);
+  /** 同步状态的页面级呈现 —— 只靠转瞬即逝的 toast，用户会盯着旧邮件问「怎么都是老邮件？」 */
+  const [syncUi, setSyncUi] = useState<{
+    phase: "idle" | "running" | "done" | "error";
+    startedAt?: number;
+    synced?: number;
+    folders?: string[];
+    error?: string;
+  }>({ phase: "idle" });
+  /** 「上次同步 x 前」+ 同步已用时的公共时钟 */
+  const [clock, setClock] = useState(() => Date.now());
+  /** 上次同步时间 —— localStorage 持久化，刷新后仍能判断列表有多新 */
+  const [lastSyncedAt, setLastSyncedAt] = useState<number>(() => {
+    try {
+      return Number(window.localStorage.getItem("marios_email_last_sync") || 0) || 0;
+    } catch {
+      return 0;
+    }
+  });
+  /** 本次同步新拉到的邮件 id —— 行高亮 12s，让「列表哪里变了」肉眼可见 */
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
+  /** 同步前的行快照（手动同步才快照；切文件夹的自动同步整表都是新的，不逐行高亮） */
+  const preSyncIdsRef = useRef<Set<string> | null>(null);
+  const doneTimerRef = useRef<number | null>(null);
+  const newIdsTimerRef = useRef<number | null>(null);
 
   /**
    * 取数：四个来源彼此独立（allSettled），主列表失败走错误态，参考数据失败只做局部提示。
@@ -278,8 +302,10 @@ export default function EmailReviewPage() {
       apiGet("/api/v1/email/folders"),
       apiGet("/api/v1/office/status"),
     ]);
+    let fresh: Msg[] | null = null;
     if (msgsR.status === "fulfilled") {
-      setRows(msgsR.value as Msg[]);
+      fresh = msgsR.value as Msg[];
+      setRows(fresh);
       setErr(null);
     } else {
       setRows([]);
@@ -309,6 +335,7 @@ export default function EmailReviewPage() {
       setOfficeErr(msgOf(officeR.reason));
     }
     setLoading(false);
+    return fresh; // sync() 用它 diff 出「本次新拉到的」行做高亮
   }, [activeFolder, syncDays, syncCount]);
 
   // sync 完成后的刷新要用「最新」的 load —— 否则切文件夹触发的自动同步
@@ -317,6 +344,21 @@ export default function EmailReviewPage() {
   useEffect(() => {
     loadRef.current = load;
   }, [load]);
+
+  // 「上次同步 x 前」/ 同步已用时的时钟：同步中每秒走一格，空闲 30 秒走一格
+  useEffect(() => {
+    const iv = window.setInterval(() => setClock(Date.now()), syncUi.phase === "running" ? 1000 : 30000);
+    return () => window.clearInterval(iv);
+  }, [syncUi.phase]);
+
+  // 卸载时清掉挂着的定时器
+  useEffect(
+    () => () => {
+      if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
+      if (newIdsTimerRef.current) window.clearTimeout(newIdsTimerRef.current);
+    },
+    [],
+  );
 
   // 租户默认时区（Asia/Singapore 等）—— 邮件时间按它格式化。
   useEffect(() => {
@@ -365,6 +407,11 @@ export default function EmailReviewPage() {
     if (syncingRef.current) return;
     if (auto && Date.now() - lastSyncAtRef.current < AUTO_SYNC_COOLDOWN_MS) return;
     syncingRef.current = true;
+    // 页面级状态：进入 running（手动同步快照当前行 id —— 完成后 diff 出「新邮件」高亮；
+    // 切文件夹的自动同步整表都是新文件夹的行，不做逐行高亮，芯片提示就够）
+    if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
+    preSyncIdsRef.current = auto ? null : new Set(rows.map((r) => r.id));
+    setSyncUi({ phase: "running", startedAt: Date.now(), folders });
     try {
       if (!auto) {
         toast.success(
@@ -385,13 +432,34 @@ export default function EmailReviewPage() {
         folders?: Record<string, number>;
       };
       lastSyncAtRef.current = Date.now();
-      await loadRef.current(); // 用最新 load —— 自动同步横跨文件夹切换
+      const fresh = await loadRef.current(); // 用最新 load —— 自动同步横跨文件夹切换
+      // 新邮件高亮：本次拉到的、快照里没有的 id（12s 后自动熄灭）
+      const before = preSyncIdsRef.current;
+      if (before && fresh) {
+        setNewIds(new Set(fresh.filter((m) => !before.has(m.id)).map((m) => m.id)));
+        if (newIdsTimerRef.current) window.clearTimeout(newIdsTimerRef.current);
+        newIdsTimerRef.current = window.setTimeout(() => setNewIds(new Set()), 12000);
+      }
+      // 「上次同步」持久化 —— 刷新页面也能看到列表有多新
+      const now = Date.now();
+      setLastSyncedAt(now);
+      try {
+        window.localStorage.setItem("marios_email_last_sync", String(now));
+      } catch {
+        // localStorage 不可用（隐私模式等）只丢展示，不影响同步
+      }
       // 各文件夹拉取条数 —— 按勾选逐项显示（去重后 0 条也显示），让用户确认勾选的文件夹确实被同步了
       const folderMap = result.folders && typeof result.folders === "object" ? result.folders : {};
       const perFolder = folders
         .map((f) => `${f} ${folderMap[f] ?? 0}`)
         .join(" · ");
-      // 自动同步保持安静：0 条不打扰，有新邮件才提示
+      // 芯片常驻 10s：0 条也明示「同步完成」，避免用户以为没动静
+      setSyncUi({ phase: "done", synced: result.synced ?? 0, folders });
+      doneTimerRef.current = window.setTimeout(
+        () => setSyncUi((s) => (s.phase === "done" ? { phase: "idle" } : s)),
+        10000,
+      );
+      // toast 只作为补充提示（自动同步 0 条保持安静，芯片已说明）
       if (!auto || (result.synced ?? 0) > 0) {
         toast.success(
           t("page.email.synced", "Synced {n} message(s).", { n: result.synced ?? 1 }) + (perFolder ? ` (${perFolder})` : ""),
@@ -402,6 +470,9 @@ export default function EmailReviewPage() {
           t("page.email.sync_capped", "达到单次同步总量上限（2000 条），部分邮件未拉取 — 可缩小天数/条数再同步。"),
         );
       }
+    } catch (ex) {
+      setSyncUi({ phase: "error", error: msgOf(ex, t("page.email.sync_fail", "Sync failed")) });
+      throw ex;
     } finally {
       syncingRef.current = false;
     }
@@ -803,6 +874,9 @@ export default function EmailReviewPage() {
     (key: string) => {
       setActiveFolder(key);
       setStatusFilter(key === "inbox" ? "review" : "");
+      // 换文件夹后旧行高亮/旧芯片都失去意义（进行中的同步除外）
+      setNewIds(new Set());
+      setSyncUi((s) => (s.phase === "running" ? s : { phase: "idle" }));
       // 切到哪个文件夹就补拉哪个（只拉当前 Tab，不按勾选全拉）；
       // 未连邮箱账户且非 M365 时不自动建账户 —— 首次仍走手动同步按钮
       if (m365 || accounts.length) {
@@ -944,6 +1018,18 @@ export default function EmailReviewPage() {
     </button>
   );
 
+  // 同步芯片文案 —— clock 驱动定时重算（running 每秒 / idle 30s）
+  const elapsedSec =
+    syncUi.phase === "running" && syncUi.startedAt ? Math.max(1, Math.floor((clock - syncUi.startedAt) / 1000)) : 0;
+  const agoLabel = !lastSyncedAt
+    ? ""
+    : (() => {
+        const diff = Math.max(0, clock - lastSyncedAt);
+        if (diff < 60000) return t("page.email.just_now", "just now");
+        if (diff < 3600000) return t("page.email.ago_min", "{n} 分钟前", { n: Math.floor(diff / 60000) });
+        return t("page.email.ago_hour", "{n} 小时前", { n: Math.floor(diff / 3600000) });
+      })();
+
   return (
     <AppShell>
       <PageHeader
@@ -953,20 +1039,48 @@ export default function EmailReviewPage() {
       />
       <Toolbar
         right={
-          <span className="hint">
-            {t("page.email.count", "{n} messages", { n: sorted.length })}
-            {rows.length !== sorted.length ? ` / ${rows.length}` : ""}
+          <span className="email-toolbar-right">
+            {syncUi.phase === "running" ? (
+              <span className="sync-chip sync-chip-busy" role="status">
+                <span className="sync-chip-spin" aria-hidden />
+                {t("page.email.syncing_chip", "Syncing {folders}… {s}s", {
+                  folders: (syncUi.folders || []).join("/"),
+                  s: elapsedSec,
+                })}
+              </span>
+            ) : syncUi.phase === "done" ? (
+              <span className="sync-chip sync-chip-ok" role="status">
+                {(syncUi.synced ?? 0) > 0
+                  ? t("page.email.synced_chip", "Synced — {n} new", { n: syncUi.synced ?? 0 })
+                  : t("page.email.synced_none", "Synced — no new mail")}
+              </span>
+            ) : syncUi.phase === "error" ? (
+              <span className="sync-chip sync-chip-err" role="alert">
+                {t("page.email.sync_error_chip", "Sync failed")}: {syncUi.error}
+              </span>
+            ) : agoLabel ? (
+              <span className="sync-chip" role="status">
+                {t("page.email.last_synced", "Last sync {when}", { when: agoLabel })}
+              </span>
+            ) : null}
+            <span className="hint">
+              {t("page.email.count", "{n} messages", { n: sorted.length })}
+              {rows.length !== sorted.length ? ` / ${rows.length}` : ""}
+            </span>
           </span>
         }
       >
         <button
           className="btn btn-primary"
           type="button"
+          disabled={syncUi.phase === "running"}
           onClick={() => sync().catch((ex) => toast.error(msgOf(ex, t("page.email.sync_fail", "Sync failed"))))}
         >
-          {m365
-            ? t("page.email.sync_btn_m365", "同步 Microsoft 365 邮件")
-            : t("page.email.sync_btn", "Sync demo inbox")}
+          {syncUi.phase === "running"
+            ? t("page.email.sync_btn_busy", "同步中…")
+            : m365
+              ? t("page.email.sync_btn_m365", "同步 Microsoft 365 邮件")
+              : t("page.email.sync_btn", "Sync demo inbox")}
         </button>
         <label className="email-sync-opt">
           {t("page.email.days", "天数")}
@@ -1061,6 +1175,7 @@ export default function EmailReviewPage() {
             columns={columns}
             data={sorted}
             rowKey={(r) => r.id}
+            rowClassName={(r) => (newIds.has(r.id) ? "grid-row-new" : undefined)}
             onRowClick={(r) => void openDetail(r)}
             onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
             onSortChange={onSortChange}

@@ -73,6 +73,8 @@ export type DataGridProps<T = any> = {
   onRowClick?: (row: T, index: number) => void;
   /** 行右键（ContextMenu 一等交互；e 已 preventDefault） */
   onRowContextMenu?: (row: T, index: number, e: React.MouseEvent) => void;
+  /** 行级 className（如新到行高亮）—— 追加在 grid-row 之后 */
+  rowClassName?: (row: T, index: number) => string | undefined;
   /** 选择变化 */
   onSelectionChange?: (sel: GridSelection) => void;
   /** 服务端排序 */

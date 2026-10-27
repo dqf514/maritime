@@ -99,6 +99,7 @@ export function DataGrid<T extends Record<string, any>>({
   onRowDoubleClick,
   onRowClick,
   onRowContextMenu,
+  rowClassName,
   onSelectionChange,
   onSortChange,
   groupBy = [],
@@ -866,7 +867,7 @@ export function DataGrid<T extends Record<string, any>>({
                         return (
                           <tr
                             key={rowKey(row as T, globalIdx)}
-                            className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}`}
+                            className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}${rowClassName ? ` ${rowClassName(row as T, globalIdx)}` : ""}`}
                             onDoubleClick={() => onRowDoubleClick?.(row as T, globalIdx)}
                             onClick={() => onRowClick?.(row as T, globalIdx)}
                             onContextMenu={
@@ -910,7 +911,7 @@ export function DataGrid<T extends Record<string, any>>({
                 return (
                   <tr
                     key={rowKey(row as T, ri)}
-                    className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}`}
+                    className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}${rowClassName ? ` ${rowClassName(row as T, ri)}` : ""}`}
                     onDoubleClick={() => onRowDoubleClick?.(row as T, ri)}
                     onClick={() => onRowClick?.(row as T, ri)}
                     onContextMenu={

@@ -269,6 +269,38 @@
   font-size: var(--font-label);
   padding: 0 4px;
 }
+/* ── 邮件复核：工具栏右侧的同步状态芯片（同步中/已同步 N 封/失败/上次同步 x 前）
+   + 本次新拉到的行高亮 —— 同步是后台静默跑的，没有这两样用户只会盯着旧列表发懵 ── */
+.email-toolbar-right { display: inline-flex; align-items: center; gap: 0.6rem; }
+.sync-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(232, 241, 245, 0.75);
+  white-space: nowrap;
+}
+.sync-chip-busy { border-color: rgba(46, 168, 255, 0.5); color: #8fd0ff; }
+.sync-chip-ok { border-color: rgba(69, 213, 143, 0.45); color: #7fe0b2; }
+.sync-chip-err { border-color: rgba(255, 120, 120, 0.5); color: #ff9d9d; }
+.sync-chip-spin {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgba(143, 208, 255, 0.35);
+  border-top-color: #8fd0ff;
+  animation: sync-chip-rotate 0.9s linear infinite;
+}
+@keyframes sync-chip-rotate { to { transform: rotate(360deg); } }
+.grid-row-new td { animation: grid-row-new-flash 12s ease-out; }
+@keyframes grid-row-new-flash {
+  0% { background: rgba(46, 168, 255, 0.18); }
+  25% { background: rgba(46, 168, 255, 0.1); }
+  100% { background: transparent; }
+}
 /* 文件夹勾选改为点击弹窗（原 details 弹层挂在 overflow-x:auto 的工具栏里 ——
    单轴 auto 会把另一轴也算 auto，工具栏右缘因此冒出上下滚动条，滚动才看到弹层）。
    复选项复用站内 check-row 样式（forms.css，压过 .record-modal-body label 布局）。 */
