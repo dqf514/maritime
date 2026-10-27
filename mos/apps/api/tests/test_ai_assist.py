@@ -255,6 +255,48 @@ def test_recommend_email_llm_can_correct_type(client, auth_headers, monkeypatch)
     assert body2["email_type"] in ("fixture_recap", "recap")
 
 
+def test_recommend_email_records_usage(client, auth_headers, monkeypatch):
+    """用量埋点：LLM 尝试过的邮件推荐落 AIMessage —— AI 中枢→用量 页不再恒 0。"""
+    from types import SimpleNamespace
+
+    from app.services import ai_assist as mod
+
+    mid = _seed_recap_email(client, auth_headers)
+    monkeypatch.setattr(mod.llm_client, "resolve_provider_config", lambda *a, **k: object())
+    monkeypatch.setattr(mod.llm_client, "llm_off", lambda: False)
+    monkeypatch.setattr(
+        mod.llm_client,
+        "chat_completion",
+        lambda *a, **k: SimpleNamespace(
+            usage=SimpleNamespace(total_tokens=42, input_tokens=30, output_tokens=12),
+            latency_ms=123,
+            text='{"action":"review","confidence":0.6,"reason":"x","reply_template":"general"}',
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.saas_engine.bill_ai_tokens",
+        lambda **k: {"billed": 0, "mode": "skip"},
+    )
+
+    r = client.post(f"{API}/ai/assist/recommend/email/{mid}", headers=auth_headers)
+    assert r.status_code == 200, r.text
+
+    u = client.get(f"{API}/settings/ai/usage", headers=auth_headers)
+    assert u.status_code == 200, u.text
+    body = u.json()
+    row = next((a for a in body["by_agent"] if a.get("key") == "email_intelligence"), None)
+    assert row is not None, body
+    assert row["requests"] >= 1
+    assert row["tokens_total"] >= 42
+    assert row["tokens_in"] == 30
+    assert row["tokens_out"] == 12
+    assert row["avg_latency_ms"] == 123
+    assert body["totals"]["requests"] >= 1
+    assert body["totals"]["tokens_total"] >= 42
+    # 无定价数据源 → cost 显式 null（前端显示 —），不是编出来的 0
+    assert body["totals"]["cost_usd"] is None
+
+
 # ── 4b. 粘贴文本 → 结构化字段（航次计算 AI 填充） ─────────────────────────
 
 _RECAP_SAMPLE = """Fixture Recap

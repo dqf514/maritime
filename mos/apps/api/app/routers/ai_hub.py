@@ -423,10 +423,16 @@ def usage_stats(
     auth: AuthContext = Depends(require_module("ai")),
     db: Session = Depends(get_db),
 ):
-    """Token usage stats aggregated from AIMessage.tokens_used.
+    """Token usage stats aggregated from AIMessage.
 
     Grouped by agent / conversation / day (ISO date). Aggregated in-process to
     stay portable across SQLite and Postgres.
+
+    响应同时携带两套字段：
+    - 前端用量页契约：``key/label/requests/tokens_in/tokens_out/tokens_total/
+      avg_latency_ms`` + ``totals``（缺 cost 数据时 cost_usd=null → UI 显示 —）；
+    - 旧字段（``total_tokens/message_count/by_* 的 agent_name/tokens/messages``）
+      保留，兼容既有调用方与测试。
     """
     rows = db.execute(
         select(AIMessage, AIConversation)
@@ -434,13 +440,39 @@ def usage_stats(
         .where(AIConversation.tenant_id == auth.tenant_id)
     ).all()
 
+    # agent 显示名（全局 + 本租户；无定义时 key 即 label）
+    disp: dict[str, str] = {}
+    for a in db.scalars(
+        select(AIAgentDefinition).where(
+            (AIAgentDefinition.tenant_id.is_(None))
+            | (AIAgentDefinition.tenant_id == auth.tenant_id)
+        )
+    ).all():
+        disp[a.agent_name] = a.display_name
+
     total_tokens = 0
     counted = 0
     latency_sum = 0
     latency_n = 0
+    total_requests = 0
+
+    def _slot() -> dict[str, Any]:
+        return {
+            "tokens": 0,
+            "messages": 0,
+            "requests": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "has_in": False,
+            "has_out": False,
+            "lat_sum": 0,
+            "lat_n": 0,
+        }
+
     by_agent: dict[str, dict[str, Any]] = {}
     by_day: dict[str, dict[str, Any]] = {}
     by_conv: dict[str, dict[str, Any]] = {}
+    conv_meta: dict[str, AIConversation] = {}
 
     for msg, conv in rows:
         tokens = int(msg.tokens_used or 0)
@@ -450,29 +482,74 @@ def usage_stats(
         if msg.latency_ms is not None:
             latency_sum += int(msg.latency_ms)
             latency_n += 1
+        # 「请求数」= 助手回复条数（用户提问条不重复计）
+        is_reply = msg.role == "assistant"
+        if is_reply:
+            total_requests += 1
         day = (msg.created_at.date().isoformat() if msg.created_at else None) or "unknown"
-        agent_slot = by_agent.setdefault(conv.agent_name or "unknown", {"tokens": 0, "messages": 0})
-        agent_slot["tokens"] += tokens
-        agent_slot["messages"] += 1
-        day_slot = by_day.setdefault(day, {"tokens": 0, "messages": 0})
-        day_slot["tokens"] += tokens
-        day_slot["messages"] += 1
-        conv_slot = by_conv.setdefault(
-            str(conv.id),
-            {"agent_name": conv.agent_name, "tokens": 0, "messages": 0},
-        )
-        conv_slot["tokens"] += tokens
-        conv_slot["messages"] += 1
+        conv_key = str(conv.id)
+        conv_meta[conv_key] = conv
+
+        for group, key in (
+            (by_agent, conv.agent_name or "unknown"),
+            (by_day, day),
+            (by_conv, conv_key),
+        ):
+            slot = group.setdefault(key, _slot())
+            slot["tokens"] += tokens
+            slot["messages"] += 1
+            if is_reply:
+                slot["requests"] += 1
+            if msg.tokens_in is not None:
+                slot["tokens_in"] += int(msg.tokens_in)
+                slot["has_in"] = True
+            if msg.tokens_out is not None:
+                slot["tokens_out"] += int(msg.tokens_out)
+                slot["has_out"] = True
+            if msg.latency_ms is not None:
+                slot["lat_sum"] += int(msg.latency_ms)
+                slot["lat_n"] += 1
+
+    def _out(key: str, slot: dict[str, Any], label: str, **legacy: Any) -> dict[str, Any]:
+        return {
+            "key": key,
+            "label": label,
+            "requests": slot["requests"],
+            "tokens_total": slot["tokens"],
+            "tokens_in": slot["tokens_in"] if slot["has_in"] else None,
+            "tokens_out": slot["tokens_out"] if slot["has_out"] else None,
+            "avg_latency_ms": round(slot["lat_sum"] / slot["lat_n"], 1) if slot["lat_n"] else None,
+            # 旧字段（兼容）
+            "tokens": slot["tokens"],
+            "messages": slot["messages"],
+            **legacy,
+        }
 
     return {
+        # 前端契约
+        "totals": {
+            "requests": total_requests,
+            "tokens_total": total_tokens,
+            "cost_usd": None,  # 无定价数据源 —— 前端显示 —，不编数字
+        },
+        "by_agent": [
+            _out(k, v, disp.get(k, k), agent_name=k) for k, v in sorted(by_agent.items())
+        ],
+        "by_day": [_out(k, v, k, day=k) for k, v in sorted(by_day.items())],
+        "by_conversation": [
+            _out(
+                k,
+                v,
+                (conv_meta[k].title or conv_meta[k].agent_name or "") if k in conv_meta else k,
+                conversation_id=k,
+                agent_name=conv_meta[k].agent_name if k in conv_meta else None,
+            )
+            for k, v in sorted(by_conv.items())
+        ],
+        # 旧字段（兼容既有调用方/测试）
         "total_tokens": total_tokens,
         "message_count": counted,
         "avg_latency_ms": round(latency_sum / latency_n, 1) if latency_n else 0,
-        "by_agent": [{"agent_name": k, **v} for k, v in sorted(by_agent.items())],
-        "by_day": [{"day": k, **v} for k, v in sorted(by_day.items())],
-        "by_conversation": [
-            {"conversation_id": k, **v} for k, v in sorted(by_conv.items())
-        ],
     }
 
 

@@ -122,9 +122,20 @@ class ExtractIn(BaseModel):
 def assist_extract(
     body: ExtractIn,
     auth: AuthContext = Depends(require_module("ai")),
+    db: Session = Depends(get_db),
 ):
     """粘贴邮件/聊天记录 → AI 分析出结构化字段（预览确认后人工填表，不落库）。"""
-    return ai_assist.extract_from_text(body.subject, body.body)
+    result = ai_assist.extract_from_text(body.subject, body.body)
+    if result.get("_source") == "llm":
+        # 用量页埋点：LLM 真跑了才记（规则兜底不占「请求」）
+        ai_assist._record_usage_msg(
+            db,
+            auth.tenant_id,
+            auth.user_id,
+            f"[extract:{result.get('kind')}] {(body.subject or body.body)[:150]}",
+            title="Text extract",
+        )
+    return result
 
 
 @router.post("/recommend/email/{message_id}")

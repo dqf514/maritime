@@ -1201,6 +1201,8 @@ def add_message(
     tool_calls: list[dict] | None = None,
     tokens_used: int | None = None,
     latency_ms: int | None = None,
+    tokens_in: int | None = None,
+    tokens_out: int | None = None,
 ) -> AIMessage:
     """Add a message to a conversation."""
     msg = AIMessage(
@@ -1210,6 +1212,8 @@ def add_message(
         tool_calls_json=tool_calls,
         tokens_used=tokens_used,
         latency_ms=latency_ms,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
     )
     db.add(msg)
     # Update conversation message count and timestamp
@@ -1367,6 +1371,8 @@ def _llm_chat(
 
     tool_log: list[dict] = []
     total_tokens = 0
+    total_in = 0
+    total_out = 0
     total_latency = 0
     text = ""
     last_resp = None
@@ -1382,7 +1388,10 @@ def _llm_chat(
         )
         last_resp = resp
         total_tokens += int(resp.usage.total_tokens or 0)
-        total_latency += int(resp.latency_ms or 0)
+        # getattr：测试 double 可能只带 total_tokens / 不带 latency
+        total_in += int(getattr(resp.usage, "input_tokens", 0) or 0)
+        total_out += int(getattr(resp.usage, "output_tokens", 0) or 0)
+        total_latency += int(getattr(resp, "latency_ms", 0) or 0)
 
         if not resp.tool_calls:
             text = (resp.text or "").strip()
@@ -1425,6 +1434,8 @@ def _llm_chat(
         tool_calls=tool_log or None,
         tokens_used=total_tokens,
         latency_ms=total_latency,
+        tokens_in=total_in or None,
+        tokens_out=total_out or None,
     )
     billing = _bill_chat_usage(
         db, tenant_id, conv.user_id, total_tokens, msg.id,

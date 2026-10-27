@@ -74,6 +74,9 @@ class AIMessage(Base):
         JSON
     )  # [{tool_name, parameters, result}]
     tokens_used: Mapped[int | None] = mapped_column(Integer)
+    # 输入/输出拆分（用量页 Tokens in/out 列）；历史行为 NULL，只有新记录才有
+    tokens_in: Mapped[int | None] = mapped_column(Integer)
+    tokens_out: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

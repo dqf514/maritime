@@ -508,3 +508,13 @@ def test_usage_stats_endpoint(client, auth_headers, db_session, tenant_id, user_
     by_agent = next(a for a in body["by_agent"] if a["agent_name"] == "voyage_advisor")
     assert by_agent["tokens"] >= 30
     assert body["by_day"]
+
+    # 前端用量页契约（key/label/requests/tokens_* + totals）—— 此前字段名对不上，
+    # 页面 KPI 恒为 0/「—」
+    assert body["totals"]["requests"] >= 1  # 请求数 = 助手回复条数（用户条不重复计）
+    assert body["totals"]["tokens_total"] >= 30
+    assert "cost_usd" in body["totals"]
+    assert by_conv["key"] == str(conv.id)
+    assert by_conv["requests"] == 1  # 该会话 1 条 assistant 回复
+    assert by_conv["tokens_total"] == 30
+    assert by_agent["key"] == "voyage_advisor"

@@ -70,15 +70,20 @@ def _ensure_copilot_agent(db: Session) -> None:
 
 
 def _get_or_create_assist_conv(
-    db: Session, tenant_id: UUID, user_id: UUID, context: dict | None, title: str | None
+    db: Session,
+    tenant_id: UUID,
+    user_id: UUID,
+    context: dict | None,
+    title: str | None,
+    agent_name: str = COPILOT_AGENT,
 ):
-    """为助手取一个可用会话：优先复用最近的 copilot 会话（刷新 context），否则新建。"""
+    """为助手取一个可用会话：优先复用该 agent 最近的活跃会话（刷新 context），否则新建。"""
     conv = db.scalar(
         select(mari_ai.AIConversation)
         .where(
             mari_ai.AIConversation.tenant_id == tenant_id,
             mari_ai.AIConversation.user_id == user_id,
-            mari_ai.AIConversation.agent_name == COPILOT_AGENT,
+            mari_ai.AIConversation.agent_name == agent_name,
             mari_ai.AIConversation.status == "active",
         )
         .order_by(mari_ai.AIConversation.updated_at.desc())
@@ -86,7 +91,7 @@ def _get_or_create_assist_conv(
     )
     if conv is None:
         conv = mari_ai.create_conversation(
-            db, tenant_id, user_id, COPILOT_AGENT, title=title or "Mari Copilot", context=context or {}
+            db, tenant_id, user_id, agent_name, title=title or "Mari Copilot", context=context or {}
         )
     else:
         # 每次调用都刷新上下文 —— 用户可能已切到另一个记录
@@ -96,6 +101,43 @@ def _get_or_create_assist_conv(
             conv.title = title
         db.commit()
     return conv
+
+
+def _record_usage_msg(
+    db: Session,
+    tenant_id: UUID,
+    user_id: UUID,
+    content: str,
+    *,
+    agent_name: str = "email_intelligence",
+    title: str | None = None,
+    tokens: int | None = None,
+    tokens_in: int | None = None,
+    tokens_out: int | None = None,
+    latency_ms: int | None = None,
+) -> None:
+    """把一次 AI 调用落进用量页的数据源（``ai_messages``）。
+
+    AI 中枢 → 用量页只聚合 ``AIMessage`` —— 不埋点的路径（邮件推荐、
+    文本抽取）用户用得再多页面也是 0。落库失败只记日志，绝不阻断业务
+    （推荐/抽取结果照常返回）。
+    """
+    try:
+        conv = _get_or_create_assist_conv(
+            db, tenant_id, user_id, None, title or "Email AI review", agent_name=agent_name
+        )
+        mari_ai.add_message(
+            db,
+            conv.id,
+            "assistant",
+            content[:2000],
+            tokens_used=tokens,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=latency_ms,
+        )
+    except Exception:  # noqa: BLE001 — 用量埋点失败不影响业务返回
+        log.exception("ai_assist: usage record failed (agent=%s)", agent_name)
 
 
 def status(db: Session, tenant_id: UUID) -> dict:
@@ -389,7 +431,12 @@ def recommend_email(db: Session, tenant_id: UUID, user_id: UUID, message_id: UUI
         cfg = llm_client.resolve_provider_config(db, tenant_id, agent_name=COPILOT_AGENT)
     except Exception:  # noqa: BLE001 — LLM 不可用则直接用规则推荐
         cfg = None
-    if cfg is not None and not llm_client.llm_off():
+    # 用量埋点只记「真的尝试过 LLM」的调用 —— 没配 provider 的规则直出不进用量页
+    attempted = cfg is not None and not llm_client.llm_off()
+    llm_latency: int | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    if attempted:
         try:
             body = (msg.body_text or "")[:6000]
             subject = msg.subject or "(no subject)"
@@ -417,6 +464,10 @@ def recommend_email(db: Session, tenant_id: UUID, user_id: UUID, message_id: UUI
                 provider=cfg,
             )
             tokens = int(resp.usage.total_tokens or 0)
+            # getattr：测试 double 可能只带 total_tokens
+            tokens_in = int(getattr(resp.usage, "input_tokens", 0) or 0) or None
+            tokens_out = int(getattr(resp.usage, "output_tokens", 0) or 0) or None
+            llm_latency = int(getattr(resp, "latency_ms", 0) or 0) or None
             parsed = _parse_json_payload(resp.text or "")
             if parsed and parsed.get("action") in ("apply", "reply", "review"):
                 base = {
@@ -447,6 +498,20 @@ def recommend_email(db: Session, tenant_id: UUID, user_id: UUID, message_id: UUI
         except Exception:  # noqa: BLE001 — 推荐失败回落规则
             log.exception("ai_assist: email recommend LLM path failed")
             billing = {"billed": 0, "mode": "error"}
+
+    if attempted:
+        # 用量页数据源埋点：请求 +1；成功带 token 拆分，失败只计请求
+        _record_usage_msg(
+            db,
+            tenant_id,
+            user_id,
+            f"[email:{etype_out}] {(msg.subject or '(no subject)')[:150]} → "
+            f"{base['recommendation']}: {base['reason'][:300]}",
+            tokens=tokens or None,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=llm_latency,
+        )
 
     return {
         "message_id": str(msg.id),
