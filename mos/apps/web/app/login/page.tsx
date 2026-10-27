@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
@@ -39,6 +39,18 @@ type AuthMethods = {
   provider_modes: { microsoft: string; google: string };
 };
 
+/**
+ * 「已激活」的 SSO 提供商（登录页只展示这些）：除 policy/platform 开关外，
+ * 还要求运行时 mode=live —— 凭据没配到位（stub/disabled）的提供商点了也登不进去，
+ * 只会误导用户。旧后端不带 provider_modes 时按布尔兜底（保持原行为）。
+ */
+function liveProviders(m: AuthMethods | null): ("microsoft" | "google")[] {
+  if (!m) return [];
+  const modes = (m.provider_modes || {}) as Partial<AuthMethods["provider_modes"]>;
+  const ok = (p: "microsoft" | "google") => Boolean(m[p]) && (modes[p] ? modes[p] === "live" : true);
+  return (["microsoft", "google"] as const).filter(ok);
+}
+
 function MsIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 21 21" aria-hidden>
@@ -74,9 +86,21 @@ export default function LoginPage() {
   const [brand, setBrand] = useState<Branding | null>(null);
   const [methods, setMethods] = useState<AuthMethods | null>(null);
   const [magicSent, setMagicSent] = useState("");
+  /** 绑定 SSO 时密码默认收起 —— 点「改用密码登录」才展开（SSO 是主路径，密码是备选） */
+  const [pwOpen, setPwOpen] = useState(false);
   // 登录失败后清空密码框并把焦点移回 —— 明文残留会被误读为「已提交成功」，
   // 也有肩窥/录屏泄露风险（P1-21）。
   const passwordRef = useRef<HTMLInputElement>(null);
+
+  // —— 方法可用性（handlers 里也要用，声明在 handlers 之前）——
+  /** 已激活的 SSO 提供商：只展示真实凭据到位的（见 liveProviders） */
+  const ssoProviders = useMemo(() => liveProviders(methods), [methods]);
+  const showSso = ssoProviders.length > 0;
+  const showPassword = methods?.password !== false;
+  const showMagic = Boolean(methods?.magic_link);
+  // 绑定 SSO 且密码仍开放：SSO 按钮是主操作（回车即 SSO），密码收起为「改用密码登录」备选
+  const collapsePassword = showSso && showPassword;
+  const passwordVisible = showPassword && (!collapsePassword || pwOpen);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/v1/public/branding`)
@@ -147,12 +171,10 @@ export default function LoginPage() {
         return;
       }
       // No password — route straight to the tenant's SSO / magic link.
-      if (m.microsoft) {
-        await startOAuth("microsoft", tenantVal, emailVal);
-        return;
-      }
-      if (m.google) {
-        await startOAuth("google", tenantVal, emailVal);
+      // 只跳「已激活」的提供商：stub/disabled 的点进去也登不上。
+      const live = liveProviders(m);
+      if (live.length) {
+        await startOAuth(live[0], tenantVal, emailVal);
         return;
       }
       if (m.magic_link) {
@@ -170,6 +192,11 @@ export default function LoginPage() {
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    // 密码收起时，表单提交（回车 / 主按钮）= 走绑定的 SSO —— 「继续」即 SSO，少一次选错
+    if (collapsePassword && !pwOpen && ssoProviders.length) {
+      await startOAuth(ssoProviders[0]);
+      return;
+    }
     setLoading(true);
     setError("");
     const fd = new FormData(e.currentTarget);
@@ -238,15 +265,13 @@ export default function LoginPage() {
     setEmail(p.email);
     setPassword(p.password);
     setMethods(null); // presets bypass methods resolution — show the plain password form
+    setPwOpen(false);
     setError("");
     setStep("credentials");
   }
 
   const accent = brand?.primary_color || "#1A9B96";
   const name = brand?.product_name || "MariOS";
-  const showSso = Boolean(methods?.microsoft || methods?.google);
-  const showPassword = methods?.password !== false;
-  const showMagic = Boolean(methods?.magic_link);
 
   return (
     <div className="login-stage login-stage-clean" style={{ ["--portal-accent" as string]: accent }}>
@@ -319,7 +344,7 @@ export default function LoginPage() {
             <h1>{t("login.welcome", "Welcome back")}</h1>
             <p className="muted">
               {tenant} · {email}{" "}
-              <button type="button" className="login-text-btn" onClick={() => { setStep("identity"); setError(""); setMagicSent(""); }}>
+              <button type="button" className="login-text-btn" onClick={() => { setStep("identity"); setError(""); setMagicSent(""); setPwOpen(false); }}>
                 {t("login.not_you", "Not you?")}
               </button>
             </p>
@@ -329,29 +354,60 @@ export default function LoginPage() {
 
           {showSso ? (
             <div className="oauth-stack">
-              {methods?.microsoft ? (
-                <button type="button" className="btn oauth-btn oauth-btn-full ms" onClick={() => startOAuth("microsoft")}>
-                  <MsIcon />
-                  <span>{t("login.microsoft_full", "Continue with Microsoft")}</span>
-                </button>
-              ) : null}
-              {methods?.google ? (
-                <button type="button" className="btn oauth-btn oauth-btn-full goog" onClick={() => startOAuth("google")}>
-                  <GoogleIcon />
-                  <span>{t("login.google_full", "Continue with Google")}</span>
-                </button>
+              {ssoProviders.map((p, i) => {
+                // 密码收起时，首个提供商按钮就是表单主提交 —— 回车/点击 = SSO，「继续」不再让人二选一
+                const heroIsSubmit = collapsePassword && !pwOpen && i === 0;
+                return (
+                  <button
+                    key={p}
+                    type={heroIsSubmit ? "submit" : "button"}
+                    className={`btn oauth-btn oauth-btn-full ${p === "microsoft" ? "ms" : "goog"}${collapsePassword ? " oauth-btn-hero" : ""}`}
+                    onClick={heroIsSubmit ? undefined : () => startOAuth(p)}
+                    autoFocus={collapsePassword && !pwOpen && i === 0}
+                  >
+                    {p === "microsoft" ? <MsIcon /> : <GoogleIcon />}
+                    <span>
+                      {p === "microsoft"
+                        ? t("login.microsoft_full", "Continue with Microsoft")
+                        : t("login.google_full", "Continue with Google")}
+                    </span>
+                  </button>
+                );
+              })}
+              {collapsePassword && !pwOpen ? (
+                <p className="login-sso-hint">
+                  {ssoProviders.length === 1
+                    ? t("login.sso_hero_hint", "This tenant uses {provider} sign-on — you'll continue there.", {
+                        provider: ssoProviders[0] === "microsoft" ? "Microsoft" : "Google",
+                      })
+                    : t("login.sso_hint_multi", "This tenant uses single sign-on — pick your work account above.")}
+                </p>
               ) : null}
             </div>
           ) : null}
 
-          {showSso && showPassword ? (
+          {showPassword && collapsePassword && !pwOpen ? (
             <div className="login-divider" role="separator">
-              <span>{t("login.or_email", "or continue with email")}</span>
+              <button
+                type="button"
+                className="login-text-btn"
+                onClick={() => {
+                  setPwOpen(true);
+                  window.requestAnimationFrame(() => passwordRef.current?.focus());
+                }}
+              >
+                {t("login.use_password", "Use password instead")}
+              </button>
             </div>
           ) : null}
 
-          {showPassword ? (
+          {passwordVisible ? (
             <>
+              {collapsePassword ? (
+                <div className="login-divider" role="separator">
+                  <span>{t("login.or_email", "or continue with email")}</span>
+                </div>
+              ) : null}
               <label htmlFor="password">{t("login.password", "Password")}</label>
               <input
                 id="password"
@@ -368,9 +424,11 @@ export default function LoginPage() {
                 {loading ? "…" : t("login.sign_in", "Sign in")}
               </button>
             </>
-          ) : (
-            !showSso && <p className="muted">{t("login.password_disabled", "Password login disabled — use Microsoft / Google.")}</p>
-          )}
+          ) : null}
+
+          {!showPassword && !showSso ? (
+            <p className="muted">{t("login.password_disabled", "Password login disabled — use Microsoft / Google.")}</p>
+          ) : null}
 
           <div className="login-alt-row">
             {showMagic ? (
