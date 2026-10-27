@@ -281,10 +281,14 @@ def apply_message(db: Session, tenant_id: UUID, user_id: UUID | None, message_id
     msg = db.get(EmailMessage, message_id)
     if not msg or msg.tenant_id != tenant_id:
         raise LookupError("message not found")
-    if msg.direction == "outbound":
-        return {"created": [], "warnings": ["outbound_message"], "hints": []}
 
     parse = dict(msg.parse_result or {})
+    etype = _email_type_of(parse)
+    # 出站方向只拦「未分类/系统回写」的行（outbound/outbound_reply）——
+    # Sent Items 里被分类为业务类型的邮件同样可落单（同步不再按方向强制 parsed）
+    if msg.direction == "outbound" and etype in ("outbound", "outbound_reply"):
+        return {"created": [], "warnings": ["outbound_message"], "hints": []}
+
     if parse.get("applied"):
         # 幂等：已落过单的邮件不重复生成草稿
         return {
@@ -294,7 +298,6 @@ def apply_message(db: Session, tenant_id: UUID, user_id: UUID | None, message_id
             "warnings": [],
             "hints": ["already_applied"],
         }
-    etype = _email_type_of(parse)
     fields = _flat_fields(parse)
     # 键名兼容：规则抽取用 vessel；demo/旧落库形状用 vessel_name；
     # 都没有时按主题里的船名回退（"Bunker offer — Ocean Star" 这类航运惯例）

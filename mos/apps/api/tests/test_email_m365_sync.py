@@ -235,8 +235,9 @@ def test_html_body_stored_as_plain_text(client, auth_headers, monkeypatch):
     assert "<" not in str(detail["parse_result"])
 
 
-def test_outbound_folder_not_in_review_queue(client, auth_headers, monkeypatch):
-    """sentitems 行 direction=outbound、强制 parsed、不在 /email/review。"""
+def test_sent_folder_classified_same_as_inbox(client, auth_headers, monkeypatch):
+    """sentitems 行 direction=outbound 保留，但分类/复核管线与 inbox 一致：
+    业务邮件（NOR）进 review 队列，普通邮件 parsed。"""
     from datetime import datetime, timezone
 
     from app.services.graph_client import GraphClient
@@ -252,7 +253,17 @@ def test_outbound_folder_not_in_review_queue(client, auth_headers, monkeypatch):
             "sentDateTime": now,
             "body": {"contentType": "Text", "content": "We accept the rate."},
             "conversationId": "conv-sent-1",
-        }
+        },
+        {
+            "id": "sent-2",
+            "subject": "NOR — MV DEMO / Rotterdam",
+            "from": {"emailAddress": {"address": "ops@demo.marios"}},
+            "toRecipients": [{"emailAddress": {"address": "charterer@broker.com"}}],
+            "receivedDateTime": now,
+            "sentDateTime": now,
+            "body": {"contentType": "Text", "content": "Notice of readiness tendered 08:00 LT."},
+            "conversationId": "conv-sent-2",
+        },
     ]
 
     class _Client(GraphClient):
@@ -276,13 +287,16 @@ def test_outbound_folder_not_in_review_queue(client, auth_headers, monkeypatch):
     assert s.status_code == 200, s.text
 
     msgs = client.get(f"{API}/email/messages", headers=auth_headers).json()
-    sent = [m for m in msgs if m["folder"] == "sentitems"]
-    assert sent and sent[0]["direction"] == "outbound"
-    assert sent[0]["parse_status"] == "parsed"
+    sent = {m["subject"]: m for m in msgs if m["folder"] == "sentitems"}
+    assert len(sent) == 2
+    assert all(m["direction"] == "outbound" for m in sent.values())
+    # 普通邮件 parsed，业务邮件（NOR）进复核队列 —— 与 inbox 口径一致
+    assert sent["RE: FIRM OFFER — MV DEMO"]["parse_status"] == "parsed"
+    assert sent["NOR — MV DEMO / Rotterdam"]["parse_status"] == "review"
 
-    # 不进复核队列
     review = client.get(f"{API}/email/review", headers=auth_headers).json()
-    assert all(m["folder"] == "inbox" for m in review)
+    nor = [m for m in review if m["folder"] == "sentitems"]
+    assert nor and "NOR" in nor[0]["subject"]
 
 
 def test_email_folders_endpoint(client, auth_headers, monkeypatch):

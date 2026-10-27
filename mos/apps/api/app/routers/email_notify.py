@@ -162,7 +162,8 @@ def delete_account(
 
 GRAPH_PROVIDERS = {"microsoft", "m365", "graph", "outlook"}
 
-#: 非收件箱的系统文件夹：出站语义 —— 只做参考浏览，不进复核队列
+#: 出站语义的系统文件夹 —— 仅决定 direction 展示元数据（From 列显示收件人）；
+#: 分类/规则解析/复核队列对所有文件夹一视同仁，不再按 inbound/outbound 分流
 OUTBOUND_FOLDERS = {"sentitems", "drafts", "deleteditems", "junkemail", "archive", "outbox"}
 #: 文件夹 key 的安全字符（Graph wellKnownName / 自定义文件夹名 / folder id）
 _FOLDER_RE = re.compile(r"^[A-Za-z0-9=_.-]{1,128}$")
@@ -202,8 +203,9 @@ def _sync_graph_mails(
     """Pull the connected mailbox via Microsoft Graph and persist new messages
     into the review pipeline (dedupe by Graph message id).
 
-    多文件夹拉取：inbox 优先，然后其余（sentitems 等出站文件夹只做参考浏览，
-    强制 parsed 不进复核队列）。单次总量受 SYNC_GLOBAL_BUDGET 预算保护。
+    多文件夹拉取：inbox 优先，然后其余。所有文件夹统一分类/规则解析 ——
+    业务类型进复核队列，其余 parsed；sentitems 等出站文件夹仅 direction
+    标记不同。单次总量受 SYNC_GLOBAL_BUDGET 预算保护。
     正文在 classify/规则解析**之前**统一 html_to_text 转纯文本。
     """
     from app.services import office_hub
@@ -242,7 +244,7 @@ def _sync_graph_mails(
                 502, detail={"code": "GRAPH_SYNC_FAILED", "message": f"{folder}: {exc}"}
             ) from exc
         folder_key = folder.lower()
-        inbound = folder_key == "inbox"
+        outbound_folder = folder_key in OUTBOUND_FOLDERS
         for m in mails:
             mid = m.get("id")
             if not mid:
@@ -284,53 +286,46 @@ def _sync_graph_mails(
                 db.add(thread)
                 db.flush()
 
-            if not inbound:
-                # 出站/杂项文件夹：强制 parsed（不进复核队列），收件人存档供参考
-                to_recipients = [
-                    ((r or {}).get("emailAddress") or {}).get("address")
-                    for r in (m.get("toRecipients") or [])
-                ]
-                to_recipients = [t for t in to_recipients if t][:5]
-                parse_result: dict = {
-                    "email_type": "outbound",
-                    "source": "graph",
-                    "graph_id": str(mid),
-                    "to_recipients": to_recipients,
-                }
-                status = "parsed"
-                cls = {"confidence": 1.0}
-            else:
-                # Classify + rule-based parse (fast & deterministic; the LLM pipeline
-                # remains available separately via /email-intelligence/process).
-                # 反馈记忆（忽略并记住）命中时分类降级为 general —— 不再进复核队列。
-                cls, suppressed = classify_with_memory(db, auth.tenant_id, subject, body, from_email)
-                ctype = cls["type"]
-                parse_result = {"email_type": ctype, "source": "graph", "graph_id": str(mid)}
-                if suppressed:
-                    parse_result["suppressed_by_rule"] = suppressed["rule"]
-                    parse_result["original_classification"] = suppressed["original"]
-                status = "parsed"
-                if ctype == "fixture_recap":
-                    parse_result.update(parse_fixture_recap(body))
-                    status = "review"
-                elif ctype == "nor":
-                    parse_result.update(parse_nor(body))
-                    status = "review"
-                elif ctype == "laytime_statement":
-                    parse_result.update(parse_laytime_statement(body))
-                    status = "review"
-                elif ctype == "bunker_offer":
-                    parse_result.update(parse_bunker_offer(body))
-                    status = "review"
-                elif ctype == "port_disbursement":
-                    parse_result.update(parse_port_disbursement(body))
-                    status = "review"
-                elif ctype == "invoice":
-                    parse_result.update(parse_invoice(body))
-                    status = "review"
-                elif ctype == "claim":
-                    parse_result.update(parse_claim(body))
-                    status = "review"
+            # 所有文件夹统一走 classify + 规则解析（快且确定；LLM 管线仍在
+            # /email-intelligence/process 单独可用）。业务类型 → review 队列，
+            # 其余 → parsed；出站/杂项文件夹只多带 direction 展示元数据，
+            # 不再强制 parsed（收件箱子文件夹/已发送里的 recap 一样要复核）。
+            # 反馈记忆（忽略并记住）命中时分类降级为 general —— 不再进复核队列。
+            to_recipients = [
+                ((r or {}).get("emailAddress") or {}).get("address")
+                for r in (m.get("toRecipients") or [])
+            ]
+            to_recipients = [t for t in to_recipients if t][:5]
+            cls, suppressed = classify_with_memory(db, auth.tenant_id, subject, body, from_email)
+            ctype = cls["type"]
+            parse_result: dict = {"email_type": ctype, "source": "graph", "graph_id": str(mid)}
+            if to_recipients:
+                parse_result["to_recipients"] = to_recipients
+            if suppressed:
+                parse_result["suppressed_by_rule"] = suppressed["rule"]
+                parse_result["original_classification"] = suppressed["original"]
+            status = "parsed"
+            if ctype == "fixture_recap":
+                parse_result.update(parse_fixture_recap(body))
+                status = "review"
+            elif ctype == "nor":
+                parse_result.update(parse_nor(body))
+                status = "review"
+            elif ctype == "laytime_statement":
+                parse_result.update(parse_laytime_statement(body))
+                status = "review"
+            elif ctype == "bunker_offer":
+                parse_result.update(parse_bunker_offer(body))
+                status = "review"
+            elif ctype == "port_disbursement":
+                parse_result.update(parse_port_disbursement(body))
+                status = "review"
+            elif ctype == "invoice":
+                parse_result.update(parse_invoice(body))
+                status = "review"
+            elif ctype == "claim":
+                parse_result.update(parse_claim(body))
+                status = "review"
 
             db.add(
                 EmailMessage(
@@ -338,7 +333,7 @@ def _sync_graph_mails(
                     account_id=account.id,
                     thread_id=thread.id,
                     message_id=str(mid),
-                    direction="inbound" if inbound else "outbound",
+                    direction="outbound" if outbound_folder else "inbound",
                     folder=folder_key,
                     from_email=from_email,
                     subject=subject,
