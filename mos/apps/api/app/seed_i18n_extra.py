@@ -513,7 +513,7 @@ UI_MESSAGES_EXTRA: list[tuple[str, str, str, str]] = [
     ("page.email.confidence", "app", "Confidence", "置信度"),
     ("page.email.confidence_hint", "app", "Confidence = how sure the AI is about the parsed fields (0–100%); double-check the parsed fields before confirming when it is low.", "置信度 = AI 对解析字段的把握程度（0–100%）：偏低时请重点核对「解析字段」再确认。"),
     ("page.email.confirm_btn", "app", "Confirm parse", "确认解析"),
-    ("page.email.confirm_hint", "app", "Accept the AI parse result — the email leaves the review queue.", "采纳 AI 解析结果，该邮件移出复核队列。"),
+    ("page.email.confirm_hint", "app", "Accept the parse result — the email leaves the review queue.", "采纳解析结果，该邮件移出复核队列。"),
     ("page.email.confirm_fail", "app", "Confirm failed", "确认失败"),
     ("page.email.confirmed", "app", "Parse result confirmed.", "Parse result confirmed."),
     ("page.email.display_name", "app", "Display name", "显示名称"),
@@ -4381,7 +4381,7 @@ UI_MESSAGES_EXTRA += [
 # —— 走查修复分片自动加载（各分片并行编辑互不冲突；缺失则跳过）——
 import importlib as _importlib  # noqa: E402
 
-for _shard in ("seed_i18n_gaps_a0", "seed_i18n_gaps_a1", "seed_i18n_gaps_a2", "seed_i18n_gaps_a3", "seed_i18n_gaps_a4", "seed_i18n_gaps_a5"):
+for _shard in ("seed_i18n_gaps_a0", "seed_i18n_gaps_a1", "seed_i18n_gaps_a2", "seed_i18n_gaps_a3", "seed_i18n_gaps_a4", "seed_i18n_gaps_a5", "seed_i18n_gaps_a6"):
     try:
         _m = _importlib.import_module(f"app.{_shard}")
         UI_MESSAGES_EXTRA += list(getattr(_m, "UI_MESSAGES_EXTRA", []))

@@ -107,6 +107,32 @@ function msgEmailType(m: { parse_result?: Record<string, unknown> }): string {
   return String(p.email_type || cls.type || "");
 }
 
+/** 进复核队列的业务类型 —— 只有这些才值得 AI 复核（B：其余不烧 token） */
+const BUSINESS_TYPES = new Set([
+  "fixture_recap",
+  "recap",
+  "nor",
+  "laytime_statement",
+  "bunker_offer",
+  "port_disbursement",
+  "invoice",
+  "claim",
+]);
+
+/** 可疑判定：业务类型 +（低置信 或 关键字段缺失）→ 打开详情时后台跑一次 AI 识别 */
+function needsAiSuggest(m: { parse_confidence: number | null; parse_result?: Record<string, unknown> }): boolean {
+  const etype = msgEmailType(m);
+  if (!BUSINESS_TYPES.has(etype)) return false;
+  if (m.parse_confidence == null || m.parse_confidence < 0.8) return true;
+  const p = (m.parse_result || {}) as Record<string, unknown>;
+  const raw = p[etype];
+  const sub = (raw && typeof raw === "object" ? raw : p) as Record<string, unknown>;
+  if (etype === "nor") return !sub.date_time;
+  if (etype === "fixture_recap" || etype === "recap") return !sub.vessel && !sub.vessel_name;
+  if (etype === "laytime_statement") return !Array.isArray(sub.events) || sub.events.length === 0;
+  return false;
+}
+
 const DAY_OPTIONS = [7, 14, 30] as const;
 const COUNT_OPTIONS = [200, 500, 1000] as const;
 /** 切文件夹自动同步的冷却时间 —— 5 分钟内不重复自动拉（手动同步同样重置计时） */
@@ -232,6 +258,12 @@ export default function EmailReviewPage() {
   const [detail, setDetail] = useState<MsgDetail | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const [detailErr, setDetailErr] = useState<string | null>(null);
+  /** 处理建议区：邮件先出；可疑业务邮件 pending → AI 识别 → 对应动作（Request XIX-B） */
+  const [sug, setSug] = useState<{ phase: "idle" | "pending" | "done" | "error"; rec: Recommend | null }>({
+    phase: "idle",
+    rec: null,
+  });
+  const sugReqRef = useRef(0);
   // 详情 → 填入航次计算
   const [extractOpen, setExtractOpen] = useState(false);
   // 回复对话框状态
@@ -620,6 +652,29 @@ export default function EmailReviewPage() {
     },
     [t],
   );
+
+  /** 处理建议区 —— 可疑业务邮件打开即后台 AI 识别；错误不打扰阅读，落区里降级为规则建议 */
+  const runSuggest = useCallback(async (m: MsgDetail) => {
+    const req = ++sugReqRef.current;
+    setSug({ phase: "pending", rec: null });
+    try {
+      const r = (await apiPost(`/api/v1/ai/assist/recommend/email/${m.id}`, {})) as Recommend;
+      if (sugReqRef.current === req) setSug({ phase: "done", rec: r });
+    } catch {
+      if (sugReqRef.current === req) setSug({ phase: "error", rec: null });
+    }
+  }, []);
+
+  // 详情加载完成 → 评估是否触发 AI（B：低置信/关键字段缺失才烧 token；否则规则动作直接出）
+  useEffect(() => {
+    sugReqRef.current += 1; // 关闭/切换详情时使在途 AI 请求失效
+    if (!detail) {
+      setSug({ phase: "idle", rec: null });
+      return;
+    }
+    if (needsAiSuggest(detail)) void runSuggest(detail);
+    else setSug({ phase: "idle", rec: null });
+  }, [detail, runSuggest]);
 
   /** 详情 → 填入航次计算：现成 parse_result 预填 AiExtractFill 预览，确认后转 estimates 页 */
   function applyToEstimate() {
@@ -1308,19 +1363,81 @@ export default function EmailReviewPage() {
                 </>
               );
             })()}
-            <p className="row-actions">
-              {["fixture_recap", "recap", "nor"].includes(
-                String((detail.parse_result || {}).email_type || ""),
-              ) ? (
-                <button className="btn btn-primary btn-sm" type="button" onClick={applyToEstimate}>
-                  {t("page.email.fill_estimate", "填入航次计算")}
-                </button>
-              ) : null}
-              {detail.parse_status === "review" ? (
-                (() => {
-                  const applyLabel = APPLY_LABEL_KEYS[msgEmailType(detail)];
-                  return (
-                    <>
+            {/* 处理建议区（Request XIX-B）：邮件先出；可疑业务邮件 pending → AI 识别 → 对应动作 */}
+            {(() => {
+              const storedType = msgEmailType(detail);
+              const sugRec = sug.phase === "done" ? sug.rec : null;
+              const aiType = sugRec ? sugRec.email_type || storedType : storedType;
+              // AI 结论驱动：仅 recommendation=apply 给落单动作 —— review/reply 收起，防错类型落单
+              const showApply = sugRec ? sugRec.recommendation === "apply" && !sugRec.already_applied : true;
+              const isReview = detail.parse_status === "review";
+              const applyLabel = APPLY_LABEL_KEYS[aiType];
+              return (
+                <div className="email-sug">
+                  <div className="email-sug-head">
+                    <h4>{t("page.email.sug_title", "处理建议")}</h4>
+                    {sug.phase === "pending" ? (
+                      <span className="badge badge-info" role="status">
+                        <span className="sug-spin" aria-hidden="true" />
+                        {t("page.email.sug_pending", "AI 正在识别这封邮件…")}
+                      </span>
+                    ) : sug.phase === "error" ? (
+                      <span className="badge badge-fail" role="alert">
+                        {t("page.email.sug_fail", "AI 识别失败 — 以下为规则建议")}
+                      </span>
+                    ) : sugRec && sugRec.source === "llm" ? (
+                      <span className="badge badge-pass">{t("page.email.sug_ai", "AI 识别")}</span>
+                    ) : (
+                      <span className="badge">{t("page.email.sug_rule", "规则建议")}</span>
+                    )}
+                    {sug.phase !== "pending" ? (
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        title={t("page.email.ai_rec_hint", "让 AI 根据这封邮件推荐下一步操作（落单 / 回复），仅建议不自动执行")}
+                        onClick={() => void runSuggest(detail)}
+                      >
+                        ✦ {t("page.email.sug_rerun", "重新识别")}
+                      </button>
+                    ) : null}
+                    {sug.phase === "error" ? (
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        onClick={() => void runSuggest(detail)}
+                      >
+                        {t("page.email.sug_retry", "重试")}
+                      </button>
+                    ) : null}
+                  </div>
+                  {sug.phase === "pending" ? (
+                    <p className="muted sug-pending-line">
+                      {t("page.email.sug_pending_hint", "正在识别类型与下一步动作 — 邮件内容可先阅读…")}
+                    </p>
+                  ) : null}
+                  {sugRec ? (
+                    <p className="sug-reason">
+                      {sugRec.email_type && sugRec.email_type !== storedType
+                        ? `${t("page.email.sug_type_diff", "AI 识别为 {ai}（规则：{rule}）", {
+                            ai: sugRec.email_type,
+                            rule: storedType || "—",
+                          })} · `
+                        : ""}
+                      {t("page.email.sug_reason", "推荐理由：{reason}", { reason: sugRec.reason })}
+                      {sugRec.already_applied
+                        ? ` · ${t("page.email.sug_applied", "已生成业务草稿 — 建议回复确认。")}`
+                        : ""}
+                    </p>
+                  ) : null}
+                  {/* 识别中不给动作按钮 —— 处理结束后才显示对应动作（用户规格） */}
+                  {sug.phase !== "pending" ? (
+                  <p className="row-actions">
+                    {showApply && ["fixture_recap", "recap", "nor"].includes(aiType) ? (
+                      <button className="btn btn-primary btn-sm" type="button" onClick={applyToEstimate}>
+                        {t("page.email.fill_estimate", "填入航次计算")}
+                      </button>
+                    ) : null}
+                    {showApply && isReview ? (
                       <button
                         className="btn btn-sm btn-primary"
                         type="button"
@@ -1339,40 +1456,59 @@ export default function EmailReviewPage() {
                           ? t(applyLabel[0], applyLabel[1])
                           : t("page.email.apply_btn", "Create draft")}
                       </button>
-                      <button
-                        className="btn btn-sm"
-                        type="button"
-                        title={t(
-                          "page.email.ignore_hint",
-                          "忽略本次建议；勾选记住后，同一发件人不会再被识别为此类型。",
-                        )}
-                        onClick={() => {
-                          const m = detail;
-                          setDetailFor(null);
-                          setDetail(null);
-                          setIgnoreRemember(true);
-                          setIgnoreFor(m);
-                        }}
-                      >
-                        {t("page.email.ignore_btn", "忽略")}
-                      </button>
-                      <button
-                        className="btn btn-sm"
-                        type="button"
-                        title={t("page.email.confirm_hint", "采纳 AI 解析结果，该邮件移出复核队列")}
-                        onClick={() => {
-                          const id = detail.id;
-                          setDetailFor(null);
-                          setDetail(null);
-                          void confirm(id).catch((ex) => toast.error(msgOf(ex, t("page.email.confirm_fail", "Confirm failed"))));
-                        }}
-                      >
-                        {t("page.email.confirm_btn", "确认解析")}
-                      </button>
-                    </>
-                  );
-                })()
-              ) : null}
+                    ) : null}
+                    {isReview ? (
+                      <>
+                        <button
+                          className="btn btn-sm"
+                          type="button"
+                          title={t(
+                            "page.email.ignore_hint",
+                            "忽略本次建议；勾选记住后，同一发件人不会再被识别为此类型。",
+                          )}
+                          onClick={() => {
+                            const m = detail;
+                            setDetailFor(null);
+                            setDetail(null);
+                            setIgnoreRemember(true);
+                            setIgnoreFor(m);
+                          }}
+                        >
+                          {t("page.email.ignore_btn", "忽略")}
+                        </button>
+                        <button
+                          className="btn btn-sm"
+                          type="button"
+                          title={t("page.email.confirm_hint", "采纳解析结果，该邮件移出复核队列")}
+                          onClick={() => {
+                            const id = detail.id;
+                            setDetailFor(null);
+                            setDetail(null);
+                            void confirm(id).catch((ex) => toast.error(msgOf(ex, t("page.email.confirm_fail", "Confirm failed"))));
+                          }}
+                        >
+                          {t("page.email.confirm_btn", "确认解析")}
+                        </button>
+                      </>
+                    ) : null}
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      onClick={() => {
+                        const m = detail;
+                        setDetailFor(null);
+                        setDetail(null);
+                        void openReply(m);
+                      }}
+                    >
+                      {t("page.email.reply_btn", "Reply")}
+                    </button>
+                  </p>
+                  ) : null}
+                </div>
+              );
+            })()}
+            <p className="row-actions">
               <button
                 className="btn btn-sm"
                 type="button"
@@ -1385,31 +1521,6 @@ export default function EmailReviewPage() {
                 }}
               >
                 {t("page.email.archive_btn", "存档")}
-              </button>
-              <button
-                className="btn btn-sm"
-                type="button"
-                title={t("page.email.ai_rec_hint", "让 AI 根据这封邮件推荐下一步操作（落单 / 回复），仅建议不自动执行")}
-                onClick={() => {
-                  const m = detail;
-                  setDetailFor(null);
-                  setDetail(null);
-                  void openRecommend(m);
-                }}
-              >
-                ✦ {t("page.email.ai_rec", "AI 建议")}
-              </button>
-              <button
-                className="btn btn-sm"
-                type="button"
-                onClick={() => {
-                  const m = detail;
-                  setDetailFor(null);
-                  setDetail(null);
-                  void openReply(m);
-                }}
-              >
-                {t("page.email.reply_btn", "Reply")}
               </button>
             </p>
             <p className="hint">

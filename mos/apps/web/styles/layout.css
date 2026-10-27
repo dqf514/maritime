@@ -301,6 +301,36 @@
   25% { background: rgba(46, 168, 255, 0.1); }
   100% { background: transparent; }
 }
+/* ── 邮件详情：处理建议区（Request XIX-B）—— 邮件先出；可疑业务邮件
+   pending 芯片转圈 → AI 结果给对应动作，否则规则动作直接出 ── */
+.email-sug {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-light);
+}
+.email-sug-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.email-sug-head h4 { margin: 0; }
+.sug-spin {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgba(46, 168, 255, 0.35);
+  border-top-color: #2ea8ff;
+  animation: sync-chip-rotate 0.9s linear infinite;
+  vertical-align: -1px;
+}
+.sug-reason {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0.4rem 0 0;
+}
+.sug-pending-line { margin: 0.4rem 0 0; }
 /* 文件夹勾选改为点击弹窗（原 details 弹层挂在 overflow-x:auto 的工具栏里 ——
    单轴 auto 会把另一轴也算 auto，工具栏右缘因此冒出上下滚动条，滚动才看到弹层）。
    复选项复用站内 check-row 样式（forms.css，压过 .record-modal-body label 布局）。 */

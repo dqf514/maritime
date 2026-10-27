@@ -326,6 +326,19 @@ _EMAIL_TEMPLATE_HINTS = {
     "laytime_statement": "laytime_query",
 }
 
+# LLM 纠正类型时允许的取值白名单（防止模型幻觉出任意字符串进按钮/落单分支）
+_AI_RECLASS_TYPES = {
+    "fixture_recap",
+    "recap",
+    "nor",
+    "laytime_statement",
+    "bunker_offer",
+    "port_disbursement",
+    "invoice",
+    "claim",
+    "general",
+}
+
 
 def recommend_email(db: Session, tenant_id: UUID, user_id: UUID, message_id: UUID) -> dict:
     """邮件下一步动作推荐：规则底稿 + LLM 润色判断；产出推荐，不落库。
@@ -371,6 +384,7 @@ def recommend_email(db: Session, tenant_id: UUID, user_id: UUID, message_id: UUI
     source = "rules"
     tokens = 0
     billing: dict = {"billed": 0, "mode": "skip"}
+    etype_out = etype  # LLM 可纠正类型（source=llm 且给出合法类型时覆盖）
     try:
         cfg = llm_client.resolve_provider_config(db, tenant_id, agent_name=COPILOT_AGENT)
     except Exception:  # noqa: BLE001 — LLM 不可用则直接用规则推荐
@@ -385,8 +399,13 @@ def recommend_email(db: Session, tenant_id: UUID, user_id: UUID, message_id: UUI
                 f"Detected type: {etype}\n"
                 f"Extracted fields: {json.dumps(fields, ensure_ascii=False, default=str)[:1500]}\n"
                 f"Body:\n{body}\n\n"
-                "Recommend the single best next action for a human operator. Reply ONLY with JSON:\n"
-                '{"action": "apply"|"reply"|"review", "confidence": 0.0-1.0, '
+                "Recommend the single best next action for a human operator. Verify the detected "
+                "type against the body — correct it if the email is actually a different kind. "
+                "Reply ONLY with JSON:\n"
+                '{"action": "apply"|"reply"|"review", '
+                '"type": "fixture_recap"|"recap"|"nor"|"laytime_statement"|"bunker_offer"|'
+                '"port_disbursement"|"invoice"|"claim"|"general", '
+                '"confidence": 0.0-1.0, '
                 '"reason": "<one sentence>", "reply_template": "ack_recap"|"counter_offer"|'
                 '"nor_ack"|"laytime_query"|"general"}'
             )
@@ -407,6 +426,9 @@ def recommend_email(db: Session, tenant_id: UUID, user_id: UUID, message_id: UUI
                     "reply_template": str(parsed.get("reply_template") or base["reply_template"]),
                 }
                 source = "llm"
+                ai_type = str(parsed.get("type") or "").strip().lower()
+                if ai_type in _AI_RECLASS_TYPES:
+                    etype_out = ai_type
                 llm_note = (resp.text or "").strip()[:500]
             from app.services.saas_engine import bill_ai_tokens
 
@@ -428,7 +450,7 @@ def recommend_email(db: Session, tenant_id: UUID, user_id: UUID, message_id: UUI
 
     return {
         "message_id": str(msg.id),
-        "email_type": etype,
+        "email_type": etype_out,
         "already_applied": applied,
         **base,
         "source": source,

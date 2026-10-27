@@ -194,6 +194,67 @@ def test_recommend_email_404_for_unknown(client, auth_headers):
     assert r.status_code == 404, r.text
 
 
+def test_recommend_email_llm_can_correct_type(client, auth_headers, monkeypatch):
+    """Request XIX：LLM 推荐可纠正规则类型（白名单内生效，非法值拒绝回落规则类型）。"""
+    import json
+    from types import SimpleNamespace
+
+    from app.services import ai_assist as mod
+
+    mid = _seed_recap_email(client, auth_headers)
+    replies = iter(
+        [
+            json.dumps(
+                {
+                    "action": "review",
+                    "type": "general",
+                    "confidence": 0.7,
+                    "reason": "Body is a weather note, not a fixture recap.",
+                    "reply_template": "general",
+                }
+            ),
+            json.dumps(
+                {
+                    "action": "apply",
+                    "type": "totally_made_up",
+                    "confidence": 0.9,
+                    "reason": "x",
+                    "reply_template": "ack_recap",
+                }
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(mod.llm_client, "resolve_provider_config", lambda *a, **k: object())
+    monkeypatch.setattr(mod.llm_client, "llm_off", lambda: False)
+    monkeypatch.setattr(
+        mod.llm_client,
+        "chat_completion",
+        lambda *a, **k: SimpleNamespace(
+            usage=SimpleNamespace(total_tokens=11), text=next(replies)
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.saas_engine.bill_ai_tokens",
+        lambda **k: {"billed": 0, "mode": "skip"},
+    )
+
+    # 白名单类型 → 纠正生效
+    r = client.post(f"{API}/ai/assist/recommend/email/{mid}", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source"] == "llm"
+    assert body["recommendation"] == "review"
+    assert body["email_type"] == "general"
+
+    # 非法类型 → 白名单拒绝，保留规则识别出的 recap 类型
+    r2 = client.post(f"{API}/ai/assist/recommend/email/{mid}", headers=auth_headers)
+    assert r2.status_code == 200, r2.text
+    body2 = r2.json()
+    assert body2["source"] == "llm"
+    assert body2["email_type"] in ("fixture_recap", "recap")
+
+
 # ── 4b. 粘贴文本 → 结构化字段（航次计算 AI 填充） ─────────────────────────
 
 _RECAP_SAMPLE = """Fixture Recap
