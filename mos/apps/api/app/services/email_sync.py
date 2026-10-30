@@ -213,6 +213,10 @@ def sync_graph_mails(
             if ctype == "fixture_recap":
                 parse_result.update(parse_fixture_recap(body))
                 status = "review"
+            elif ctype == "noon_report":
+                # 午报走例行任务中枢；这里只保留类型，不生成估算/租约草稿，
+                # 也不进入 NOR 复核队列（避免误出「填入航次计算」）。
+                status = "parsed"
             elif ctype == "nor":
                 parse_result.update(parse_nor(body))
                 status = "review"

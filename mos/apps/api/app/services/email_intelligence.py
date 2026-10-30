@@ -328,7 +328,12 @@ def classify_email(subject: str, body: str) -> dict:
         return {"type": "fixture_recap", "confidence": 0.9}
     if any(kw in text for kw in ["laytime statement", "statement of facts", "demurrage calc"]):
         return {"type": "laytime_statement", "confidence": 0.85}
-    if any(kw in text for kw in ["notice of readiness", "nor ", "nor."]):
+    # 午报必须先于 NOR 判断：noon report 正文常出现 NOR / nor. 等字样，
+    # 旧逻辑会把午报误判成 NOR，前端因此给出「填入航次计算」。
+    if any(kw in text for kw in ["noon report", "noon position", "daily noon", "mirror noon"]):
+        return {"type": "noon_report", "confidence": 0.85}
+    # NOR 用词边界匹配，不再吞掉 "nor " / "nor." 这类子串。
+    if "notice of readiness" in text or re.search(r"\bnor\b", text):
         return {"type": "nor", "confidence": 0.85}
     if any(kw in text for kw in ["bunker offer", "bunker quotation", "stem "]):
         return {"type": "bunker_offer", "confidence": 0.8}

@@ -373,6 +373,7 @@ _AI_RECLASS_TYPES = {
     "fixture_recap",
     "recap",
     "nor",
+    "noon_report",
     "laytime_statement",
     "bunker_offer",
     "port_disbursement",
@@ -450,7 +451,7 @@ def recommend_email(db: Session, tenant_id: UUID, user_id: UUID, message_id: UUI
                 "type against the body — correct it if the email is actually a different kind. "
                 "Reply ONLY with JSON:\n"
                 '{"action": "apply"|"reply"|"review", '
-                '"type": "fixture_recap"|"recap"|"nor"|"laytime_statement"|"bunker_offer"|'
+                '"type": "fixture_recap"|"recap"|"nor"|"noon_report"|"laytime_statement"|"bunker_offer"|'
                 '"port_disbursement"|"invoice"|"claim"|"general", '
                 '"confidence": 0.0-1.0, '
                 '"reason": "<one sentence>", "reply_template": "ack_recap"|"counter_offer"|'
