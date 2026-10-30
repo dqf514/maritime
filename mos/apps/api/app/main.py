@@ -48,6 +48,7 @@ import app.models_coa  # noqa: F401
 import app.models_trading  # noqa: F401
 import app.models_pooling  # noqa: F401
 import app.models_lightering  # noqa: F401
+import app.models_routine  # noqa: F401
 import app.models_reference_ext  # noqa: F401
 import app.models_interface  # noqa: F401
 import app.models_field_perms  # noqa: F401
@@ -114,6 +115,7 @@ from app.routers.scheduling import router as scheduling_router
 from app.routers.coa import router as coa_router
 from app.routers.trading import router as trading_router
 from app.routers.pooling import router as pooling_router
+from app.routers.routine import router as routine_router
 from app.routers.lightering import router as lightering_router
 from app.routers.masterdata_ext import router as masterdata_ext_router
 from app.routers.interface_messages import router as interface_messages_router
@@ -121,6 +123,7 @@ from app.routers.field_perms import router as field_perms_router
 from app.routers.udf import router as udf_router
 from app.routers.docs import router as docs_router
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo
+from app.seed_routine import seed_demo_routine_tasks, seed_platform_skills
 from app.seed_demo_flow import seed_full_demo_flow, stamp_demo_attribution
 from app.seed_masterdata_gaps import seed_masterdata_gaps
 from app.seed_i18n import seed_i18n
@@ -377,6 +380,8 @@ async def lifespan(_app: FastAPI):
                 seed_clause_pack(db)
                 seed_report_datasets(db)
                 seed_config_flag_presets(db)
+                # 例行任务中枢的平台技能模板（tenant_id IS NULL，跨租户复用）
+                seed_platform_skills(db)
                 # 预置燃油区（ECA / EU ETS 多边形）—— estimate_enrich 的 ECA 天数
                 # 与 EU 份额推断依赖这些区划；幂等（按 zone_name 去重）。
                 from app.services.fuel_zone_service import seed_preset_zones
@@ -396,6 +401,8 @@ async def lifespan(_app: FastAPI):
                     demo_tenant = db.scalar(_sel(_Tenant).where(_Tenant.code == "demo"))
                     if demo_tenant is not None:
                         stamp_demo_attribution(db, demo_tenant)
+                        # 试点例行任务（午报 / 装卸时间 / 租约意向书）
+                        seed_demo_routine_tasks(db, demo_tenant.id)
                 db.commit()
     except Exception:
         log.exception("Startup seed failed")
@@ -409,9 +416,14 @@ async def lifespan(_app: FastAPI):
             install_scheduler as install_backup_scheduler,
             register_handlers as register_backup_handlers,
         )
+        from app.services.routine_scheduler import (
+            install_scheduler as install_routine_scheduler,
+            register_handlers as register_routine_handlers,
+        )
 
         register_handlers()
         register_backup_handlers()
+        register_routine_handlers()
         try:
             with SessionLocal() as db:
                 install_scheduler(db)
@@ -422,6 +434,11 @@ async def lifespan(_app: FastAPI):
                 install_backup_scheduler(db)
         except Exception:
             log.exception("backup schedule bootstrap failed")
+        try:
+            with SessionLocal() as db:
+                install_routine_scheduler(db)
+        except Exception:
+            log.exception("routine scheduler bootstrap failed")
         job_thread = threading.Thread(target=run_worker, args=(job_stop,), name="marios-jobs", daemon=True)
         job_thread.start()
     yield
@@ -521,6 +538,7 @@ app.include_router(scheduling_router, prefix="/api/v1")
 app.include_router(coa_router, prefix="/api/v1")
 app.include_router(trading_router, prefix="/api/v1")
 app.include_router(pooling_router, prefix="/api/v1")
+app.include_router(routine_router, prefix="/api/v1")
 app.include_router(lightering_router, prefix="/api/v1")
 app.include_router(masterdata_ext_router, prefix="/api/v1")
 app.include_router(interface_messages_router, prefix="/api/v1")

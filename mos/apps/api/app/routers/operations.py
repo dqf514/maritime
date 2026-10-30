@@ -41,6 +41,7 @@ from app.services.notifications import notify_once, role_recipients
 from app.services.voyage_close import closing_check
 from app.services.recycle import soft_delete
 from app.services.report_sequence import assert_report_sequence, derive_report_stage
+from app.services.noon_service import create_noon_report
 from app.services.tenant_guard import global_ref_get, scoped_get
 from app.services.state_machine import VOYAGE_TRANSITIONS, InvalidState, transition
 
@@ -1493,46 +1494,10 @@ def sof_summary(port_call_id: UUID, auth: AuthContext = Depends(require_module("
 
 @router.post("/noon-reports", response_model=NoonOut)
 def create_noon(body: NoonIn, auth: AuthContext = Depends(require_module("operations")), db: Session = Depends(get_db)):
-    v = db.get(Voyage, body.voyage_id)
-    if not v or v.tenant_id != auth.tenant_id:
-        raise HTTPException(404, "Voyage not found")
-    # Activity Report 审批顺序链：阶段不得回退（同阶段可重复；CFGRelaxReportSequence 可关）
-    stage = assert_report_sequence(
+    # 建报逻辑已下沉到服务层（services/noon_service.py）—— 例行任务中枢的写回腿
+    # 在人工确认后要落同一份午报；对外响应与错误语义不变。
+    res = create_noon_report(
         db,
-        auth.tenant_id,
-        v.id,
-        report_at=body.report_at,
-        lat=body.lat,
-        lon=body.lon,
-        speed=body.speed,
-        remarks=body.remarks,
-        voyage_no=v.voyage_no,
-    )
-    deviation = None
-    # ETA deviation vs first port call ETA
-    pc = db.scalar(
-        select(PortCall)
-        .where(PortCall.voyage_id == v.id, PortCall.deleted_at.is_(None))
-        .order_by(PortCall.seq)
-        .limit(1)
-    )
-    if pc and pc.eta and body.eta_next:
-        eta = pc.eta if pc.eta.tzinfo else pc.eta.replace(tzinfo=timezone.utc)
-        eta_next = body.eta_next if body.eta_next.tzinfo else body.eta_next.replace(tzinfo=timezone.utc)
-        deviation = Decimal(str((eta_next - eta).total_seconds() / 3600.0))
-        if abs(deviation) >= 6:
-            db.add(
-                TwinAlert(
-                    tenant_id=auth.tenant_id,
-                    level="warn",
-                    title=f"ETA deviation {float(deviation):.1f}h",
-                    body=f"Voyage {v.voyage_no} noon ETA drift",
-                    href=f"/operations/voyages/{v.id}",
-                    vessel_id=v.vessel_id,
-                    voyage_id=v.id,
-                )
-            )
-    row = NoonReport(
         tenant_id=auth.tenant_id,
         voyage_id=body.voyage_id,
         report_at=body.report_at,
@@ -1546,17 +1511,14 @@ def create_noon(body: NoonIn, auth: AuthContext = Depends(require_module("operat
         wind_bf=body.wind_bf,
         sea_state=body.sea_state,
         current_kn=body.current_kn,
-        eta_deviation_hours=deviation,
     )
-    db.add(row)
-    db.commit()
     return NoonOut(
-        id=row.id,
-        eta_deviation_hours=float(deviation) if deviation is not None else None,
+        id=res["id"],
+        eta_deviation_hours=res["eta_deviation_hours"],
         wind_bf=body.wind_bf,
         sea_state=body.sea_state,
         current_kn=body.current_kn,
-        stage=stage,
+        stage=res["stage"],
     )
 
 

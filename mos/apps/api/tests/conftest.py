@@ -25,6 +25,7 @@ os.environ["MARIOS_LLM_OFF"] = "1"  # 测试零网络：LLM 抽取熔断（mock 
 os.environ["STARTUP_SEED"] = "false"
 
 from app.db import Base, get_db  # noqa: E402
+from app.models import Tenant  # noqa: E402
 import app.models  # noqa: E402, F401
 import app.models_audit  # noqa: E402, F401
 import app.models_onboarding  # noqa: E402, F401
@@ -56,6 +57,7 @@ import app.models_coa  # noqa: E402, F401
 import app.models_trading  # noqa: E402, F401
 import app.models_pooling  # noqa: E402, F401
 import app.models_lightering  # noqa: E402, F401
+import app.models_routine  # noqa: E402, F401
 import app.models_reference_ext  # noqa: E402, F401
 import app.models_interface  # noqa: E402, F401
 import app.models_field_perms  # noqa: E402, F401
@@ -70,6 +72,8 @@ from app.services.reference_data import seed_reference_catalog
 from app.services.clause_library import seed_clause_pack  # noqa: E402
 from app.services.report_builder import seed_report_datasets  # noqa: E402
 from app.services.config_service import seed_config_flag_presets  # noqa: E402
+from app.seed_routine import seed_demo_routine_tasks, seed_platform_skills  # noqa: E402
+from sqlalchemy import select as _select  # noqa: E402
 
 
 def _build_seeded_engine(url: str):
@@ -92,6 +96,11 @@ def _build_seeded_engine(url: str):
         seed_clause_pack(db)
         seed_report_datasets(db)
         seed_config_flag_presets(db)
+        # 例行任务中枢：平台技能模板 + demo 试点任务
+        seed_platform_skills(db)
+        _demo = db.scalar(_select(Tenant).where(Tenant.code == "demo"))
+        if _demo is not None:
+            seed_demo_routine_tasks(db, _demo.id)
         db.commit()
     return engine
 
@@ -133,6 +142,10 @@ def db_engine(request, _template_db, tmp_path):
             seed_clause_pack(db)
             seed_report_datasets(db)
             seed_config_flag_presets(db)
+            seed_platform_skills(db)
+            _demo = db.scalar(_select(Tenant).where(Tenant.code == "demo"))
+            if _demo is not None:
+                seed_demo_routine_tasks(db, _demo.id)
             db.commit()
         yield engine
         Base.metadata.drop_all(bind=engine)

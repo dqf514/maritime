@@ -91,6 +91,7 @@ import app.models_coa  # noqa: F401,E402
 import app.models_trading  # noqa: F401,E402
 import app.models_pooling  # noqa: F401,E402
 import app.models_lightering  # noqa: F401,E402
+import app.models_routine  # noqa: F401,E402
 import app.models_reference_ext  # noqa: F401,E402
 import app.models_interface  # noqa: F401,E402
 import app.models_field_perms  # noqa: F401,E402
