@@ -193,6 +193,8 @@ def draft_out(
     draft: DraftRecord,
     task: RoutineTask | None = None,
     source: dict | None = None,
+    can_confirm: bool | None = None,
+    blocked_reason: str | None = None,
 ) -> dict:
     return {
         "id": str(draft.id),
@@ -217,7 +219,22 @@ def draft_out(
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
         "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
         "source_email": source,
+        # 能不能确认（服务端判，前端据此禁用按钮并说明原因 —— 不让用户点了才报错）
+        "can_confirm": can_confirm,
+        "blocked_reason": blocked_reason,
     }
+
+
+def _confirm_gate(draft: DraftRecord, auth: AuthContext) -> tuple[bool, str | None]:
+    """确认闸门 —— 四眼：草稿创建人不能自己确认。
+
+    闸门在**列表/详情里就说明白**，而不是等用户点「采纳」才吃一个 409。
+    """
+    if draft.status != "pending":
+        return False, f"Draft is '{draft.status}' — only pending drafts can be confirmed"
+    if draft.created_by is not None and draft.created_by == auth.user_id:
+        return False, "You triggered this draft — another person must confirm it (four-eyes rule)"
+    return True, None
 
 
 #: 来源邮件正文摘录长度（够核对证据，不整封复制）
@@ -790,6 +807,7 @@ def list_drafts(
                 d,
                 by_id.get(d.routine_task_id),
                 _source_brief(sources[d.source_email_id]) if d.source_email_id in sources else None,
+                *_confirm_gate(d, auth),
             )
             for d in rows
         ],
@@ -820,7 +838,7 @@ def get_draft(
         )
         if row is not None:
             source = _source_excerpt(row)
-    return draft_out(draft, task, source)
+    return draft_out(draft, task, source, *_confirm_gate(draft, auth))
 
 
 @router.post("/drafts/{draft_id}/confirm")

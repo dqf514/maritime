@@ -152,6 +152,22 @@ def _as_number(value: Any) -> Decimal | None:
         return None
 
 
+def _is_blank(value: Any) -> bool:
+    """空值判定 —— LLM 腿返回空容器/空串时**不算抽到值**。
+
+    模型常把「没找到」表达成 ``[]`` / ``{}`` / ``""``；若把它当成有效值，
+    就会顶掉规则腿明明抽到的结果（试点走查踩到：SOF 的 4 条事件被空数组顶掉，
+    装卸时间草稿成了空壳）。
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    return False
+
+
 def _value_candidates(value: Any) -> list[str]:
     """把字段值拆成可在原文里检索的标量候选（列表/字典取其元素）。"""
     if value is None:
@@ -170,8 +186,43 @@ def _value_candidates(value: Any) -> list[str]:
     return [text] if text else []
 
 
-#: 行内数字（用于数值证据匹配）
-_NUM_TOKEN_RE = re.compile(r"-?\d+(?:\.\d+)?")
+#: 纯数字形态的字符串（判「按数字 token 匹配」而不是子串匹配）
+_NUMERIC_STR_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
+
+
+def _numeric_candidates(value: Any) -> list[str]:
+    """把一个数值展开成正文里可能的写法（1520 / 1520.0 / 1,520）。"""
+    num = _as_number(value)
+    if num is None:
+        return []
+    raw = format(num, "f")
+    out: list[str] = [raw]
+    if "." in raw:
+        trimmed = raw.rstrip("0").rstrip(".")
+        if trimmed and trimmed not in out:
+            out.append(trimmed)
+    else:
+        if f"{raw}.0" not in out:
+            out.append(f"{raw}.0")
+        if len(raw.lstrip("-")) > 3:
+            grouped = f"{int(raw):,}"
+            if grouped not in out:
+                out.append(grouped)
+    return out
+
+
+def _has_standalone_number(line: str, candidates: list[str]) -> bool:
+    """行里是否**独立**出现了该数字。
+
+    必须按「独立 token」判，不能用子串包含 —— 否则 4 会命中 "04:00"、
+    4 会命中 "2408"，出处行会指到不相干的行上（试点走查踩到：
+    wind_bf=4 的出处指向 "Report at: ... 04:00"）。左右两侧都不许挨着
+    字母/数字/小数点，才算「这一行里写的就是这个数」。
+    """
+    for cand in candidates:
+        if re.search(rf"(?<![\w.]){re.escape(cand)}(?![\w.])", line):
+            return True
+    return False
 
 
 def _line_quote(body: str, value: Any) -> str | None:
@@ -183,27 +234,42 @@ def _line_quote(body: str, value: Any) -> str | None:
         return None
     lines = [ln.strip() for ln in (body or "").splitlines() if ln.strip()]
 
+    # 数值型字段：只认「独立出现的数字」，绝不按子串找
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+        numeric = _numeric_candidates(value)
+        for raw_line in lines:
+            if _has_standalone_number(raw_line, numeric):
+                return raw_line[:280]
+        return None
+
     # 文本候选：任一候选出现在某行即算证据（容器字段靠元素命中）
     for raw_line in lines:
         low = raw_line.lower()
-        if any(c.lower() in low for c in candidates):
-            return raw_line[:280]
-
-    # 数值候选：行内**独立的数字**与该值相等（"ROB FO: 320" ↔ 320.0）。
-    # 早期实现把整行当数字解析，浮点值（320.0）在正文里写作 "320" 时取不到证据，
-    # 于是数值字段被静默丢弃 —— 现在按数字 token 比。
-    num = _as_number(value)
-    if num is not None:
-        for raw_line in lines:
-            for token in _NUM_TOKEN_RE.findall(raw_line):
-                token_num = _as_number(token)
-                if token_num is not None and token_num == num:
+        for cand in candidates:
+            text = cand.strip()
+            if not text:
+                continue
+            if _NUMERIC_STR_RE.match(text):
+                # 字符串形态的纯数字 —— 同样按独立 token 判
+                if _has_standalone_number(raw_line, _numeric_candidates(text)):
                     return raw_line[:280]
+            elif text.lower() in low:
+                return raw_line[:280]
     return None
 
 
-def build_evidence(fields: dict[str, Any], body: str, *, source: str) -> list[dict[str, Any]]:
-    """逐字段找原文出处；找不到出处的字段不产出证据（调用方据此丢字段）。"""
+def build_evidence(
+    fields: dict[str, Any],
+    body: str,
+    *,
+    source: str,
+    origins: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """逐字段找原文出处；找不到出处的字段不产出证据（调用方据此丢字段）。
+
+    ``origins`` 给的是**逐字段**来源（llm / rules）；缺省才回落到整体 ``source``。
+    规则腿兜底的字段不能挂「llm」标签 —— 复核人看到的标签必须等于真正的抽取腿。
+    """
     evidence: list[dict[str, Any]] = []
     for name, value in fields.items():
         if name.startswith("_") or value is None:
@@ -217,7 +283,7 @@ def build_evidence(fields: dict[str, Any], body: str, *, source: str) -> list[di
                 "field": name,
                 "quote": quote,
                 "value": value,
-                "extracted_by": source,
+                "extracted_by": (origins or {}).get(name, source),
             }
         )
     return evidence
@@ -327,11 +393,20 @@ def run_skill(
         return SkillResult(error=f"extraction_failed: {exc}")
 
     source = str(extracted.get("_source") or "rules")
-    fields = {k: v for k, v in extracted.items() if not k.startswith("_") and v is not None}
-    # 规则腿补缺：LLM 没抽到的字段用规则结果兜住（LLM 优先）
-    for key, value in (rules or {}).items():
-        if value is not None and key not in fields:
-            fields[key] = value
+    llm_fields = {
+        k: v
+        for k, v in extracted.items()
+        if not k.startswith("_") and v is not None and not _is_blank(v)
+    }
+    # 规则腿补缺：LLM 没抽到（**或抽到空值**）的字段用规则结果兜住（LLM 优先）
+    rule_only = {
+        k: v for k, v in (rules or {}).items() if v is not None and k not in llm_fields
+    }
+    fields = {**llm_fields, **rule_only}
+    # 逐字段记抽取腿 —— LLM 腿没贡献任何字段时，整体来源就是规则（降级要明示）
+    origins = {**{k: "llm" for k in llm_fields}, **{k: "rules" for k in rule_only}}
+    if not llm_fields:
+        source = "rules"
     diffs = extracted.get("_rule_diffs") or []
 
     # 3) 确定性引擎腿（算账走引擎，不走模型）
@@ -339,7 +414,7 @@ def run_skill(
     engine_failed = bool(computed.get("_engine_error"))
 
     # 4) 证据腿 —— 指不回原文的字段直接丢弃
-    evidence = build_evidence(fields, body, source=source)
+    evidence = build_evidence(fields, body, source=source, origins=origins)
     evidenced = {e["field"] for e in evidence}
     dropped = [k for k in fields if k not in evidenced]
     payload = {k: v for k, v in fields.items() if k in evidenced}

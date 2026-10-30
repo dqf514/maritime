@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models import Tenant, User
@@ -521,8 +521,18 @@ def test_self_approval_blocked_and_field_subset(client, auth_headers, open_db):
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["code"] == "SELF_APPROVAL_BLOCKED"
 
+    # 闸门要在列表/详情里就说清楚 —— 不让用户点了「采纳」才吃 409
+    r = client.get("/api/v1/routine/drafts", headers=auth_headers)
+    row = next(d for d in r.json()["items"] if d["id"] == draft_id)
+    assert row["can_confirm"] is False
+    assert "four-eyes" in (row["blocked_reason"] or "")
+    r = client.get(f"/api/v1/routine/drafts/{draft_id}", headers=auth_headers)
+    assert r.json()["can_confirm"] is False
+
     # ops（另一个角色）确认，只认 report_at + lat 两个字段
     ops = _login(client, "ops@demo.marios")
+    r = client.get(f"/api/v1/routine/drafts/{draft_id}", headers=ops)
+    assert r.json()["can_confirm"] is True
     r = client.post(
         f"/api/v1/routine/drafts/{draft_id}/confirm",
         headers=ops,
@@ -726,3 +736,339 @@ def test_routine_nav_locked_for_unrelated_role():
     assert item_for(["viewer"]).get("locked") is True
     assert item_for(["risk"]).get("locked") is True
     assert item_for(["tenant_admin"]).get("locked") is None
+
+
+# ── W11 试点闭环：入站邮件 → 待确认草稿 → 人工确认 → 业务表 ────────────────
+
+
+def _pilot_drafts(db, tenant) -> dict[str, DraftRecord]:
+    """跑三条试点例行任务，返回 ``{任务 code: 草稿}``（demo 三封试点邮件 → 三份草稿）。"""
+    from app.seed_routine import seed_routine_pilot_emails
+
+    seed_routine_pilot_emails(db, tenant.id)
+    db.commit()
+    out: dict[str, DraftRecord] = {}
+    tasks = db.scalars(
+        select(RoutineTask).where(
+            RoutineTask.tenant_id == tenant.id, RoutineTask.enabled.is_(True)
+        )
+    ).all()
+    for task in tasks:
+        for draft in run_task(db, tenant_id=tenant.id, task=task):
+            out[task.code] = draft
+    db.commit()
+    return out
+
+
+def _counts(db, tenant_id) -> dict[str, int]:
+    from app.models_domain import Charter, Estimate, LaytimeCalc, NoonReport
+
+    def n(model) -> int:
+        return db.scalar(select(func.count()).select_from(model).where(model.tenant_id == tenant_id)) or 0
+
+    return {
+        "noon": n(NoonReport),
+        "laytime": n(LaytimeCalc),
+        "estimate": n(Estimate),
+        "charter": n(Charter),
+    }
+
+
+def test_pilot_chain_email_to_business_rows(client, auth_headers, open_db):
+    """试点闭环：一封入站邮件 → 待确认草稿 → 人工确认 → 业务表真的多了一行。
+
+    三条腿各落一处 —— 午报 → noon_reports；SOF → laytime_calcs；
+    recap → estimates + charters（租约草稿带 laycan 窗口）。
+    """
+    from app.models_domain import Charter, Estimate, LaytimeCalc, NoonReport, Voyage
+
+    db = open_db()
+    tenant = _demo_tenant(db)
+    drafts = _pilot_drafts(db, tenant)
+    assert set(drafts) == {
+        "noon_report_intake",
+        "laytime_statement_intake",
+        "fixture_recap_intake",
+    }
+    for code, draft in drafts.items():
+        assert draft.status == "pending", (code, draft.error)
+        assert draft.payload, (code, "没有抽出任何字段")
+        assert draft.evidence, (code, "字段没有证据")
+
+    before = _counts(db, tenant.id)
+
+    # 人工确认（租户管理员）—— 草稿由系统生成，四眼规则不拦
+    for code, draft in drafts.items():
+        r = client.post(
+            f"/api/v1/routine/drafts/{draft.id}/confirm",
+            headers=auth_headers,
+            json={"payload": {}, "confirmed": None, "comment": "pilot confirm"},
+        )
+        assert r.status_code == 200, (code, r.text)
+        assert r.json()["draft"]["status"] == "applied"
+
+    db2 = open_db()
+    after = _counts(db2, tenant.id)
+    assert after == {k: before[k] + 1 for k in before}, (before, after)
+
+    # ① 午报 → 落在进行中的航次上（VOY-2407 / MV PACIFIC STAR）
+    voyage = db2.scalars(
+        select(Voyage).where(Voyage.tenant_id == tenant.id, Voyage.voyage_no == "VOY-2407")
+    ).one()
+    noon = db2.scalars(
+        select(NoonReport).where(
+            NoonReport.tenant_id == tenant.id,
+            NoonReport.voyage_id == voyage.id,
+            NoonReport.lat == 51.9,
+        )
+    ).one()
+    assert float(noon.lat) == 51.9
+    assert float(noon.lon) == 4.4
+    assert float(noon.speed) == 11.9
+    assert float(noon.rob_fo) == 1520
+    assert float(noon.rob_do) == 980
+    assert noon.eta_next is not None
+
+    # ② SOF → 装卸时间计算草稿，挂到 MV DEMO WAVE 的航次上
+    laytime_voyage = db2.scalars(
+        select(Voyage).where(Voyage.tenant_id == tenant.id, Voyage.voyage_no == "VOY-2408")
+    ).one()
+    calc = db2.scalars(
+        select(LaytimeCalc).where(
+            LaytimeCalc.tenant_id == tenant.id,
+            LaytimeCalc.voyage_id == laytime_voyage.id,
+        )
+    ).one()
+    assert len(calc.inputs["sof_events"]) == 4
+    assert float(calc.inputs["allowed_days"]) == 3.5
+
+    # ③ recap → 估算草稿 + 租约草稿（船名/对手方都匹配上了，laycan 窗口不丢）
+    est = db2.scalars(
+        select(Estimate).where(
+            Estimate.tenant_id == tenant.id,
+            Estimate.title.like("Recap draft:%"),
+        )
+    ).one()
+    assert est.status == "draft"
+    assert float(est.inputs["freight_rate"]) == 18.5
+    assert est.inputs["cargo"] == "Coal"
+    assert est.inputs["load_port"] == "SGSIN"
+    assert est.inputs["discharge_port"] == "NLRTM"
+    assert est.vessel_id is not None, "船名应匹配到 demo 船舶"
+    assert est.counterparty_id is not None, "对手方应匹配到 demo 对手方"
+
+    charter = db2.scalars(
+        select(Charter).where(Charter.tenant_id == tenant.id, Charter.estimate_id == est.id)
+    ).one()
+    assert charter.status == "draft"
+    assert charter.laycan_from is not None, "laycan 窗口不该被 split('-') 弄丢"
+    assert charter.laycan_to is not None
+    assert charter.laycan_to > charter.laycan_from
+    assert float(charter.freight_rate) == 18.5
+    assert float(charter.commission_pct) == 1.5
+
+
+def test_evidence_labels_rule_fallback_fields_as_rules(open_db, monkeypatch):
+    """逐字段标抽取腿 —— 规则兜底的字段不能挂「llm」标签。
+
+    走查发现：LLM 腿返回结构合法但没抽到东西时，规则腿兜底的字段被整体标成
+    llm，复核人会误以为这些值是模型抽的。
+    """
+    from app.services import llm_extract
+    from app.services.skill_runtime import run_skill
+
+    skill = SkillTemplate(
+        tenant_id=None,
+        code="noon_report",
+        name="Noon",
+        purpose="pilot",
+        prompt_template="",
+        output_schema={"kind": "noon_report", "required": ["report_at"], "fields": {}},
+        validator_rules={},
+        version=1,
+        enabled=True,
+    )
+    # LLM 腿只贡献一个字段，其余走规则兜底
+    monkeypatch.setattr(
+        llm_extract,
+        "extract_fields",
+        lambda kind, subject, body, rule_fields=None, **kw: {
+            "lat": 12.5,
+            "_source": "llm",
+            "_rule_diffs": [],
+        },
+    )
+    body = NOON_BODY
+    res = run_skill(skill=skill, subject="Noon report", body=body, db=None, tenant_id=None)
+    by_field = {e["field"]: e["extracted_by"] for e in res.evidence}
+    assert by_field["lat"] == "llm"
+    assert by_field["report_at"] == "rules"
+    assert by_field["rob_fo"] == "rules"
+    # LLM 腿有贡献 → 整体不算降级，但每个字段的标签必须真实
+    assert res.source == "llm"
+    assert "rule_fallback" not in res.warnings
+
+
+def test_evidence_marks_all_rules_when_llm_returns_nothing(open_db, monkeypatch):
+    """LLM 腿完全没出东西 → 全部标 rules，并带 rule_fallback 告警。"""
+    from app.services import llm_extract
+    from app.services.skill_runtime import run_skill
+
+    skill = SkillTemplate(
+        tenant_id=None,
+        code="noon_report",
+        name="Noon",
+        purpose="pilot",
+        prompt_template="",
+        output_schema={"kind": "noon_report", "required": ["report_at"], "fields": {}},
+        validator_rules={},
+        version=1,
+        enabled=True,
+    )
+    monkeypatch.setattr(
+        llm_extract,
+        "extract_fields",
+        lambda kind, subject, body, rule_fields=None, **kw: {
+            "_source": "llm",
+            "_rule_diffs": [],
+        },
+    )
+    res = run_skill(skill=skill, subject="Noon report", body=NOON_BODY, db=None, tenant_id=None)
+    assert res.source == "rules"
+    assert "rule_fallback" in res.warnings
+    assert all(e["extracted_by"] == "rules" for e in res.evidence)
+
+
+def test_llm_empty_value_does_not_override_rule_result(open_db, monkeypatch):
+    """LLM 腿返回空容器（[]/""）时不算「抽到值」—— 不能顶掉规则腿的结果。
+
+    试点走查踩到：模型把「没找到」表达成 ``events: []``，把规则腿抽到的 4 条
+    SOF 事件顶掉了 → 装卸时间草稿成了空壳（还看不出哪里错）。
+    """
+    from app.services import llm_extract
+    from app.services.skill_runtime import run_skill
+
+    skill = SkillTemplate(
+        tenant_id=None,
+        code="laytime_statement",
+        name="SOF",
+        purpose="pilot",
+        prompt_template="",
+        output_schema={"kind": "laytime_statement", "required": ["events"], "fields": {}},
+        validator_rules={},
+        version=1,
+        enabled=True,
+    )
+    monkeypatch.setattr(
+        llm_extract,
+        "extract_fields",
+        lambda kind, subject, body, rule_fields=None, **kw: {
+            "events": [],
+            "_source": "llm",
+            "_rule_diffs": [],
+        },
+    )
+    body = (
+        "Statement of Facts - MV DEMO WAVE\n"
+        "12-10 08:00 Vessel alongside berth 4\n"
+        "12-10 12:00 Commencement of laytime\n"
+        "12-12 10:30 Notice of readiness tendered\n"
+        "12-14 16:00 Laytime terminated\n"
+        "Total: 3.5 days\n"
+    )
+    res = run_skill(skill=skill, subject="Statement of Facts", body=body, db=None, tenant_id=None)
+    assert len(res.payload.get("events") or []) == 4, res.payload
+    assert res.payload["allowed_days"] == 3.5
+    # LLM 一个有效字段都没贡献 → 整体按规则腿算，并明示降级
+    assert res.source == "rules"
+    assert "rule_fallback" in res.warnings
+    assert res.errors == []
+
+
+# ── 试点走查发现的两个缺陷（回归）────────────────────────────────────────
+
+#: 数值字段的出处必须指向**真正写着这个数**的那一行
+NOON_BODY_NUMERIC = (
+    "NOON REPORT\n"
+    "Vessel: MV PACIFIC STAR\n"
+    "Voyage: VOY-2408\n"
+    "Report at: 2026-10-30 04:00\n"
+    "Lat: 51.9\n"
+    "Lon: 4.4\n"
+    "Speed: 11.9\n"
+    "ROB FO: 1520\n"
+    "ROB DO: 980\n"
+    "Wind BF: 4\n"
+    "Current: 0.6\n"
+)
+
+
+def test_evidence_line_must_be_the_line_that_holds_the_number(open_db):
+    """出处行指错，等于「无证据不落库」被绕过。
+
+    走查踩到：wind_bf=4 的出处指向 "Report at: ... 04:00"（子串命中 04），
+    event_count=4 的出处指向 "Voyage: VOY-2408"（子串命中 2408）。
+    数值字段必须按「独立出现的数字」匹配。
+    """
+    db = open_db()
+    tenant = _demo_tenant(db)
+    skill = db.scalar(
+        select(SkillTemplate).where(SkillTemplate.code == "noon_report", SkillTemplate.tenant_id.is_(None))
+    )
+    assert skill is not None
+    result = run_skill(
+        skill=skill,
+        subject="Noon report",
+        body=NOON_BODY_NUMERIC,
+        db=db,
+        tenant_id=tenant.id,
+    )
+    quote = {e["field"]: e.get("quote") or "" for e in result.evidence}
+    assert quote.get("wind_bf", "").startswith("Wind BF: 4"), quote
+    assert "04:00" not in quote.get("wind_bf", "")
+    assert quote.get("current_kn", "").startswith("Current: 0.6"), quote
+    assert quote.get("lat", "").startswith("Lat: 51.9"), quote
+    assert quote.get("lon", "").startswith("Lon: 4.4"), quote
+    assert quote.get("rob_fo", "").startswith("ROB FO: 1520"), quote
+    assert quote.get("rob_do", "").startswith("ROB DO: 980"), quote
+
+
+def test_evidence_line_for_event_count_is_not_the_voyage_number(open_db):
+    """事件条数的出处不能落在航次号上（"4" 是 "2408" 的子串）。"""
+    db = open_db()
+    tenant = _demo_tenant(db)
+    skill = db.scalar(
+        select(SkillTemplate).where(
+            SkillTemplate.code == "laytime_statement", SkillTemplate.tenant_id.is_(None)
+        )
+    )
+    assert skill is not None
+    body = (
+        "Statement of Facts - MV DEMO WAVE\n"
+        "Voyage: VOY-2408\n"
+        "12-10 08:00 Vessel alongside berth 4\n"
+        "12-10 12:00 Commencement of laytime\n"
+        "12-12 10:30 Notice of readiness tendered\n"
+        "12-14 16:00 Laytime terminated\n"
+        "Total: 3.5 days\n"
+    )
+    result = run_skill(skill=skill, subject="Statement of Facts", body=body, db=db, tenant_id=tenant.id)
+    quote = {e["field"]: e.get("quote") or "" for e in result.evidence}
+    assert quote.get("event_count", "").startswith("12-10 08:00"), quote
+    assert "VOY-2408" not in quote.get("event_count", "")
+
+
+def test_recap_rule_leg_does_not_swallow_the_next_sentence(open_db):
+    """单行 recap：字段值不能把下一句一起吞掉。
+
+    "Vessel MV X IMO 9123456. Laycan 12-18 Sep. Freight USD 18.5 PMT." 一行里
+    挤了三件事 —— 按行捕获会让 vessel 变成整行、laycan 变成 "12-18 Sep. Freight ..."。
+    """
+    from app.services.email_intelligence import parse_fixture_recap
+
+    parsed = parse_fixture_recap(
+        "Vessel MV OCEAN STAR IMO 9123456. Laycan 12-18 Sep. Freight USD 18.5 PMT."
+    )
+    assert parsed["vessel"] == "MV OCEAN STAR IMO 9123456", parsed
+    assert parsed["laycan"] == "12-18 Sep", parsed
+    assert parsed["freight_rate"] == 18.5, parsed

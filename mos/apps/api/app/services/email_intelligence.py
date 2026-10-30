@@ -33,13 +33,42 @@ FIXTURE_RECAP_PATTERNS = {
     "load_port": re.compile(r"Load(?:ing)?\s*Port[:\s]+(.+?)(?:\n|$)", re.I),
     "discharge_port": re.compile(r"Disch(?:arge)?(?:ing)?\s*Port[:\s]+(.+?)(?:\n|$)", re.I),
     "laycan": re.compile(r"Laycan[:\s]+(.+?)(?:\n|$)", re.I),
-    "freight_rate": re.compile(r"Freight\s*Rate[:\s]+[USD$]*\s*([\d.,]+)", re.I),
+    # "Freight USD 18.5 PMT"（没有 Rate 单词）也要认 —— 单行 recap 很常见
+    "freight_rate": re.compile(r"Freight(?:\s*Rate)?[:\s]+[USD$]*\s*([\d.,]+)", re.I),
     "demurrage_rate": re.compile(r"Demurrage[:\s]+[USD$]*\s*([\d.,]+)", re.I),
     "despatch_rate": re.compile(r"Despatch[:\s]+[USD$]*\s*([\d.,]+)", re.I),
     "laytime_load": re.compile(r"(?:Load(?:ing)?\s*)?Laytime[:\s]+([\d.]+)\s*(?:days|hrs|hours)", re.I),
     "laytime_discharge": re.compile(r"(?:Disch(?:arge)?(?:ing)?\s*)?Laytime[:\s]+([\d.]+)\s*(?:days|hrs|hours)", re.I),
     "commission": re.compile(r"(?:Total\s*)?Commission[:\s]+([\d.]+)\s*%", re.I),
 }
+
+#: 句号后面接新句 —— 自由文本字段的值不该把下一句一起吞掉
+_SENTENCE_BREAK_RE = re.compile(r"\.\s+(?=[A-Z0-9])")
+#: recap 里的自由文本字段（按行捕获，可能越界吞句）
+_FREETEXT_RECAP_FIELDS = (
+    "charterers",
+    "owners",
+    "vessel",
+    "cargo",
+    "load_port",
+    "discharge_port",
+    "laycan",
+)
+
+
+def _trim_to_sentence(value: str) -> str:
+    """把自由文本的值截到句尾。
+
+    邮件常把几件事塞进一行（"Vessel MV X IMO 1. Laycan 12-18 Sep. Freight ..."），
+    按行捕获会把后半句一起吞进字段值 —— 这里截到第一个「句号 + 大写/数字」处。
+    """
+    text = (value or "").strip()
+    m = _SENTENCE_BREAK_RE.search(text)
+    if m:
+        text = text[: m.start()].strip()
+    if text.endswith("."):
+        text = text[:-1].strip()
+    return text
 
 NOR_PATTERNS = {
     "vessel": re.compile(r"Vessel[:\s]+[\"']?(.+?)[\"']?(?:\n|$)", re.I),
@@ -322,6 +351,8 @@ def parse_fixture_recap(body: str) -> dict:
         m = pattern.search(body)
         if m:
             val = m.group(1).strip()
+            if field in _FREETEXT_RECAP_FIELDS:
+                val = _trim_to_sentence(val)
             if field in ("freight_rate", "demurrage_rate", "despatch_rate", "commission",
                          "laytime_load", "laytime_discharge"):
                 val = val.replace(",", "")

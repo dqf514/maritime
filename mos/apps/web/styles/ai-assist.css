@@ -274,6 +274,23 @@
 .ai-extract-val:disabled {
   background: var(--chrome-bg);
 }
+/* 结构化字段（SOF 事件列表这类）—— 只读展开，不能用单行输入框 */
+.ai-extract-json {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 6px;
+  max-height: 120px;
+  overflow-y: auto;
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--chrome-bg);
+  color: var(--ink);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--font-label);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 /* 邮件复核页的 AI 推荐条 */
 .ai-rec {

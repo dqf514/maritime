@@ -441,3 +441,51 @@ def test_laytime_finalize_and_invoice_issue_escalate(client, auth_headers, oauth
             .all()
         )
         assert none2 == []
+
+
+# ── Laycan 窗口解析（recap → 租约草稿的 laycan 落库）────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,expect_from,expect_to",
+    [
+        ("2026-11-01 - 2026-11-10", "2026-11-01", "2026-11-10"),
+        ("2026-11-01", "2026-11-01", "2026-11-01"),
+        ("2026-11-01 to 2026-11-10", "2026-11-01", "2026-11-10"),
+        ("01-10 Nov 2026", "2026-11-01", "2026-11-10"),
+    ],
+)
+def test_parse_laycan_window(raw, expect_from, expect_to):
+    """Laycan 文本 → 起止日。
+
+    旧实现 `laycan.split("-")` 取首尾两段 —— 对 ISO 写法首段成了 "2026"，
+    租约草稿的 laycan 永远是空的（人工确认过的字段等于白确认）。
+    """
+    from app.services.email_writeback import parse_laycan_window
+
+    d1, d2 = parse_laycan_window(raw)
+    assert d1 is not None and d2 is not None, raw
+    assert d1.isoformat() == expect_from
+    assert d2.isoformat() == expect_to
+
+
+def test_parse_laycan_window_keeps_unparsable_empty():
+    """认不出来的写法宁可留空，也不猜（不静默填错日期）。"""
+    from app.services.email_writeback import parse_laycan_window
+
+    assert parse_laycan_window(None) == (None, None)
+    assert parse_laycan_window("") == (None, None)
+    assert parse_laycan_window("next week") == (None, None)
+
+
+def test_parse_laycan_window_without_year_uses_current_year():
+    """缺年份的写法（"12-18 Sep"）按当年补齐 —— 并明示这是约定。"""
+    from datetime import datetime, timezone
+
+    from app.services.email_writeback import parse_laycan_window
+
+    d1, d2 = parse_laycan_window("12-18 Sep")
+    assert d1 is not None and d2 is not None
+    assert (d1.month, d1.day) == (9, 12)
+    assert (d2.month, d2.day) == (9, 18)
+    assert d1.year == datetime.now(timezone.utc).year

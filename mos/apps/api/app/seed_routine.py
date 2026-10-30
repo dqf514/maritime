@@ -1,10 +1,13 @@
 """例行任务中枢种子数据。
 
-两类数据，性质不同：
+三类数据，性质不同：
 
 * **平台技能模板**（``tenant_id IS NULL``）—— 属于平台目录（和 SaaS/i18n/参考数据
   同级），任何租户都能用，租户可复制后自改。启动时随 catalog 一起种下。
 * **试点例行任务**（demo 租户）—— 属于演示数据，只在 ``SEED_DEMO=true`` 时种下。
+* **试点入站邮件**（demo 租户）—— 三封，正好命中三条例行任务的触发规则；
+  船名/航次号/对手方都指向 demo 租户里真实存在的实体，保证「人工确认 → 落库」
+  有对象可落（不然只能演示到草稿这一步）。
 
 技能模板里的字段契约是**数据不是代码**：新增一种抽取类型只要加一条模板，
 不用改引擎。字段清单见 :mod:`app.services.skill_runtime`。
@@ -13,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -262,4 +266,129 @@ def seed_demo_routine_tasks(db: Session, tenant_id: Any) -> None:
             existing.folder = trigger.get("folder")
             existing.direction = trigger.get("direction")
             existing.enabled = True
+    db.flush()
+
+
+#: 试点入站邮件（demo 租户）—— 三封，一封对一条例行任务。
+#: 船名 / 航次号 / 对手方都用 demo 租户里**真实存在**的实体：
+#: MV PACIFIC STAR → VOY-2407（in_progress）、MV DEMO WAVE → VOY-2408（planned）、
+#: MV ATLANTIC PEARL（IMO 9000003）+ 对手方 Nordic Grain Traders。
+#: 这样「人工确认 → 落库」才有对象可落 —— 否则只能演示到草稿这一步。
+PILOT_EMAILS: tuple[dict[str, Any], ...] = (
+    {
+        "message_id": "<pilot-noon-demo.marios>",
+        "from_email": "master@oceanstar-agency.nl",
+        "subject": "Noon Report — MV PACIFIC STAR / VOY-2407",
+        "task_code": "noon_report_intake",
+        "hours_ago": 2,
+        "body": (
+            "Noon Report - MV PACIFIC STAR\n"
+            "Vessel: MV PACIFIC STAR\n"
+            "Voyage: VOY-2407\n"
+            "Report at: {today} 04:00\n"
+            "Lat: 51.9\n"
+            "Lon: 4.4\n"
+            "Speed: 11.9\n"
+            "ROB FO: 1520\n"
+            "ROB DO: 980\n"
+            "ETA next: {tomorrow} 08:00\n"
+            "Sea state: slight\n"
+            "Wind BF: 4\n"
+            "Current: 0.6\n"
+            "Remarks: Approaching Rotterdam, pilot booked for 08:00.\n"
+        ),
+    },
+    {
+        "message_id": "<pilot-sof-demo.marios>",
+        "from_email": "sof@rotterdamagency.nl",
+        "subject": "Statement of Facts — MV DEMO WAVE / VOY-2408",
+        "task_code": "laytime_statement_intake",
+        "hours_ago": 4,
+        "body": (
+            "Statement of Facts - MV DEMO WAVE\n"
+            "Voyage: VOY-2408\n"
+            "Port: Rotterdam (NLRTM)\n"
+            "\n"
+            "12-10 08:00 Vessel alongside berth 4\n"
+            "12-10 12:00 Commencement of laytime\n"
+            "12-12 10:30 Notice of readiness tendered\n"
+            "12-14 16:00 Laytime terminated\n"
+            "\n"
+            "Total: 3.5 days\n"
+            "Remarks: 1 day saved time.\n"
+        ),
+    },
+    {
+        "message_id": "<pilot-recap-demo.marios>",
+        "from_email": "chartering@nordicgrain.no",
+        "subject": "Fixture Recap — MV ATLANTIC PEARL / SGSIN-NLRTM Coal",
+        "task_code": "fixture_recap_intake",
+        "hours_ago": 6,
+        "body": (
+            "Fixture Recap - MV ATLANTIC PEARL\n"
+            "Vessel: MV ATLANTIC PEARL\n"
+            "Charterers: Nordic Grain Traders\n"
+            "Owners: Demo Shipping Ltd\n"
+            "Cargo: Coal\n"
+            "Loading Port: SGSIN\n"
+            "Discharge Port: NLRTM\n"
+            "Laycan: {laycan_from} - {laycan_to}\n"
+            "Freight Rate: USD 18.5 per MT\n"
+            "Demurrage: USD 12000 per day\n"
+            "Despatch: USD 6000 per day\n"
+            "Laytime: 2 days\n"
+            "Commission: 1.5%\n"
+        ),
+    },
+)
+
+
+def seed_routine_pilot_emails(db: Session, tenant_id: Any) -> None:
+    """给 demo 租户种下三封试点入站邮件（幂等 upsert —— 按 message_id 定位）。
+
+    这三封是**中枢的演示输入**：命中三条例行任务的触发规则 → 生成待确认草稿 →
+    人工确认 → 落进午报 / 装卸时间 / 估算+租约三类业务表。
+
+    upsert 而不是纯插入：试点邮件的正文会随演示需要调整（补一行 Vessel: 让船名
+    变成有证据的字段），改了正文就应当同步到已存在的行，否则老草稿/新草稿的
+    口径会不一致。
+    """
+    from app.models_wave1 import EmailMessage
+
+    now = datetime.now(timezone.utc)
+    ctx = {
+        "today": now.strftime("%Y-%m-%d"),
+        "tomorrow": (now + timedelta(days=1)).strftime("%Y-%m-%d"),
+        "laycan_from": (now + timedelta(days=2)).strftime("%Y-%m-%d"),
+        "laycan_to": (now + timedelta(days=12)).strftime("%Y-%m-%d"),
+    }
+    for spec in PILOT_EMAILS:
+        body = str(spec["body"]).format(**ctx)
+        row = db.scalar(
+            select(EmailMessage).where(
+                EmailMessage.tenant_id == tenant_id,
+                EmailMessage.message_id == spec["message_id"],
+            )
+        )
+        if row is None:
+            db.add(
+                EmailMessage(
+                    tenant_id=tenant_id,
+                    message_id=spec["message_id"],
+                    direction="inbound",
+                    folder="inbox",
+                    from_email=spec["from_email"],
+                    subject=spec["subject"],
+                    body_text=body,
+                    sent_at=now - timedelta(hours=spec.get("hours_ago", 1)),
+                    parse_status="review",
+                    parse_result={},
+                )
+            )
+            continue
+        # 已有行：正文/主题与模板不一致时同步（演示数据保持一致）
+        if row.body_text != body:
+            row.body_text = body
+            row.subject = spec["subject"]
+            row.from_email = spec["from_email"]
     db.flush()

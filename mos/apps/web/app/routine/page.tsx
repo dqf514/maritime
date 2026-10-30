@@ -67,6 +67,9 @@ type DraftOut = {
   error: string | null;
   decided_comment: string | null;
   created_at: string | null;
+  /** 服务端判定的确认闸门（四眼：自己触发的草稿不能自己确认） */
+  can_confirm?: boolean | null;
+  blocked_reason?: string | null;
   source_email?: SourceEmail | null;
 };
 
@@ -116,6 +119,25 @@ type SkillOut = {
 const DRAFT_STATUSES = ["pending", "applied", "rejected", "failed", "superseded"];
 const FOLDER_OPTIONS = ["*", "inbox", "sentitems", "drafts", "archive", "junkemail"];
 const DIRECTION_OPTIONS = ["*", "inbound", "outbound"];
+
+/** 结构化值（数组/对象）—— 不能塞进单行输入框 */
+function isStructuredValue(value: unknown): boolean {
+  return value !== null && typeof value === "object";
+}
+
+/** 结构化值的可读展开（数组一行一条，对象按键值） */
+function formatStructuredValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "object" && item !== null ? JSON.stringify(item) : String(item)))
+      .join("\n");
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
 
 type EditableTask = {
   id: string | null;
@@ -931,6 +953,9 @@ function RoutinePageInner() {
                 {t("page.routine.dropped_fields", "Dropped for lack of evidence")}: {dropped.join(", ")}
               </p>
             ) : null}
+            {detail.can_confirm === false && detail.blocked_reason ? (
+              <p className="flash-warn">{detail.blocked_reason}</p>
+            ) : null}
 
             <div className="form-section-title">
               {t("page.routine.fields_title", "Fields to write")}
@@ -956,18 +981,25 @@ function RoutinePageInner() {
                       aria-label={key}
                     />
                     <span className="ai-extract-key">{key}</span>
-                    <input
-                      className="ai-extract-val"
-                      value={String(values[key] ?? "")}
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        const num = Number(raw);
-                        setValues((prev) => ({
-                          ...prev,
-                          [key]: raw !== "" && Number.isFinite(num) ? num : raw,
-                        }));
-                      }}
-                    />
+                    {isStructuredValue(values[key]) ? (
+                      /* 结构化值（SOF 事件列表这类）不能塞进单行输入框 ——
+                         String([{...}]) 只会显示 "[object Object]"，复核人看不到内容。
+                         这里只读展开 JSON，值本身原样带出去（落库仍用原值）。 */
+                      <pre className="ai-extract-json">{formatStructuredValue(values[key])}</pre>
+                    ) : (
+                      <input
+                        className="ai-extract-val"
+                        value={String(values[key] ?? "")}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const num = Number(raw);
+                          setValues((prev) => ({
+                            ...prev,
+                            [key]: raw !== "" && Number.isFinite(num) ? num : raw,
+                          }));
+                        }}
+                      />
+                    )}
                     {ev?.quote ? (
                       <span className="hint" title={ev.quote}>
                         {ev.quote.slice(0, 60)}
@@ -999,7 +1031,8 @@ function RoutinePageInner() {
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
-                disabled={busy || detail.status !== "pending"}
+                disabled={busy || detail.status !== "pending" || detail.can_confirm === false}
+                title={detail.blocked_reason || undefined}
                 onClick={() => setConfirmAdopt(true)}
               >
                 {t("page.routine.adopt", "Adopt selected fields")}

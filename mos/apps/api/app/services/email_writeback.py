@@ -143,6 +143,67 @@ def parse_date(raw: Any) -> date | None:
     return dt.date() if dt else None
 
 
+#: Laycan 窗口的写法（邮件里五花八门）—— 按顺序尝试
+_LAYCAN_RANGE_SEP = re.compile(r"\s*(?:to|until|till)\s+|\s+[-–—]\s+", re.I)
+#: "01-10 Nov 2026" / "12-18 Sep" —— 日段 + 尾段（尾段可无年份）
+_LAYCAN_DAY_RANGE = re.compile(r"^(\d{1,2})\s*[-–—]\s*(\d{1,2})(?:\s+(.+))?$")
+
+
+def parse_laycan_window(raw: Any) -> tuple[date | None, date | None]:
+    """Laycan 文本 → (起始日, 结束日)。
+
+    邮件里的写法有 ``2026-11-01 - 2026-11-10``（ISO 区间）、``2026-11-01``
+    （单日）、``01-10 Nov 2026``、``12-18 Sep``（无年份）等。
+
+    旧实现直接 ``laycan.split("-")`` 取首尾两段 —— 对 ISO 写法必然取错
+    （首段成了 "2026"），于是**租约草稿的 laycan 永远是空的**，人工确认过的
+    laycan 字段等于白确认。这里按上面几种写法分别解析。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None, None
+
+    whole = parse_date(text)
+    if whole is not None:
+        return whole, whole
+
+    parts = [p.strip() for p in _LAYCAN_RANGE_SEP.split(text) if p and p.strip()]
+    if len(parts) >= 2:
+        d1 = parse_date(parts[0])
+        d2 = parse_date(parts[-1])
+        if d1 and d2:
+            return d1, d2
+
+    m = _LAYCAN_DAY_RANGE.match(text)
+    if m:
+        day1, day2 = int(m.group(1)), int(m.group(2))
+        tail = (m.group(3) or "").strip()
+        base = None
+        for fmt in ("%d %b %Y", "%d %B %Y", "%d/%m/%Y", "%b %Y", "%B %Y", "%Y"):
+            try:
+                base = datetime.strptime(tail, fmt)
+                break
+            except ValueError:
+                continue
+        if base is None:
+            # "12-18 Sep" —— 尾段只有月缩写：按当年补齐（缺年份的 laycan 只能这样）
+            month = None
+            for fmt in ("%b", "%B"):
+                try:
+                    month = datetime.strptime(tail, fmt)
+                    break
+                except ValueError:
+                    continue
+            if month is None:
+                return None, None
+            base = month.replace(year=datetime.now(timezone.utc).year)
+        try:
+            return base.replace(day=day1).date(), base.replace(day=day2).date()
+        except ValueError:
+            return None, None
+    return None, None
+
+
 # ---------------------------------------------------------------------------
 # 主数据匹配
 # ---------------------------------------------------------------------------
@@ -380,8 +441,7 @@ def create_estimate_charter_from_recap(
         warnings.append("vessel_not_matched")
     # 租约草稿（P2）：recap 落估算的同时挂一份 CP 草稿，商务可在租约页接着谈条款
     laycan = str(pick(fields, "laycan", confirmed) or "")
-    laycan_from = parse_date(laycan.split("-")[0]) if laycan else None
-    laycan_to = parse_date(laycan.split("-")[-1]) if laycan else None
+    laycan_from, laycan_to = parse_laycan_window(laycan)
     charter = Charter(
         tenant_id=tenant_id,
         created_by=user_id,

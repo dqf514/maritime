@@ -123,7 +123,11 @@ from app.routers.field_perms import router as field_perms_router
 from app.routers.udf import router as udf_router
 from app.routers.docs import router as docs_router
 from app.seed import seed_if_empty, seed_saas_catalog, seed_wave1_demo
-from app.seed_routine import seed_demo_routine_tasks, seed_platform_skills
+from app.seed_routine import (
+    seed_demo_routine_tasks,
+    seed_platform_skills,
+    seed_routine_pilot_emails,
+)
 from app.seed_demo_flow import seed_full_demo_flow, stamp_demo_attribution
 from app.seed_masterdata_gaps import seed_masterdata_gaps
 from app.seed_i18n import seed_i18n
@@ -403,6 +407,8 @@ async def lifespan(_app: FastAPI):
                         stamp_demo_attribution(db, demo_tenant)
                         # 试点例行任务（午报 / 装卸时间 / 租约意向书）
                         seed_demo_routine_tasks(db, demo_tenant.id)
+                        # 试点入站邮件 —— 中枢的演示输入（命中三条触发规则 → 待确认草稿）
+                        seed_routine_pilot_emails(db, demo_tenant.id)
                 db.commit()
     except Exception:
         log.exception("Startup seed failed")
