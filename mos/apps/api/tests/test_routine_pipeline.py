@@ -597,3 +597,132 @@ def test_run_task_creates_drafts_for_matching_mail_only(client, auth_headers, op
 
     drafts = run_task(db, tenant_id=tenant.id, task=task)
     assert len(drafts) == 1
+
+
+# ── W10：草稿携带来源邮件（前端收件箱要显示发件人/主题/原文）──────────────
+
+
+def test_draft_list_carries_source_email_brief(client, open_db):
+    """列表里能直接看到来源邮件的发件人与主题（前端不必再发 N+1 请求）。"""
+    db = open_db()
+    tenant = _demo_tenant(db)
+    task = _make_task(db, tenant, owner_role="operations")
+    _make_rule(db, tenant, task, subject_regex="noon report")
+    msg = _make_email(
+        db,
+        tenant,
+        subject="Noon report — Ocean Star",
+        body=NOON_BODY,
+        sender="master@oceanstar.com",
+    )
+    db.commit()
+    process_message(db, tenant_id=tenant.id, task=task, message=msg)
+    db.commit()
+
+    ops = _login(client, "ops@demo.marios")
+    r = client.get("/api/v1/routine/drafts", headers=ops)
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert items, "expected one draft"
+    src = items[0]["source_email"]
+    assert src is not None
+    assert src["subject"] == "Noon report — Ocean Star"
+    assert src["from_email"] == "master@oceanstar.com"
+    assert src["id"] == str(msg.id)
+
+
+def test_draft_detail_carries_source_excerpt(client, open_db):
+    """详情带原文摘录 —— 人工核对证据时不必去邮件页翻。"""
+    db = open_db()
+    tenant = _demo_tenant(db)
+    task = _make_task(db, tenant, owner_role="operations")
+    _make_rule(db, tenant, task, subject_regex="noon report")
+    msg = _make_email(db, tenant, body=NOON_BODY)
+    db.commit()
+    draft = process_message(db, tenant_id=tenant.id, task=task, message=msg)
+    db.commit()
+
+    ops = _login(client, "ops@demo.marios")
+    r = client.get(f"/api/v1/routine/drafts/{draft.id}", headers=ops)
+    assert r.status_code == 200, r.text
+    src = r.json()["source_email"]
+    assert src is not None
+    assert "NOON REPORT" in src["body_excerpt"]
+    assert src["body_truncated"] is False
+
+
+def test_draft_source_email_is_tenant_scoped(client, open_db):
+    """别人的邮件不能借草稿接口读到（跨租户一律 404）。"""
+    db = open_db()
+    tenant = _demo_tenant(db)
+    task = _make_task(db, tenant, owner_role="operations")
+    _make_rule(db, tenant, task, subject_regex="noon report")
+    msg = _make_email(db, tenant, body=NOON_BODY)
+    db.commit()
+    draft = process_message(db, tenant_id=tenant.id, task=task, message=msg)
+    db.commit()
+
+    other = Tenant(
+        name="Other Co", code="other2", status="active", default_locale="en", default_timezone="UTC"
+    )
+    db.add(other)
+    db.flush()
+    user = User(
+        tenant_id=other.id,
+        email="admin@other2.marios",
+        full_name="Other Admin",
+        password_hash=hash_password("Demo1234!"),
+        status="active",
+        locale="en",
+        timezone="UTC",
+        email_verified_at=datetime.now(timezone.utc),
+    )
+    db.add(user)
+    db.flush()
+    from app.models import Role, UserRole
+
+    role = Role(tenant_id=other.id, code="tenant_admin", name="Tenant Admin", permissions={})
+    db.add(role)
+    db.flush()
+    db.add(UserRole(user_id=user.id, role_id=role.id))
+    db.commit()
+
+    other_headers = _login(client, "admin@other2.marios", tenant_code="other2")
+    r = client.get(f"/api/v1/routine/drafts/{draft.id}", headers=other_headers)
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"]["code"] == "DRAFT_NOT_FOUND"
+
+
+# ── W10：导航挂出 /routine（角色可见性 + 路径 ACL + 搜索一致）──────────────
+
+
+def test_routine_nav_visible_and_searchable(client):
+    """例行任务中枢在导航里挂出，角色可见性与路径 ACL 一致。"""
+    ops_headers = _login(client, "ops@demo.marios")
+    boot = client.get("/api/v1/shell/bootstrap", headers=ops_headers).json()
+    hrefs = {
+        i["href"] for sec in boot["navigation"] for i in sec["items"] if not i.get("locked")
+    }
+    assert "/routine" in hrefs
+    assert "/routine" in boot.get("allowed_paths", [])
+
+    hits = client.get("/api/v1/search", params={"q": "routine"}, headers=ops_headers).json()
+    assert any((h.get("href") or "") == "/routine" for h in hits)
+
+
+def test_routine_nav_locked_for_unrelated_role():
+    """角色不在白名单 → 入口置灰（菜单锁定 = 路径拒绝，B1 一致性）。"""
+    from app.services.shell_nav import build_navigation
+
+    def item_for(roles: list[str]) -> dict:
+        for sec in build_navigation(roles):
+            for item in sec["items"]:
+                if item["href"] == "/routine":
+                    return item
+        raise AssertionError(f"/routine missing from nav for roles={roles}")
+
+    assert item_for(["operations"]).get("locked") is None
+    assert item_for(["chartering"]).get("locked") is None
+    assert item_for(["viewer"]).get("locked") is True
+    assert item_for(["risk"]).get("locked") is True
+    assert item_for(["tenant_admin"]).get("locked") is None

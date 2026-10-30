@@ -229,6 +229,7 @@ NAV_HIT_META: dict[str, dict[str, Any]] = {
     "tc-out": {"title": "TC Out", "keywords": ["tc", "time charter", "out", "期租", "租出"], "module": "chartering", "license": "chartering"},
     "open-positions": {"title": "Open Positions", "keywords": ["open", "position", "availability", "机会"], "module": "chartering", "license": "chartering"},
     "email": {"title": "Email Review", "keywords": ["email", "recap", "review"], "module": "email", "license": "email"},
+    "routine": {"title": "Routine Tasks", "keywords": ["routine", "draft", "automation", "例行", "草稿"], "module": "shell", "license": None},
     "ops": {"title": "Operations", "keywords": ["voyage", "ops", "schedule", "航次"], "module": "operations", "license": "operations"},
     "bunker": {"title": "Bunker desk", "keywords": ["bunker", "fuel", "燃油", "ROB"], "module": "bunker", "license": "bunker"},
     "ship": {"title": "Ship management", "keywords": ["ship", "pms", "certificate", "crew"], "module": "ship_mgmt", "license": "ship_mgmt"},

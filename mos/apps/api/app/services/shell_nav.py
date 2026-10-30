@@ -27,6 +27,8 @@ NAV_DESK: list[dict[str, Any]] = [
     {"id": "coa-contracts", "label": "COA", "label_zh": "包运合同", "href": "/charters/coa", "roles": ["chartering", "management"]},
     {"id": "open-positions", "label": "Open Positions", "label_zh": "租家机会", "href": "/charters/open-positions", "roles": ["chartering", "management"]},
     {"id": "email", "label": "Email Review", "href": "/email/review", "roles": ["chartering", "operations"]},
+    # 例行任务中枢：入站邮件 → 待确认草稿 → 人工核实 → 落库（草稿按 owner_role 可见）
+    {"id": "routine", "label": "Routine Tasks", "label_zh": "例行任务中枢", "href": "/routine", "roles": ["operations", "chartering", "finance", "demurrage", "management", "technical"]},
     {"id": "ops", "label": "Voyages", "href": "/operations/voyages", "roles": ["operations", "management", "technical"]},
     {"id": "schedule", "label": "Scheduling", "label_zh": "调度管理", "href": "/operations/schedule", "roles": ["operations", "management", "technical", "chartering"]},
     {"id": "cargo-book", "label": "Cargo Book", "label_zh": "货物台账", "href": "/cargo", "roles": ["operations", "management", "chartering"]},
@@ -111,7 +113,7 @@ MODULES: list[dict[str, Any]] = [
     {
         "id": "operations",
         "label": "Operations",
-        "item_ids": ["ops", "schedule", "cargo-book", "marilink", "bunker", "emissions", "compliance", "exceptions"],
+        "item_ids": ["ops", "schedule", "cargo-book", "marilink", "bunker", "emissions", "compliance", "exceptions", "routine"],
         "roles": ["operations", "management", "technical", "bunker"],
         "collapsed_default": False,
     },

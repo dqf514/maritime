@@ -213,6 +213,14 @@ export function NavIcon({
           <path d="M10 9v2.5h4V9M12 11.5V15" />
         </svg>
       );
+    case "routine":
+      return (
+        <svg {...common}>
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M3 9h18M8 4v5" />
+          <path d="m9.5 14.5 1.8 1.8 3.4-3.6" />
+        </svg>
+      );
     case "selfcheck":
       return (
         <svg {...common}>
@@ -450,6 +458,7 @@ export function resolveIconId(hrefOrId: string): string {
     ["/admin/org", "org"],
     ["/account/security", "account"],
     ["/workflows/inbox", "inbox"],
+    ["/routine", "routine"],
     ["/masterdata/counterparties", "parties"],
     ["/masterdata/vessels", "vessels"],
     ["/masterdata/ports", "ports"],

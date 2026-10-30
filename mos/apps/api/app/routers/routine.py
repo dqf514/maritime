@@ -189,7 +189,11 @@ def skill_out(skill: SkillTemplate) -> dict:
     }
 
 
-def draft_out(draft: DraftRecord, task: RoutineTask | None = None) -> dict:
+def draft_out(
+    draft: DraftRecord,
+    task: RoutineTask | None = None,
+    source: dict | None = None,
+) -> dict:
     return {
         "id": str(draft.id),
         "routine_task_id": str(draft.routine_task_id),
@@ -212,7 +216,45 @@ def draft_out(draft: DraftRecord, task: RoutineTask | None = None) -> dict:
         "decided_comment": draft.decided_comment,
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
         "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+        "source_email": source,
     }
+
+
+#: 来源邮件正文摘录长度（够核对证据，不整封复制）
+SOURCE_EXCERPT_CHARS = 1500
+
+
+def _source_email_map(db: Session, tenant_id: UUID, email_ids: set[UUID]) -> dict[UUID, dict]:
+    """批量取来源邮件的元信息（列表页用；避免 N+1）。"""
+    if not email_ids:
+        return {}
+    from app.models_wave1 import EmailMessage
+
+    rows = db.scalars(
+        select(EmailMessage).where(
+            EmailMessage.tenant_id == tenant_id,
+            EmailMessage.id.in_(tuple(email_ids)),
+        )
+    ).all()
+    return {row.id: row for row in rows}
+
+
+def _source_brief(row: Any) -> dict:
+    return {
+        "id": str(row.id),
+        "subject": row.subject,
+        "from_email": row.from_email,
+        "sent_at": row.sent_at.isoformat() if row.sent_at else None,
+        "folder": row.folder,
+    }
+
+
+def _source_excerpt(row: Any) -> dict:
+    brief = _source_brief(row)
+    body = row.body_text or ""
+    brief["body_excerpt"] = body[:SOURCE_EXCERPT_CHARS]
+    brief["body_truncated"] = len(body) > SOURCE_EXCERPT_CHARS
+    return brief
 
 
 # ── 内部助手 ──────────────────────────────────────────────────────────────
@@ -739,8 +781,18 @@ def list_drafts(
     rows = db.scalars(
         stmt.order_by(DraftRecord.created_at.desc()).limit(limit).offset(offset)
     ).all()
+    sources = _source_email_map(
+        db, auth.tenant_id, {d.source_email_id for d in rows if d.source_email_id}
+    )
     return {
-        "items": [draft_out(d, by_id.get(d.routine_task_id)) for d in rows],
+        "items": [
+            draft_out(
+                d,
+                by_id.get(d.routine_task_id),
+                _source_brief(sources[d.source_email_id]) if d.source_email_id in sources else None,
+            )
+            for d in rows
+        ],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -756,7 +808,19 @@ def get_draft(
     draft = _get_draft(db, auth.tenant_id, draft_id)
     task = db.get(RoutineTask, draft.routine_task_id)
     _assert_task_access(db, auth, task)
-    return draft_out(draft, task)
+    source = None
+    if draft.source_email_id:
+        from app.models_wave1 import EmailMessage
+
+        row = db.scalar(
+            select(EmailMessage).where(
+                EmailMessage.tenant_id == auth.tenant_id,
+                EmailMessage.id == draft.source_email_id,
+            )
+        )
+        if row is not None:
+            source = _source_excerpt(row)
+    return draft_out(draft, task, source)
 
 
 @router.post("/drafts/{draft_id}/confirm")
