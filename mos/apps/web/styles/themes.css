@@ -87,6 +87,19 @@
   --nav-topbar-icon-border: rgba(255,255,255,0.12);
   --nav-topbar-icon-hover: rgba(255,255,255,0.14);
   --nav-topbar-border: rgba(255,255,255,0.14);
+
+  /* 世界地图（航次航线图）配色 */
+  --map-sea: linear-gradient(180deg, #eaf3f7 0%, #dcebf1 100%);
+  --map-sea-solid: #e4eff5;
+  --map-land: #d3e2e8;
+  --map-land-stroke: #a9c1cb;
+  --map-grid: rgba(15, 28, 40, 0.06);
+  --map-equator: rgba(15, 28, 40, 0.14);
+  --map-route: #1a9b96;
+  --map-track: #2f6fb0;
+  --map-port-fill: #ffffff;
+  --map-port-stroke: #1a9b96;
+  --map-label: #0f1c28;
 }
 
 /* ═══ Theme: Slate — 深色专注 ═══ */
@@ -173,6 +186,19 @@
   --nav-topbar-icon-border: rgba(255,255,255,0.10);
   --nav-topbar-icon-hover: rgba(255,255,255,0.10);
   --nav-topbar-border: rgba(255,255,255,0.12);
+
+  /* 世界地图（航次航线图）配色 —— 深色底 */
+  --map-sea: linear-gradient(180deg, #0b1620 0%, #0a1b28 100%);
+  --map-sea-solid: #0c1822;
+  --map-land: #22323f;
+  --map-land-stroke: #33495a;
+  --map-grid: rgba(230, 237, 243, 0.06);
+  --map-equator: rgba(230, 237, 243, 0.16);
+  --map-route: #2bb5b0;
+  --map-track: #58a6ff;
+  --map-port-fill: #0d1117;
+  --map-port-stroke: #2bb5b0;
+  --map-label: #e6edf3;
 }
 
 /* ═══ Theme: Indigo — 现代蓝紫 ═══ */
@@ -258,6 +284,19 @@
   --nav-topbar-icon-border: rgba(255,255,255,0.12);
   --nav-topbar-icon-hover: rgba(255,255,255,0.14);
   --nav-topbar-border: rgba(255,255,255,0.14);
+
+  /* 世界地图（航次航线图）配色 */
+  --map-sea: linear-gradient(180deg, #eef0fb 0%, #e2e5f8 100%);
+  --map-sea-solid: #eceefb;
+  --map-land: #dcdcf1;
+  --map-land-stroke: #b6b7dd;
+  --map-grid: rgba(30, 27, 75, 0.06);
+  --map-equator: rgba(30, 27, 75, 0.16);
+  --map-route: #6366f1;
+  --map-track: #2f6fb0;
+  --map-port-fill: #ffffff;
+  --map-port-stroke: #4f46e5;
+  --map-label: #1e1b4b;
 }
 
 /* ── Theme Picker UI ── */

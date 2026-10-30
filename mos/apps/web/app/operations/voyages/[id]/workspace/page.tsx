@@ -34,6 +34,7 @@ import { useTodoAdd } from "@/components/TodoQuickAdd";
 import { apiDelete, apiGet, apiPatch, apiPost, type VoyageOverview, type VoyagePnlLine } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { toPositiveInt } from "@/lib/numbers";
+import { WORLD_LAND_PATHS } from "@/lib/world-map";
 import { fromUtcInput, parseUtc, toUtcInput } from "@/lib/datetime";
 import { handled, msgOf } from "@/lib/errors";
 
@@ -198,8 +199,8 @@ function greatCircle(a: [number, number], b: [number, number], steps = 24): [num
     const x = A * Math.cos(lat1) * Math.cos(lon1) + B * Math.cos(lat2) * Math.cos(lon2);
     const y = A * Math.cos(lat1) * Math.sin(lon1) + B * Math.cos(lat2) * Math.sin(lon2);
     const z = A * Math.sin(lat1) + B * Math.sin(lat2);
-    const lat = Math.atan2(z, Math.sqrt(x * x + y * y));
-    const lon = Math.atan2(y, x);
+    const lat = (Math.atan2(z, Math.sqrt(x * x + y * y)) * 180) / Math.PI;
+    const lon = (Math.atan2(y, x) * 180) / Math.PI;
     out.push([lat, lon]);
   }
   return out;
@@ -1284,71 +1285,58 @@ export default function VoyageWorkspacePage() {
 
   const mapTab = (
     <Panel title={t("ws.map", "Route map")} collapsible>
-      {mapModel.coords.length + mapModel.track.length > 0 ? (
-        <>
-          <div className="ws-map">
-            <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} role="img" aria-label={t("ws.map", "Route map")}>
-              <rect x={0} y={0} width={MAP_W} height={MAP_H} fill="transparent" />
-              {Array.from({ length: 12 }, (_, i) => (
-                <line
-                  key={`v${i}`}
-                  x1={(i * MAP_W) / 12}
-                  x2={(i * MAP_W) / 12}
-                  y1={0}
-                  y2={MAP_H}
-                  stroke="rgba(15,28,40,0.06)"
-                  strokeWidth={1}
-                />
-              ))}
-              {Array.from({ length: 6 }, (_, i) => (
-                <line
-                  key={`h${i}`}
-                  y1={(i * MAP_H) / 6}
-                  y2={(i * MAP_H) / 6}
-                  x1={0}
-                  x2={MAP_W}
-                  stroke="rgba(15,28,40,0.06)"
-                  strokeWidth={1}
-                />
-              ))}
-              <line x1={0} x2={MAP_W} y1={MAP_H / 2} y2={MAP_H / 2} stroke="rgba(15,28,40,0.14)" strokeDasharray="6 4" />
-              {trackPath ? (
-                <path d={trackPath} fill="none" stroke="#2f6fb0" strokeWidth={2} strokeDasharray="3 3" opacity={0.8} />
-              ) : null}
-              {mapPath ? <path d={mapPath} fill="none" stroke="#1A9B96" strokeWidth={2.5} strokeLinecap="round" /> : null}
-              {mapModel.coords.map((c, i) => {
-                const [x, y] = proj(c.lat, c.lon);
-                return (
-                  <g key={`${c.name}-${i}`}>
-                    <circle cx={x} cy={y} r={5} fill="#fff" stroke="#1A9B96" strokeWidth={2.5} />
-                    <text x={x + 8} y={y + 4} fontSize={11} fontWeight={600} fill="#0f1c28">
-                      {c.seq}. {c.name}
-                    </text>
-                  </g>
-                );
-              })}
-              {mapModel.track.map((p, i) => {
-                const [x, y] = proj(p[0], p[1]);
-                return <circle key={`t${i}`} cx={x} cy={y} r={2} fill="#2f6fb0" opacity={0.7} />;
-              })}
-            </svg>
-          </div>
-          <div className="ws-map-legend">
-            <span>
-              <i style={{ background: "#1A9B96" }} />
-              {t("ws.map_route", "Planned route (great circle)")}
-            </span>
-            {trackPath ? (
-              <span>
-                <i style={{ background: "#2f6fb0" }} />
-                {t("ws.map_track", "Noon position track")}
-              </span>
-            ) : null}
-          </div>
-        </>
-      ) : (
+      <div className="ws-map">
+        <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} role="img" aria-label={t("ws.map", "Route map")}>
+          <rect className="ws-map-sea" x={0} y={0} width={MAP_W} height={MAP_H} />
+          {/* 世界陆地底图 —— 预投影的世界地图，全球港口都在其中 */}
+          <g className="ws-map-land">
+            {WORLD_LAND_PATHS.map((d, i) => (
+              <path key={i} d={d} />
+            ))}
+          </g>
+          <g className="ws-map-grid">
+            {Array.from({ length: 12 }, (_, i) => (
+              <line key={`v${i}`} x1={(i * MAP_W) / 12} x2={(i * MAP_W) / 12} y1={0} y2={MAP_H} />
+            ))}
+            {Array.from({ length: 6 }, (_, i) => (
+              <line key={`h${i}`} y1={(i * MAP_H) / 6} y2={(i * MAP_H) / 6} x1={0} x2={MAP_W} />
+            ))}
+          </g>
+          <line className="ws-map-equator" x1={0} x2={MAP_W} y1={MAP_H / 2} y2={MAP_H / 2} />
+          {trackPath ? <path className="ws-map-track" d={trackPath} /> : null}
+          {mapPath ? <path className="ws-map-route" d={mapPath} /> : null}
+          {mapModel.coords.map((c, i) => {
+            const [x, y] = proj(c.lat, c.lon);
+            return (
+              <g key={`${c.name}-${i}`}>
+                <circle className="ws-map-port" cx={x} cy={y} r={5} />
+                <text className="ws-map-port-label" x={x + 8} y={y + 4}>
+                  {c.seq}. {c.name}
+                </text>
+              </g>
+            );
+          })}
+          {mapModel.track.map((p, i) => {
+            const [x, y] = proj(p[0], p[1]);
+            return <circle key={`t${i}`} className="ws-map-pos" cx={x} cy={y} r={2} />;
+          })}
+        </svg>
+      </div>
+      <div className="ws-map-legend">
+        <span>
+          <i className="ws-map-swatch-route" />
+          {t("ws.map_route", "Planned route (great circle)")}
+        </span>
+        {trackPath ? (
+          <span>
+            <i className="ws-map-swatch-track" />
+            {t("ws.map_track", "Noon position track")}
+          </span>
+        ) : null}
+      </div>
+      {mapModel.coords.length + mapModel.track.length === 0 ? (
         <p className="muted">{t("ws.map_empty", "No port coordinates or position data")}</p>
-      )}
+      ) : null}
     </Panel>
   );
 

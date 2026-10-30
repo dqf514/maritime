@@ -490,11 +490,28 @@
 .ws-map {
   width: 100%;
   overflow: auto;
-  background: linear-gradient(180deg, #eaf3f7 0%, #dcebf1 100%);
+  background: var(--map-sea);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-.ws-map svg { display: block; min-width: 640px; width: 100%; height: auto; }
+.ws-map svg { display: block; min-width: 720px; width: 100%; height: auto; }
+
+/* 世界陆地底图（预投影路径，坐标与 proj() 一致） */
+.ws-map-sea { fill: var(--map-sea-solid); }
+.ws-map-land path {
+  fill: var(--map-land);
+  stroke: var(--map-land-stroke);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+}
+.ws-map-grid line { stroke: var(--map-grid); stroke-width: 1; }
+.ws-map-equator { stroke: var(--map-equator); stroke-width: 1; stroke-dasharray: 6 4; }
+.ws-map-route { fill: none; stroke: var(--map-route); stroke-width: 2.5; stroke-linecap: round; }
+.ws-map-track { fill: none; stroke: var(--map-track); stroke-width: 2; stroke-dasharray: 3 3; opacity: 0.8; }
+.ws-map-port { fill: var(--map-port-fill); stroke: var(--map-port-stroke); stroke-width: 2.5; }
+.ws-map-port-label { font-size: 11px; font-weight: 600; fill: var(--map-label); }
+.ws-map-pos { fill: var(--map-track); opacity: 0.7; }
+
 .ws-map-legend {
   display: flex;
   flex-wrap: wrap;
@@ -510,3 +527,5 @@
   margin-right: 4px;
   vertical-align: middle;
 }
+.ws-map-swatch-route { background: var(--map-route); }
+.ws-map-swatch-track { background: var(--map-track); }
