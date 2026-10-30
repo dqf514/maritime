@@ -410,6 +410,16 @@
     grid-template-columns: 1fr;
   }
 }
+/* 窄屏收成单列：侧栏变成抽屉、右栏变浮层（两者都是 position:fixed，已脱离网格流），
+   若还留着它们的网格列，主内容列会被自动排进第一列（宽度 = --sidenav），
+   整个页面只剩一条窄栏。 */
+@media (max-width: 900px) {
+  .body,
+  .app-shell.nav-collapsed .body,
+  .app-shell.right-panel-hidden .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 
 /* ── Unified PageHeader (all pages must use PageHeader component) ── */
 .page-header {

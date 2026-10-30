@@ -1440,6 +1440,7 @@ function VoyagesPageInner() {
               showFooter={false}
               emptyText={t("common.empty", "No records")}
               onRowClick={(r) => selectVoyage(r.id)}
+              onRowOpen={(r) => selectVoyage(r.id)}
               onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
             />
           </StateView>

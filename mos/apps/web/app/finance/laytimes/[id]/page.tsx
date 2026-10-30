@@ -21,6 +21,20 @@ import type { ColumnDef } from "@/components/grid";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { formatDateTimeShort } from "@/lib/datetime";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
+import { useListBackHref } from "@/lib/listContext";
+
+/** 左栏清单行 —— /api/v1/laytimes 列表接口的形状。 */
+type LaytimeRow = {
+  id: string;
+  voyage_id?: string | null;
+  port_call_id?: string | null;
+  booking_reference?: string | null;
+  status?: string | null;
+  results?: { amount?: number } | null;
+};
 
 type StatementEventRow = {
   start: string;
@@ -74,6 +88,53 @@ export default function LaytimeDetailPage() {
   const [mailOpts, setMailOpts] = useState<{ message_id: string; subject: string; parsed: unknown }[]>([]);
   const [cmpr, setCmpr] = useState<CompareResult | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/finance?tab=laytime");
+  const currentRailItem = useMemo(
+    () =>
+      st
+        ? {
+            id: String(id),
+            title: `#${String(st.id || id).slice(0, 8)}`,
+            meta: [
+              st.status || "",
+              st.amount != null ? String(st.amount) : "",
+              st.currency || "",
+            ],
+            href: `/finance/laytimes/${id}`,
+          }
+        : null,
+    [st, id],
+  );
+  const rail = useDetailRail<LaytimeRow>(
+    {
+      endpoint: "/api/v1/laytimes",
+      params: { limit: 200 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.booking_reference || `#${String(r.id).slice(0, 8)}`,
+        meta: [
+          r.status || "",
+          r.results?.amount != null ? String(r.results.amount) : "",
+        ],
+        href: `/finance/laytimes/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
+  const railNode = (
+    <DetailRail
+      items={rail.items}
+      activeId={String(id)}
+      title={t("page.finance.laytime", "Laytime")}
+      backHref={backHref}
+      backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+      loading={rail.loading}
+      error={rail.error}
+      onRetry={rail.reload}
+    />
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -223,166 +284,186 @@ export default function LaytimeDetailPage() {
 
   if (notFound) {
     return (
-      <AppShell>
-        <div className="panel">
-          <p>{t("common.not_found", "Not found")}</p>
-          <Link href="/finance?tab=laytime" className="btn">
-            {t("common.back", "返回")}
-          </Link>
-        </div>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.finance", "Finance"), href: "/finance" },
+          { label: t("page.finance.laytime", "Laytime"), href: backHref },
+          { label: `#${id.slice(0, 8)}` },
+        ]}
+      >
+        <MasterDetail rail={railNode}>
+          <div className="panel">
+            <p>{t("common.not_found", "Not found")}</p>
+            <Link href={backHref} className="btn">
+              {t("common.back", "返回")}
+            </Link>
+          </div>
+        </MasterDetail>
       </AppShell>
     );
   }
 
   return (
-    <AppShell>
-      <PageHeader
-        breadcrumb={[
-          { label: t("nav.finance", "Finance"), href: "/finance?tab=laytime" },
-          { label: st?.id ? `#${st.id.slice(0, 8)}` : `#${id.slice(0, 8)}` },
-        ]}
-        title={
-          <>
-            {t("page.finance.lt_statement", "Laytime 计算书")} {st ? <span className="badge badge-warn">{st.status}</span> : null}
-          </>
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.finance", "Finance"), href: "/finance" },
+        { label: t("page.finance.laytime", "Laytime"), href: backHref },
+        { label: st?.id ? `#${st.id.slice(0, 8)}` : `#${id.slice(0, 8)}` },
+      ]}
+    >
+      <MasterDetail
+        rail={railNode}
+        header={
+          <PageHeader
+            breadcrumb={[
+              { label: t("nav.finance", "Finance"), href: "/finance?tab=laytime" },
+              { label: st?.id ? `#${st.id.slice(0, 8)}` : `#${id.slice(0, 8)}` },
+            ]}
+            title={
+              <>
+                {t("page.finance.lt_statement", "Laytime 计算书")} {st ? <span className="badge badge-warn">{st.status}</span> : null}
+              </>
+            }
+            subtitle={
+              st ? (
+                <>
+                  {`${st.format || "LAYTIME_STATEMENT_v1"}${st.terms ? ` · ${st.terms}` : ""}`} ·{" "}
+                  <RecordAttribution entityType="laytime" entityId={id} />
+                </>
+              ) : (
+                "…"
+              )
+            }
+            actions={
+              <>
+                <Link href="/finance?tab=laytime" className="btn btn-ghost">
+                  {t("common.back", "返回")}
+                </Link>
+                <button className="btn btn-sm" type="button" onClick={() => window.print()}>
+                  {t("common.print", "打印 / PDF")}
+                </button>
+              </>
+            }
+          />
         }
-        subtitle={
-          st ? (
-            <>
-              {`${st.format || "LAYTIME_STATEMENT_v1"}${st.terms ? ` · ${st.terms}` : ""}`} ·{" "}
-              <RecordAttribution entityType="laytime" entityId={id} />
-            </>
-          ) : (
-            "…"
-          )
-        }
-        actions={
-          <>
-            <Link href="/finance?tab=laytime" className="btn btn-ghost">
-              {t("common.back", "返回")}
-            </Link>
-            <button className="btn btn-sm" type="button" onClick={() => window.print()}>
-              {t("common.print", "打印 / PDF")}
-            </button>
-          </>
-        }
-      />
+      >
 
-      {err ? <p className="err-text">{err}</p> : null}
-      {loadErr ? (
-        <p className="state-view-text state-view-error">
-          {t("page.finance.load_failed", "数据加载失败：{msg}", { msg: loadErr })}
-        </p>
-      ) : null}
-      {sectionErr.mail ? (
-        <p className="state-view-text state-view-error">
-          {t("page.finance.laytime_mail_failed", "已解析的滞期费邮件加载失败：{msg}", { msg: sectionErr.mail })}
-        </p>
-      ) : null}
+        {err ? <p className="err-text">{err}</p> : null}
+        {loadErr ? (
+          <p className="state-view-text state-view-error">
+            {t("page.finance.load_failed", "数据加载失败：{msg}", { msg: loadErr })}
+          </p>
+        ) : null}
+        {sectionErr.mail ? (
+          <p className="state-view-text state-view-error">
+            {t("page.finance.laytime_mail_failed", "已解析的滞期费邮件加载失败：{msg}", { msg: sectionErr.mail })}
+          </p>
+        ) : null}
 
-      {!st ? (
-        // P1-5：loading / error / content 三态互斥 —— 错误不被骨架屏吞掉
-        <StateView
-          loading={loading}
-          error={loadErr || undefined}
-          empty={!loading && !loadErr}
-          emptyText={t("common.empty", "No records")}
-          onRetry={reload}
-        >
-          <SkeletonCard />
-        </StateView>
-      ) : (
-        <PrintDoc
-          title={t("page.finance.lt_statement", "LAYTIME STATEMENT")}
-          no={st.id?.slice(0, 8)}
-          meta={st.terms || undefined}
-          entityType="laytime_statement"
-          entityId={st.id || id}
-        >
-          <div className="panel">
-            <div className="desk-results">
-              <div className="kv-box">
-                <span>{t("page.finance.allowed_hours", "Allowed hours")}</span>
-                <strong>{fmt(st.allowed_hours)}</strong>
-              </div>
-              <div className="kv-box">
-                <span>{t("page.finance.used_hours", "Used hours")}</span>
-                <strong>{fmt(st.used_hours)}</strong>
-              </div>
-              <div className="kv-box">
-                <span>{t("page.finance.excluded_hours", "Excluded hours")}</span>
-                <strong>{fmt(st.excluded_hours)}</strong>
-              </div>
-              <div className="kv-box">
-                <span>{t("page.finance.balance_hours", "Balance hours")}</span>
-                <strong>{fmt(st.balance_hours)}</strong>
-              </div>
-              <div className="kv-box">
-                <span>{t("common.amount", "Amount")}</span>
-                <strong>
-                  {fmt(st.amount)} {st.currency || "USD"}
-                </strong>
-              </div>
-              <div className="kv-box">
-                <span>{t("common.result", "Result")}</span>
-                <strong>{st.result_type ? t(`status.${st.result_type}`, st.result_type.replace(/_/g, " ")) : "—"}</strong>
-              </div>
-            </div>
-          </div>
-
-          {st.events?.length ? (
+        {!st ? (
+          // P1-5：loading / error / content 三态互斥 —— 错误不被骨架屏吞掉
+          <StateView
+            loading={loading}
+            error={loadErr || undefined}
+            empty={!loading && !loadErr}
+            emptyText={t("common.empty", "No records")}
+            onRetry={reload}
+          >
+            <SkeletonCard />
+          </StateView>
+        ) : (
+          <PrintDoc
+            title={t("page.finance.lt_statement", "LAYTIME STATEMENT")}
+            no={st.id?.slice(0, 8)}
+            meta={st.terms || undefined}
+            entityType="laytime_statement"
+            entityId={st.id || id}
+          >
             <div className="panel">
-              <h3 style={{ marginTop: 0 }}>{t("page.finance.lt_events", "事件明细")}</h3>
-              <DataGrid<StatementEventRow>
-                columns={eventCols}
-                data={st.events}
-                rowKey={(r, i) => `${r.start ?? ""}-${r.end ?? ""}-${i}`}
-                storageKey="laytime_events_grid"
-                showFooter={false}
-                emptyText={t("common.empty", "No records")}
-              />
+              <div className="desk-results">
+                <div className="kv-box">
+                  <span>{t("page.finance.allowed_hours", "Allowed hours")}</span>
+                  <strong>{fmt(st.allowed_hours)}</strong>
+                </div>
+                <div className="kv-box">
+                  <span>{t("page.finance.used_hours", "Used hours")}</span>
+                  <strong>{fmt(st.used_hours)}</strong>
+                </div>
+                <div className="kv-box">
+                  <span>{t("page.finance.excluded_hours", "Excluded hours")}</span>
+                  <strong>{fmt(st.excluded_hours)}</strong>
+                </div>
+                <div className="kv-box">
+                  <span>{t("page.finance.balance_hours", "Balance hours")}</span>
+                  <strong>{fmt(st.balance_hours)}</strong>
+                </div>
+                <div className="kv-box">
+                  <span>{t("common.amount", "Amount")}</span>
+                  <strong>
+                    {fmt(st.amount)} {st.currency || "USD"}
+                  </strong>
+                </div>
+                <div className="kv-box">
+                  <span>{t("common.result", "Result")}</span>
+                  <strong>{st.result_type ? t(`status.${st.result_type}`, st.result_type.replace(/_/g, " ")) : "—"}</strong>
+                </div>
+              </div>
             </div>
-          ) : null}
 
-          <LaytimeDemurragePanel laytimeId={st.id || id} />
-
-          <div className="panel no-print">
-            <h3 style={{ marginTop: 0 }}>{t("page.finance.lt_compare", "对账（粘贴对手方计算书 JSON）")}</h3>
-            <textarea
-              style={{ width: "100%", minHeight: 72, fontFamily: "monospace", fontSize: 12 }}
-              value={cmprJson}
-              onChange={(e) => setCmprJson(e.target.value)}
-              aria-label={t("page.finance.lt_compare_json", "Counterparty calculation JSON")}
-              placeholder='{"allowed_hours": 72, "used_hours": 84, "amount": 12000, "events": [...]}'
-            />
-            <div className="desk-toolbar" style={{ margin: "0.5rem 0 0" }}>
-              <button className="btn btn-sm" type="button" disabled={busy} onClick={runCompare}>
-                {t("page.finance.lt_compare_run", "开始对账")}
-              </button>
-              {cmpr ? (
-                <span className={cmpr.match ? "ok-text" : "err-text"}>
-                  {cmpr.match ? t("page.finance.lt_compare_match", "双方一致") : t("page.finance.lt_compare_diff", "存在差异")}
-                </span>
-              ) : null}
-            </div>
-            {cmpr && !cmpr.match ? (
-              <div style={{ marginTop: "0.5rem" }}>
-                <DataGrid<DiffRow>
-                  columns={diffCols}
-                  data={diffRows}
-                  rowKey={(r) => r.id}
-                  storageKey="laytime_compare_grid"
+            {st.events?.length ? (
+              <div className="panel">
+                <h3 style={{ marginTop: 0 }}>{t("page.finance.lt_events", "事件明细")}</h3>
+                <DataGrid<StatementEventRow>
+                  columns={eventCols}
+                  data={st.events}
+                  rowKey={(r, i) => `${r.start ?? ""}-${r.end ?? ""}-${i}`}
+                  storageKey="laytime_events_grid"
                   showFooter={false}
                   emptyText={t("common.empty", "No records")}
                 />
               </div>
             ) : null}
-          </div>
-        </PrintDoc>
-      )}
 
-      {id ? <AttachmentsPanel entityType="laytime" entityId={id} /> : null}
-      {id ? <RevisionsPanel entityType="laytime" entityId={id} /> : null}
+            <LaytimeDemurragePanel laytimeId={st.id || id} />
+
+            <div className="panel no-print">
+              <h3 style={{ marginTop: 0 }}>{t("page.finance.lt_compare", "对账（粘贴对手方计算书 JSON）")}</h3>
+              <textarea
+                style={{ width: "100%", minHeight: 72, fontFamily: "monospace", fontSize: 12 }}
+                value={cmprJson}
+                onChange={(e) => setCmprJson(e.target.value)}
+                aria-label={t("page.finance.lt_compare_json", "Counterparty calculation JSON")}
+                placeholder='{"allowed_hours": 72, "used_hours": 84, "amount": 12000, "events": [...]}'
+              />
+              <div className="desk-toolbar" style={{ margin: "0.5rem 0 0" }}>
+                <button className="btn btn-sm" type="button" disabled={busy} onClick={runCompare}>
+                  {t("page.finance.lt_compare_run", "开始对账")}
+                </button>
+                {cmpr ? (
+                  <span className={cmpr.match ? "ok-text" : "err-text"}>
+                    {cmpr.match ? t("page.finance.lt_compare_match", "双方一致") : t("page.finance.lt_compare_diff", "存在差异")}
+                  </span>
+                ) : null}
+              </div>
+              {cmpr && !cmpr.match ? (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <DataGrid<DiffRow>
+                    columns={diffCols}
+                    data={diffRows}
+                    rowKey={(r) => r.id}
+                    storageKey="laytime_compare_grid"
+                    showFooter={false}
+                    emptyText={t("common.empty", "No records")}
+                  />
+                </div>
+              ) : null}
+            </div>
+          </PrintDoc>
+        )}
+
+        {id ? <AttachmentsPanel entityType="laytime" entityId={id} /> : null}
+        {id ? <RevisionsPanel entityType="laytime" entityId={id} /> : null}
+      </MasterDetail>
     </AppShell>
   );
 }

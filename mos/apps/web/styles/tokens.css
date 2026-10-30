@@ -26,6 +26,8 @@
   --statusbar: 24px;
   --sidenav: 196px;
   --rightpanel: 280px;
+  /* 详情页左窄导航（IMOS 式主从布局） */
+  --md-rail-w: 240px;
   --skeleton: #e2e8f0;
   --skeleton-shine: #f8fafc;
   /* 焦点环：需要 ≥3:1（对相邻底色）且 ≥2px 粗，半透明的 rgba 版本只有 2.46:1 */

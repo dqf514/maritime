@@ -4,10 +4,13 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
 import { PageHeader } from "@/components/PageHeader";
 import { apiGet } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
 import { useI18n, type TFallback } from "@/lib/i18n";
+import { useListBackHref } from "@/lib/listContext";
 import { maxOf, minOf } from "@/lib/numbers";
 import { formatInTz } from "@/lib/datetime";
 
@@ -159,6 +162,21 @@ export default function RoleDashboardPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const switcherRef = useRef<HTMLDivElement>(null);
+
+  // 左栏：兄弟看板清单（IMOS 式）+「返回列表」
+  const backHref = useListBackHref("/dashboards");
+  const railItems = useMemo(() => {
+    const items = screens.map((s) => ({
+      id: s.role,
+      title: s.title,
+      meta: [s.subtitle].filter(Boolean) as string[],
+      href: s.href,
+    }));
+    if (!items.some((it) => it.id === role)) {
+      items.push({ id: role, title: snap?.title || role, meta: [], href: `/dashboards/${role}` });
+    }
+    return items;
+  }, [screens, role, snap]);
 
   const load = useCallback(() => {
     apiGet(`/api/v1/dashboards/${role}/snapshot`)
@@ -453,5 +471,29 @@ export default function RoleDashboardPage() {
     </div>
   );
 
-  return <AppShell>{wall}</AppShell>;
+  return (
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.dashboards", "Live dashboards"), href: backHref },
+        { label: snap?.title || role },
+      ]}
+    >
+      <MasterDetail
+        rail={
+          <DetailRail
+            items={railItems}
+            activeId={role}
+            title={t("nav.dashboards", "Live dashboards")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={!screens.length && !catalogErr}
+            error={catalogErr}
+            onRetry={() => void load()}
+          />
+        }
+      >
+        {wall}
+      </MasterDetail>
+    </AppShell>
+  );
 }

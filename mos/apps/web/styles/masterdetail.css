@@ -1,0 +1,234 @@
+/* ── 主从布局（IMOS 式）—— 左窄导航 + 右详情，全高、各栏独立滚动 ── */
+/* 挂载点：.master-detail 必须是 .content 的直接子元素 */
+
+.master-detail {
+  display: grid;
+  grid-template-columns: var(--md-rail-w, 240px) minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* 详情页：内容区不再整页滚动，改成两栏各自滚动 */
+.content:has(> .master-detail) {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* AppShell 的路径条在主从布局里贴顶成一行 */
+.content:has(> .master-detail) > .breadcrumb {
+  margin: 0;
+  padding: var(--gap-sm) var(--gap-md);
+  border-bottom: 1px solid var(--border-light);
+  flex: 0 0 auto;
+}
+
+/* ── 左栏 ── */
+.md-rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--chrome-bg);
+  border-right: 1px solid var(--chrome-border);
+}
+
+.md-rail-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: var(--gap-sm) var(--gap-md);
+  background: var(--toolbar-bg);
+  border-bottom: 1px solid var(--chrome-border);
+}
+
+.md-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-ui);
+  color: var(--accent-text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.md-back:hover {
+  background: var(--accent-bg);
+}
+
+.md-rail-title {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--font-label);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.md-rail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--gap-xs) 0;
+}
+
+.md-rail-note {
+  margin: 0;
+  padding: var(--gap-sm) var(--gap-md);
+  color: var(--muted);
+  font-size: var(--font-label);
+}
+.md-rail-err {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+  color: var(--danger);
+}
+
+.md-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.md-card {
+  display: block;
+  padding: var(--gap-sm) var(--gap-md);
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--border-light);
+  color: var(--ink);
+  text-decoration: none;
+}
+.md-card:hover {
+  background: var(--row-hover);
+}
+.md-card:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.md-card[aria-current="page"] {
+  background: var(--row-selected);
+  border-left-color: var(--accent);
+}
+
+.md-card-title {
+  display: block;
+  font-weight: 600;
+  font-size: var(--font-ui);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-card-meta {
+  display: block;
+  color: var(--muted);
+  font-size: var(--font-label);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 详情主区 ── */
+.md-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.md-detail-head {
+  flex: 0 0 auto;
+  padding: var(--gap-sm) var(--gap-md) 0;
+}
+.md-detail-head > .page-header {
+  margin-bottom: 0;
+}
+/* 页头里的 tab 条（详情页 tab 固定，不随内容滚走） */
+.md-detail-head > .ui-tabs {
+  margin: var(--gap-xs) 0 var(--gap-sm);
+}
+
+.md-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--gap-sm) var(--gap-md);
+}
+
+/* 航次工作台：WorkspaceShell 自带固定头 + 自己的滚动区 */
+.md-detail:has(> .ws-shell) {
+  background: var(--foam);
+}
+.md-detail > .ws-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ── 窄屏：左栏变成顶部横向条 ── */
+@media (max-width: 1000px) {
+  .master-detail {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .md-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--chrome-border);
+    max-height: 140px;
+  }
+  .md-rail-body {
+    display: flex;
+    gap: var(--gap-xs);
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: var(--gap-xs);
+  }
+  .md-list {
+    display: flex;
+    gap: var(--gap-xs);
+  }
+  .md-card {
+    min-width: 190px;
+    border-bottom: none;
+    border-right: 1px solid var(--border-light);
+    border-left: none;
+  }
+  .md-card[aria-current="page"] {
+    border-bottom: 2px solid var(--accent);
+  }
+}
+
+/* ── 打印：左栏不出现，内容展开 ── */
+@media print {
+  .content:has(> .master-detail) {
+    overflow: visible;
+    display: block;
+    padding: 0;
+  }
+  .master-detail {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+  .md-rail {
+    display: none;
+  }
+  .md-detail,
+  .md-detail-body {
+    overflow: visible;
+    height: auto;
+    padding: 0;
+  }
+}

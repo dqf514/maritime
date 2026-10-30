@@ -707,6 +707,7 @@ function CounterpartiesPage() {
               data={rows}
               rowKey={(r) => r.id}
               onRowClick={(r) => router.push(`/masterdata/counterparties/${r.id}`)}
+              onRowOpen={(r) => router.push(`/masterdata/counterparties/${r.id}`)}
               onRowContextMenu={(r, _i, e) => partyCtx.open(r)(e)}
               storageKey="masterdata_counterparties_grid"
               emptyText={t("common.empty", "No records")}

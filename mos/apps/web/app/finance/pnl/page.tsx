@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -11,6 +11,7 @@ import { apiGet } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { useListQuery } from "@/lib/useListQuery";
 import { StateView } from "@/components/StateView";
 
 type LineKey = "revenue" | "hire" | "demurrage" | "port_costs" | "canal" | "bunker" | "commission" | "emissions" | "other";
@@ -84,14 +85,16 @@ function exportCsv(rows: VoyageRow[]) {
   downloadCsv(`pnl_fleet_${new Date().toISOString().slice(0, 10)}`, cols, body);
 }
 
-export default function PnlOverviewPage() {
+function PnlOverviewPage() {
   const { t } = useI18n();
   const [voyages, setVoyages] = useState<VoyageRow[]>([]);
   const [fleet, setFleet] = useState<FleetSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<string>("voyage_no");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  // U1 列表协议：排序进 URL —— 进详情再回来，排序不丢（原来只放 React state）
+  const { query, setQuery } = useListQuery();
+  const sortKey = query.sort || "voyage_no";
+  const sortDir: "asc" | "desc" = query.dir === "desc" ? "desc" : "asc";
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -386,8 +389,7 @@ export default function PnlOverviewPage() {
             data={gridRows}
             rowKey={(r) => r.voyage_id}
             onSortChange={(key, dir) => {
-              setSortKey(key);
-              setSortDir(dir === "desc" ? "desc" : "asc");
+              setQuery({ sort: key, dir: dir === "desc" ? "desc" : null });
             }}
             storageKey="finance_pnl_list_grid"
             showFooter={false}
@@ -396,5 +398,14 @@ export default function PnlOverviewPage() {
         </StateView>
       </div>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <PnlOverviewPage />
+    </Suspense>
   );
 }

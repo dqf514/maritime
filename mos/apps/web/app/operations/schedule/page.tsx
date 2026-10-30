@@ -4,13 +4,14 @@
 // 数据源：/api/v1/scheduling/{blocks,open-positions,cargo-book,berth-windows}
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DateInput } from "@/components/DateInput";
 import { PageHeader } from "@/components/PageHeader";
 import { StateView } from "@/components/StateView";
 import { StatusBadge, type StatusTone } from "@/components/StatusBadge";
 import { useToast } from "@/components/ToastProvider";
+import { useListQuery } from "@/lib/useListQuery";
 import { GanttBoard } from "@/components/gantt/GanttBoard";
 import {
   DAY_MS,
@@ -102,16 +103,23 @@ async function fetchRows<T>(path: string): Promise<T[]> {
   return [];
 }
 
-export default function SchedulePage() {
+function SchedulePage() {
   const { t, locale } = useI18n();
   const toast = useToast();
   const router = useRouter();
 
-  const [view, setView] = useState<GanttView>("vessel");
-  const [zoom, setZoom] = useState<GanttZoom>("week");
+  // U1 列表协议：视图 / 缩放 / 时间窗进 URL —— 点进航次工作台再回来，
+  // 调度视图还是原来那个（原来只放 React state，一跳就丢）。
+  const { query, setQuery } = useListQuery();
+  const view: GanttView = query.view === "cargo" || query.view === "berth" ? query.view : "vessel";
+  const zoom: GanttZoom = query.zoom === "day" || query.zoom === "month" ? query.zoom : "week";
   const [todayMs] = useState(() => Date.now());
-  const [rangeFrom, setRangeFrom] = useState(() => toDateInput(startOfDay(Date.now()) - 7 * DAY_MS));
-  const [rangeTo, setRangeTo] = useState(() => toDateInput(startOfDay(Date.now()) + 45 * DAY_MS));
+  const rangeFrom = query.from || toDateInput(startOfDay(todayMs) - 7 * DAY_MS);
+  const rangeTo = query.to || toDateInput(startOfDay(todayMs) + 45 * DAY_MS);
+  const setView = (v: GanttView) => setQuery({ view: v === "vessel" ? null : v });
+  const setZoom = (z: GanttZoom) => setQuery({ zoom: z === "week" ? null : z });
+  const setRangeFrom = (v: string) => setQuery({ from: v });
+  const setRangeTo = (v: string) => setQuery({ to: v });
 
   const [blocks, setBlocks] = useState<ScheduleBlockRow[]>([]);
   const [vessels, setVessels] = useState<VesselRow[]>([]);
@@ -425,5 +433,14 @@ export default function SchedulePage() {
         </div>
       </WorkspaceShell>
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <SchedulePage />
+    </Suspense>
   );
 }

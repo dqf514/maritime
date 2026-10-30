@@ -10,6 +10,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { RecordAttribution } from "@/components/RecordAttribution";
 import { Tabs } from "@/components/Tabs";
 import { DataGrid } from "@/components/grid";
@@ -24,6 +27,17 @@ import { useI18n } from "@/lib/i18n";
 import { msgOf } from "@/lib/errors";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
+import { useListBackHref } from "@/lib/listContext";
+
+/** 左栏清单行 —— /masterdata/vessels 列表接口的形状。 */
+type VesselRow = {
+  id: string;
+  name?: string | null;
+  imo?: string | null;
+  flag?: string | null;
+  vessel_type?: string | null;
+  status?: string | null;
+};
 
 type Tab =
   | "summary"
@@ -238,6 +252,38 @@ export default function VesselDetailPage() {
 
   const vessel = summary?.vessel;
   const spec = summary?.spec;
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/masterdata/vessels");
+  const currentRailItem = useMemo(
+    () =>
+      vessel
+        ? {
+            id: String(vesselId),
+            title: String(vessel.name || vesselId),
+            meta: [
+              String(vessel.imo || ""),
+              String(vessel.vessel_type || ""),
+              String(vessel.flag || ""),
+            ],
+            href: `/ship/vessels/${vesselId}`,
+          }
+        : null,
+    [vessel, vesselId],
+  );
+  const rail = useDetailRail<VesselRow>(
+    {
+      endpoint: "/api/v1/masterdata/vessels",
+      params: { limit: 300 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.name || r.id,
+        meta: [r.imo || "", r.vessel_type || "", r.flag || ""],
+        href: `/ship/vessels/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
 
   async function saveSpec() {
     setBusy(true);
@@ -856,7 +902,29 @@ export default function VesselDetailPage() {
   );
 
   return (
-    <AppShell>
+    <AppShell
+      breadcrumbs={[
+        { label: t("page.ship.title", "Ship management"), href: "/ship" },
+        // A5：第二项返回主数据船舶列表（list masterdata / detail shipyard）
+        { label: t("nav.vessels", "Vessels"), href: backHref },
+        { label: vessel?.name || t("page.vessel.card", "Vessel card") },
+      ]}
+    >
+      <MasterDetail
+        rail={
+          <DetailRail
+            items={rail.items}
+            activeId={String(vesselId)}
+            title={t("page.vessels.title", "Vessels")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={rail.loading}
+            error={rail.error}
+            onRetry={rail.reload}
+          />
+        }
+        header={
+          <>
       <PageHeader
         title={vessel?.name || t("page.vessel.card", "Vessel card")}
         subtitle={
@@ -891,6 +959,9 @@ export default function VesselDetailPage() {
         variant="line"
 
       />
+          </>
+        }
+      >
 
       {/* 摘要加载失败 —— 显式错误态 + 重试，不能静默渲染成空数据（P1-4） */}
       {summaryErr ? (
@@ -1400,6 +1471,7 @@ export default function VesselDetailPage() {
           </div>
         </>
       ) : null}
+      </MasterDetail>
     </AppShell>
   );
 }

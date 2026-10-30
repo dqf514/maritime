@@ -18,6 +18,10 @@ import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { SkeletonCard } from "@/components/Skeleton";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
+import { useListBackHref } from "@/lib/listContext";
 
 // U2 单据详情页：原 finance 页索赔弹窗的路由化版本（可深链/收藏/分享）。
 
@@ -36,6 +40,16 @@ type Claim = {
 };
 type Labeled = { code: string; label: { en: string; zh?: string } };
 type ClaimTypeOpt = Labeled & { subtypes?: Labeled[] };
+
+/** 左栏清单行 —— /api/v1/claims 列表接口的形状。 */
+type ClaimRow = {
+  id: string;
+  claim_no?: string | null;
+  claim_type?: string | null;
+  status?: string | null;
+  amount?: number | null;
+  days_to_timebar?: number | null;
+};
 type ClaimActionRow = {
   id: string;
   action_type: string;
@@ -77,6 +91,50 @@ function ClaimDetailPage() {
 
   const subtypeOpts = claimTypes.find((ct) => ct.code === editType)?.subtypes || [];
   const nextStatuses = useStateActions("claim", claim?.status);
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/finance?tab=claims");
+  const currentRailItem = useMemo(
+    () =>
+      claim
+        ? {
+            id: String(id),
+            title: claim.claim_no || String(id),
+            meta: [
+              claim.claim_type || "",
+              claim.status || "",
+              claim.amount != null ? String(claim.amount) : "",
+            ],
+            href: `/finance/claims/${id}`,
+          }
+        : null,
+    [claim, id],
+  );
+  const rail = useDetailRail<ClaimRow>(
+    {
+      endpoint: "/api/v1/claims",
+      params: { limit: 200 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.claim_no || r.id,
+        meta: [r.claim_type || "", r.status || "", r.amount != null ? String(r.amount) : ""],
+        href: `/finance/claims/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
+  const railNode = (
+    <DetailRail
+      items={rail.items}
+      activeId={String(id)}
+      title={t("page.finance.claims", "Claims")}
+      backHref={backHref}
+      backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+      loading={rail.loading}
+      error={rail.error}
+      onRetry={rail.reload}
+    />
+  );
 
   const actionCols = useMemo<ColumnDef<ClaimActionRow>[]>(
     () => [
@@ -375,13 +433,21 @@ function ClaimDetailPage() {
 
   if (notFound) {
     return (
-      <AppShell>
-        <div className="panel">
-          <p>{t("common.not_found", "Not found")}</p>
-          <Link href="/finance?tab=claims" className="btn">
-            {t("common.back", "返回")}
-          </Link>
-        </div>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.finance", "Finance"), href: "/finance" },
+          { label: t("page.finance.claims", "Claims"), href: backHref },
+          { label: `#${id}` },
+        ]}
+      >
+        <MasterDetail rail={railNode}>
+          <div className="panel">
+            <p>{t("common.not_found", "Not found")}</p>
+            <Link href={backHref} className="btn">
+              {t("common.back", "返回")}
+            </Link>
+          </div>
+        </MasterDetail>
       </AppShell>
     );
   }
@@ -389,173 +455,193 @@ function ClaimDetailPage() {
   // P1-5：loading / error / content 三态互斥
   if (!claim) {
     return (
-      <AppShell>
-        <StateView
-          loading={loading}
-          error={loadErr || undefined}
-          empty={!loading && !loadErr}
-          emptyText={t("common.empty", "No records")}
-          onRetry={reload}
-        >
-          <SkeletonCard />
-        </StateView>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.finance", "Finance"), href: "/finance" },
+          { label: t("page.finance.claims", "Claims"), href: backHref },
+          { label: `#${id}` },
+        ]}
+      >
+        <MasterDetail rail={railNode}>
+          <StateView
+            loading={loading}
+            error={loadErr || undefined}
+            empty={!loading && !loadErr}
+            emptyText={t("common.empty", "No records")}
+            onRetry={reload}
+          >
+            <SkeletonCard />
+          </StateView>
+        </MasterDetail>
       </AppShell>
     );
   }
 
   return (
-    <AppShell>
-      <DetailHeader
-        breadcrumb={[
-          { label: t("nav.finance", "Finance"), href: "/finance?tab=claims" },
-          { label: claim?.claim_no ? `#${claim.claim_no}` : `#${id}` },
-        ]}
-        title={claim?.claim_no || "…"}
-        status={claim?.status}
-        subtitle={t("page.finance.edit_claim", "编辑索赔")}
-        entityType="claim"
-        entityId={id}
-        actions={headerActions}
-      />
-
-      {err ? <p className="err-text">{err}</p> : null}
-      {loadErr ? (
-        <p className="state-view-text state-view-error">
-          {t("page.finance.load_failed", "数据加载失败：{msg}", { msg: loadErr })}
-        </p>
-      ) : null}
-      {sectionErr.types ? (
-        <p className="state-view-text state-view-error">
-          {t("page.finance.claim_types_failed", "索赔类型目录加载失败：{msg}", { msg: sectionErr.types })}
-        </p>
-      ) : null}
-
-      <div className="panel">
-        {claim?.days_to_timebar != null ? (
-          <p style={{ margin: "0 0 0.75rem" }}>
-            {t("page.finance.days_to_timebar", "Days to time bar")}:{" "}
-            <strong style={claim.days_to_timebar < 14 ? { color: "#dc2626" } : undefined}>{claim.days_to_timebar}</strong>
-            {claim.time_bar ? <span className="muted">（{claim.time_bar}）</span> : null}
-          </p>
-        ) : null}
-        <div className="form-grid">
-          <label>
-            {t("page.finance.claim_type", "索赔类型")}
-            <select value={editType} onChange={(e) => { setEditType(e.target.value); setEditSubtype(""); }}>
-              {claimTypes.map((ct) => (
-                <option key={ct.code} value={ct.code}>
-                  {locale.startsWith("zh") ? ct.label.zh || ct.label.en : ct.label.en}
-                </option>
-              ))}
-              {!claimTypes.some((ct) => ct.code === editType) ? <option value={editType}>{editType}</option> : null}
-            </select>
-          </label>
-          <label>
-            {t("page.finance.claim_subtype", "索赔子类")}
-            <select value={editSubtype} onChange={(e) => setEditSubtype(e.target.value)}>
-              <option value="">—</option>
-              {subtypeOpts.map((st) => (
-                <option key={st.code} value={st.code}>
-                  {locale.startsWith("zh") ? st.label.zh || st.label.en : st.label.en}
-                </option>
-              ))}
-              {editSubtype && !subtypeOpts.some((st) => st.code === editSubtype) ? (
-                <option value={editSubtype}>{editSubtype}</option>
-              ) : null}
-            </select>
-          </label>
-          <label>
-            {t("page.parties.contact", "对方联系人")}
-            <ContactPicker value={editContact} onChange={setEditContact} placeholder={t("picker.search", "搜索联系人…")} />
-          </label>
-          <label>
-            {t("common.amount", "Amount")}
-            <input type="number" step="any" value={editAmount} onChange={(e) => setEditAmount(e.target.value)} />
-          </label>
-          <label>
-            {t("page.finance.notes", "备注")}
-            <input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} />
-          </label>
-          {claim && (claim.status === "open" || claim.status === "negotiating") ? (
-            <label>
-              {t("page.finance.settlement_amount", "Settlement amount")}
-              <input type="number" step="any" value={settleAmount} onChange={(e) => setSettleAmount(e.target.value)} />
-            </label>
-          ) : null}
-        </div>
-        <div className="desk-toolbar">
-          <button className="btn btn-primary" type="button" disabled={saving || busy} onClick={save}>
-            {t("common.save", "保存")}
-          </button>
-        </div>
-      </div>
-
-      <div className="panel">
-        <h3 style={{ marginTop: 0 }}>{t("page.finance.claim_actions", "Claim actions")}</h3>
-        {sectionErr.actions ? (
-          <p className="state-view-text state-view-error">
-            {t("page.finance.claim_actions_failed", "处置动作加载失败：{msg}", { msg: sectionErr.actions })}
-          </p>
-        ) : null}
-        {claimActions.length ? (
-          <DataGrid<ClaimActionRow>
-            columns={actionCols}
-            data={claimActions}
-            rowKey={(r) => r.id}
-            storageKey="claim_actions_grid"
-            showFooter={false}
-            emptyText={t("page.finance.no_actions", "暂无处置动作")}
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.finance", "Finance"), href: "/finance" },
+        { label: t("page.finance.claims", "Claims"), href: backHref },
+        { label: claim?.claim_no ? `#${claim.claim_no}` : `#${id}` },
+      ]}
+    >
+      <MasterDetail
+        rail={railNode}
+        header={
+          <DetailHeader
+            breadcrumb={[
+              { label: t("nav.finance", "Finance"), href: "/finance?tab=claims" },
+              { label: claim?.claim_no ? `#${claim.claim_no}` : `#${id}` },
+            ]}
+            title={claim?.claim_no || "…"}
+            status={claim?.status}
+            subtitle={t("page.finance.edit_claim", "编辑索赔")}
+            entityType="claim"
+            entityId={id}
+            actions={headerActions}
           />
-        ) : (
-          <p className="muted" style={{ margin: "0 0 0.5rem" }}>{t("page.finance.no_actions", "暂无处置动作")}</p>
-        )}
-        <div className="form-grid">
-          <label>
-            {t("page.finance.action_type", "Action")}
-            <select value={actType} onChange={(e) => setActType(e.target.value)}>
-              {actionCatalog.map((a) => (
-                <option key={a.code} value={a.code}>
-                  {locale.startsWith("zh") ? a.label.zh || a.label.en : a.label.en}
-                </option>
-              ))}
-              {!actionCatalog.some((a) => a.code === actType) ? <option value={actType}>{actType}</option> : null}
-            </select>
-          </label>
-          <label>
-            {t("common.date", "日期")}
-            <input type="date" value={actDate} onChange={(e) => setActDate(e.target.value)} />
-          </label>
-          <label>
-            {t("page.finance.notes", "备注")}
-            <input value={actNotes} onChange={(e) => setActNotes(e.target.value)} />
-          </label>
-          <label>
-            {t("page.finance.action_result", "Result")}
-            <input value={actResult} onChange={(e) => setActResult(e.target.value)} />
-          </label>
-          <div style={{ display: "flex", alignItems: "end" }}>
-            <button className="btn btn-sm" type="button" disabled={busy} onClick={addAction}>
-              {t("page.finance.log_action", "Log action")}
+        }
+      >
+
+        {err ? <p className="err-text">{err}</p> : null}
+        {loadErr ? (
+          <p className="state-view-text state-view-error">
+            {t("page.finance.load_failed", "数据加载失败：{msg}", { msg: loadErr })}
+          </p>
+        ) : null}
+        {sectionErr.types ? (
+          <p className="state-view-text state-view-error">
+            {t("page.finance.claim_types_failed", "索赔类型目录加载失败：{msg}", { msg: sectionErr.types })}
+          </p>
+        ) : null}
+
+        <div className="panel">
+          {claim?.days_to_timebar != null ? (
+            <p style={{ margin: "0 0 0.75rem" }}>
+              {t("page.finance.days_to_timebar", "Days to time bar")}:{" "}
+              <strong style={claim.days_to_timebar < 14 ? { color: "#dc2626" } : undefined}>{claim.days_to_timebar}</strong>
+              {claim.time_bar ? <span className="muted">（{claim.time_bar}）</span> : null}
+            </p>
+          ) : null}
+          <div className="form-grid">
+            <label>
+              {t("page.finance.claim_type", "索赔类型")}
+              <select value={editType} onChange={(e) => { setEditType(e.target.value); setEditSubtype(""); }}>
+                {claimTypes.map((ct) => (
+                  <option key={ct.code} value={ct.code}>
+                    {locale.startsWith("zh") ? ct.label.zh || ct.label.en : ct.label.en}
+                  </option>
+                ))}
+                {!claimTypes.some((ct) => ct.code === editType) ? <option value={editType}>{editType}</option> : null}
+              </select>
+            </label>
+            <label>
+              {t("page.finance.claim_subtype", "索赔子类")}
+              <select value={editSubtype} onChange={(e) => setEditSubtype(e.target.value)}>
+                <option value="">—</option>
+                {subtypeOpts.map((st) => (
+                  <option key={st.code} value={st.code}>
+                    {locale.startsWith("zh") ? st.label.zh || st.label.en : st.label.en}
+                  </option>
+                ))}
+                {editSubtype && !subtypeOpts.some((st) => st.code === editSubtype) ? (
+                  <option value={editSubtype}>{editSubtype}</option>
+                ) : null}
+              </select>
+            </label>
+            <label>
+              {t("page.parties.contact", "对方联系人")}
+              <ContactPicker value={editContact} onChange={setEditContact} placeholder={t("picker.search", "搜索联系人…")} />
+            </label>
+            <label>
+              {t("common.amount", "Amount")}
+              <input type="number" step="any" value={editAmount} onChange={(e) => setEditAmount(e.target.value)} />
+            </label>
+            <label>
+              {t("page.finance.notes", "备注")}
+              <input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} />
+            </label>
+            {claim && (claim.status === "open" || claim.status === "negotiating") ? (
+              <label>
+                {t("page.finance.settlement_amount", "Settlement amount")}
+                <input type="number" step="any" value={settleAmount} onChange={(e) => setSettleAmount(e.target.value)} />
+              </label>
+            ) : null}
+          </div>
+          <div className="desk-toolbar">
+            <button className="btn btn-primary" type="button" disabled={saving || busy} onClick={save}>
+              {t("common.save", "保存")}
             </button>
           </div>
         </div>
-      </div>
 
-      {id ? <AttachmentsPanel entityType="claim" entityId={id} /> : null}
-      {id ? <RevisionsPanel entityType="claim" entityId={id} /> : null}
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>{t("page.finance.claim_actions", "Claim actions")}</h3>
+          {sectionErr.actions ? (
+            <p className="state-view-text state-view-error">
+              {t("page.finance.claim_actions_failed", "处置动作加载失败：{msg}", { msg: sectionErr.actions })}
+            </p>
+          ) : null}
+          {claimActions.length ? (
+            <DataGrid<ClaimActionRow>
+              columns={actionCols}
+              data={claimActions}
+              rowKey={(r) => r.id}
+              storageKey="claim_actions_grid"
+              showFooter={false}
+              emptyText={t("page.finance.no_actions", "暂无处置动作")}
+            />
+          ) : (
+            <p className="muted" style={{ margin: "0 0 0.5rem" }}>{t("page.finance.no_actions", "暂无处置动作")}</p>
+          )}
+          <div className="form-grid">
+            <label>
+              {t("page.finance.action_type", "Action")}
+              <select value={actType} onChange={(e) => setActType(e.target.value)}>
+                {actionCatalog.map((a) => (
+                  <option key={a.code} value={a.code}>
+                    {locale.startsWith("zh") ? a.label.zh || a.label.en : a.label.en}
+                  </option>
+                ))}
+                {!actionCatalog.some((a) => a.code === actType) ? <option value={actType}>{actType}</option> : null}
+              </select>
+            </label>
+            <label>
+              {t("common.date", "日期")}
+              <input type="date" value={actDate} onChange={(e) => setActDate(e.target.value)} />
+            </label>
+            <label>
+              {t("page.finance.notes", "备注")}
+              <input value={actNotes} onChange={(e) => setActNotes(e.target.value)} />
+            </label>
+            <label>
+              {t("page.finance.action_result", "Result")}
+              <input value={actResult} onChange={(e) => setActResult(e.target.value)} />
+            </label>
+            <div style={{ display: "flex", alignItems: "end" }}>
+              <button className="btn btn-sm" type="button" disabled={busy} onClick={addAction}>
+                {t("page.finance.log_action", "Log action")}
+              </button>
+            </div>
+          </div>
+        </div>
 
-      <ConfirmDialog
-        open={Boolean(confirm)}
-        title={t("common.confirm", "确认操作")}
-        message={confirm?.message || ""}
-        danger={confirm?.danger}
-        onConfirm={() => {
-          const fn = confirm?.action;
-          setConfirm(null);
-          fn?.();
-        }}
-        onCancel={() => setConfirm(null)}
-      />
+        {id ? <AttachmentsPanel entityType="claim" entityId={id} /> : null}
+        {id ? <RevisionsPanel entityType="claim" entityId={id} /> : null}
+
+        <ConfirmDialog
+          open={Boolean(confirm)}
+          title={t("common.confirm", "确认操作")}
+          message={confirm?.message || ""}
+          danger={confirm?.danger}
+          onConfirm={() => {
+            const fn = confirm?.action;
+            setConfirm(null);
+            fn?.();
+          }}
+          onCancel={() => setConfirm(null)}
+        />
+      </MasterDetail>
     </AppShell>
   );
 }

@@ -6,6 +6,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
@@ -20,7 +23,20 @@ import { useStateActions, useTransitionTable } from "@/components/useTransitions
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { useListBackHref } from "@/lib/listContext";
 import { useToast } from "@/components/ToastProvider";
+
+/** 左栏清单行 —— /api/v1/coa/contracts（COA 合同列表页）的形状。 */
+type CoaRailRow = {
+  id: string;
+  coa_no?: string | null;
+  total_qty?: number | null;
+  qty_unit?: string | null;
+  rate_basis?: string | null;
+  rate?: number | null;
+  currency?: string | null;
+  status?: string | null;
+};
 
 type CoaContract = {
   id: string;
@@ -165,6 +181,40 @@ export default function CoaWorkspacePage() {
   // 转移表取数失败时不能静默地「没有可用动作」
   const { error: transitionErr } = useTransitionTable();
   const nextStatuses = useStateActions("coa_contract", contract?.status);
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/charters?type=coa");
+  const currentRailItem = useMemo(
+    () =>
+      contract
+        ? {
+            id: coaId,
+            title: contract.coa_no || coaId,
+            meta: [
+              `${contract.total_qty.toLocaleString()} ${contract.qty_unit}`,
+              `${contract.rate_basis} ${contract.rate.toLocaleString()} ${contract.currency}`,
+            ],
+            href: `/charters/coa/${coaId}`,
+          }
+        : null,
+    [contract, coaId],
+  );
+  const rail = useDetailRail<CoaRailRow>(
+    {
+      endpoint: "/api/v1/coa/contracts",
+      params: { limit: 100 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.coa_no || r.id,
+        meta: [
+          r.total_qty != null ? `${r.total_qty.toLocaleString()} ${r.qty_unit || ""}`.trim() : "",
+          r.rate != null ? `${r.rate_basis || ""} ${r.rate.toLocaleString()} ${r.currency || ""}`.trim() : "",
+        ],
+        href: `/charters/coa/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
 
   const toDraft = useCallback((c: CoaContract) => {
     setDraft({
@@ -527,391 +577,416 @@ export default function CoaWorkspacePage() {
       : 0;
 
   return (
-    <AppShell>
-      {err ? <p className="flash-err">{err}</p> : null}
-      {refErr ? (
-        <p className="flash-err">
-          {t("page.coa.ref_load_failed", "Reference data failed to load: {msg}", { msg: refErr })}
-        </p>
-      ) : null}
-      {transitionErr ? (
-        <p className="flash-err">
-          {t("page.transitions.load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
-        </p>
-      ) : null}
-
-      {contract ? (
-        <>
-          <DetailHeader
-            breadcrumb={[
-              { label: t("page.coa.title", "COA"), href: "/charters?type=coa" },
-              { label: contract.coa_no ? `#${contract.coa_no}` : `#${coaId}` },
-            ]}
-            title={contract.coa_no}
-            status={contract.status}
-            entityType="coa_contract"
-            entityId={coaId}
-            subtitle={`${contract.rate_basis} · ${contract.rate.toLocaleString()} ${contract.currency} · ${contract.total_qty.toLocaleString()} ${contract.qty_unit}`}
-            actions={[
-              ...nextStatuses.map((s) => ({
-                key: `go-${s}`,
-                label: t(`page.coa.action.${s}`, s.replace(/_/g, " ")),
-                variant: s === "cancelled" ? ("danger" as const) : ("primary" as const),
-                onClick: () => void transitionTo(s),
-              })),
-              {
-                key: "back",
-                label: t("common.back", "Back"),
-                onClick: () => window.location.href = "/charters?type=coa",
-              },
-            ]}
+    <AppShell
+      breadcrumbs={[
+        { label: t("page.coa.title", "COA"), href: backHref },
+        { label: `#${coaId}` },
+      ]}
+    >
+      <MasterDetail
+        rail={
+          <DetailRail
+            items={rail.items}
+            activeId={coaId}
+            title={t("page.coa.title", "COA")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={rail.loading}
+            error={rail.error}
+            onRetry={rail.reload}
           />
-          <StatusLegend statuses={["draft", "active", "completed", "cancelled"]} />
+        }
+        header={
+          contract ? (
+            <>
+              <DetailHeader
+                breadcrumb={[
+                  { label: t("page.coa.title", "COA"), href: "/charters?type=coa" },
+                  { label: contract.coa_no ? `#${contract.coa_no}` : `#${coaId}` },
+                ]}
+                title={contract.coa_no}
+                status={contract.status}
+                entityType="coa_contract"
+                entityId={coaId}
+                subtitle={`${contract.rate_basis} · ${contract.rate.toLocaleString()} ${contract.currency} · ${contract.total_qty.toLocaleString()} ${contract.qty_unit}`}
+                actions={[
+                  ...nextStatuses.map((s) => ({
+                    key: `go-${s}`,
+                    label: t(`page.coa.action.${s}`, s.replace(/_/g, " ")),
+                    variant: s === "cancelled" ? ("danger" as const) : ("primary" as const),
+                    onClick: () => void transitionTo(s),
+                  })),
+                  {
+                    key: "back",
+                    label: t("common.back", "Back"),
+                    onClick: () => window.location.href = "/charters?type=coa",
+                  },
+                ]}
+              />
+              <StatusLegend statuses={["draft", "active", "completed", "cancelled"]} />
 
-          {allocation ? (
-            <div className="coa-kpis">
-              <div className="coa-kpi">
-                <span>{t("page.coa.kpi.total_qty", "Contracted")}</span>
-                <strong>
-                  {allocation.total_qty.toLocaleString()} {allocation.qty_unit}
-                </strong>
-              </div>
-              <div className="coa-kpi">
-                <span>{t("page.coa.kpi.planned", "Planned")}</span>
-                <strong>
-                  {allocation.planned_qty.toLocaleString()} {allocation.qty_unit}
-                </strong>
-              </div>
-              <div className="coa-kpi">
-                <span>{t("page.coa.kpi.allocated", "Allocated")}</span>
-                <strong>
-                  {allocation.allocated_qty.toLocaleString()} {allocation.qty_unit}
-                </strong>
-              </div>
-              <div className="coa-kpi">
-                <span>{t("page.coa.kpi.remaining", "Remaining")}</span>
-                <strong>
-                  {allocation.remaining_qty.toLocaleString()} {allocation.qty_unit}
-                </strong>
-              </div>
-              <div className="coa-kpi">
-                <span>{t("page.coa.kpi.unplanned", "Unplanned")}</span>
-                <strong>
-                  {allocation.unplanned_qty.toLocaleString()} {allocation.qty_unit}
-                </strong>
-              </div>
-            </div>
-          ) : null}
-
-          <Tabs
-            items={TABS.map((tb) => ({ key: tb, label: tabLabels[tb] }))}
-            value={tab}
-            onChange={(k) => setTab(k as TabId)}
-            variant="line"
-          />
-
-          <div className="coa-tab-body">
-            {tab === "contract" ? (
-              <div className="coa-panel">
-                <div className="coa-panel-head">
-                  <h3>{t("page.coa.tab.contract", "Contract")}</h3>
-                  <div className="quick-row">
-                    <ValidateButton onValidate={validateCoa} />
-                    <button type="button" className="btn btn-primary" onClick={saveContract} disabled={saving}>
-                      {t("common.save", "Save")}
-                    </button>
+              {allocation ? (
+                <div className="coa-kpis">
+                  <div className="coa-kpi">
+                    <span>{t("page.coa.kpi.total_qty", "Contracted")}</span>
+                    <strong>
+                      {allocation.total_qty.toLocaleString()} {allocation.qty_unit}
+                    </strong>
+                  </div>
+                  <div className="coa-kpi">
+                    <span>{t("page.coa.kpi.planned", "Planned")}</span>
+                    <strong>
+                      {allocation.planned_qty.toLocaleString()} {allocation.qty_unit}
+                    </strong>
+                  </div>
+                  <div className="coa-kpi">
+                    <span>{t("page.coa.kpi.allocated", "Allocated")}</span>
+                    <strong>
+                      {allocation.allocated_qty.toLocaleString()} {allocation.qty_unit}
+                    </strong>
+                  </div>
+                  <div className="coa-kpi">
+                    <span>{t("page.coa.kpi.remaining", "Remaining")}</span>
+                    <strong>
+                      {allocation.remaining_qty.toLocaleString()} {allocation.qty_unit}
+                    </strong>
+                  </div>
+                  <div className="coa-kpi">
+                    <span>{t("page.coa.kpi.unplanned", "Unplanned")}</span>
+                    <strong>
+                      {allocation.unplanned_qty.toLocaleString()} {allocation.qty_unit}
+                    </strong>
                   </div>
                 </div>
-                <div className="coa-panel-body">
-                  <FormPanel columns={3}>
-                    <FormSection title={t("page.coa.terms.quantity", "Quantity & period")} dense>
-                      <FieldRow label={t("page.coa.col.total_qty", "Total qty")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.total_qty || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, total_qty: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.coa.terms.qty_unit", "Unit")}>
-                        <select
-                          value={draft.qty_unit || "mt"}
-                          onChange={(e) => setDraft((f) => ({ ...f, qty_unit: e.target.value }))}
-                        >
-                          <option value="mt">mt</option>
-                          <option value="bbl">bbl</option>
-                        </select>
-                      </FieldRow>
-                      <FieldRow label={t("page.coa.col.period_from", "Period from")}>
-                        <DateInput
-                          value={draft.period_from || ""}
-                          onChange={(v) => setDraft((f) => ({ ...f, period_from: v }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.coa.col.period_to", "Period to")}>
-                        <DateInput
-                          value={draft.period_to || ""}
-                          onChange={(v) => setDraft((f) => ({ ...f, period_to: v }))}
-                        />
-                      </FieldRow>
-                    </FormSection>
-                    <FormSection title={t("page.coa.terms.rate", "Rate")} dense>
-                      <FieldRow label={t("page.coa.col.rate_basis", "Rate basis")}>
-                        <select
-                          value={draft.rate_basis || "per_voyage"}
-                          onChange={(e) => setDraft((f) => ({ ...f, rate_basis: e.target.value }))}
-                        >
-                          <option value="per_voyage">per_voyage</option>
-                          <option value="per_mt">per_mt</option>
-                          <option value="lumpsum">lumpsum</option>
-                        </select>
-                      </FieldRow>
-                      <FieldRow label={t("page.coa.col.rate", "Rate")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.rate || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, rate: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.terms.currency", "Currency")}>
-                        <select
-                          value={draft.currency || "USD"}
-                          onChange={(e) => setDraft((f) => ({ ...f, currency: e.target.value }))}
-                        >
-                          {["USD", "EUR", "GBP", "CNY"].map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
-                      </FieldRow>
-                    </FormSection>
-                    <FormSection title={t("page.coa.terms.cargo", "Cargo")} dense>
-                      <FieldRow label={t("page.coa.terms.cargo_spec", "Cargo spec")} span={3}>
-                        <textarea
-                          value={draft.cargo_spec || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, cargo_spec: e.target.value }))}
-                          rows={3}
-                        />
-                      </FieldRow>
-                      {/* C1-P1 货物 CP 条款：计费量基准 / MOL 公差 / 超量加价 */}
-                      <FieldRow label={t("page.coa.terms.bill_by", "Bill by")}>
-                        <select
-                          value={draft.bill_by || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, bill_by: e.target.value }))}
-                        >
-                          <option value="">—</option>
-                          <option value="weight">weight</option>
-                          <option value="measure">measure</option>
-                          <option value="volume">volume</option>
-                        </select>
-                      </FieldRow>
-                      <FieldRow label={t("page.coa.terms.tolerance_pct", "Tolerance % (0–50)")}>
-                        <input
-                          type="number"
-                          step="any"
-                          min={0}
-                          max={50}
-                          value={draft.tolerance_pct || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, tolerance_pct: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.coa.terms.overage_pct", "Overage % (0–100)")}>
-                        <input
-                          type="number"
-                          step="any"
-                          min={0}
-                          max={100}
-                          value={draft.overage_pct || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, overage_pct: e.target.value }))}
-                        />
-                      </FieldRow>
-                    </FormSection>
-                  </FormPanel>
-                </div>
-              </div>
-            ) : null}
+              ) : null}
 
-            {tab === "liftings" ? (
-              <div className="coa-panel">
-                <div className="coa-panel-head">
-                  <h3>{t("page.coa.tab.liftings", "Lifting Schedule")}</h3>
-                </div>
-                <div className="coa-panel-body">
-                  <DataGrid
-                    columns={liftingColumns}
-                    data={liftings}
-                    rowKey={(r) => r.id}
-                    loading={tabBusy}
-                    storageKey="coa-liftings"
-                    emptyText={t("common.empty", "No records")}
-                  />
-                </div>
-              </div>
-            ) : null}
+              <Tabs
+                items={TABS.map((tb) => ({ key: tb, label: tabLabels[tb] }))}
+                value={tab}
+                onChange={(k) => setTab(k as TabId)}
+                variant="line"
+              />
+            </>
+          ) : null
+        }
+      >
+        {err ? <p className="flash-err">{err}</p> : null}
+        {refErr ? (
+          <p className="flash-err">
+            {t("page.coa.ref_load_failed", "Reference data failed to load: {msg}", { msg: refErr })}
+          </p>
+        ) : null}
+        {transitionErr ? (
+          <p className="flash-err">
+            {t("page.transitions.load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
+          </p>
+        ) : null}
 
-            {tab === "allocation" ? (
-              <div className="coa-panel">
-                <div className="coa-panel-head">
-                  <h3>{t("page.coa.tab.allocation", "Itinerary Allocation")}</h3>
-                  <div className="quick-row">
+        {contract ? (
+          <>
+            <div className="coa-tab-body">
+              {tab === "contract" ? (
+                <div className="coa-panel">
+                  <div className="coa-panel-head">
+                    <h3>{t("page.coa.tab.contract", "Contract")}</h3>
+                    <div className="quick-row">
+                      <ValidateButton onValidate={validateCoa} />
+                      <button type="button" className="btn btn-primary" onClick={saveContract} disabled={saving}>
+                        {t("common.save", "Save")}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="coa-panel-body">
+                    <FormPanel columns={3}>
+                      <FormSection title={t("page.coa.terms.quantity", "Quantity & period")} dense>
+                        <FieldRow label={t("page.coa.col.total_qty", "Total qty")}>
+                          <input
+                            type="number"
+                            step="any"
+                            value={draft.total_qty || ""}
+                            onChange={(e) => setDraft((f) => ({ ...f, total_qty: e.target.value }))}
+                          />
+                        </FieldRow>
+                        <FieldRow label={t("page.coa.terms.qty_unit", "Unit")}>
+                          <select
+                            value={draft.qty_unit || "mt"}
+                            onChange={(e) => setDraft((f) => ({ ...f, qty_unit: e.target.value }))}
+                          >
+                            <option value="mt">mt</option>
+                            <option value="bbl">bbl</option>
+                          </select>
+                        </FieldRow>
+                        <FieldRow label={t("page.coa.col.period_from", "Period from")}>
+                          <DateInput
+                            value={draft.period_from || ""}
+                            onChange={(v) => setDraft((f) => ({ ...f, period_from: v }))}
+                          />
+                        </FieldRow>
+                        <FieldRow label={t("page.coa.col.period_to", "Period to")}>
+                          <DateInput
+                            value={draft.period_to || ""}
+                            onChange={(v) => setDraft((f) => ({ ...f, period_to: v }))}
+                          />
+                        </FieldRow>
+                      </FormSection>
+                      <FormSection title={t("page.coa.terms.rate", "Rate")} dense>
+                        <FieldRow label={t("page.coa.col.rate_basis", "Rate basis")}>
+                          <select
+                            value={draft.rate_basis || "per_voyage"}
+                            onChange={(e) => setDraft((f) => ({ ...f, rate_basis: e.target.value }))}
+                          >
+                            <option value="per_voyage">per_voyage</option>
+                            <option value="per_mt">per_mt</option>
+                            <option value="lumpsum">lumpsum</option>
+                          </select>
+                        </FieldRow>
+                        <FieldRow label={t("page.coa.col.rate", "Rate")}>
+                          <input
+                            type="number"
+                            step="any"
+                            value={draft.rate || ""}
+                            onChange={(e) => setDraft((f) => ({ ...f, rate: e.target.value }))}
+                          />
+                        </FieldRow>
+                        <FieldRow label={t("page.tc.terms.currency", "Currency")}>
+                          <select
+                            value={draft.currency || "USD"}
+                            onChange={(e) => setDraft((f) => ({ ...f, currency: e.target.value }))}
+                          >
+                            {["USD", "EUR", "GBP", "CNY"].map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </FieldRow>
+                      </FormSection>
+                      <FormSection title={t("page.coa.terms.cargo", "Cargo")} dense>
+                        <FieldRow label={t("page.coa.terms.cargo_spec", "Cargo spec")} span={3}>
+                          <textarea
+                            value={draft.cargo_spec || ""}
+                            onChange={(e) => setDraft((f) => ({ ...f, cargo_spec: e.target.value }))}
+                            rows={3}
+                          />
+                        </FieldRow>
+                        {/* C1-P1 货物 CP 条款：计费量基准 / MOL 公差 / 超量加价 */}
+                        <FieldRow label={t("page.coa.terms.bill_by", "Bill by")}>
+                          <select
+                            value={draft.bill_by || ""}
+                            onChange={(e) => setDraft((f) => ({ ...f, bill_by: e.target.value }))}
+                          >
+                            <option value="">—</option>
+                            <option value="weight">weight</option>
+                            <option value="measure">measure</option>
+                            <option value="volume">volume</option>
+                          </select>
+                        </FieldRow>
+                        <FieldRow label={t("page.coa.terms.tolerance_pct", "Tolerance % (0–50)")}>
+                          <input
+                            type="number"
+                            step="any"
+                            min={0}
+                            max={50}
+                            value={draft.tolerance_pct || ""}
+                            onChange={(e) => setDraft((f) => ({ ...f, tolerance_pct: e.target.value }))}
+                          />
+                        </FieldRow>
+                        <FieldRow label={t("page.coa.terms.overage_pct", "Overage % (0–100)")}>
+                          <input
+                            type="number"
+                            step="any"
+                            min={0}
+                            max={100}
+                            value={draft.overage_pct || ""}
+                            onChange={(e) => setDraft((f) => ({ ...f, overage_pct: e.target.value }))}
+                          />
+                        </FieldRow>
+                      </FormSection>
+                    </FormPanel>
+                  </div>
+                </div>
+              ) : null}
+
+              {tab === "liftings" ? (
+                <div className="coa-panel">
+                  <div className="coa-panel-head">
+                    <h3>{t("page.coa.tab.liftings", "Lifting Schedule")}</h3>
+                  </div>
+                  <div className="coa-panel-body">
+                    <DataGrid
+                      columns={liftingColumns}
+                      data={liftings}
+                      rowKey={(r) => r.id}
+                      loading={tabBusy}
+                      storageKey="coa-liftings"
+                      emptyText={t("common.empty", "No records")}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {tab === "allocation" ? (
+                <div className="coa-panel">
+                  <div className="coa-panel-head">
+                    <h3>{t("page.coa.tab.allocation", "Itinerary Allocation")}</h3>
+                    <div className="quick-row">
+                      {allocation ? (
+                        <span className="muted">
+                          {t("page.coa.alloc.ratio", "Allocated {pct} of contracted", { pct: `${allocPct.toFixed(1)}%` })}
+                        </span>
+                      ) : null}
+                      <button type="button" className="btn btn-sm" onClick={() => void loadScore()} disabled={scoreBusy}>
+                        {scoreBusy ? t("common.loading", "Loading…") : t("page.coa.score_match", "Score match")}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="coa-panel-body">
                     {allocation ? (
+                      <>
+                        <div className="coa-alloc-bar" aria-hidden>
+                          <div className="alloc-done" style={{ width: `${allocPct}%` }} />
+                          <div className="alloc-open" style={{ width: `${100 - allocPct}%` }} />
+                        </div>
+                        <DataGrid
+                          columns={itineraryColumns}
+                          data={allocation.itineraries || []}
+                          rowKey={(r) => String(r.seq)}
+                          loading={tabBusy}
+                          storageKey="coa-allocation"
+                          emptyText={t("common.empty", "No records")}
+                        />
+                      </>
+                    ) : (
+                      <p className="muted">{t("common.loading", "Loading…")}</p>
+                    )}
+                    {score ? (
+                      <div className="desk-section">
+                        <h3>{t("page.coa.score_title", "Cargo × leg score (0–100)")}</h3>
+                        {score.items.length === 0 ? (
+                          <p className="muted">{t("page.coa.score_empty", "No itinerary legs to score")}</p>
+                        ) : (
+                          score.items.map((leg) => (
+                            <div key={leg.itinerary_id || leg.seq} className="desk-section">
+                              <p className="muted">
+                                {t("page.coa.score_leg", "Leg {seq}", { seq: leg.seq })} · {portName(leg.load_port_id)} → {portName(leg.disch_port_id)}
+                                {leg.qty != null ? ` · ${leg.qty.toLocaleString()}` : ""}
+                              </p>
+                              {leg.matches.length === 0 ? (
+                                <p className="muted">{t("page.coa.score_no_match", "No matching cargoes")}</p>
+                              ) : (
+                                <DataGrid<ScoreMatch>
+                                  columns={scoreMatchColumns}
+                                  data={leg.matches}
+                                  rowKey={(r, i) => `${leg.seq}-${r.cargo_id || i}`}
+                                  storageKey="coa-score-matches"
+                                  showFooter={false}
+                                  showColumnMenu={false}
+                                  emptyText={t("common.empty", "No records")}
+                                />
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {tab === "voyages" ? (
+                <div className="coa-panel">
+                  <div className="coa-panel-head">
+                    <h3>{t("page.coa.tab.voyages", "Linked Voyages")}</h3>
+                  </div>
+                  <div className="coa-panel-body">
+                    <DataGrid
+                      columns={voyageColumns}
+                      data={linkedVoyages}
+                      rowKey={(r) => r.key}
+                      loading={tabBusy}
+                      storageKey="coa-voyages"
+                      emptyText={t("common.empty", "No records")}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {tab === "pnl" ? (
+                <div className="coa-panel">
+                  <div className="coa-panel-head">
+                    <h3>{t("page.coa.tab.pnl", "Fuel-neutral P&L")}</h3>
+                    {pnl ? (
                       <span className="muted">
-                        {t("page.coa.alloc.ratio", "Allocated {pct} of contracted", { pct: `${allocPct.toFixed(1)}%` })}
+                        {pnl.rate_basis} · {pnl.rate.toLocaleString()} {pnl.currency}
                       </span>
                     ) : null}
-                    <button type="button" className="btn btn-sm" onClick={() => void loadScore()} disabled={scoreBusy}>
-                      {scoreBusy ? t("common.loading", "Loading…") : t("page.coa.score_match", "Score match")}
-                    </button>
+                  </div>
+                  <div className="coa-panel-body">
+                    {pnl ? (
+                      <>
+                        <div className="coa-kpis">
+                          <div className="coa-kpi">
+                            <span>{t("page.coa.pnl.revenue", "Revenue")}</span>
+                            <strong>{pnl.revenue.toLocaleString()}</strong>
+                          </div>
+                          <div className="coa-kpi">
+                            <span>{t("page.coa.pnl.fuel_cost", "Fuel cost")}</span>
+                            <strong>{pnl.fuel_cost.toLocaleString()}</strong>
+                          </div>
+                          <div className="coa-kpi">
+                            <span>{t("page.coa.pnl.other_cost", "Other cost")}</span>
+                            <strong>{pnl.other_cost.toLocaleString()}</strong>
+                          </div>
+                          <div className={`coa-kpi ${pnl.pnl_fuel_neutral >= 0 ? "coa-kpi-pos" : "coa-kpi-neg"}`}>
+                            <span>{t("page.coa.pnl.fuel_neutral", "P&L fuel-neutral")}</span>
+                            <strong>{pnl.pnl_fuel_neutral.toLocaleString()}</strong>
+                          </div>
+                          <div className={`coa-kpi ${pnl.pnl_gross >= 0 ? "coa-kpi-pos" : "coa-kpi-neg"}`}>
+                            <span>{t("page.coa.pnl.gross", "P&L gross")}</span>
+                            <strong>{pnl.pnl_gross.toLocaleString()}</strong>
+                          </div>
+                          <div className="coa-kpi">
+                            <span>{t("page.coa.pnl.completed", "Completed liftings")}</span>
+                            <strong>
+                              {pnl.completed_liftings} / {pnl.completed_qty.toLocaleString()} {contract.qty_unit}
+                            </strong>
+                          </div>
+                          <div className="coa-kpi">
+                            <span>{t("page.coa.pnl.voyage_count", "Voyages")}</span>
+                            <strong>{pnl.voyage_count}</strong>
+                          </div>
+                        </div>
+                        <DataGrid<PnlLine>
+                          columns={pnlLineColumns}
+                          data={pnlLines}
+                          rowKey={(r) => r.key}
+                          storageKey="coa_pnl_lines"
+                          showFooter={false}
+                          showColumnMenu={false}
+                          emptyText={t("common.empty", "No records")}
+                        />
+                        <p className="muted" style={{ marginTop: 10 }}>
+                          {t(
+                            "page.coa.pnl.hint",
+                            "Fuel-neutral P&L strips bunker price effects: revenue − non-fuel costs. Gross P&L deducts fuel cost as well.",
+                          )}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="muted">{t("common.loading", "Loading…")}</p>
+                    )}
                   </div>
                 </div>
-                <div className="coa-panel-body">
-                  {allocation ? (
-                    <>
-                      <div className="coa-alloc-bar" aria-hidden>
-                        <div className="alloc-done" style={{ width: `${allocPct}%` }} />
-                        <div className="alloc-open" style={{ width: `${100 - allocPct}%` }} />
-                      </div>
-                      <DataGrid
-                        columns={itineraryColumns}
-                        data={allocation.itineraries || []}
-                        rowKey={(r) => String(r.seq)}
-                        loading={tabBusy}
-                        storageKey="coa-allocation"
-                        emptyText={t("common.empty", "No records")}
-                      />
-                    </>
-                  ) : (
-                    <p className="muted">{t("common.loading", "Loading…")}</p>
-                  )}
-                  {score ? (
-                    <div className="desk-section">
-                      <h3>{t("page.coa.score_title", "Cargo × leg score (0–100)")}</h3>
-                      {score.items.length === 0 ? (
-                        <p className="muted">{t("page.coa.score_empty", "No itinerary legs to score")}</p>
-                      ) : (
-                        score.items.map((leg) => (
-                          <div key={leg.itinerary_id || leg.seq} className="desk-section">
-                            <p className="muted">
-                              {t("page.coa.score_leg", "Leg {seq}", { seq: leg.seq })} · {portName(leg.load_port_id)} → {portName(leg.disch_port_id)}
-                              {leg.qty != null ? ` · ${leg.qty.toLocaleString()}` : ""}
-                            </p>
-                            {leg.matches.length === 0 ? (
-                              <p className="muted">{t("page.coa.score_no_match", "No matching cargoes")}</p>
-                            ) : (
-                              <DataGrid<ScoreMatch>
-                                columns={scoreMatchColumns}
-                                data={leg.matches}
-                                rowKey={(r, i) => `${leg.seq}-${r.cargo_id || i}`}
-                                storageKey="coa-score-matches"
-                                showFooter={false}
-                                showColumnMenu={false}
-                                emptyText={t("common.empty", "No records")}
-                              />
-                            )}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-
-            {tab === "voyages" ? (
-              <div className="coa-panel">
-                <div className="coa-panel-head">
-                  <h3>{t("page.coa.tab.voyages", "Linked Voyages")}</h3>
-                </div>
-                <div className="coa-panel-body">
-                  <DataGrid
-                    columns={voyageColumns}
-                    data={linkedVoyages}
-                    rowKey={(r) => r.key}
-                    loading={tabBusy}
-                    storageKey="coa-voyages"
-                    emptyText={t("common.empty", "No records")}
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            {tab === "pnl" ? (
-              <div className="coa-panel">
-                <div className="coa-panel-head">
-                  <h3>{t("page.coa.tab.pnl", "Fuel-neutral P&L")}</h3>
-                  {pnl ? (
-                    <span className="muted">
-                      {pnl.rate_basis} · {pnl.rate.toLocaleString()} {pnl.currency}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="coa-panel-body">
-                  {pnl ? (
-                    <>
-                      <div className="coa-kpis">
-                        <div className="coa-kpi">
-                          <span>{t("page.coa.pnl.revenue", "Revenue")}</span>
-                          <strong>{pnl.revenue.toLocaleString()}</strong>
-                        </div>
-                        <div className="coa-kpi">
-                          <span>{t("page.coa.pnl.fuel_cost", "Fuel cost")}</span>
-                          <strong>{pnl.fuel_cost.toLocaleString()}</strong>
-                        </div>
-                        <div className="coa-kpi">
-                          <span>{t("page.coa.pnl.other_cost", "Other cost")}</span>
-                          <strong>{pnl.other_cost.toLocaleString()}</strong>
-                        </div>
-                        <div className={`coa-kpi ${pnl.pnl_fuel_neutral >= 0 ? "coa-kpi-pos" : "coa-kpi-neg"}`}>
-                          <span>{t("page.coa.pnl.fuel_neutral", "P&L fuel-neutral")}</span>
-                          <strong>{pnl.pnl_fuel_neutral.toLocaleString()}</strong>
-                        </div>
-                        <div className={`coa-kpi ${pnl.pnl_gross >= 0 ? "coa-kpi-pos" : "coa-kpi-neg"}`}>
-                          <span>{t("page.coa.pnl.gross", "P&L gross")}</span>
-                          <strong>{pnl.pnl_gross.toLocaleString()}</strong>
-                        </div>
-                        <div className="coa-kpi">
-                          <span>{t("page.coa.pnl.completed", "Completed liftings")}</span>
-                          <strong>
-                            {pnl.completed_liftings} / {pnl.completed_qty.toLocaleString()} {contract.qty_unit}
-                          </strong>
-                        </div>
-                        <div className="coa-kpi">
-                          <span>{t("page.coa.pnl.voyage_count", "Voyages")}</span>
-                          <strong>{pnl.voyage_count}</strong>
-                        </div>
-                      </div>
-                      <DataGrid<PnlLine>
-                        columns={pnlLineColumns}
-                        data={pnlLines}
-                        rowKey={(r) => r.key}
-                        storageKey="coa_pnl_lines"
-                        showFooter={false}
-                        showColumnMenu={false}
-                        emptyText={t("common.empty", "No records")}
-                      />
-                      <p className="muted" style={{ marginTop: 10 }}>
-                        {t(
-                          "page.coa.pnl.hint",
-                          "Fuel-neutral P&L strips bunker price effects: revenue − non-fuel costs. Gross P&L deducts fuel cost as well.",
-                        )}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="muted">{t("common.loading", "Loading…")}</p>
-                  )}
-                </div>
-              </div>
-            ) : null}
-          </div>
-          {contract ? <RevisionsPanel entityType="coa_contract" entityId={contract.id} /> : null}
-        </>
-      ) : loading ? (
-        <p className="muted">{t("common.loading", "Loading…")}</p>
-      ) : (
-        <p className="flash-err">{t("common.not_found", "Not found")}</p>
-      )}
+              ) : null}
+            </div>
+            {contract ? <RevisionsPanel entityType="coa_contract" entityId={contract.id} /> : null}
+          </>
+        ) : loading ? (
+          <p className="muted">{t("common.loading", "Loading…")}</p>
+        ) : (
+          <p className="flash-err">{t("common.not_found", "Not found")}</p>
+        )}
+      </MasterDetail>
     </AppShell>
   );
 }

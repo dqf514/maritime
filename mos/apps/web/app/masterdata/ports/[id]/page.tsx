@@ -9,6 +9,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { RecordAttribution } from "@/components/RecordAttribution";
 import { StateView } from "@/components/StateView";
 import { Tabs } from "@/components/Tabs";
@@ -19,6 +22,7 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
+import { useListBackHref } from "@/lib/listContext";
 
 type Tab = "details" | "berths" | "aliases";
 
@@ -29,6 +33,15 @@ const TABS: { key: Tab; labelKey: string; label: string }[] = [
 ];
 
 type PortGroup = "basics" | "classification" | "location" | "ops";
+
+/** 左栏清单行 —— /masterdata/ports 列表接口的形状。 */
+type PortRow = {
+  id: string;
+  name?: string | null;
+  unlocode?: string | null;
+  country?: string | null;
+  port_type?: string | null;
+};
 
 /** 港口分类与地理归属 —— IMOS Port Detail 左栏。 */
 const PORT_TEXT_FIELDS: { key: string; label: string; group: PortGroup; list?: string }[] = [
@@ -96,6 +109,34 @@ export default function PortDetailPage() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/masterdata/ports");
+  const currentRailItem = useMemo(
+    () =>
+      port
+        ? {
+            id: portId,
+            title: String(port.name || port.unlocode || portId),
+            meta: [String(port.unlocode || ""), String(port.country || "")],
+            href: `/masterdata/ports/${portId}`,
+          }
+        : null,
+    [port, portId],
+  );
+  const rail = useDetailRail<PortRow>(
+    {
+      endpoint: "/api/v1/masterdata/ports",
+      params: { limit: 300 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.name || r.unlocode || r.id,
+        meta: [r.unlocode || "", r.country || "", r.port_type || ""],
+        href: `/masterdata/ports/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -256,38 +297,61 @@ export default function PortDetailPage() {
   }
 
   return (
-    <AppShell>
-      <PageHeader
-        title={port?.name || t("page.port.card", "Port card")}
-        subtitle={
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.master", "Master data"), href: "/masterdata" },
+        { label: t("page.ports.title", "Ports"), href: backHref },
+        { label: port?.name || t("page.port.card", "Port") },
+      ]}
+    >
+      <MasterDetail
+        rail={
+          <DetailRail
+            items={rail.items}
+            activeId={portId}
+            title={t("page.ports.title", "Ports")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={rail.loading}
+            error={rail.error}
+            onRetry={rail.reload}
+          />
+        }
+        header={
           <>
-            {`${port?.unlocode ? port.unlocode : "—"} · ${port?.country || "—"} · ${port?.timezone || "—"}`} ·{" "}
-            <RecordAttribution entityType="port" entityId={portId} />
+            <PageHeader
+              title={port?.name || t("page.port.card", "Port card")}
+              subtitle={
+                <>
+                  {`${port?.unlocode ? port.unlocode : "—"} · ${port?.country || "—"} · ${port?.timezone || "—"}`} ·{" "}
+                  <RecordAttribution entityType="port" entityId={portId} />
+                </>
+              }
+              breadcrumb={[
+                { label: t("nav.master", "Master data"), href: "/masterdata" },
+                { label: t("page.ports.title", "Ports"), href: "/masterdata/ports" },
+                { label: port?.name || t("page.port.card", "Port") },
+              ]}
+              actions={
+                <>
+                  <Link href="/masterdata/ports" className="btn btn-ghost">
+                    {t("page.ports.title", "Ports")}
+                  </Link>
+                  <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>
+                    {busy ? t("common.saving", "Saving…") : t("common.save", "Save")}
+                  </button>
+                </>
+              }
+            />
+            <Tabs
+              items={TABS.map((tb) => ({ key: tb.key, label: t(tb.labelKey, tb.label) }))}
+              value={tab}
+              onChange={(k) => setTab(k as Tab)}
+              variant="line"
+            />
           </>
         }
-        breadcrumb={[
-          { label: t("nav.master", "Master data"), href: "/masterdata" },
-          { label: t("page.ports.title", "Ports"), href: "/masterdata/ports" },
-          { label: port?.name || t("page.port.card", "Port") },
-        ]}
-        actions={
-          <>
-            <Link href="/masterdata/ports" className="btn btn-ghost">
-              {t("page.ports.title", "Ports")}
-            </Link>
-            <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>
-              {busy ? t("common.saving", "Saving…") : t("common.save", "Save")}
-            </button>
-          </>
-        }
-      />
-
-      <Tabs
-        items={TABS.map((tb) => ({ key: tb.key, label: t(tb.labelKey, tb.label) }))}
-        value={tab}
-        onChange={(k) => setTab(k as Tab)}
-        variant="line"
-      />
+      >
 
       {tab === "details" ? (
         <div className="panel">
@@ -405,6 +469,7 @@ export default function PortDetailPage() {
           fields={aliasFields}
         />
       ) : null}
+      </MasterDetail>
     </AppShell>
   );
 }

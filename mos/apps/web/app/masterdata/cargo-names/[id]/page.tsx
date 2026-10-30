@@ -9,6 +9,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { RecordAttribution } from "@/components/RecordAttribution";
 import { StateView } from "@/components/StateView";
 import { Tabs } from "@/components/Tabs";
@@ -18,8 +21,20 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
+import { useListBackHref } from "@/lib/listContext";
 
 type Tab = "details" | "properties";
+
+/** 左栏清单行 —— /masterdata/cargo-names 列表接口的形状。 */
+type CargoNameRow = {
+  id: string;
+  short_name?: string | null;
+  full_name?: string | null;
+  cargo_class?: string | null;
+  default_cp_unit?: string | null;
+  dangerous?: boolean;
+  inactive?: boolean;
+};
 
 const TABS: { key: Tab; labelKey: string; label: string }[] = [
   { key: "details", labelKey: "page.cargo.tab_details", label: "Details" },
@@ -81,6 +96,34 @@ export default function CargoNameDetailPage() {
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
   const [groupsErr, setGroupsErr] = useState("");
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/masterdata/cargo-names");
+  const currentRailItem = useMemo(
+    () =>
+      cargo
+        ? {
+            id: cargoId,
+            title: String(cargo.short_name || cargoId),
+            meta: [String(cargo.full_name || ""), String(cargo.cargo_class || "")],
+            href: `/masterdata/cargo-names/${cargoId}`,
+          }
+        : null,
+    [cargo, cargoId],
+  );
+  const rail = useDetailRail<CargoNameRow>(
+    {
+      endpoint: "/api/v1/masterdata/cargo-names",
+      params: { limit: 300 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.short_name || r.id,
+        meta: [r.full_name || "", r.cargo_class || ""],
+        href: `/masterdata/cargo-names/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -195,7 +238,28 @@ export default function CargoNameDetailPage() {
   );
 
   return (
-    <AppShell>
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.master", "Master data"), href: "/masterdata" },
+        { label: t("page.cargo_names.title", "Cargo names"), href: backHref },
+        { label: cargo?.short_name || t("page.cargo.card", "Cargo name") },
+      ]}
+    >
+      <MasterDetail
+        rail={
+          <DetailRail
+            items={rail.items}
+            activeId={cargoId}
+            title={t("page.cargo_names.title", "Cargo names")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={rail.loading}
+            error={rail.error}
+            onRetry={rail.reload}
+          />
+        }
+        header={
+          <>
       <PageHeader
         title={cargo?.short_name || t("page.cargo.card", "Cargo name")}
         subtitle={
@@ -227,6 +291,9 @@ export default function CargoNameDetailPage() {
         onChange={(k) => setTab(k as Tab)}
         variant="line"
       />
+          </>
+        }
+      >
 
       {tab === "details" ? (
         <div className="panel">
@@ -325,6 +392,7 @@ export default function CargoNameDetailPage() {
           fields={propertyFields}
         />
       ) : null}
+      </MasterDetail>
     </AppShell>
   );
 }

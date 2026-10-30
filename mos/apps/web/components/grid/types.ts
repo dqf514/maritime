@@ -71,6 +71,8 @@ export type DataGridProps<T = any> = {
   onRowDoubleClick?: (row: T, index: number) => void;
   /** 行点击 */
   onRowClick?: (row: T, index: number) => void;
+  /** 键盘打开行（Enter）—— 列表 → 详情导航的键盘等价动作 */
+  onRowOpen?: (row: T, index: number) => void;
   /** 行右键（ContextMenu 一等交互；e 已 preventDefault） */
   onRowContextMenu?: (row: T, index: number, e: React.MouseEvent) => void;
   /** 行级 className（如新到行高亮）—— 追加在 grid-row 之后 */

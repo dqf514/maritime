@@ -10,6 +10,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { RecordAttribution } from "@/components/RecordAttribution";
 import { StateView } from "@/components/StateView";
 import { Tabs } from "@/components/Tabs";
@@ -21,6 +24,7 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
+import { useListBackHref } from "@/lib/listContext";
 
 type Tab = "details" | "contacts" | "properties" | "bank";
 
@@ -32,6 +36,17 @@ const TABS: { key: Tab; labelKey: string; label: string }[] = [
 ];
 
 type PartyGroup = "identity" | "contact" | "credit" | "compliance" | "gl";
+
+/** 左栏清单行 —— /masterdata/counterparties 列表接口的形状。 */
+type PartyRow = {
+  id: string;
+  name?: string | null;
+  short_name?: string | null;
+  type?: string | null;
+  country?: string | null;
+  email?: string | null;
+  phone?: string | null;
+};
 
 /** 文本字段 —— key 与 CounterpartyIn 列名 1:1。 */
 const TEXT_FIELDS: { key: string; label: string; group: PartyGroup; list?: string }[] = [
@@ -101,6 +116,38 @@ export default function CounterpartyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
   const [glErr, setGlErr] = useState("");
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/masterdata/counterparties");
+  const currentRailItem = useMemo(
+    () =>
+      party
+        ? {
+            id: partyId,
+            title: String(party.name || partyId),
+            meta: [
+              String(party.short_name || ""),
+              String(party.country || ""),
+              String(party.type || ""),
+            ],
+            href: `/masterdata/counterparties/${partyId}`,
+          }
+        : null,
+    [party, partyId],
+  );
+  const rail = useDetailRail<PartyRow>(
+    {
+      endpoint: "/api/v1/masterdata/counterparties",
+      params: { limit: 300 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.name || r.short_name || r.id,
+        meta: [r.short_name || "", r.country || "", r.type || ""],
+        href: `/masterdata/counterparties/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -331,7 +378,28 @@ export default function CounterpartyDetailPage() {
   }
 
   return (
-    <AppShell>
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.master", "Master data"), href: "/masterdata" },
+        { label: t("page.parties.title", "Counterparties"), href: backHref },
+        { label: party?.name || t("page.parties.card", "Counterparty") },
+      ]}
+    >
+      <MasterDetail
+        rail={
+          <DetailRail
+            items={rail.items}
+            activeId={partyId}
+            title={t("page.parties.title", "Counterparties")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={rail.loading}
+            error={rail.error}
+            onRetry={rail.reload}
+          />
+        }
+        header={
+          <>
       <PageHeader
         title={party?.name || t("page.parties.card", "Counterparty")}
         subtitle={
@@ -365,6 +433,9 @@ export default function CounterpartyDetailPage() {
         onChange={(k) => setTab(k as Tab)}
         variant="line"
       />
+          </>
+        }
+      >
 
       {tab === "details" ? (
         <div className="panel">
@@ -544,6 +615,7 @@ export default function CounterpartyDetailPage() {
           fields={bankFields}
         />
       ) : null}
+      </MasterDetail>
     </AppShell>
   );
 }

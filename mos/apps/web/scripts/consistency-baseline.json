@@ -4,6 +4,13 @@
   "legacy-tab-families": 0,
   "data-table": 0,
   "inline-create-form": 0,
-  "inline-style": 514,
-  "raw-toolbar-div": 0
+  "inline-style": 485,
+  "raw-toolbar-div": 0,
+  "raw-blob-download": 0,
+  "raw-string-err": 0,
+  "silent-catch": 0,
+  "icon-button-aria-label": 0,
+  "detail-trail": 0,
+  "detail-breadcrumb-linked": 0,
+  "list-page-url-state": 0
 }

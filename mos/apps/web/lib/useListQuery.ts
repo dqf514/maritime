@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
+import { publishListContext } from "./listContext";
 import { toFiniteNumber, toPageNumber } from "./numbers";
 
 /**
@@ -43,6 +44,12 @@ export function useListQuery() {
   const page = toPageNumber(query.page);
   const parsedLimit = toFiniteNumber(query.limit);
   const limit = parsedLimit !== null && PAGE_LIMITS.includes(parsedLimit) ? parsedLimit : DEFAULT_LIMIT;
+
+  // 把当前 URL 状态镜像进 sessionStorage —— 详情页据此重建「返回列表」链接，
+  // 这样列表的筛选/排序/页码在往返中不丢（详情页 URL 本身保持干净）。
+  useEffect(() => {
+    publishListContext(pathname, { qs: searchParams.toString() });
+  }, [pathname, searchParams]);
 
   return { query, setQuery, page, limit };
 }

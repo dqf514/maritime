@@ -98,6 +98,7 @@ export function DataGrid<T extends Record<string, any>>({
   onCellSave,
   onRowDoubleClick,
   onRowClick,
+  onRowOpen,
   onRowContextMenu,
   rowClassName,
   onSelectionChange,
@@ -223,6 +224,9 @@ export function DataGrid<T extends Record<string, any>>({
   const rowCount = data.length;
   const colCount = columns.length;
   const sel = useCellSelection(rowCount, colCount);
+
+  // 行是否"可点开" —— 有任一行级动作就该给指针光标（历史缺陷：只有双击才给）
+  const rowClickable = Boolean(onRowClick || onRowDoubleClick || onRowOpen);
 
   // 排序
   const [sortKey, setSortKey] = useState<string | null>(null);
@@ -509,6 +513,14 @@ export function DataGrid<T extends Record<string, any>>({
     onFillDown: handleFillDown,
     onFillRight: handleFillRight,
     onUndo: handleUndo,
+    // 可编辑的网格里 Enter 仍然是"进单元格编辑"；只有纯列表才把 Enter 让给"打开行"
+    onRowOpen:
+      onRowOpen && !editable
+        ? (rowIdx: number) => {
+            const row = data[rowIdx];
+            if (row !== undefined) onRowOpen(row, rowIdx);
+          }
+        : undefined,
   });
 
   // --- 排序 ---
@@ -867,7 +879,7 @@ export function DataGrid<T extends Record<string, any>>({
                         return (
                           <tr
                             key={rowKey(row as T, globalIdx)}
-                            className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}${rowClassName ? ` ${rowClassName(row as T, globalIdx)}` : ""}`}
+                            className={`grid-row${rowClickable ? " dt-row-clickable" : ""}${rowClassName ? ` ${rowClassName(row as T, globalIdx)}` : ""}`}
                             onDoubleClick={() => onRowDoubleClick?.(row as T, globalIdx)}
                             onClick={() => onRowClick?.(row as T, globalIdx)}
                             onContextMenu={
@@ -911,7 +923,7 @@ export function DataGrid<T extends Record<string, any>>({
                 return (
                   <tr
                     key={rowKey(row as T, ri)}
-                    className={`grid-row${onRowDoubleClick ? " dt-row-clickable" : ""}${rowClassName ? ` ${rowClassName(row as T, ri)}` : ""}`}
+                    className={`grid-row${rowClickable ? " dt-row-clickable" : ""}${rowClassName ? ` ${rowClassName(row as T, ri)}` : ""}`}
                     onDoubleClick={() => onRowDoubleClick?.(row as T, ri)}
                     onClick={() => onRowClick?.(row as T, ri)}
                     onContextMenu={

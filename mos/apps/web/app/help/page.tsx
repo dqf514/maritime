@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { HelpFrame } from "@/components/HelpFrame";
 import { PageHeader } from "@/components/PageHeader";
 import { StateView } from "@/components/StateView";
@@ -10,13 +9,15 @@ import { useI18n } from "@/lib/i18n";
 
 import { apiGet, apiPost } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
+import { useListQuery } from "@/lib/useListQuery";
 
 type Cat = { id: string; label: string };
 type Article = { slug: string; category: string; tags: string[]; title: string; summary: string };
 
 function HelpHomePage() {
   const { t, locale } = useI18n();
-  const params = useSearchParams();
+  // U1 列表协议：文章目录页的视图状态进 URL（?ask=1 等），往返文章详情不丢
+  const { query } = useListQuery();
   const [categories, setCategories] = useState<Cat[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [q, setQ] = useState("");
@@ -29,7 +30,7 @@ function HelpHomePage() {
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
   const [searchErr, setSearchErr] = useState("");
-  const focusAsk = params.get("ask") === "1";
+  const focusAsk = query.ask === "1";
 
   const loc = locale?.startsWith("zh") ? "zh-CN" : "en";
 

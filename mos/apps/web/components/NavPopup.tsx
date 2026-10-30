@@ -78,9 +78,18 @@ function semanticGroup(items: NavItem[], section: string): { group: string; item
 export function NavPopup({ sections, navCollapsed, pathname, onNavigate }: Props) {
   const { t } = useI18n();
   const [openSection, setOpenSection] = useState<string | null>(null);
+  // 「钉住」的分区：鼠标移开也不关闭，直到再次点击取消。
+  const [pinnedSection, setPinnedSection] = useState<string | null>(null);
   const [popupPos, setPopupPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const popupRef = useRef<HTMLDivElement>(null);
   const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const closeTimer = useRef<number | null>(null);
+  // 关闭定时器里要读最新的钉住状态 —— 用 ref 避免闭包过期
+  const pinnedRef = useRef<string | null>(null);
+  // 同步进 ref 只能在 effect 中做（render 中写 ref 违反 react-hooks/refs）
+  useEffect(() => {
+    pinnedRef.current = pinnedSection;
+  }, [pinnedSection]);
 
   const isActive = useCallback(
     (href: string) => {
@@ -90,7 +99,28 @@ export function NavPopup({ sections, navCollapsed, pathname, onNavigate }: Props
     [pathname],
   );
 
-  // 点击外部关闭
+  function clearCloseTimer() {
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  }
+
+  /**
+   * 移开鼠标后延迟关闭 —— 弹层是 fixed 定位，与按钮有 2px 间隙，
+   * 不延迟的话鼠标从按钮移到弹层的路上弹层就关了。
+   */
+  function scheduleClose() {
+    clearCloseTimer();
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null;
+      setOpenSection((cur) => (cur && pinnedRef.current === cur ? cur : null));
+    }, 220);
+  }
+
+  useEffect(() => () => clearCloseTimer(), []);
+
+  // 点击外部关闭（并取消钉住）
   useEffect(() => {
     if (!openSection) return;
     function onDoc(e: MouseEvent) {
@@ -98,6 +128,7 @@ export function NavPopup({ sections, navCollapsed, pathname, onNavigate }: Props
       const btn = btnRefs.current.get(openSection!);
       if (btn?.contains(e.target as Node)) return;
       setOpenSection(null);
+      setPinnedSection(null);
     }
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
@@ -107,24 +138,40 @@ export function NavPopup({ sections, navCollapsed, pathname, onNavigate }: Props
   useEffect(() => {
     if (!openSection) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpenSection(null);
+      if (e.key === "Escape") {
+        setOpenSection(null);
+        setPinnedSection(null);
+      }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [openSection]);
 
-  function toggleSection(sec: string, e: React.MouseEvent<HTMLButtonElement>) {
-    if (openSection === sec) {
-      setOpenSection(null);
-      return;
-    }
-    const btn = e.currentTarget;
+  /** 打开某分区的弹层（定位在按钮右侧）。 */
+  function openSectionAt(sec: string, btn: HTMLElement) {
     const rect = btn.getBoundingClientRect();
     setPopupPos({
       top: rect.top,
-      left: navCollapsed ? rect.right + 2 : rect.right + 2,
+      left: rect.right + 2,
     });
     setOpenSection(sec);
+  }
+
+  // 鼠标移上去即展开（不需要点击）
+  function hoverOpen(sec: string, btn: HTMLElement) {
+    clearCloseTimer();
+    openSectionAt(sec, btn);
+  }
+
+  // 点击 = 钉住 / 取消钉住（键盘/触屏走的也是这条路径）
+  function toggleSection(sec: string, e: React.MouseEvent<HTMLButtonElement>) {
+    if (pinnedSection === sec) {
+      setPinnedSection(null);
+      setOpenSection(null);
+      return;
+    }
+    setPinnedSection(sec);
+    openSectionAt(sec, e.currentTarget);
   }
 
   return (
@@ -143,6 +190,8 @@ export function NavPopup({ sections, navCollapsed, pathname, onNavigate }: Props
               type="button"
               className={`nav-popup-btn ${isOpen ? "open" : ""} ${hasActive ? "has-active" : ""}`}
               onClick={(e) => toggleSection(sec.section, e)}
+              onMouseEnter={(e) => hoverOpen(sec.section, e.currentTarget)}
+              onMouseLeave={scheduleClose}
               title={secLabel}
               aria-expanded={isOpen}
             >
@@ -162,6 +211,8 @@ export function NavPopup({ sections, navCollapsed, pathname, onNavigate }: Props
           ref={popupRef}
           className="nav-popup-menu"
           style={{ top: popupPos.top, left: popupPos.left }}
+          onMouseEnter={clearCloseTimer}
+          onMouseLeave={scheduleClose}
         >
           {(() => {
             const sec = sections.find((s) => s.section === openSection);
@@ -194,6 +245,7 @@ export function NavPopup({ sections, navCollapsed, pathname, onNavigate }: Props
                               title={t("nav.locked_hint", "Not available for your role — click for details")}
                               onClick={() => {
                                 setOpenSection(null);
+                                setPinnedSection(null);
                                 onNavigate();
                               }}
                             >
@@ -212,6 +264,7 @@ export function NavPopup({ sections, navCollapsed, pathname, onNavigate }: Props
                             className={`nav-popup-item ${isActive(item.href) ? "active" : ""}`}
                             onClick={() => {
                               setOpenSection(null);
+                              setPinnedSection(null);
                               onNavigate();
                             }}
                           >

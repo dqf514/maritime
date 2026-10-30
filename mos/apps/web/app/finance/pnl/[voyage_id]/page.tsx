@@ -13,6 +13,18 @@ import type { ColumnDef } from "@/components/grid";
 import { apiGet } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
+import { useListBackHref } from "@/lib/listContext";
+
+/** 左栏清单行 —— /api/v1/voyages 列表接口的形状（本页是航次 P&L，兄弟记录是航次）。 */
+type VoyageRow = {
+  id: string;
+  voyage_no?: string | null;
+  status?: string | null;
+  cargo?: string | null;
+};
 
 type LineKey = "revenue" | "hire" | "demurrage" | "port_costs" | "canal" | "bunker" | "commission" | "emissions" | "other";
 const LINE_KEYS: LineKey[] = ["revenue", "hire", "demurrage", "port_costs", "canal", "bunker", "commission", "emissions", "other"];
@@ -73,6 +85,46 @@ export default function VoyagePnlDetailPage() {
   const [err, setErr] = useState<string | null>(null);
   const [grossNet, setGrossNet] = useState<"gross" | "net">("gross");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/finance?tab=pnl");
+  const currentRailItem = useMemo(
+    () =>
+      data
+        ? {
+            id: String(voyageId),
+            title: data.voyage_no || String(voyageId),
+            meta: [data.status || "", data.cargo || ""],
+            href: `/finance/pnl/${voyageId}`,
+          }
+        : null,
+    [data, voyageId],
+  );
+  const rail = useDetailRail<VoyageRow>(
+    {
+      endpoint: "/api/v1/voyages",
+      params: { limit: 200 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.voyage_no || r.id,
+        meta: [r.status || "", r.cargo || ""],
+        href: `/finance/pnl/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
+  const railNode = (
+    <DetailRail
+      items={rail.items}
+      activeId={String(voyageId)}
+      title={t("page.pnl.title", "Profit & Loss")}
+      backHref={backHref}
+      backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+      loading={rail.loading}
+      error={rail.error}
+      onRetry={rail.reload}
+    />
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -332,55 +384,91 @@ export default function VoyagePnlDetailPage() {
 
   if (loading) {
     return (
-      <AppShell>
-        <PageHeader
-          breadcrumb={[
-            { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
-            { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
-            { label: `#${voyageId}` },
-          ]}
-          title={t("common.loading", "Loading…")}
-        />
-        <div className="panel"><div className="skeleton-table" /></div>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.finance", "Finance"), href: "/finance" },
+          { label: t("page.pnl.title", "Profit & Loss"), href: backHref },
+          { label: `#${voyageId}` },
+        ]}
+      >
+        <MasterDetail
+          rail={railNode}
+          header={
+            <PageHeader
+              breadcrumb={[
+                { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
+                { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
+                { label: `#${voyageId}` },
+              ]}
+              title={t("common.loading", "Loading…")}
+            />
+          }
+        >
+          <div className="panel"><div className="skeleton-table" /></div>
+        </MasterDetail>
       </AppShell>
     );
   }
 
   if (err) {
     return (
-      <AppShell>
-        <PageHeader
-          breadcrumb={[
-            { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
-            { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
-            { label: `#${voyageId}` },
-          ]}
-          title={t("page.pnl.load_failed", "Failed to load voyage P&L")}
-        />
-        <div className="panel">
-          <StateView loading={false} error={err} empty={false} onRetry={() => void load()}>
-            <span />
-          </StateView>
-        </div>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.finance", "Finance"), href: "/finance" },
+          { label: t("page.pnl.title", "Profit & Loss"), href: backHref },
+          { label: `#${voyageId}` },
+        ]}
+      >
+        <MasterDetail
+          rail={railNode}
+          header={
+            <PageHeader
+              breadcrumb={[
+                { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
+                { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
+                { label: `#${voyageId}` },
+              ]}
+              title={t("page.pnl.load_failed", "Failed to load voyage P&L")}
+            />
+          }
+        >
+          <div className="panel">
+            <StateView loading={false} error={err} empty={false} onRetry={() => void load()}>
+              <span />
+            </StateView>
+          </div>
+        </MasterDetail>
       </AppShell>
     );
   }
 
   if (!data) {
     return (
-      <AppShell>
-        <PageHeader
-          breadcrumb={[
-            { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
-            { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
-            { label: `#${voyageId}` },
-          ]}
-          title={t("common.not_found", "Not found")}
-        />
-        <div className="panel">
-          <p className="muted">{t("common.not_found", "Voyage not found")}</p>
-          <Link href="/finance/pnl" className="btn btn-ghost">{t("common.back", "Back")}</Link>
-        </div>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.finance", "Finance"), href: "/finance" },
+          { label: t("page.pnl.title", "Profit & Loss"), href: backHref },
+          { label: `#${voyageId}` },
+        ]}
+      >
+        <MasterDetail
+          rail={railNode}
+          header={
+            <PageHeader
+              breadcrumb={[
+                { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
+                { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
+                { label: `#${voyageId}` },
+              ]}
+              title={t("common.not_found", "Not found")}
+            />
+          }
+        >
+          <div className="panel">
+            <p className="muted">{t("common.not_found", "Voyage not found")}</p>
+            <Link href={backHref} className="btn btn-ghost">{t("common.back", "Back")}</Link>
+          </div>
+        </MasterDetail>
       </AppShell>
     );
   }
@@ -392,81 +480,93 @@ export default function VoyagePnlDetailPage() {
   const pnlVariancePct = variancePct(actTotals.pnl, estTotals.pnl);
 
   return (
-    <AppShell>
-      <PageHeader
-        breadcrumb={[
-          { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
-          { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
-          { label: data.voyage_no ? `#${data.voyage_no}` : `#${voyageId}` },
-        ]}
-        title={`${t("page.pnl.voyage_title", "Voyage P&L")} — ${data.voyage_no}`}
-        subtitle={`${data.status} ${data.cargo ? `· ${data.cargo}` : ""}`}
-        actions={
-          <>
-            <div className="btn-group">
-              <button
-                className={`btn btn-sm${grossNet === "gross" ? " btn-primary" : ""}`}
-                type="button"
-                onClick={() => setGrossNet("gross")}
-              >
-                Gross
-              </button>
-              <button
-                className={`btn btn-sm${grossNet === "net" ? " btn-primary" : ""}`}
-                type="button"
-                onClick={() => setGrossNet("net")}
-              >
-                Net
-              </button>
-            </div>
-            <button className="btn btn-sm btn-ghost" type="button" onClick={load}>
-              {t("common.refresh", "Refresh")}
-            </button>
-          </>
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.finance", "Finance"), href: "/finance" },
+        { label: t("page.pnl.title", "Profit & Loss"), href: backHref },
+        { label: data.voyage_no ? `#${data.voyage_no}` : `#${voyageId}` },
+      ]}
+    >
+      <MasterDetail
+        rail={railNode}
+        header={
+          <PageHeader
+            breadcrumb={[
+              { label: t("nav.finance", "Finance"), href: "/finance?tab=pnl" },
+              { label: t("page.pnl.title", "Profit & Loss"), href: "/finance/pnl" },
+              { label: data.voyage_no ? `#${data.voyage_no}` : `#${voyageId}` },
+            ]}
+            title={`${t("page.pnl.voyage_title", "Voyage P&L")} — ${data.voyage_no}`}
+            subtitle={`${data.status} ${data.cargo ? `· ${data.cargo}` : ""}`}
+            actions={
+              <>
+                <div className="btn-group">
+                  <button
+                    className={`btn btn-sm${grossNet === "gross" ? " btn-primary" : ""}`}
+                    type="button"
+                    onClick={() => setGrossNet("gross")}
+                  >
+                    Gross
+                  </button>
+                  <button
+                    className={`btn btn-sm${grossNet === "net" ? " btn-primary" : ""}`}
+                    type="button"
+                    onClick={() => setGrossNet("net")}
+                  >
+                    Net
+                  </button>
+                </div>
+                <button className="btn btn-sm btn-ghost" type="button" onClick={load}>
+                  {t("common.refresh", "Refresh")}
+                </button>
+              </>
+            }
+          />
         }
-      />
-      <div className="panel">
+      >
+        <div className="panel">
 
-        <div className="pnl-kpi-row">
-          <div className="pnl-kpi">
-            <span className="pnl-kpi-label">Est. P&L</span>
-            <span className="pnl-kpi-value">{fmt(estTotals.pnl)}</span>
-            {estTotals.tce != null ? <span className="pnl-kpi-sub">TCE: {fmt(estTotals.tce)}</span> : null}
+          <div className="pnl-kpi-row">
+            <div className="pnl-kpi">
+              <span className="pnl-kpi-label">Est. P&L</span>
+              <span className="pnl-kpi-value">{fmt(estTotals.pnl)}</span>
+              {estTotals.tce != null ? <span className="pnl-kpi-sub">TCE: {fmt(estTotals.tce)}</span> : null}
+            </div>
+            <div className="pnl-kpi">
+              <span className="pnl-kpi-label">Actual P&L</span>
+              <span className={`pnl-kpi-value ${actTotals.pnl >= 0 ? "pnl-fav" : "pnl-adv"}`}>{fmt(actTotals.pnl)}</span>
+            </div>
+            <div className="pnl-kpi">
+              <span className="pnl-kpi-label">Posted P&L</span>
+              <span className="pnl-kpi-value">{fmt(postTotals.pnl)}</span>
+            </div>
+            <div className="pnl-kpi">
+              <span className="pnl-kpi-label">Variance</span>
+              <span className={`pnl-kpi-value ${varianceClass(pnlVariance, estTotals.pnl)}`}>
+                {fmt(pnlVariance)}
+                {pnlVariancePct != null ? ` (${pnlVariancePct.toFixed(1)}%)` : ""}
+              </span>
+            </div>
+            <div className="pnl-kpi">
+              <span className="pnl-kpi-label">Paid</span>
+              <span className="pnl-kpi-value">{fmt(data.paid_amount)}</span>
+            </div>
           </div>
-          <div className="pnl-kpi">
-            <span className="pnl-kpi-label">Actual P&L</span>
-            <span className={`pnl-kpi-value ${actTotals.pnl >= 0 ? "pnl-fav" : "pnl-adv"}`}>{fmt(actTotals.pnl)}</span>
-          </div>
-          <div className="pnl-kpi">
-            <span className="pnl-kpi-label">Posted P&L</span>
-            <span className="pnl-kpi-value">{fmt(postTotals.pnl)}</span>
-          </div>
-          <div className="pnl-kpi">
-            <span className="pnl-kpi-label">Variance</span>
-            <span className={`pnl-kpi-value ${varianceClass(pnlVariance, estTotals.pnl)}`}>
-              {fmt(pnlVariance)}
-              {pnlVariancePct != null ? ` (${pnlVariancePct.toFixed(1)}%)` : ""}
-            </span>
-          </div>
-          <div className="pnl-kpi">
-            <span className="pnl-kpi-label">Paid</span>
-            <span className="pnl-kpi-value">{fmt(data.paid_amount)}</span>
-          </div>
+
+          <DataGrid<PnlDetailRow>
+            columns={detailCols}
+            data={detailRows}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => {
+              if (r.id.startsWith("line-")) toggleLine(r.id.slice(5));
+            }}
+            storageKey="finance_pnl_voyage_grid"
+            showFooter={false}
+            emptyText={t("common.empty", "No records")}
+          />
         </div>
-
-        <DataGrid<PnlDetailRow>
-          columns={detailCols}
-          data={detailRows}
-          rowKey={(r) => r.id}
-          onRowClick={(r) => {
-            if (r.id.startsWith("line-")) toggleLine(r.id.slice(5));
-          }}
-          storageKey="finance_pnl_voyage_grid"
-          showFooter={false}
-          emptyText={t("common.empty", "No records")}
-        />
-      </div>
-      {voyageId ? <RevisionsPanel entityType="voyage" entityId={voyageId} /> : null}
+        {voyageId ? <RevisionsPanel entityType="voyage" entityId={voyageId} /> : null}
+      </MasterDetail>
     </AppShell>
   );
 }

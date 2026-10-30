@@ -3,12 +3,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useListBackHref } from "@/lib/listContext";
 import { maxOf } from "@/lib/numbers";
+
+/** 左栏清单行 —— /api/v1/estimates（估价列表页）的形状。 */
+type EstimateRow = {
+  id: string;
+  title?: string | null;
+  mode?: string | null;
+  version?: number | null;
+  status?: string | null;
+  results?: { tce?: number | null } | null;
+};
 
 type Perturbation = {
   parameter: string;
@@ -63,6 +77,7 @@ export default function SensitivityPage() {
   const { t } = useI18n();
 
   const [sensitivity, setSensitivity] = useState<SensitivityData | null>(null);
+  const [estimate, setEstimate] = useState<EstimateRow | null>(null);
   const [bep, setBep] = useState<BEPData | null>(null);
   const [pct, setPct] = useState(10);
   const [loading, setLoading] = useState(true);
@@ -87,6 +102,22 @@ export default function SensitivityPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // 单取一条估价 —— 页头与左栏要显示估价名与 TCE（取不到不阻塞敏感性分析本体）
+  useEffect(() => {
+    if (!estimateId) return;
+    let alive = true;
+    apiGet(`/api/v1/estimates/${estimateId}`)
+      .then((e) => {
+        if (alive) setEstimate(e as EstimateRow);
+      })
+      .catch(() => {
+        console.warn("Failed to load estimate for sensitivity page header:", estimateId);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [estimateId]);
 
   const maxImpact = useMemo(() => {
     if (!sensitivity?.tornado?.length) return 0;
@@ -149,9 +180,45 @@ export default function SensitivityPage() {
     [pct, t],
   );
 
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/estimates");
+  const currentRailItem = useMemo(
+    () =>
+      estimate
+        ? {
+            id: estimate.id,
+            title: estimate.title || `#${estimateId.slice(0, 8)}`,
+            meta: [
+              estimate.status || "",
+              estimate.results?.tce != null ? `TCE ${fmt(estimate.results.tce)}` : "",
+            ],
+            href: `/estimates/${estimateId}/sensitivity`,
+          }
+        : null,
+    [estimate, estimateId],
+  );
+  const rail = useDetailRail<EstimateRow>(
+    {
+      endpoint: "/api/v1/estimates",
+      params: { limit: 100 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.title || `#${r.id.slice(0, 8)}`,
+        meta: [r.status || "", r.results?.tce != null ? `TCE ${fmt(r.results.tce)}` : ""],
+        href: `/estimates/${r.id}/sensitivity`,
+      }),
+    },
+    currentRailItem,
+  );
+
   if (loading) {
     return (
-      <AppShell>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.estimates", "Estimates"), href: backHref },
+          { label: `#${estimateId}` },
+        ]}
+      >
         <div className="container">
           <div className="skeleton-table">
             <div className="skeleton-row" />
@@ -165,7 +232,12 @@ export default function SensitivityPage() {
 
   if (!sensitivity || !bep) {
     return (
-      <AppShell>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.estimates", "Estimates"), href: backHref },
+          { label: `#${estimateId}` },
+        ]}
+      >
         <div className="container">
           <div className="alert alert-warning">
             {t("page.sensitivity.load_fail", { en: "Failed to load sensitivity analysis", zh: "敏感性分析加载失败" })}
@@ -176,33 +248,52 @@ export default function SensitivityPage() {
   }
 
   return (
-    <AppShell>
-      <div className="container">
-        <PageHeader
-          title={t("page.sensitivity.title", { en: "Sensitivity Analysis", zh: "敏感性分析" })}
-          breadcrumb={[
-            { label: t("nav.estimates", "Estimates"), href: "/estimates" },
-            { label: `#${estimateId}`, href: `/estimates?id=${estimateId}` },
-            { label: t("page.sensitivity.title", { en: "Sensitivity Analysis", zh: "敏感性分析" }) },
-          ]}
-          actions={
-            <div className="btn-group">
-              <label>
-                {t("page.sensitivity.perturbation", { en: "Perturbation", zh: "扰动幅度" })}: ±{pct}%
-              </label>
-              <input
-                type="range"
-                min="5"
-                max="30"
-                step="5"
-                value={pct}
-                onChange={(e) => setPct(Number(e.target.value))}
-                className="slider"
-              />
-            </div>
-          }
-        />
-
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.estimates", "Estimates"), href: backHref },
+        { label: `#${estimateId}` },
+      ]}
+    >
+      <MasterDetail
+        rail={
+          <DetailRail
+            items={rail.items}
+            activeId={estimateId}
+            title={t("nav.estimates", "Estimates")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={rail.loading}
+            error={rail.error}
+            onRetry={rail.reload}
+          />
+        }
+        header={
+          <PageHeader
+            title={t("page.sensitivity.title", { en: "Sensitivity Analysis", zh: "敏感性分析" })}
+            breadcrumb={[
+              { label: t("nav.estimates", "Estimates"), href: "/estimates" },
+              { label: `#${estimateId}`, href: `/estimates?id=${estimateId}` },
+              { label: t("page.sensitivity.title", { en: "Sensitivity Analysis", zh: "敏感性分析" }) },
+            ]}
+            actions={
+              <div className="btn-group">
+                <label>
+                  {t("page.sensitivity.perturbation", { en: "Perturbation", zh: "扰动幅度" })}: ±{pct}%
+                </label>
+                <input
+                  type="range"
+                  min="5"
+                  max="30"
+                  step="5"
+                  value={pct}
+                  onChange={(e) => setPct(Number(e.target.value))}
+                  className="slider"
+                />
+              </div>
+            }
+          />
+        }
+      >
         <div className="kpi-row">
           <div className="kpi">
             <div className="kpi-label">
@@ -342,7 +433,7 @@ export default function SensitivityPage() {
             </div>
           </div>
         </section>
-      </div>
+      </MasterDetail>
     </AppShell>
   );
 }

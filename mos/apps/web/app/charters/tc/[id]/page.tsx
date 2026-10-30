@@ -6,6 +6,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
@@ -22,7 +25,17 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { useListBackHref } from "@/lib/listContext";
 import { useToast } from "@/components/ToastProvider";
+
+/** 左栏清单行 —— /api/v1/tc/contracts（TC 合同列表页）的形状。 */
+type TcRailRow = {
+  id: string;
+  tc_code?: string | null;
+  contract_type?: string | null;
+  contract_style?: string | null;
+  status?: string | null;
+};
 
 type RefItem = { id: string; name: string };
 
@@ -717,6 +730,41 @@ export default function TcWorkspacePage() {
     return contract.contract_type === "tci" ? t("page.tc.type.tci", "TC In") : t("page.tc.type.tco", "TC Out");
   }, [contract, t]);
 
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/charters?type=tc");
+  const currentRailItem = useMemo(
+    () =>
+      contract
+        ? {
+            id: cid,
+            title: contract.tc_code || `#${cid.slice(0, 8)}`,
+            meta: [typeLabel, contract.status || ""],
+            href: `/charters/tc/${cid}`,
+          }
+        : null,
+    [contract, cid, typeLabel],
+  );
+  const rail = useDetailRail<TcRailRow>(
+    {
+      endpoint: "/api/v1/tc/contracts",
+      params: { limit: 100 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.tc_code || `#${r.id.slice(0, 8)}`,
+        meta: [
+          r.contract_style === "bareboat"
+            ? t("page.tc.type.bareboat", "Bareboat")
+            : r.contract_type === "tci"
+              ? t("page.tc.type.tci", "TC In")
+              : t("page.tc.type.tco", "TC Out"),
+          r.status || "",
+        ],
+        href: `/charters/tc/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
+
   const nameOf = (list: RefItem[], id: string | null) => (id ? list.find((x) => x.id === id)?.name || id.slice(0, 8) : "—");
 
   const psColumns: ColumnDef<PsRow>[] = useMemo(
@@ -1173,894 +1221,919 @@ export default function TcWorkspacePage() {
 
   return (
     <>
-      <AppShell>
-        {err ? <p className="flash-err">{err}</p> : null}
-        {subErr ? (
-          <p className="flash-err">
-            {t("page.tc.sub_load_failed", "Some lists failed to load: {msg}", { msg: subErr })}
-          </p>
-        ) : null}
-        {transitionErr ? (
-          <p className="flash-err">
-            {t("page.transitions.load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
-          </p>
-        ) : null}
+      <AppShell
+        breadcrumbs={[
+          { label: t("page.tc.title", "Time charter"), href: backHref },
+          { label: `#${cid}` },
+        ]}
+      >
+        <MasterDetail
+          rail={
+            <DetailRail
+              items={rail.items}
+              activeId={cid}
+              title={t("page.tc.title", "Time charter")}
+              backHref={backHref}
+              backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+              loading={rail.loading}
+              error={rail.error}
+              onRetry={rail.reload}
+            />
+          }
+          header={
+            contract ? (
+              <>
+                <DetailHeader
+                  breadcrumb={[
+                    { label: t("page.tc.title", "Time charter"), href: "/charters?type=tc" },
+                    { label: contract.id ? `#${contract.id}` : `#${cid}` },
+                  ]}
+                  title={typeLabel}
+                  status={contract.status}
+                  entityType="time_charter"
+                  entityId={cid}
+                  subtitle={`${nameOf(vessels, contract.vessel_id)} · ${nameOf(parties, contract.counterparty_id)}`}
+                  actions={[
+                    ...nextStatuses.map((s) => ({
+                      key: `go-${s}`,
+                      label: t(`page.tc.action.${s}`, s.replace(/_/g, " ")),
+                      variant: s === "cancelled" ? ("danger" as const) : ("primary" as const),
+                      onClick: () => void transitionTo(s),
+                    })),
+                    {
+                      key: "back",
+                      label: t("common.back", "Back"),
+                      onClick: () => router.push("/charters?type=tc"),
+                    },
+                  ]}
+                />
+                <StatusLegend statuses={["draft", "active", "completed", "cancelled"]} />
 
-      {contract ? (
-        <>
-          <DetailHeader
-            breadcrumb={[
-              { label: t("page.tc.title", "Time charter"), href: "/charters?type=tc" },
-              { label: contract.id ? `#${contract.id}` : `#${cid}` },
-            ]}
-            title={typeLabel}
-            status={contract.status}
-            entityType="time_charter"
-            entityId={cid}
-            subtitle={`${nameOf(vessels, contract.vessel_id)} · ${nameOf(parties, contract.counterparty_id)}`}
-            actions={[
-              ...nextStatuses.map((s) => ({
-                key: `go-${s}`,
-                label: t(`page.tc.action.${s}`, s.replace(/_/g, " ")),
-                variant: s === "cancelled" ? ("danger" as const) : ("primary" as const),
-                onClick: () => void transitionTo(s),
-              })),
-              {
-                key: "back",
-                label: t("common.back", "Back"),
-                onClick: () => router.push("/charters?type=tc"),
-              },
-            ]}
-          />
-          <StatusLegend statuses={["draft", "active", "completed", "cancelled"]} />
+                {summary ? (
+                  <div className="tc-kpis">
+                    <div className="tc-kpi">
+                      <span>{t("page.tc.kpi.billed", "Total billed")}</span>
+                      <strong>
+                        {summary.total_billed.toLocaleString()} {summary.currency}
+                      </strong>
+                    </div>
+                    <div className="tc-kpi">
+                      <span>{t("page.tc.kpi.paid", "Total paid")}</span>
+                      <strong>
+                        {summary.total_paid.toLocaleString()} {summary.currency}
+                      </strong>
+                    </div>
+                    <div className="tc-kpi">
+                      <span>{t("page.tc.kpi.outstanding", "Outstanding")}</span>
+                      <strong>
+                        {summary.outstanding.toLocaleString()} {summary.currency}
+                      </strong>
+                    </div>
+                    <div className="tc-kpi">
+                      <span>{t("page.tc.kpi.statements", "Statements")}</span>
+                      <strong>{summary.statement_count}</strong>
+                    </div>
+                    <div className="tc-kpi">
+                      <span>{t("page.tc.kpi.voyages", "Voyages")}</span>
+                      <strong>{summary.voyage_count}</strong>
+                    </div>
+                    <div className="tc-kpi">
+                      <span>{t("page.tc.kpi.billing", "Billing total")}</span>
+                      <strong>
+                        {summary.billing_total.toLocaleString()} {summary.currency}
+                      </strong>
+                    </div>
+                  </div>
+                ) : null}
 
-          {summary ? (
-            <div className="tc-kpis">
-              <div className="tc-kpi">
-                <span>{t("page.tc.kpi.billed", "Total billed")}</span>
-                <strong>
-                  {summary.total_billed.toLocaleString()} {summary.currency}
-                </strong>
-              </div>
-              <div className="tc-kpi">
-                <span>{t("page.tc.kpi.paid", "Total paid")}</span>
-                <strong>
-                  {summary.total_paid.toLocaleString()} {summary.currency}
-                </strong>
-              </div>
-              <div className="tc-kpi">
-                <span>{t("page.tc.kpi.outstanding", "Outstanding")}</span>
-                <strong>
-                  {summary.outstanding.toLocaleString()} {summary.currency}
-                </strong>
-              </div>
-              <div className="tc-kpi">
-                <span>{t("page.tc.kpi.statements", "Statements")}</span>
-                <strong>{summary.statement_count}</strong>
-              </div>
-              <div className="tc-kpi">
-                <span>{t("page.tc.kpi.voyages", "Voyages")}</span>
-                <strong>{summary.voyage_count}</strong>
-              </div>
-              <div className="tc-kpi">
-                <span>{t("page.tc.kpi.billing", "Billing total")}</span>
-                <strong>
-                  {summary.billing_total.toLocaleString()} {summary.currency}
-                </strong>
-              </div>
-            </div>
+                <Tabs
+                  items={TABS.map((tb) => ({ key: tb, label: tabLabels[tb] }))}
+                  value={tab}
+                  onChange={(k) => setTab(k as TabId)}
+                  variant="line"
+                />
+              </>
+            ) : null
+          }
+        >
+          {err ? <p className="flash-err">{err}</p> : null}
+          {subErr ? (
+            <p className="flash-err">
+              {t("page.tc.sub_load_failed", "Some lists failed to load: {msg}", { msg: subErr })}
+            </p>
+          ) : null}
+          {transitionErr ? (
+            <p className="flash-err">
+              {t("page.transitions.load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
+            </p>
           ) : null}
 
-          <Tabs
-            items={TABS.map((tb) => ({ key: tb, label: tabLabels[tb] }))}
-            value={tab}
-            onChange={(k) => setTab(k as TabId)}
-            variant="line"
-          />
-
-          <div className="tc-tab-body">
-            {tab === "contract" ? (
-              <div className="tc-panel">
-                <div className="tc-panel-head">
-                  <h3>{t("page.tc.tab.contract", "Contract")}</h3>
-                  <div className="quick-row">
-                    <ValidateButton onValidate={validateTc} />
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={saveContract}
-                      disabled={saving || !isDraft}
-                      title={isDraft ? undefined : t("page.tc.draft_only", "Only draft contracts can be edited")}
-                    >
-                      {t("common.save", "Save")}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      onClick={() => setConfirmDelete(true)}
-                      disabled={saving || !isDraft || inUse}
-                      title={
-                        !isDraft
-                          ? t("page.tc.draft_only_delete", "Only draft contracts can be deleted")
-                          : inUse
-                            ? t("page.tc.in_use", "Contract has hire statements or voyages and cannot be deleted")
-                            : undefined
-                      }
-                    >
-                      {t("common.delete", "Delete")}
-                    </button>
-                  </div>
-                </div>
-                <div className="tc-panel-body">
-                  <FormPanel columns={3}>
-                    <FormSection title={t("page.tc.terms.basic", "Terms")} dense>
-                      <FieldRow label={t("page.tc.col.style", "Style")}>
-                        <select
-                          value={draft.contract_style || "time_charter"}
-                          onChange={(e) => setDraft((f) => ({ ...f, contract_style: e.target.value }))}
+          {contract ? (
+            <>
+              <div className="tc-tab-body">
+                {tab === "contract" ? (
+                  <div className="tc-panel">
+                    <div className="tc-panel-head">
+                      <h3>{t("page.tc.tab.contract", "Contract")}</h3>
+                      <div className="quick-row">
+                        <ValidateButton onValidate={validateTc} />
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={saveContract}
+                          disabled={saving || !isDraft}
+                          title={isDraft ? undefined : t("page.tc.draft_only", "Only draft contracts can be edited")}
                         >
-                          <option value="time_charter">Time charter</option>
-                          <option value="bareboat">Bareboat</option>
+                          {t("common.save", "Save")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          onClick={() => setConfirmDelete(true)}
+                          disabled={saving || !isDraft || inUse}
+                          title={
+                            !isDraft
+                              ? t("page.tc.draft_only_delete", "Only draft contracts can be deleted")
+                              : inUse
+                                ? t("page.tc.in_use", "Contract has hire statements or voyages and cannot be deleted")
+                                : undefined
+                          }
+                        >
+                          {t("common.delete", "Delete")}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="tc-panel-body">
+                      <FormPanel columns={3}>
+                        <FormSection title={t("page.tc.terms.basic", "Terms")} dense>
+                          <FieldRow label={t("page.tc.col.style", "Style")}>
+                            <select
+                              value={draft.contract_style || "time_charter"}
+                              onChange={(e) => setDraft((f) => ({ ...f, contract_style: e.target.value }))}
+                            >
+                              <option value="time_charter">Time charter</option>
+                              <option value="bareboat">Bareboat</option>
+                            </select>
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.col.hire_rate", "Hire rate")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.hire_rate || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, hire_rate: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.terms.currency", "Currency")}>
+                            <select
+                              value={draft.hire_currency || "USD"}
+                              onChange={(e) => setDraft((f) => ({ ...f, hire_currency: e.target.value }))}
+                            >
+                              {["USD", "EUR", "GBP", "CNY"].map((c) => (
+                                <option key={c} value={c}>
+                                  {c}
+                                </option>
+                              ))}
+                            </select>
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.terms.pay_freq", "Payment")}>
+                            <select
+                              value={draft.payment_frequency || "monthly"}
+                              onChange={(e) => setDraft((f) => ({ ...f, payment_frequency: e.target.value }))}
+                            >
+                              <option value="monthly">monthly</option>
+                              <option value="semi_monthly">semi_monthly</option>
+                            </select>
+                          </FieldRow>
+                        </FormSection>
+                        <FormSection title={t("page.tc.terms.period", "Delivery / redelivery")} dense>
+                          <FieldRow label={t("page.tc.col.delivery", "Delivery")}>
+                            <DateInput
+                              value={draft.delivery_date || ""}
+                              onChange={(v) => setDraft((f) => ({ ...f, delivery_date: v }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.terms.delivery_port", "Delivery port")}>
+                            <input
+                              value={draft.delivery_port || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, delivery_port: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.col.redelivery", "Redelivery")}>
+                            <DateInput
+                              value={draft.redelivery_date || ""}
+                              onChange={(v) => setDraft((f) => ({ ...f, redelivery_date: v }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.terms.redelivery_port", "Redelivery port")}>
+                            <input
+                              value={draft.redelivery_port || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, redelivery_port: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.terms.cancel_date", "Cancel date")}>
+                            <DateInput
+                              value={draft.cancel_date || ""}
+                              onChange={(v) => setDraft((f) => ({ ...f, cancel_date: v }))}
+                            />
+                          </FieldRow>
+                        </FormSection>
+                        <FormSection title={t("page.tc.terms.share_comm", "Profit share & commission")} dense>
+                          <FieldRow label={t("page.tc.terms.ps_threshold", "PS threshold")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.profit_share_threshold || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, profit_share_threshold: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.terms.ps_pct", "PS %")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.profit_share_pct || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, profit_share_pct: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.charters.address_comm", "Address comm %")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.address_comm_pct || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, address_comm_pct: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.charters.brokerage", "Brokerage %")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.brokerage_pct || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, brokerage_pct: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.col.owner_comm", "Owner comm %")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.owner_comm_pct || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, owner_comm_pct: e.target.value }))}
+                            />
+                          </FieldRow>
+                        </FormSection>
+                        {/* P11 IMOS：Duration 块 — Min/Max/-Days/+Days/E/L Redel. */}
+                        <FormSection title={t("page.tc.terms.duration", "Duration")} dense>
+                          <FieldRow label={t("page.tc.duration.min", "Min (days)")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.duration_min_days || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, duration_min_days: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.duration.max", "Max (days)")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.duration_max_days || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, duration_max_days: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.duration.minus", "- Days")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.duration_minus_days || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, duration_minus_days: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.duration.plus", "+ Days")}>
+                            <input
+                              type="number"
+                              step="any"
+                              value={draft.duration_plus_days || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, duration_plus_days: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.duration.el_min", "E redel.")}>
+                            <DateInput
+                              value={draft.el_redel_min || ""}
+                              onChange={(v) => setDraft((f) => ({ ...f, el_redel_min: v }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.duration.el_max", "L redel.")}>
+                            <DateInput
+                              value={draft.el_redel_max || ""}
+                              onChange={(v) => setDraft((f) => ({ ...f, el_redel_max: v }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.duration.basis", "Basis")}>
+                            <input
+                              value={draft.duration_basis || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, duration_basis: e.target.value }))}
+                              placeholder="WEATHER WORKING…"
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.duration.local_time", "Use local time")}>
+                            <select
+                              value={draft.use_local_time || "0"}
+                              onChange={(e) => setDraft((f) => ({ ...f, use_local_time: e.target.value }))}
+                            >
+                              <option value="0">{t("common.no", "No")}</option>
+                              <option value="1">{t("common.yes", "Yes")}</option>
+                            </select>
+                          </FieldRow>
+                        </FormSection>
+                        {/* P11 IMOS：合同抬头其余字段 */}
+                        <FormSection title={t("page.tc.terms.header_extra", "Contract header")} dense>
+                          <FieldRow label={t("page.tc.header.beneficiary", "Beneficiary")}>
+                            <input
+                              value={draft.beneficiary || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, beneficiary: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.company_code", "Company code")}>
+                            <input
+                              value={draft.company_code || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, company_code: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.trade_area", "Trade area")}>
+                            <input
+                              value={draft.trade_area || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, trade_area: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.contract_form", "Contract form")}>
+                            <input
+                              value={draft.contract_form || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, contract_form: e.target.value }))}
+                              placeholder="NYPE 2015…"
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.payment_terms", "Payment terms")}>
+                            <input
+                              value={draft.payment_terms || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, payment_terms: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.billing_period", "Billing period")}>
+                            <input
+                              value={draft.billing_period || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, billing_period: e.target.value }))}
+                              placeholder="EVERY 15 DAYS…"
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.billing_schedule", "Billing schedule")}>
+                            <input
+                              value={draft.billing_schedule || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, billing_schedule: e.target.value }))}
+                              placeholder="IN ADVANCE…"
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.chtr_specialist", "Chtr specialist")}>
+                            <input
+                              value={draft.chtr_specialist || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, chtr_specialist: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.ic_company", "IC company")}>
+                            <input
+                              value={draft.ic_company || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, ic_company: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.intercompany", "Intercompany")}>
+                            <select
+                              value={draft.intercompany || "0"}
+                              onChange={(e) => setDraft((f) => ({ ...f, intercompany: e.target.value }))}
+                            >
+                              <option value="0">{t("common.no", "No")}</option>
+                              <option value="1">{t("common.yes", "Yes")}</option>
+                            </select>
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.col.remarks", "Remarks")}>
+                            <input
+                              value={draft.remarks || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, remarks: e.target.value }))}
+                            />
+                          </FieldRow>
+                          <FieldRow label={t("page.tc.header.notes_ops", "Notes to operations")}>
+                            <input
+                              value={draft.notes_to_operations || ""}
+                              onChange={(e) => setDraft((f) => ({ ...f, notes_to_operations: e.target.value }))}
+                            />
+                          </FieldRow>
+                        </FormSection>
+                      </FormPanel>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* P11：Delivery/Redelivery 表 — Est / Proj-Act GMT / Difference */}
+                {tab === "lay_events" ? (
+                  <div className="tc-panel">
+                    <div className="tc-panel-head">
+                      <h3>{t("page.tc.lay.title", "Delivery / Redelivery")}</h3>
+                    </div>
+                    <div className="tc-panel-body">
+                      <DataGrid
+                        columns={layColumns}
+                        data={layRows}
+                        rowKey={(r) => r.id}
+                        loading={tabBusy}
+                        storageKey="tc-lay-events"
+                        emptyText={t("common.empty", "No records")}
+                      />
+                      <div className="quick-row mt-sm">
+                        <select
+                          aria-label={t("page.tc.lay.kind", "Lay")}
+                          value={layForm.kind}
+                          onChange={(e) => setLayForm((f) => ({ ...f, kind: e.target.value }))}
+                        >
+                          <option value="delivery">{t("page.tc.lay.delivery", "Delivery")}</option>
+                          <option value="redelivery">{t("page.tc.lay.redelivery", "Redelivery")}</option>
                         </select>
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.col.hire_rate", "Hire rate")}>
+                        <input
+                          aria-label={t("page.tc.lay.port", "Port")}
+                          placeholder={t("page.tc.lay.port", "Port")}
+                          value={layForm.port}
+                          onChange={(e) => setLayForm((f) => ({ ...f, port: e.target.value }))}
+                        />
+                        <label className="muted">
+                          {t("page.tc.lay.est_gmt", "Est GMT")}
+                          <input
+                            type="datetime-local"
+                            value={layForm.est_gmt}
+                            onChange={(e) => setLayForm((f) => ({ ...f, est_gmt: e.target.value }))}
+                          />
+                        </label>
+                        <label className="muted">
+                          {t("page.tc.lay.proj_act", "Proj/Act GMT")}
+                          <input
+                            type="datetime-local"
+                            value={layForm.proj_act_gmt}
+                            onChange={(e) => setLayForm((f) => ({ ...f, proj_act_gmt: e.target.value }))}
+                          />
+                        </label>
+                        <input
+                          aria-label={t("page.tc.col.remarks", "Remarks")}
+                          placeholder={t("page.tc.col.remarks", "Remarks")}
+                          value={layForm.remarks}
+                          onChange={(e) => setLayForm((f) => ({ ...f, remarks: e.target.value }))}
+                        />
+                        <button type="button" className="btn btn-primary" onClick={() => void addLayEvent()}>
+                          {t("common.create", "Create")}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* P11：Pricing ladder — 多段租金 */}
+                {tab === "pricing" ? (
+                  <div className="tc-panel">
+                    <div className="tc-panel-head">
+                      <h3>{t("page.tc.pricing.title", "Pricing ladder")}</h3>
+                    </div>
+                    <div className="tc-panel-body">
+                      <DataGrid
+                        columns={pricingColumns}
+                        data={pricingRows}
+                        rowKey={(r) => r.id}
+                        loading={tabBusy}
+                        showFooter
+                        storageKey="tc-pricing-ladder"
+                        emptyText={t("common.empty", "No records")}
+                      />
+                      <div className="quick-row mt-sm">
                         <input
                           type="number"
                           step="any"
-                          value={draft.hire_rate || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, hire_rate: e.target.value }))}
+                          aria-label={t("page.tc.col.hire_rate", "Hire rate")}
+                          placeholder={t("page.tc.col.hire_rate", "Hire rate")}
+                          value={pricingForm.hire_rate}
+                          onChange={(e) => setPricingForm((f) => ({ ...f, hire_rate: e.target.value }))}
                         />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.terms.currency", "Currency")}>
                         <select
-                          value={draft.hire_currency || "USD"}
-                          onChange={(e) => setDraft((f) => ({ ...f, hire_currency: e.target.value }))}
+                          aria-label={t("page.tc.pricing.rate_type", "Rate type")}
+                          value={pricingForm.rate_type}
+                          onChange={(e) => setPricingForm((f) => ({ ...f, rate_type: e.target.value }))}
                         >
-                          {["USD", "EUR", "GBP", "CNY"].map((c) => (
+                          <option value="per_day">{t("page.tc.pricing.per_day", "per day")}</option>
+                          <option value="lumpsum">{t("page.tc.pricing.lumpsum", "lumpsum")}</option>
+                          <option value="per_30_days">{t("page.tc.pricing.per_30", "per 30 days")}</option>
+                        </select>
+                        <label className="muted">
+                          {t("page.tc.col.from_gmt", "From GMT")}
+                          <input
+                            type="datetime-local"
+                            value={pricingForm.from_gmt}
+                            onChange={(e) => setPricingForm((f) => ({ ...f, from_gmt: e.target.value }))}
+                          />
+                        </label>
+                        <label className="muted">
+                          {t("page.tc.col.to_gmt", "To GMT")}
+                          <input
+                            type="datetime-local"
+                            value={pricingForm.to_gmt}
+                            onChange={(e) => setPricingForm((f) => ({ ...f, to_gmt: e.target.value }))}
+                          />
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          aria-label={t("page.tc.pricing.duration", "Duration (d)")}
+                          placeholder={t("page.tc.pricing.duration", "Duration (d)")}
+                          value={pricingForm.duration_days}
+                          onChange={(e) => setPricingForm((f) => ({ ...f, duration_days: e.target.value }))}
+                        />
+                        <input
+                          type="number"
+                          step="any"
+                          aria-label={t("page.tc.pricing.tcl_ins", "TCL Ins")}
+                          placeholder={t("page.tc.pricing.tcl_ins", "TCL Ins")}
+                          value={pricingForm.tcl_ins}
+                          onChange={(e) => setPricingForm((f) => ({ ...f, tcl_ins: e.target.value }))}
+                        />
+                        <input
+                          aria-label={t("page.tc.col.remarks", "Comments")}
+                          placeholder={t("page.tc.col.remarks", "Comments")}
+                          value={pricingForm.comments}
+                          onChange={(e) => setPricingForm((f) => ({ ...f, comments: e.target.value }))}
+                        />
+                        <button type="button" className="btn btn-primary" onClick={() => void addPricingRow()}>
+                          {t("common.create", "Create")}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* P11：Other items — BALLA/CABLE/VICTU/… */}
+                {tab === "other_items" ? (
+                  <div className="tc-panel">
+                    <div className="tc-panel-head">
+                      <h3>{t("page.tc.other.title", "Other items")}</h3>
+                    </div>
+                    <div className="tc-panel-body">
+                      <DataGrid
+                        columns={otherColumns}
+                        data={otherRows}
+                        rowKey={(r) => r.id}
+                        loading={tabBusy}
+                        showFooter
+                        storageKey="tc-other-items"
+                        emptyText={t("common.empty", "No records")}
+                      />
+                      <div className="quick-row mt-sm">
+                        <select
+                          aria-label={t("page.tc.other.code", "Code")}
+                          value={otherForm.code}
+                          onChange={(e) => setOtherForm((f) => ({ ...f, code: e.target.value }))}
+                        >
+                          {OTHER_ITEM_CODES.map((c) => (
                             <option key={c} value={c}>
                               {c}
                             </option>
                           ))}
                         </select>
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.terms.pay_freq", "Payment")}>
+                        <input
+                          aria-label={t("common.description", "Description")}
+                          placeholder={t("common.description", "Description")}
+                          value={otherForm.description}
+                          onChange={(e) => setOtherForm((f) => ({ ...f, description: e.target.value }))}
+                        />
                         <select
-                          value={draft.payment_frequency || "monthly"}
-                          onChange={(e) => setDraft((f) => ({ ...f, payment_frequency: e.target.value }))}
+                          aria-label={t("page.tc.pricing.rate_type", "Rate type")}
+                          value={otherForm.rate_type}
+                          onChange={(e) => setOtherForm((f) => ({ ...f, rate_type: e.target.value }))}
                         >
-                          <option value="monthly">monthly</option>
-                          <option value="semi_monthly">semi_monthly</option>
+                          <option value="lumpsum">{t("page.tc.pricing.lumpsum", "lumpsum")}</option>
+                          <option value="monthly">{t("page.tc.other.monthly", "monthly")}</option>
+                          <option value="per_30_days">{t("page.tc.pricing.per_30", "per 30 days")}</option>
+                          <option value="per_day">{t("page.tc.pricing.per_day", "per day")}</option>
                         </select>
-                      </FieldRow>
-                    </FormSection>
-                    <FormSection title={t("page.tc.terms.period", "Delivery / redelivery")} dense>
-                      <FieldRow label={t("page.tc.col.delivery", "Delivery")}>
-                        <DateInput
-                          value={draft.delivery_date || ""}
-                          onChange={(v) => setDraft((f) => ({ ...f, delivery_date: v }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.terms.delivery_port", "Delivery port")}>
-                        <input
-                          value={draft.delivery_port || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, delivery_port: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.col.redelivery", "Redelivery")}>
-                        <DateInput
-                          value={draft.redelivery_date || ""}
-                          onChange={(v) => setDraft((f) => ({ ...f, redelivery_date: v }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.terms.redelivery_port", "Redelivery port")}>
-                        <input
-                          value={draft.redelivery_port || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, redelivery_port: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.terms.cancel_date", "Cancel date")}>
-                        <DateInput
-                          value={draft.cancel_date || ""}
-                          onChange={(v) => setDraft((f) => ({ ...f, cancel_date: v }))}
-                        />
-                      </FieldRow>
-                    </FormSection>
-                    <FormSection title={t("page.tc.terms.share_comm", "Profit share & commission")} dense>
-                      <FieldRow label={t("page.tc.terms.ps_threshold", "PS threshold")}>
                         <input
                           type="number"
                           step="any"
-                          value={draft.profit_share_threshold || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, profit_share_threshold: e.target.value }))}
+                          aria-label={t("page.tc.other.rate", "Rate")}
+                          placeholder={t("page.tc.other.rate", "Rate")}
+                          value={otherForm.rate}
+                          onChange={(e) => setOtherForm((f) => ({ ...f, rate: e.target.value }))}
                         />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.terms.ps_pct", "PS %")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.profit_share_pct || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, profit_share_pct: e.target.value }))}
+                        <label className="muted">
+                          <input
+                            type="checkbox"
+                            checked={otherForm.comm}
+                            onChange={(e) => setOtherForm((f) => ({ ...f, comm: e.target.checked }))}
+                          />{" "}
+                          {t("page.tc.other.comm", "Comm")}
+                        </label>
+                        <button type="button" className="btn btn-primary" onClick={() => void addOtherItem()}>
+                          {t("common.create", "Create")}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {tab === "hire" ? (
+                  <div className="tc-split">
+                    <div className="tc-panel">
+                      <div className="tc-panel-head">
+                        <h3>{t("page.tc.statements.title", "Hire statements")}</h3>
+                        <button type="button" className="btn btn-primary" onClick={generateStatements} disabled={tabBusy}>
+                          {t("page.tc.statements.generate", "Generate")}
+                        </button>
+                      </div>
+                      <div className="tc-panel-body">
+                        <DataGrid
+                          columns={statementColumns}
+                          data={statements}
+                          rowKey={(r) => r.id}
+                          loading={tabBusy}
+                          storageKey="tc-statements"
+                          emptyText={t("common.empty", "No records")}
                         />
-                      </FieldRow>
-                      <FieldRow label={t("page.charters.address_comm", "Address comm %")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.address_comm_pct || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, address_comm_pct: e.target.value }))}
+                      </div>
+                    </div>
+                    <div className="tc-panel">
+                      <div className="tc-panel-head">
+                        <h3>{t("page.tc.offhire.title", "Off-hire events")}</h3>
+                      </div>
+                      <div className="tc-panel-body">
+                        <DataGrid
+                          columns={offHireColumns}
+                          data={offHire}
+                          rowKey={(r) => r.id}
+                          loading={tabBusy}
+                          storageKey="tc-offhire"
+                          emptyText={t("common.empty", "No records")}
                         />
-                      </FieldRow>
-                      <FieldRow label={t("page.charters.brokerage", "Brokerage %")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.brokerage_pct || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, brokerage_pct: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.col.owner_comm", "Owner comm %")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.owner_comm_pct || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, owner_comm_pct: e.target.value }))}
-                        />
-                      </FieldRow>
-                    </FormSection>
-                    {/* P11 IMOS：Duration 块 — Min/Max/-Days/+Days/E/L Redel. */}
-                    <FormSection title={t("page.tc.terms.duration", "Duration")} dense>
-                      <FieldRow label={t("page.tc.duration.min", "Min (days)")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.duration_min_days || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, duration_min_days: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.duration.max", "Max (days)")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.duration_max_days || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, duration_max_days: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.duration.minus", "- Days")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.duration_minus_days || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, duration_minus_days: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.duration.plus", "+ Days")}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={draft.duration_plus_days || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, duration_plus_days: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.duration.el_min", "E redel.")}>
-                        <DateInput
-                          value={draft.el_redel_min || ""}
-                          onChange={(v) => setDraft((f) => ({ ...f, el_redel_min: v }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.duration.el_max", "L redel.")}>
-                        <DateInput
-                          value={draft.el_redel_max || ""}
-                          onChange={(v) => setDraft((f) => ({ ...f, el_redel_max: v }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.duration.basis", "Basis")}>
-                        <input
-                          value={draft.duration_basis || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, duration_basis: e.target.value }))}
-                          placeholder="WEATHER WORKING…"
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.duration.local_time", "Use local time")}>
-                        <select
-                          value={draft.use_local_time || "0"}
-                          onChange={(e) => setDraft((f) => ({ ...f, use_local_time: e.target.value }))}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {tab === "billing" ? (
+                  <div className="tc-panel">
+                    <div className="tc-panel-head">
+                      <h3>{t("page.tc.tab.billing", "Billing Schedule")}</h3>
+                      <button type="button" className="btn btn-primary" onClick={generateBilling} disabled={tabBusy}>
+                        {t("page.tc.billing.generate", "Generate")}
+                      </button>
+                    </div>
+                    <div className="tc-panel-body">
+                      <DataGrid
+                        columns={billingColumns}
+                        data={billing}
+                        rowKey={(r) => r.id}
+                        loading={tabBusy}
+                        storageKey="tc-billing"
+                        emptyText={t("common.empty", "No records")}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {tab === "profit_share" ? (
+                  <div className="tc-panel">
+                    <div className="tc-panel-head">
+                      <h3>{t("page.tc.tab.profit_share", "Profit Share")}</h3>
+                      <div className="quick-row">
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() =>
+                            setPsRows((prev) => [
+                              ...prev,
+                              { id: `new-${Date.now()}`, tier_from: null, tier_to: null, share_pct: null, basis: "tce", isNew: true },
+                            ])
+                          }
                         >
-                          <option value="0">{t("common.no", "No")}</option>
-                          <option value="1">{t("common.yes", "Yes")}</option>
-                        </select>
-                      </FieldRow>
-                    </FormSection>
-                    {/* P11 IMOS：合同抬头其余字段 */}
-                    <FormSection title={t("page.tc.terms.header_extra", "Contract header")} dense>
-                      <FieldRow label={t("page.tc.header.beneficiary", "Beneficiary")}>
-                        <input
-                          value={draft.beneficiary || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, beneficiary: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.company_code", "Company code")}>
-                        <input
-                          value={draft.company_code || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, company_code: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.trade_area", "Trade area")}>
-                        <input
-                          value={draft.trade_area || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, trade_area: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.contract_form", "Contract form")}>
-                        <input
-                          value={draft.contract_form || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, contract_form: e.target.value }))}
-                          placeholder="NYPE 2015…"
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.payment_terms", "Payment terms")}>
-                        <input
-                          value={draft.payment_terms || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, payment_terms: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.billing_period", "Billing period")}>
-                        <input
-                          value={draft.billing_period || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, billing_period: e.target.value }))}
-                          placeholder="EVERY 15 DAYS…"
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.billing_schedule", "Billing schedule")}>
-                        <input
-                          value={draft.billing_schedule || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, billing_schedule: e.target.value }))}
-                          placeholder="IN ADVANCE…"
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.chtr_specialist", "Chtr specialist")}>
-                        <input
-                          value={draft.chtr_specialist || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, chtr_specialist: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.ic_company", "IC company")}>
-                        <input
-                          value={draft.ic_company || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, ic_company: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.intercompany", "Intercompany")}>
-                        <select
-                          value={draft.intercompany || "0"}
-                          onChange={(e) => setDraft((f) => ({ ...f, intercompany: e.target.value }))}
-                        >
-                          <option value="0">{t("common.no", "No")}</option>
-                          <option value="1">{t("common.yes", "Yes")}</option>
-                        </select>
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.col.remarks", "Remarks")}>
-                        <input
-                          value={draft.remarks || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, remarks: e.target.value }))}
-                        />
-                      </FieldRow>
-                      <FieldRow label={t("page.tc.header.notes_ops", "Notes to operations")}>
-                        <input
-                          value={draft.notes_to_operations || ""}
-                          onChange={(e) => setDraft((f) => ({ ...f, notes_to_operations: e.target.value }))}
-                        />
-                      </FieldRow>
-                    </FormSection>
-                  </FormPanel>
-                </div>
-              </div>
-            ) : null}
+                          {t("page.tc.ps.add_tier", "Add tier")}
+                        </button>
+                        <button type="button" className="btn btn-primary" onClick={saveProfitShare} disabled={tabBusy}>
+                          {t("common.save", "Save")}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="tc-panel-body">
+                      <DataGrid
+                        columns={psColumns}
+                        data={psRows}
+                        rowKey={(r) => r.id}
+                        editable
+                        loading={tabBusy}
+                        storageKey="tc-profit-share"
+                        emptyText={t("common.empty", "No records")}
+                        onCellSave={(rowKey, colKey, value) =>
+                          setPsRows((prev) =>
+                            prev.map((r) => (r.id === rowKey ? { ...r, [colKey]: value === "" ? null : value } : r)),
+                          )
+                        }
+                      />
+                      <p className="muted" style={{ marginTop: 8 }}>
+                        {t("page.tc.ps.hint", "Edit cells inline; new tiers are saved to the contract with Save.")}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
 
-            {/* P11：Delivery/Redelivery 表 — Est / Proj-Act GMT / Difference */}
-            {tab === "lay_events" ? (
-              <div className="tc-panel">
-                <div className="tc-panel-head">
-                  <h3>{t("page.tc.lay.title", "Delivery / Redelivery")}</h3>
-                </div>
-                <div className="tc-panel-body">
-                  <DataGrid
-                    columns={layColumns}
-                    data={layRows}
-                    rowKey={(r) => r.id}
-                    loading={tabBusy}
-                    storageKey="tc-lay-events"
-                    emptyText={t("common.empty", "No records")}
-                  />
-                  <div className="quick-row mt-sm">
-                    <select
-                      aria-label={t("page.tc.lay.kind", "Lay")}
-                      value={layForm.kind}
-                      onChange={(e) => setLayForm((f) => ({ ...f, kind: e.target.value }))}
-                    >
-                      <option value="delivery">{t("page.tc.lay.delivery", "Delivery")}</option>
-                      <option value="redelivery">{t("page.tc.lay.redelivery", "Redelivery")}</option>
-                    </select>
-                    <input
-                      aria-label={t("page.tc.lay.port", "Port")}
-                      placeholder={t("page.tc.lay.port", "Port")}
-                      value={layForm.port}
-                      onChange={(e) => setLayForm((f) => ({ ...f, port: e.target.value }))}
-                    />
-                    <label className="muted">
-                      {t("page.tc.lay.est_gmt", "Est GMT")}
-                      <input
-                        type="datetime-local"
-                        value={layForm.est_gmt}
-                        onChange={(e) => setLayForm((f) => ({ ...f, est_gmt: e.target.value }))}
+                {tab === "broker" ? (
+                  <div className="tc-panel">
+                    <div className="tc-panel-head">
+                      <h3>{t("page.tc.tab.broker", "Broker Rules")}</h3>
+                    </div>
+                    <div className="tc-panel-body">
+                      <div className="tc-inline-form">
+                        <label>
+                          {t("page.tc.col.broker", "Broker")}
+                          <PartyPicker
+                            value={brokerForm.broker_party_id}
+                            onChange={(id) => setBrokerForm((f) => ({ ...f, broker_party_id: id }))}
+                          />
+                        </label>
+                        <label>
+                          {t("page.tc.col.comm_type", "Type")}
+                          <select
+                            value={brokerForm.commission_type}
+                            onChange={(e) => setBrokerForm((f) => ({ ...f, commission_type: e.target.value }))}
+                          >
+                            <option value="brokerage">brokerage</option>
+                            <option value="address">address</option>
+                          </select>
+                        </label>
+                        <label>
+                          {t("page.tc.col.comm_pct", "Comm %")}
+                          <input
+                            type="number"
+                            step="any"
+                            value={brokerForm.commission_pct}
+                            onChange={(e) => setBrokerForm((f) => ({ ...f, commission_pct: e.target.value }))}
+                          />
+                        </label>
+                        <label>
+                          {t("page.tc.col.applies_to", "Applies to")}
+                          <select
+                            value={brokerForm.applies_to}
+                            onChange={(e) => setBrokerForm((f) => ({ ...f, applies_to: e.target.value }))}
+                          >
+                            <option value="all">all</option>
+                            <option value="hire">hire</option>
+                            <option value="off_hire">off_hire</option>
+                          </select>
+                        </label>
+                        <label>
+                          {t("page.tc.col.payment_method", "Payment method")}
+                          <select
+                            value={brokerForm.payment_method}
+                            onChange={(e) => setBrokerForm((f) => ({ ...f, payment_method: e.target.value }))}
+                          >
+                            <option value="pay_directly">{t("page.tc.pay.pay_directly", "Pay directly")}</option>
+                            <option value="deduct_from_hire">{t("page.tc.pay.deduct_from_hire", "Deduct from hire")}</option>
+                          </select>
+                        </label>
+                        <label>
+                          {t("page.tc.col.m_method", "M")}
+                          <input
+                            type="number"
+                            step="1"
+                            value={brokerForm.m_method}
+                            onChange={(e) => setBrokerForm((f) => ({ ...f, m_method: e.target.value }))}
+                          />
+                        </label>
+                        <button type="button" className="btn btn-primary" onClick={addBrokerRule}>
+                          {t("common.add", "Add")}
+                        </button>
+                      </div>
+                      <DataGrid
+                        columns={brokerColumns}
+                        data={brokerRows}
+                        rowKey={(r) => r.id}
+                        loading={tabBusy}
+                        storageKey="tc-broker"
+                        emptyText={t("common.empty", "No records")}
                       />
-                    </label>
-                    <label className="muted">
-                      {t("page.tc.lay.proj_act", "Proj/Act GMT")}
-                      <input
-                        type="datetime-local"
-                        value={layForm.proj_act_gmt}
-                        onChange={(e) => setLayForm((f) => ({ ...f, proj_act_gmt: e.target.value }))}
-                      />
-                    </label>
-                    <input
-                      aria-label={t("page.tc.col.remarks", "Remarks")}
-                      placeholder={t("page.tc.col.remarks", "Remarks")}
-                      value={layForm.remarks}
-                      onChange={(e) => setLayForm((f) => ({ ...f, remarks: e.target.value }))}
-                    />
-                    <button type="button" className="btn btn-primary" onClick={() => void addLayEvent()}>
-                      {t("common.create", "Create")}
-                    </button>
+                    </div>
                   </div>
-                </div>
-              </div>
-            ) : null}
+                ) : null}
 
-            {/* P11：Pricing ladder — 多段租金 */}
-            {tab === "pricing" ? (
-              <div className="tc-panel">
-                <div className="tc-panel-head">
-                  <h3>{t("page.tc.pricing.title", "Pricing ladder")}</h3>
-                </div>
-                <div className="tc-panel-body">
-                  <DataGrid
-                    columns={pricingColumns}
-                    data={pricingRows}
-                    rowKey={(r) => r.id}
-                    loading={tabBusy}
-                    showFooter
-                    storageKey="tc-pricing-ladder"
-                    emptyText={t("common.empty", "No records")}
-                  />
-                  <div className="quick-row mt-sm">
-                    <input
-                      type="number"
-                      step="any"
-                      aria-label={t("page.tc.col.hire_rate", "Hire rate")}
-                      placeholder={t("page.tc.col.hire_rate", "Hire rate")}
-                      value={pricingForm.hire_rate}
-                      onChange={(e) => setPricingForm((f) => ({ ...f, hire_rate: e.target.value }))}
-                    />
-                    <select
-                      aria-label={t("page.tc.pricing.rate_type", "Rate type")}
-                      value={pricingForm.rate_type}
-                      onChange={(e) => setPricingForm((f) => ({ ...f, rate_type: e.target.value }))}
-                    >
-                      <option value="per_day">{t("page.tc.pricing.per_day", "per day")}</option>
-                      <option value="lumpsum">{t("page.tc.pricing.lumpsum", "lumpsum")}</option>
-                      <option value="per_30_days">{t("page.tc.pricing.per_30", "per 30 days")}</option>
-                    </select>
-                    <label className="muted">
-                      {t("page.tc.col.from_gmt", "From GMT")}
-                      <input
-                        type="datetime-local"
-                        value={pricingForm.from_gmt}
-                        onChange={(e) => setPricingForm((f) => ({ ...f, from_gmt: e.target.value }))}
+                {tab === "surveys" ? (
+                  <div className="tc-panel">
+                    <div className="tc-panel-head">
+                      <h3>{t("page.tc.tab.surveys", "Surveys")}</h3>
+                    </div>
+                    <div className="tc-panel-body">
+                      <div className="tc-inline-form">
+                        <label>
+                          {t("page.tc.col.survey_kind", "Survey")}
+                          <select
+                            value={surveyForm.kind}
+                            onChange={(e) => setSurveyForm((f) => ({ ...f, kind: e.target.value }))}
+                          >
+                            <option value="on_hire">On-hire</option>
+                            <option value="off_hire">Off-hire</option>
+                          </select>
+                        </label>
+                        <label>
+                          {t("page.tc.col.surveyed_at", "Surveyed at")}
+                          <input
+                            type="datetime-local"
+                            value={surveyForm.surveyed_at}
+                            onChange={(e) => setSurveyForm((f) => ({ ...f, surveyed_at: e.target.value }))}
+                          />
+                        </label>
+                        <button type="button" className="btn btn-primary" onClick={addSurvey}>
+                          {t("common.add", "Add")}
+                        </button>
+                      </div>
+                      <DataGrid
+                        columns={surveyColumns}
+                        data={surveys}
+                        rowKey={(r) => r.id}
+                        loading={tabBusy}
+                        storageKey="tc-surveys"
+                        emptyText={t("common.empty", "No records")}
                       />
-                    </label>
-                    <label className="muted">
-                      {t("page.tc.col.to_gmt", "To GMT")}
-                      <input
-                        type="datetime-local"
-                        value={pricingForm.to_gmt}
-                        onChange={(e) => setPricingForm((f) => ({ ...f, to_gmt: e.target.value }))}
-                      />
-                    </label>
-                    <input
-                      type="number"
-                      step="any"
-                      aria-label={t("page.tc.pricing.duration", "Duration (d)")}
-                      placeholder={t("page.tc.pricing.duration", "Duration (d)")}
-                      value={pricingForm.duration_days}
-                      onChange={(e) => setPricingForm((f) => ({ ...f, duration_days: e.target.value }))}
-                    />
-                    <input
-                      type="number"
-                      step="any"
-                      aria-label={t("page.tc.pricing.tcl_ins", "TCL Ins")}
-                      placeholder={t("page.tc.pricing.tcl_ins", "TCL Ins")}
-                      value={pricingForm.tcl_ins}
-                      onChange={(e) => setPricingForm((f) => ({ ...f, tcl_ins: e.target.value }))}
-                    />
-                    <input
-                      aria-label={t("page.tc.col.remarks", "Comments")}
-                      placeholder={t("page.tc.col.remarks", "Comments")}
-                      value={pricingForm.comments}
-                      onChange={(e) => setPricingForm((f) => ({ ...f, comments: e.target.value }))}
-                    />
-                    <button type="button" className="btn btn-primary" onClick={() => void addPricingRow()}>
-                      {t("common.create", "Create")}
-                    </button>
+                    </div>
                   </div>
-                </div>
-              </div>
-            ) : null}
+                ) : null}
 
-            {/* P11：Other items — BALLA/CABLE/VICTU/… */}
-            {tab === "other_items" ? (
-              <div className="tc-panel">
-                <div className="tc-panel-head">
-                  <h3>{t("page.tc.other.title", "Other items")}</h3>
-                </div>
-                <div className="tc-panel-body">
-                  <DataGrid
-                    columns={otherColumns}
-                    data={otherRows}
-                    rowKey={(r) => r.id}
-                    loading={tabBusy}
-                    showFooter
-                    storageKey="tc-other-items"
-                    emptyText={t("common.empty", "No records")}
-                  />
-                  <div className="quick-row mt-sm">
-                    <select
-                      aria-label={t("page.tc.other.code", "Code")}
-                      value={otherForm.code}
-                      onChange={(e) => setOtherForm((f) => ({ ...f, code: e.target.value }))}
-                    >
-                      {OTHER_ITEM_CODES.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      aria-label={t("common.description", "Description")}
-                      placeholder={t("common.description", "Description")}
-                      value={otherForm.description}
-                      onChange={(e) => setOtherForm((f) => ({ ...f, description: e.target.value }))}
-                    />
-                    <select
-                      aria-label={t("page.tc.pricing.rate_type", "Rate type")}
-                      value={otherForm.rate_type}
-                      onChange={(e) => setOtherForm((f) => ({ ...f, rate_type: e.target.value }))}
-                    >
-                      <option value="lumpsum">{t("page.tc.pricing.lumpsum", "lumpsum")}</option>
-                      <option value="monthly">{t("page.tc.other.monthly", "monthly")}</option>
-                      <option value="per_30_days">{t("page.tc.pricing.per_30", "per 30 days")}</option>
-                      <option value="per_day">{t("page.tc.pricing.per_day", "per day")}</option>
-                    </select>
-                    <input
-                      type="number"
-                      step="any"
-                      aria-label={t("page.tc.other.rate", "Rate")}
-                      placeholder={t("page.tc.other.rate", "Rate")}
-                      value={otherForm.rate}
-                      onChange={(e) => setOtherForm((f) => ({ ...f, rate: e.target.value }))}
-                    />
-                    <label className="muted">
-                      <input
-                        type="checkbox"
-                        checked={otherForm.comm}
-                        onChange={(e) => setOtherForm((f) => ({ ...f, comm: e.target.checked }))}
-                      />{" "}
-                      {t("page.tc.other.comm", "Comm")}
-                    </label>
-                    <button type="button" className="btn btn-primary" onClick={() => void addOtherItem()}>
-                      {t("common.create", "Create")}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            {tab === "hire" ? (
-              <div className="tc-split">
-                <div className="tc-panel">
-                  <div className="tc-panel-head">
-                    <h3>{t("page.tc.statements.title", "Hire statements")}</h3>
-                    <button type="button" className="btn btn-primary" onClick={generateStatements} disabled={tabBusy}>
-                      {t("page.tc.statements.generate", "Generate")}
-                    </button>
-                  </div>
-                  <div className="tc-panel-body">
-                    <DataGrid
-                      columns={statementColumns}
-                      data={statements}
-                      rowKey={(r) => r.id}
-                      loading={tabBusy}
-                      storageKey="tc-statements"
-                      emptyText={t("common.empty", "No records")}
-                    />
-                  </div>
-                </div>
-                <div className="tc-panel">
-                  <div className="tc-panel-head">
-                    <h3>{t("page.tc.offhire.title", "Off-hire events")}</h3>
-                  </div>
-                  <div className="tc-panel-body">
-                    <DataGrid
-                      columns={offHireColumns}
-                      data={offHire}
-                      rowKey={(r) => r.id}
-                      loading={tabBusy}
-                      storageKey="tc-offhire"
-                      emptyText={t("common.empty", "No records")}
-                    />
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            {tab === "billing" ? (
-              <div className="tc-panel">
-                <div className="tc-panel-head">
-                  <h3>{t("page.tc.tab.billing", "Billing Schedule")}</h3>
-                  <button type="button" className="btn btn-primary" onClick={generateBilling} disabled={tabBusy}>
-                    {t("page.tc.billing.generate", "Generate")}
-                  </button>
-                </div>
-                <div className="tc-panel-body">
-                  <DataGrid
-                    columns={billingColumns}
-                    data={billing}
-                    rowKey={(r) => r.id}
-                    loading={tabBusy}
-                    storageKey="tc-billing"
-                    emptyText={t("common.empty", "No records")}
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            {tab === "profit_share" ? (
-              <div className="tc-panel">
-                <div className="tc-panel-head">
-                  <h3>{t("page.tc.tab.profit_share", "Profit Share")}</h3>
-                  <div className="quick-row">
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() =>
-                        setPsRows((prev) => [
-                          ...prev,
-                          { id: `new-${Date.now()}`, tier_from: null, tier_to: null, share_pct: null, basis: "tce", isNew: true },
-                        ])
-                      }
-                    >
-                      {t("page.tc.ps.add_tier", "Add tier")}
-                    </button>
-                    <button type="button" className="btn btn-primary" onClick={saveProfitShare} disabled={tabBusy}>
-                      {t("common.save", "Save")}
-                    </button>
-                  </div>
-                </div>
-                <div className="tc-panel-body">
-                  <DataGrid
-                    columns={psColumns}
-                    data={psRows}
-                    rowKey={(r) => r.id}
-                    editable
-                    loading={tabBusy}
-                    storageKey="tc-profit-share"
-                    emptyText={t("common.empty", "No records")}
-                    onCellSave={(rowKey, colKey, value) =>
-                      setPsRows((prev) =>
-                        prev.map((r) => (r.id === rowKey ? { ...r, [colKey]: value === "" ? null : value } : r)),
-                      )
-                    }
-                  />
-                  <p className="muted" style={{ marginTop: 8 }}>
-                    {t("page.tc.ps.hint", "Edit cells inline; new tiers are saved to the contract with Save.")}
-                  </p>
-                </div>
-              </div>
-            ) : null}
-
-            {tab === "broker" ? (
-              <div className="tc-panel">
-                <div className="tc-panel-head">
-                  <h3>{t("page.tc.tab.broker", "Broker Rules")}</h3>
-                </div>
-                <div className="tc-panel-body">
-                  <div className="tc-inline-form">
-                    <label>
-                      {t("page.tc.col.broker", "Broker")}
-                      <PartyPicker
-                        value={brokerForm.broker_party_id}
-                        onChange={(id) => setBrokerForm((f) => ({ ...f, broker_party_id: id }))}
+                {tab === "children" ? (
+                  <div className="tc-panel">
+                    <div className="tc-panel-head">
+                      <h3>{t("page.tc.tab.children", "Child TCs")}</h3>
+                    </div>
+                    <div className="tc-panel-body">
+                      <div className="tc-inline-form">
+                        <label>
+                          {t("common.type", "Type")}
+                          <select
+                            value={childForm.contract_type}
+                            onChange={(e) => setChildForm((f) => ({ ...f, contract_type: e.target.value }))}
+                          >
+                            <option value="tci">TC In</option>
+                            <option value="tco">TC Out</option>
+                          </select>
+                        </label>
+                        <label>
+                          {t("page.tc.col.style", "Style")}
+                          <select
+                            value={childForm.contract_style}
+                            onChange={(e) => setChildForm((f) => ({ ...f, contract_style: e.target.value }))}
+                          >
+                            <option value="time_charter">Time charter</option>
+                            <option value="bareboat">Bareboat</option>
+                          </select>
+                        </label>
+                        <label>
+                          {t("page.tc.col.hire_rate", "Hire rate")}
+                          <input
+                            type="number"
+                            step="any"
+                            value={childForm.hire_rate}
+                            onChange={(e) => setChildForm((f) => ({ ...f, hire_rate: e.target.value }))}
+                          />
+                        </label>
+                        <label>
+                          {t("page.tc.col.delivery", "Delivery")}
+                          <DateInput
+                            value={childForm.delivery_date}
+                            onChange={(v) => setChildForm((f) => ({ ...f, delivery_date: v }))}
+                          />
+                        </label>
+                        <label>
+                          {t("page.tc.col.redelivery", "Redelivery")}
+                          <DateInput
+                            value={childForm.redelivery_date}
+                            onChange={(v) => setChildForm((f) => ({ ...f, redelivery_date: v }))}
+                          />
+                        </label>
+                        <button type="button" className="btn btn-primary" onClick={addChild}>
+                          {t("common.add", "Add")}
+                        </button>
+                      </div>
+                      <DataGrid
+                        columns={childColumns}
+                        data={children}
+                        rowKey={(r) => r.id}
+                        loading={tabBusy}
+                        storageKey="tc-children"
+                        emptyText={t("common.empty", "No records")}
+                        onRowDoubleClick={(r) => router.push(`/charters/tc/${r.id}`)}
                       />
-                    </label>
-                    <label>
-                      {t("page.tc.col.comm_type", "Type")}
-                      <select
-                        value={brokerForm.commission_type}
-                        onChange={(e) => setBrokerForm((f) => ({ ...f, commission_type: e.target.value }))}
-                      >
-                        <option value="brokerage">brokerage</option>
-                        <option value="address">address</option>
-                      </select>
-                    </label>
-                    <label>
-                      {t("page.tc.col.comm_pct", "Comm %")}
-                      <input
-                        type="number"
-                        step="any"
-                        value={brokerForm.commission_pct}
-                        onChange={(e) => setBrokerForm((f) => ({ ...f, commission_pct: e.target.value }))}
-                      />
-                    </label>
-                    <label>
-                      {t("page.tc.col.applies_to", "Applies to")}
-                      <select
-                        value={brokerForm.applies_to}
-                        onChange={(e) => setBrokerForm((f) => ({ ...f, applies_to: e.target.value }))}
-                      >
-                        <option value="all">all</option>
-                        <option value="hire">hire</option>
-                        <option value="off_hire">off_hire</option>
-                      </select>
-                    </label>
-                    <label>
-                      {t("page.tc.col.payment_method", "Payment method")}
-                      <select
-                        value={brokerForm.payment_method}
-                        onChange={(e) => setBrokerForm((f) => ({ ...f, payment_method: e.target.value }))}
-                      >
-                        <option value="pay_directly">{t("page.tc.pay.pay_directly", "Pay directly")}</option>
-                        <option value="deduct_from_hire">{t("page.tc.pay.deduct_from_hire", "Deduct from hire")}</option>
-                      </select>
-                    </label>
-                    <label>
-                      {t("page.tc.col.m_method", "M")}
-                      <input
-                        type="number"
-                        step="1"
-                        value={brokerForm.m_method}
-                        onChange={(e) => setBrokerForm((f) => ({ ...f, m_method: e.target.value }))}
-                      />
-                    </label>
-                    <button type="button" className="btn btn-primary" onClick={addBrokerRule}>
-                      {t("common.add", "Add")}
-                    </button>
+                    </div>
                   </div>
-                  <DataGrid
-                    columns={brokerColumns}
-                    data={brokerRows}
-                    rowKey={(r) => r.id}
-                    loading={tabBusy}
-                    storageKey="tc-broker"
-                    emptyText={t("common.empty", "No records")}
-                  />
-                </div>
+                ) : null}
               </div>
-            ) : null}
-
-            {tab === "surveys" ? (
-              <div className="tc-panel">
-                <div className="tc-panel-head">
-                  <h3>{t("page.tc.tab.surveys", "Surveys")}</h3>
-                </div>
-                <div className="tc-panel-body">
-                  <div className="tc-inline-form">
-                    <label>
-                      {t("page.tc.col.survey_kind", "Survey")}
-                      <select
-                        value={surveyForm.kind}
-                        onChange={(e) => setSurveyForm((f) => ({ ...f, kind: e.target.value }))}
-                      >
-                        <option value="on_hire">On-hire</option>
-                        <option value="off_hire">Off-hire</option>
-                      </select>
-                    </label>
-                    <label>
-                      {t("page.tc.col.surveyed_at", "Surveyed at")}
-                      <input
-                        type="datetime-local"
-                        value={surveyForm.surveyed_at}
-                        onChange={(e) => setSurveyForm((f) => ({ ...f, surveyed_at: e.target.value }))}
-                      />
-                    </label>
-                    <button type="button" className="btn btn-primary" onClick={addSurvey}>
-                      {t("common.add", "Add")}
-                    </button>
-                  </div>
-                  <DataGrid
-                    columns={surveyColumns}
-                    data={surveys}
-                    rowKey={(r) => r.id}
-                    loading={tabBusy}
-                    storageKey="tc-surveys"
-                    emptyText={t("common.empty", "No records")}
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            {tab === "children" ? (
-              <div className="tc-panel">
-                <div className="tc-panel-head">
-                  <h3>{t("page.tc.tab.children", "Child TCs")}</h3>
-                </div>
-                <div className="tc-panel-body">
-                  <div className="tc-inline-form">
-                    <label>
-                      {t("common.type", "Type")}
-                      <select
-                        value={childForm.contract_type}
-                        onChange={(e) => setChildForm((f) => ({ ...f, contract_type: e.target.value }))}
-                      >
-                        <option value="tci">TC In</option>
-                        <option value="tco">TC Out</option>
-                      </select>
-                    </label>
-                    <label>
-                      {t("page.tc.col.style", "Style")}
-                      <select
-                        value={childForm.contract_style}
-                        onChange={(e) => setChildForm((f) => ({ ...f, contract_style: e.target.value }))}
-                      >
-                        <option value="time_charter">Time charter</option>
-                        <option value="bareboat">Bareboat</option>
-                      </select>
-                    </label>
-                    <label>
-                      {t("page.tc.col.hire_rate", "Hire rate")}
-                      <input
-                        type="number"
-                        step="any"
-                        value={childForm.hire_rate}
-                        onChange={(e) => setChildForm((f) => ({ ...f, hire_rate: e.target.value }))}
-                      />
-                    </label>
-                    <label>
-                      {t("page.tc.col.delivery", "Delivery")}
-                      <DateInput
-                        value={childForm.delivery_date}
-                        onChange={(v) => setChildForm((f) => ({ ...f, delivery_date: v }))}
-                      />
-                    </label>
-                    <label>
-                      {t("page.tc.col.redelivery", "Redelivery")}
-                      <DateInput
-                        value={childForm.redelivery_date}
-                        onChange={(v) => setChildForm((f) => ({ ...f, redelivery_date: v }))}
-                      />
-                    </label>
-                    <button type="button" className="btn btn-primary" onClick={addChild}>
-                      {t("common.add", "Add")}
-                    </button>
-                  </div>
-                  <DataGrid
-                    columns={childColumns}
-                    data={children}
-                    rowKey={(r) => r.id}
-                    loading={tabBusy}
-                    storageKey="tc-children"
-                    emptyText={t("common.empty", "No records")}
-                    onRowDoubleClick={(r) => router.push(`/charters/tc/${r.id}`)}
-                  />
-                </div>
-              </div>
-            ) : null}
-          </div>
-          {contract ? <RevisionsPanel entityType="time_charter" entityId={contract.id} /> : null}
-        </>
-      ) : loading ? (
-        <p className="muted">{t("common.loading", "Loading…")}</p>
-      ) : (
-        <p className="flash-err">{t("common.not_found", "Not found")}</p>
-      )}
+              {contract ? <RevisionsPanel entityType="time_charter" entityId={contract.id} /> : null}
+            </>
+          ) : loading ? (
+            <p className="muted">{t("common.loading", "Loading…")}</p>
+          ) : (
+            <p className="flash-err">{t("common.not_found", "Not found")}</p>
+          )}
+        </MasterDetail>
       </AppShell>
 
       <ConfirmDialog

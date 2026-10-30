@@ -426,6 +426,7 @@ function VesselsPage() {
             data={filtered}
             rowKey={(r) => r.id}
             onRowClick={(r) => router.push(`/ship/vessels/${r.id}`)}
+            onRowOpen={(r) => router.push(`/ship/vessels/${r.id}`)}
             storageKey="masterdata_vessels_grid"
             emptyText={t("common.empty", "No records")}
           />

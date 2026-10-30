@@ -395,6 +395,7 @@ function PortsPage() {
             data={filtered}
             rowKey={(r) => r.id}
             onRowClick={(r) => router.push(`/masterdata/ports/${r.id}`)}
+            onRowOpen={(r) => router.push(`/masterdata/ports/${r.id}`)}
             onRowContextMenu={(r, _i, e) => rowCtx.open(r)(e)}
             storageKey="masterdata_ports_grid"
             emptyText={t("common.empty", "No records")}

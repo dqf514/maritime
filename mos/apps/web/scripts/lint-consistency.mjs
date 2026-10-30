@@ -18,6 +18,34 @@ const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const BASELINE_PATH = join(ROOT, "scripts", "consistency-baseline.json");
 const UPDATE = process.argv.includes("--update");
 
+// ── 详情路由（动态段）相关判定 ──────────────────────────────────────────
+// app/…/[id]/page.tsx 及 app/…/[id]/…/page.tsx 都算详情路由。
+const DETAIL_SEGMENT_RE = /\[[^\]/]+\]/;
+function isDetailRouteFile(file) {
+  return /^app\/.+\/page\.tsx$/.test(file) && DETAIL_SEGMENT_RE.test(file);
+}
+// 纯 redirect 别名页（自己就跳走，没有渲染），豁免。
+const DETAIL_EXEMPT = new Set(["app/operations/voyages/[id]/page.tsx"]);
+// 会跳到详情路由的列表页路径前缀（用于识别"列表 → 详情"的跳转）。
+const DETAIL_PREFIXES = [
+  "/cargo/",
+  "/charters/",
+  "/finance/invoices/",
+  "/finance/laytimes/",
+  "/finance/claims/",
+  "/finance/pnl/",
+  "/help/",
+  "/masterdata/counterparties/",
+  "/masterdata/ports/",
+  "/masterdata/cargo-names/",
+  "/ship/vessels/",
+  "/operations/voyages/",
+  "/estimates/",
+  "/dashboards/",
+];
+// 只认模板字面量路径（`/x/${id}`）——静态路径不是"跳详情"。
+const DETAIL_LINK_RE = new RegExp("`(?:" + DETAIL_PREFIXES.join("|") + ")[^`]*\\$\\{");
+
 const RULES = [
   {
     id: "toast-success-on-failure",
@@ -173,6 +201,43 @@ const RULES = [
         if ([...text].every((ch) => !/[A-Za-z0-9]/.test(ch))) n += 1;
       }
       return n;
+    },
+  },
+  {
+    id: "detail-trail",
+    desc: "详情路由必须渲染可见路径条（MasterDetail / DetailRail / Breadcrumb / AppShell breadcrumbs）",
+    // 根因（2026-10 走查）：`PageHeader` 收下 `breadcrumb` prop 却从不渲染，
+    // 于是 17 个详情路由全站渲染 0 处路径条 —— 点进详情后"回不去列表"，
+    // 只能按浏览器返回。详情路由必须显式渲染一条能点回列表的路径条。
+    test: (src, file) => {
+      if (!isDetailRouteFile(file)) return 0;
+      if (DETAIL_EXEMPT.has(file)) return 0;
+      if (/MasterDetail|DetailRail|<Breadcrumb\b|breadcrumbs=/.test(src)) return 0;
+      return 1;
+    },
+  },
+  {
+    id: "detail-breadcrumb-linked",
+    desc: "详情页路径条至少一条带 href（点得回列表）",
+    // 只有文字没有链接的路径条等于装饰品 —— 仍然回不去列表。
+    test: (src, file) => {
+      if (!isDetailRouteFile(file)) return 0;
+      if (DETAIL_EXEMPT.has(file)) return 0;
+      const m = src.match(/breadcrumbs?=\{\[[\s\S]*?\]\}/);
+      if (!m) return 1; // 连路径条数组都没有
+      return /href:/.test(m[0]) ? 0 : 1;
+    },
+  },
+  {
+    id: "list-page-url-state",
+    desc: "会跳详情的列表页必须用 useListQuery（筛选/排序/页码进 URL，往返不丢）",
+    // 只放 React state 的列表页：进详情再回来，筛选/排序/页码全丢。
+    test: (src, file) => {
+      if (!/^app\/.+\/page\.tsx$/.test(file)) return 0;
+      if (isDetailRouteFile(file)) return 0;
+      if (src.includes("useListQuery")) return 0;
+      if (!DETAIL_LINK_RE.test(src)) return 0; // 不跳详情的列表页不管
+      return 1;
     },
   },
 ];

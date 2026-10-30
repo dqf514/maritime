@@ -7,6 +7,9 @@ import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { CurrencyField } from "@/components/CurrencyField";
 import { DetailHeader, type DetailAction } from "@/components/DetailHeader";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
@@ -24,6 +27,7 @@ import { formatInTz } from "@/lib/datetime";
 import { useToast } from "@/components/ToastProvider";
 import { SkeletonCard } from "@/components/Skeleton";
 import { PrintDoc } from "@/components/PrintDoc";
+import { useListBackHref } from "@/lib/listContext";
 
 // U2 单据详情页：原 finance 页发票弹窗的路由化版本（可深链/收藏/分享）。
 // R4：DetailHeader + 状态机动作过滤 + 镜像徽章 + DRAFT 水印 + Validate + Revisions。
@@ -51,6 +55,17 @@ type Invoice = {
 type Payment = { id: string; amount: number; currency: string; reference: string | null; paid_at: string | null; is_void_reversal: boolean };
 type CreditNote = { id: string; amount: number; reason?: string | null; created_at?: string | null };
 type MirrorChainItem = { id: string; invoice_no: string; is_mirror: boolean; mirror_of_id: string | null };
+
+/** 左栏清单行 —— /api/v1/invoices 列表接口的形状。 */
+type InvoiceRow = {
+  id: string;
+  invoice_no: string;
+  invoice_type?: string | null;
+  status?: string | null;
+  currency?: string | null;
+  gross_amount?: number | null;
+  due_date?: string | null;
+};
 
 function fmt(n: number | undefined | null) {
   if (n === undefined || n === null) return "—";
@@ -85,6 +100,34 @@ function InvoiceDetailPage() {
   const [confirm, setConfirm] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
 
   const nextStatuses = useStateActions("invoice", inv?.status);
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/finance?tab=invoices");
+  const currentRailItem = useMemo(
+    () =>
+      inv
+        ? {
+            id: String(inv.id),
+            title: inv.invoice_no || String(inv.id),
+            meta: [inv.invoice_type || "", inv.status || ""],
+            href: `/finance/invoices/${inv.id}`,
+          }
+        : null,
+    [inv],
+  );
+  const rail = useDetailRail<InvoiceRow>(
+    {
+      endpoint: "/api/v1/invoices",
+      params: { limit: 200 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.invoice_no || r.id,
+        meta: [r.invoice_type || "", r.status || "", r.currency || ""],
+        href: `/finance/invoices/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -538,44 +581,65 @@ function InvoiceDetailPage() {
   });
 
   return (
-    <AppShell>
-      <DetailHeader
-        breadcrumb={[
-          { label: t("nav.finance", "Finance"), href: "/finance?tab=invoices" },
-          { label: inv?.invoice_no ? `#${inv.invoice_no}` : `#${id}` },
-        ]}
-        title={inv?.invoice_no || "…"}
-        status={inv?.status}
-        subtitle={t("page.finance.edit_inv", "编辑发票")}
-        entityType="invoice"
-        entityId={id}
-        badges={
-          isMirror ? (
-            <StatusBadge
-              status="mirror"
-              tone="muted"
-              title={t("invoice.mirror_of", "Mirror of source invoice")}
-              label={
-                mirrorSource ? (
-                  <Link href={`/finance/invoices/${inv?.mirror_of_id}`}>
-                    {t("invoice.mirror_badge", "Mirror")} ← #{mirrorSource.invoice_no}
-                  </Link>
-                ) : (
-                  t("invoice.mirror_badge", "Mirror")
-                )
-              }
-            />
-          ) : mirrorCount > 0 ? (
-            <StatusBadge
-              status="mirror_source"
-              tone="muted"
-              title={t("invoice.mirror_source_hint", "This invoice has intercompany mirrors")}
-              label={`${t("invoice.mirror_source_badge", "Mirror source")} (${mirrorCount})`}
-            />
-          ) : null
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.finance", "Finance"), href: backHref },
+        { label: inv?.invoice_no ? `#${inv.invoice_no}` : `#${id}` },
+      ]}
+    >
+      <MasterDetail
+        rail={
+          <DetailRail
+            items={rail.items}
+            activeId={String(id)}
+            title={t("page.finance.invoices", "Invoices")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={rail.loading}
+            error={rail.error}
+            onRetry={rail.reload}
+          />
         }
-        actions={headerActions}
-      />
+        header={
+          <DetailHeader
+            breadcrumb={[
+              { label: t("nav.finance", "Finance"), href: backHref },
+              { label: inv?.invoice_no ? `#${inv.invoice_no}` : `#${id}` },
+            ]}
+            title={inv?.invoice_no || "…"}
+            status={inv?.status}
+            subtitle={t("page.finance.edit_inv", "编辑发票")}
+            entityType="invoice"
+            entityId={id}
+            badges={
+              isMirror ? (
+                <StatusBadge
+                  status="mirror"
+                  tone="muted"
+                  title={t("invoice.mirror_of", "Mirror of source invoice")}
+                  label={
+                    mirrorSource ? (
+                      <Link href={`/finance/invoices/${inv?.mirror_of_id}`}>
+                        {t("invoice.mirror_badge", "Mirror")} ← #{mirrorSource.invoice_no}
+                      </Link>
+                    ) : (
+                      t("invoice.mirror_badge", "Mirror")
+                    )
+                  }
+                />
+              ) : mirrorCount > 0 ? (
+                <StatusBadge
+                  status="mirror_source"
+                  tone="muted"
+                  title={t("invoice.mirror_source_hint", "This invoice has intercompany mirrors")}
+                  label={`${t("invoice.mirror_source_badge", "Mirror source")} (${mirrorCount})`}
+                />
+              ) : null
+            }
+            actions={headerActions}
+          />
+        }
+      >
 
       {err ? <p className="err-text">{err}</p> : null}
       {loadErr ? (
@@ -728,6 +792,7 @@ function InvoiceDetailPage() {
         }}
         onCancel={() => setConfirm(null)}
       />
+      </MasterDetail>
     </AppShell>
   );
 }

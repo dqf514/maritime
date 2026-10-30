@@ -214,6 +214,10 @@ function OpenPositionsWorkspace() {
               if (r.kind === "tc_open") router.push(`/charters/tc/${r.id}`);
               else router.push(`/charters/${r.id}`);
             }}
+            onRowOpen={(r) => {
+              if (r.kind === "tc_open") router.push(`/charters/tc/${r.id}`);
+              else router.push(`/charters/${r.id}`);
+            }}
           />
         </StateView>
       </div>

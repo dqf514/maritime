@@ -525,6 +525,7 @@ function ChartersPage() {
                 data={rows}
                 rowKey={(r) => r.id}
                 onRowClick={(r) => router.push(`/charters/${r.id}`)}
+                onRowOpen={(r) => router.push(`/charters/${r.id}`)}
                 onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
                 storageKey="charters_list_grid"
                 emptyText={t("common.empty", "No records")}

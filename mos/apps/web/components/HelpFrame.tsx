@@ -3,11 +3,12 @@
 import { ReactNode, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import type { BreadcrumbItem } from "@/components/Breadcrumb";
 import { apiMe } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 /** Knowledge Centre is in-app only — unauthenticated visitors are sent to login. */
-export function HelpFrame({ children }: { children: ReactNode }) {
+export function HelpFrame({ children, breadcrumbs }: { children: ReactNode; breadcrumbs?: BreadcrumbItem[] }) {
   const router = useRouter();
   const { t } = useI18n();
   const [ready, setReady] = useState(false);
@@ -36,8 +37,8 @@ export function HelpFrame({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AppShell>
-      <div className="help-in-app">{children}</div>
+    <AppShell breadcrumbs={breadcrumbs}>
+      {children}
     </AppShell>
   );
 }

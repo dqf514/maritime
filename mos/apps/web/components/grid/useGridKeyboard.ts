@@ -21,6 +21,8 @@ type KeyboardContext = {
   onFillRight: () => void;
   /** 撤销上一次批量清空（P1-11）。可选，缺省则 Ctrl+Z 无副作用。 */
   onUndo?: () => void;
+  /** 键盘打开行（Enter）—— 列表 → 详情导航的键盘等价动作 */
+  onRowOpen?: (rowIndex: number) => void;
 };
 
 export function useGridKeyboard(ctx: KeyboardContext) {
@@ -109,6 +111,15 @@ export function useGridKeyboard(ctx: KeyboardContext) {
           for (let i = 0; i < 20; i++) moveFocus(1, 0, { shift });
           break;
         case "Enter":
+          e.preventDefault();
+          // 行可「打开」时 Enter 打开该行（列表 → 详情的键盘路径）；
+          // 否则保持原行为：Enter 进入单元格编辑。
+          if (ctx.onRowOpen) {
+            ctx.onRowOpen(selection.focus.row);
+            break;
+          }
+          startEdit(selection.focus);
+          break;
         case "F2":
           e.preventDefault();
           startEdit(selection.focus);

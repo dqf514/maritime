@@ -262,6 +262,7 @@ function CargoBookWorkspace() {
             data={rows}
             rowKey={(r) => r.id}
             onRowClick={(r) => router.push(`/cargo/${r.id}`)}
+            onRowOpen={(r) => router.push(`/cargo/${r.id}`)}
             onRowContextMenu={(row, _i, e) => rowCtx.open(row)(e)}
             storageKey="cargo_book"
             emptyText={t("common.empty", "No records")}

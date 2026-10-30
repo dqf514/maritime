@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { Suspense, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { PageGuide } from "@/components/PageGuide";
@@ -16,6 +16,7 @@ import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
+import { useListQuery } from "@/lib/useListQuery";
 
 const DEMO_TOOLS = process.env.NEXT_PUBLIC_DEMO_TOOLS === "1";
 
@@ -50,10 +51,13 @@ type Adapter = { code: string; name: string; capabilities: string[]; status: str
 type CertAlert = { crew_id: string; crew_name: string; code: string; expires_on: string; days_left: number };
 type CertRow = { code: string; expires_on: string };
 
-export default function ShipManagementPage() {
+function ShipManagementPage() {
   const { t } = useI18n();
   const toast = useToast();
-  const [tab, setTab] = useState<"fleet" | "certs">("fleet");
+  // U1 列表协议：tab 进 URL —— 点进船舶详情再回来，还停在原来那个 tab
+  const { query, setQuery } = useListQuery();
+  const shipTab: "fleet" | "certs" = query.tab === "certs" ? "certs" : "fleet";
+  const setShipTab = (k: "fleet" | "certs") => setQuery({ tab: k === "fleet" ? null : k });
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [adapters, setAdapters] = useState<Adapter[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -452,16 +456,16 @@ export default function ShipManagementPage() {
           { key: "fleet", label: t("page.ship.tab_fleet", "Fleet") },
           { key: "certs", label: t("page.ship.tab_certs", "Certificates overview") },
         ]}
-        value={tab}
-        onChange={(k) => setTab(k as "fleet" | "certs")}
+        value={shipTab}
+        onChange={(k) => setShipTab(k as "fleet" | "certs")}
         variant="line"
 
       />
 
-      {tab === "certs" ? (
+      {shipTab === "certs" ? (
         <CertOverview
           onOpenVessel={(id) => {
-            setTab("fleet");
+            setShipTab("fleet");
             openVessel(id);
           }}
         />
@@ -781,5 +785,14 @@ export default function ShipManagementPage() {
         onCancel={() => setWoDeletePending(null)}
       />
     </AppShell>
+  );
+}
+
+// Next 16: useSearchParams（useListQuery）须位于 Suspense 边界内
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <ShipManagementPage />
+    </Suspense>
   );
 }

@@ -10,6 +10,9 @@ import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput } from "@/components/DateInput";
 import { MailAside } from "@/components/MailAside";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { RowActions } from "@/components/RowActions";
@@ -37,6 +40,7 @@ import { toPositiveInt } from "@/lib/numbers";
 import { WORLD_LAND_PATHS } from "@/lib/world-map";
 import { fromUtcInput, parseUtc, toUtcInput } from "@/lib/datetime";
 import { handled, msgOf } from "@/lib/errors";
+import { useListBackHref } from "@/lib/listContext";
 
 // —— helpers ——
 
@@ -84,6 +88,15 @@ const GO_FALLBACK: Record<string, string> = {
 type PortRef = { id: string; name: string; latitude: number | null; longitude: number | null; timezone?: string | null };
 
 type PortFunctionMeta = { code: string; label_en: string; label_zh: string; tone: string };
+
+/** 航次清单行（左栏兄弟导航用） */
+type VoyageListRow = {
+  id: string;
+  voyage_no: string | null;
+  status: string | null;
+  cargo: string | null;
+  vessel_id?: string | null;
+};
 
 type PcRow = TimelinePortCall & {
   function_code?: string | null;
@@ -599,6 +612,34 @@ export default function VoyageWorkspacePage() {
   const pnl = data?.pnl;
   const currency = pnl?.currency || "USD";
   const title = voyage?.voyage_no || voyage?.vessel_name || id.slice(0, 8);
+
+  // 左栏：兄弟航次清单（IMOS 式）+「返回列表」
+  const backHref = useListBackHref("/operations/voyages");
+  const currentRailItem = useMemo(
+    () =>
+      voyage
+        ? {
+            id,
+            title,
+            meta: [voyage.status || "", voyage.vessel_name || ""].filter(Boolean),
+            href: `/operations/voyages/${id}/workspace`,
+          }
+        : null,
+    [voyage, id, title],
+  );
+  const rail = useDetailRail<VoyageListRow>(
+    {
+      endpoint: "/api/v1/voyages",
+      params: { limit: 100 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.voyage_no || r.id.slice(0, 8),
+        meta: [r.status || "", r.cargo || ""].filter(Boolean),
+        href: `/operations/voyages/${r.id}/workspace`,
+      }),
+    },
+    currentRailItem,
+  );
 
   // 状态机动作可见性：只渲染当前状态可执行的转移（非法动作不出现）
   const nextStatuses = useStateActions("voyage", voyage?.status);
@@ -1414,9 +1455,29 @@ export default function VoyageWorkspacePage() {
   );
 
   return (
-    <AppShell>
-      <WorkspaceShell
-        header={
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.voyages", "Voyages"), href: backHref },
+        { label: `${t("common.voyage", "Voyage")} ${title}` },
+      ]}
+    >
+      <MasterDetail
+        raw
+        rail={
+          <DetailRail
+            items={rail.items}
+            activeId={id}
+            title={t("nav.voyages", "Voyages")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={rail.loading}
+            error={rail.error}
+            onRetry={rail.reload}
+          />
+        }
+      >
+        <WorkspaceShell
+          header={
           <PageHeader
             breadcrumb={[
               { label: t("nav.voyages", "Voyages"), href: "/operations/voyages" },
@@ -1530,6 +1591,7 @@ export default function VoyageWorkspacePage() {
           />
         </StateView>
       </WorkspaceShell>
+      </MasterDetail>
 
       <RecordModal
         open={pcModalOpen}

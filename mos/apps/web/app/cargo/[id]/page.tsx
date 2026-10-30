@@ -12,6 +12,9 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { DetailHeader } from "@/components/DetailHeader";
 import { FormPanel, FormSection, FieldRow } from "@/components/form/FormPanel";
+import { MasterDetail } from "@/components/masterdetail/MasterDetail";
+import { DetailRail } from "@/components/masterdetail/DetailRail";
+import { useDetailRail } from "@/components/masterdetail/useRailItems";
 import { Num } from "@/components/Num";
 import { StateView } from "@/components/StateView";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -21,6 +24,19 @@ import { useStateActions, useTransitionTable } from "@/components/useTransitions
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { useListBackHref } from "@/lib/listContext";
+
+/** 左栏清单行 —— /api/v1/cargo-book（货盘列表页）的形状。 */
+type CargoBookRow = {
+  id: string;
+  cargo_ref?: string | null;
+  cargo_type?: string | null;
+  cargo_qty?: number | null;
+  load_port?: string | null;
+  discharge_port?: string | null;
+  status?: string | null;
+  counterparty?: string | null;
+};
 
 type CargoDetail = {
   id: string;
@@ -193,6 +209,37 @@ export default function CargoDetailPage() {
   // 转移表取数失败时不能静默地「没有可用动作」
   const { error: transitionErr } = useTransitionTable();
   const nextStatuses = useStateActions("cargo", cargo?.status);
+
+  // 左栏（IMOS 式兄弟清单）+ 顶部「返回列表」（带列表的筛选/排序/页码）
+  const backHref = useListBackHref("/cargo");
+  const currentRailItem = useMemo(
+    () =>
+      cargo
+        ? {
+            id: cargoId,
+            title: String(cargo.cargo_no || cargoId),
+            meta: [
+              String(cargo.commodity || ""),
+              cargo.qty != null ? `${cargo.qty.toLocaleString()} ${cargo.qty_unit || ""}`.trim() : "",
+            ],
+            href: `/cargo/${cargoId}`,
+          }
+        : null,
+    [cargo, cargoId],
+  );
+  const rail = useDetailRail<CargoBookRow>(
+    {
+      endpoint: "/api/v1/cargo-book",
+      params: { limit: 100 },
+      mapRow: (r) => ({
+        id: r.id,
+        title: r.cargo_ref || r.id,
+        meta: [r.cargo_type || "", `${r.load_port || ""} → ${r.discharge_port || ""}`.trim()],
+        href: `/cargo/${r.id}`,
+      }),
+    },
+    currentRailItem,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -550,7 +597,12 @@ export default function CargoDetailPage() {
 
   if (loading) {
     return (
-      <AppShell>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.cargo-book", "Cargo Book"), href: backHref },
+          { label: t("page.cargo_detail.title", "Cargo") },
+        ]}
+      >
         <StateView loading error={""} empty={false} emptyText="" onRetry={() => void load()}>
           <span />
         </StateView>
@@ -560,7 +612,12 @@ export default function CargoDetailPage() {
 
   if (err || !cargo) {
     return (
-      <AppShell>
+      <AppShell
+        breadcrumbs={[
+          { label: t("nav.cargo-book", "Cargo Book"), href: backHref },
+          { label: t("page.cargo_detail.title", "Cargo") },
+        ]}
+      >
         <StateView loading={false} error={err || t("common.not_found", "Not found")} empty={false} emptyText="" onRetry={() => void load()}>
           <span />
         </StateView>
@@ -572,426 +629,450 @@ export default function CargoDetailPage() {
   }
 
   return (
-    <AppShell>
-      <DetailHeader
-        breadcrumb={[
-          { label: t("nav.cargo-book", "Cargo Book"), href: "/cargo" },
-          { label: cargo.cargo_no },
-        ]}
-        title={cargo.cargo_no}
-        status={cargo.status}
-        entityType="cargo"
-        entityId={cargoId}
-        subtitle={[
-          cargo.commodity,
-          cargo.qty != null ? `${cargo.qty.toLocaleString()} ${cargo.qty_unit || ""}` : null,
-          cargo.cp_form,
-          nameOf(parties, cargo.charterer_id || ""),
-        ]
-          .filter(Boolean)
-          .join(" · ")}
-        actions={[
-          {
-            key: "save",
-            label: t("common.save", "Save"),
-            variant: "primary",
-            disabled: saving,
-            onClick: () => void save(),
-          },
-          ...nextStatuses.map((s) => ({
-            key: `go-${s}`,
-            label: t(`page.cargo_detail.action.${s}`, s.replace(/_/g, " ")),
-            variant: s === "cancelled" ? ("danger" as const) : ("default" as const),
-            onClick: () => void transitionTo(s),
-          })),
-          ...(cargo.voyage_id
-            ? [{
-                key: "voyage",
-                label: t("page.cargo_detail.open_voyage", "Open voyage"),
-                onClick: () => router.push(`/operations/voyages/${cargo.voyage_id}/workspace`),
-              }]
-            : []),
-          ...(cargo.charter_id
-            ? [{
-                key: "charter",
-                label: t("page.cargo_detail.open_fixture", "Open fixture"),
-                onClick: () => router.push(`/charters/${cargo.charter_id}`),
-              }]
-            : []),
-        ]}
-      />
-
-      <Tabs items={tabs} value={tab} onChange={(k) => setTab(k as TabId)} variant="line" />
-
-      {refErr ? (
-        <p className="flash-err">
-          {t("page.cargo_detail.ref_load_failed", "Reference data failed to load: {msg}", { msg: refErr })}
-        </p>
-      ) : null}
-      {transitionErr ? (
-        <p className="flash-err">
-          {t("page.transitions.load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
-        </p>
-      ) : null}
-      {subErr ? (
-        <p className="flash-err">
-          {t("page.cargo_detail.sub_load_failed", "Some lists failed to load: {msg}", { msg: subErr })}
-        </p>
-      ) : null}
-
-      {tab === "terms" ? (
-        <FormPanel columns={3}>
-          <FormSection title={t("page.cargo_detail.sec_cargo", "Cargo")} dense>
-            <FieldRow label={t("page.cargo_detail.cargo_name", "Cargo name")}>
-              <select value={val("cargo_name_id")} onChange={(e) => set("cargo_name_id")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                {cargoNames.map((n) => (
-                  <option key={n.id} value={n.id}>{n.name}</option>
-                ))}
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.cargo.type", "Cargo type")}>
-              <select value={val("cargo_type")} onChange={(e) => set("cargo_type")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                <option value="bulk">bulk</option>
-                <option value="liquid">liquid</option>
-                <option value="dry">dry</option>
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.commodity", "Commodity")}>
-              <input value={val("commodity")} onChange={(e) => set("commodity")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo.qty", "Qty")}>
-              <input type="number" step="any" value={val("qty")} onChange={(e) => set("qty")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.qty_unit", "Unit")}>
-              <input value={val("qty_unit")} onChange={(e) => set("qty_unit")(e.target.value)} placeholder="mt" />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.charterer", "Charterer")}>
-              <select value={val("charterer_id")} onChange={(e) => set("charterer_id")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                {parties.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.cargo.load_port", "Load port")}>
-              <select value={val("load_port_id")} onChange={(e) => set("load_port_id")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                {ports.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.cargo.disch_port", "Disch port")}>
-              <select value={val("disch_port_id")} onChange={(e) => set("disch_port_id")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                {ports.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.api_gravity", "API gravity")}>
-              <input type="number" step="any" value={val("api_gravity")} onChange={(e) => set("api_gravity")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.spec_gravity", "Spec. gravity")}>
-              <input type="number" step="any" value={val("specific_gravity")} onChange={(e) => set("specific_gravity")(e.target.value)} />
-            </FieldRow>
-          </FormSection>
-
-          <FormSection title={t("page.cargo_detail.sec_cp", "CP terms")} dense>
-            <FieldRow label={t("page.cargo_detail.cp_date", "CP date")}>
-              <DateInput value={val("cp_date")} onChange={set("cp_date")} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.cp_form", "CP form")}>
-              <select value={val("cp_form")} onChange={(e) => set("cp_form")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                <option value="GENCON">GENCON</option>
-                <option value="NYPE">NYPE</option>
-                <option value="LINERTIME">LINERTIME</option>
-                <option value="BOLEVOY">BOLEVOY</option>
-                <option value="SAFECON">SAFECON</option>
-                <option value="RECPC">RECPC</option>
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.option_type", "Option type")}>
-              <select value={val("option_type")} onChange={(e) => set("option_type")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                <option value="MOLOO">MOLOO</option>
-                <option value="MINLO">MINLO</option>
-                <option value="MOLOA">MOLOA</option>
-                <option value="MINLOA">MINLOA</option>
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.option_pct", "Option %")}>
-              <input type="number" step="any" value={val("option_pct")} onChange={(e) => set("option_pct")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.min_qty", "Min qty")}>
-              <input type="number" step="any" value={val("min_qty")} onChange={(e) => set("min_qty")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.max_qty", "Max qty")}>
-              <input type="number" step="any" value={val("max_qty")} onChange={(e) => set("max_qty")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.freight_type", "Freight type")}>
-              <select value={val("freight_type")} onChange={(e) => set("freight_type")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                <option value="F">F — Freight prepaid</option>
-                <option value="L">L — Liner</option>
-                <option value="LS">LS — Liner out</option>
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.freight_basis", "Freight basis")}>
-              <select value={val("freight_basis")} onChange={(e) => set("freight_basis")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                <option value="per_mt">per mt</option>
-                <option value="lumpsum">lumpsum</option>
-                <option value="worldscale">worldscale</option>
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.estimates.freight_rate", "Freight rate")}>
-              <input type="number" step="any" value={val("freight_rate")} onChange={(e) => set("freight_rate")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.tc.terms.currency", "Currency")}>
-              <input value={val("currency")} onChange={(e) => set("currency")(e.target.value)} placeholder="USD" />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.exchange_rate", "Exch. rate")}>
-              <input type="number" step="any" value={val("exchange_rate")} onChange={(e) => set("exchange_rate")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.min_inv_qty", "Min inv. qty")}>
-              <input type="number" step="any" value={val("min_inv_qty")} onChange={(e) => set("min_inv_qty")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.cp_draft", "CP draft (m)")}>
-              <input type="number" step="any" value={val("cp_draft_m")} onChange={(e) => set("cp_draft_m")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.freight_via", "Freight via")}>
-              <input value={val("freight_via")} onChange={(e) => set("freight_via")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.demurrage_via", "Demurrage via")}>
-              <input value={val("demurrage_via")} onChange={(e) => set("demurrage_via")(e.target.value)} />
-            </FieldRow>
-          </FormSection>
-
-          <FormSection title={t("page.cargo_detail.sec_laycan", "Laycan")} dense>
-            <FieldRow label={t("page.cargo_detail.laycan_from", "From (local)")}>
-              <DateInput value={val("laycan_from")} onChange={set("laycan_from")} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.laycan_to", "To (local)")}>
-              <DateInput value={val("laycan_to")} onChange={set("laycan_to")} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.laycan_from_ovr", "Override from")}>
-              <DateTimeInput value={val("laycan_from_override")} onChange={set("laycan_from_override")} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.laycan_to_ovr", "Override to")}>
-              <DateTimeInput value={val("laycan_to_override")} onChange={set("laycan_to_override")} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.laycan_confirmed", "Confirmed")}>
-              <select value={val("laycan_confirmed")} onChange={(e) => set("laycan_confirmed")(e.target.value)}>
-                <option value="0">{t("common.no", "No")}</option>
-                <option value="1">{t("common.yes", "Yes")}</option>
-              </select>
-            </FieldRow>
-          </FormSection>
-
-          <FormSection title={t("page.cargo_detail.sec_payment", "Payment")} dense>
-            <FieldRow label={t("page.cargo_detail.remittance_bank", "Remittance bank")}>
-              <input value={val("remittance_bank")} onChange={(e) => set("remittance_bank")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.invoice_pct", "Invoice %")}>
-              <input type="number" step="any" value={val("invoice_pct")} onChange={(e) => set("invoice_pct")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.balance_pct", "Balance %")}>
-              <input type="number" step="any" value={val("balance_pct")} onChange={(e) => set("balance_pct")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.pay_terms_code", "Terms code")}>
-              <input value={val("payment_terms_code")} onChange={(e) => set("payment_terms_code")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.pay_terms_desc", "Terms description")} span={3}>
-              <input value={val("payment_terms_desc")} onChange={(e) => set("payment_terms_desc")(e.target.value)} />
-            </FieldRow>
-          </FormSection>
-
-          <FormSection title={t("page.cargo_detail.sec_header", "Reference")} dense>
-            <FieldRow label={t("page.cargo_detail.coordinator", "Coordinator")}>
-              <input value={val("coordinator")} onChange={(e) => set("coordinator")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.reference_no", "Reference no.")}>
-              <input value={val("reference_no")} onChange={(e) => set("reference_no")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.booking_no", "Booking no.")}>
-              <input value={val("booking_no")} onChange={(e) => set("booking_no")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.vc_in_id", "VC In id")}>
-              <input value={val("vc_in_id")} onChange={(e) => set("vc_in_id")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.nominated_vessel", "Nominated vessel")}>
-              <select value={val("nominated_vessel_id")} onChange={(e) => set("nominated_vessel_id")(e.target.value)}>
-                <option value="">{t("common.select", "Select…")}</option>
-                {vessels.map((v) => (
-                  <option key={v.id} value={v.id}>{v.name}</option>
-                ))}
-              </select>
-            </FieldRow>
-            <FieldRow label={t("page.fixtures.voyage_no", "Voyage No.")}>
-              <input value={val("voyage_no")} onChange={(e) => set("voyage_no")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.contract_link", "Contract link")}>
-              <input value={val("contract_link")} onChange={(e) => set("contract_link")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.tc.header.company_code", "Company")}>
-              <input value={val("company_code")} onChange={(e) => set("company_code")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.department", "Department")}>
-              <input value={val("department")} onChange={(e) => set("department")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.tc.header.trade_area", "Trade area")}>
-              <input value={val("trade_area")} onChange={(e) => set("trade_area")(e.target.value)} />
-            </FieldRow>
-            <FieldRow label={t("page.cargo_detail.notes", "Notes")} span={3}>
-              <textarea rows={3} value={val("notes")} onChange={(e) => set("notes")(e.target.value)} />
-            </FieldRow>
-          </FormSection>
-        </FormPanel>
-      ) : null}
-
-      {tab === "itinerary" ? (
-        <>
-          <DataGrid<CargoItinRow>
-            columns={itinColumns}
-            data={itinRows}
-            rowKey={(r) => r.id}
-            loading={itinBusy}
-            showFooter
-            storageKey="cargo_itinerary_grid"
-            emptyText={t("page.cargo_detail.itin_empty", "No itinerary rows — add the first leg below.")}
+    <AppShell
+      breadcrumbs={[
+        { label: t("nav.cargo-book", "Cargo Book"), href: backHref },
+        { label: cargo.cargo_no },
+      ]}
+    >
+      <MasterDetail
+        rail={
+          <DetailRail
+            items={rail.items}
+            activeId={cargoId}
+            title={t("page.cargo.title", "Cargo Book")}
+            backHref={backHref}
+            backLabel={t("common.back_to_list", { en: "Back to list", zh: "返回列表" })}
+            loading={rail.loading}
+            error={rail.error}
+            onRetry={rail.reload}
           />
-          <div className="desk-toolbar mt-sm">
-            <input type="number" placeholder={t("page.fixtures.seq", "Seq")} aria-label={t("page.fixtures.seq", "Seq")} value={itinForm.seq} onChange={(e) => setItinForm((f) => ({ ...f, seq: e.target.value }))} />
-            <select aria-label={t("page.cargo_detail.flag", "F")} value={itinForm.flag} onChange={(e) => setItinForm((f) => ({ ...f, flag: e.target.value }))}>
-              <option value="L">L — Load</option>
-              <option value="D">D — Discharge</option>
-            </select>
-            <select aria-label={t("page.cargo_detail.port", "Port")} value={itinForm.port_id} onChange={(e) => setItinForm((f) => ({ ...f, port_id: e.target.value }))}>
-              <option value="">{t("common.select", "Select…")}</option>
-              {ports.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            <input placeholder={t("page.cargo_detail.berth", "Berth")} aria-label={t("page.cargo_detail.berth", "Berth")} value={itinForm.berth} onChange={(e) => setItinForm((f) => ({ ...f, berth: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.cargo_detail.qty", "Qty")} aria-label={t("page.cargo_detail.qty", "Qty")} value={itinForm.qty} onChange={(e) => setItinForm((f) => ({ ...f, qty: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.cargo_detail.ld_rate", "L/D rate")} aria-label={t("page.cargo_detail.ld_rate", "L/D rate")} value={itinForm.ld_rate} onChange={(e) => setItinForm((f) => ({ ...f, ld_rate: e.target.value }))} />
-            <input placeholder={t("page.fixtures.terms", "Terms")} aria-label={t("page.fixtures.terms", "Terms")} value={itinForm.terms} onChange={(e) => setItinForm((f) => ({ ...f, terms: e.target.value }))} />
-            <input placeholder={t("page.cargo_detail.incoterms", "Incoterms")} aria-label={t("page.cargo_detail.incoterms", "Incoterms")} value={itinForm.incoterms} onChange={(e) => setItinForm((f) => ({ ...f, incoterms: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.cargo_detail.salinity", "Salinity")} aria-label={t("page.cargo_detail.salinity", "Salinity")} value={itinForm.salinity} onChange={(e) => setItinForm((f) => ({ ...f, salinity: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.fixtures.port_exp", "PortExp")} aria-label={t("page.fixtures.port_exp", "PortExp")} value={itinForm.port_exp} onChange={(e) => setItinForm((f) => ({ ...f, port_exp: e.target.value }))} />
-            <input type="number" step="any" placeholder={t("page.fixtures.liner_exp", "LinerExp")} aria-label={t("page.fixtures.liner_exp", "LinerExp")} value={itinForm.liner_exp} onChange={(e) => setItinForm((f) => ({ ...f, liner_exp: e.target.value }))} />
-            <input placeholder={t("page.cargo_detail.unit", "Unit")} aria-label={t("page.cargo_detail.unit", "Unit")} value={itinForm.unit} onChange={(e) => setItinForm((f) => ({ ...f, unit: e.target.value }))} />
-            <button type="button" className="btn btn-primary" disabled={itinBusy} onClick={() => void addItinRow()}>
-              {t("common.add", "Add")}
-            </button>
-          </div>
-        </>
-      ) : null}
+        }
+        header={
+          <>
+            <DetailHeader
+              breadcrumb={[
+                { label: t("nav.cargo-book", "Cargo Book"), href: "/cargo" },
+                { label: cargo.cargo_no },
+              ]}
+              title={cargo.cargo_no}
+              status={cargo.status}
+              entityType="cargo"
+              entityId={cargoId}
+              subtitle={[
+                cargo.commodity,
+                cargo.qty != null ? `${cargo.qty.toLocaleString()} ${cargo.qty_unit || ""}` : null,
+                cargo.cp_form,
+                nameOf(parties, cargo.charterer_id || ""),
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              actions={[
+                {
+                  key: "save",
+                  label: t("common.save", "Save"),
+                  variant: "primary",
+                  disabled: saving,
+                  onClick: () => void save(),
+                },
+                ...nextStatuses.map((s) => ({
+                  key: `go-${s}`,
+                  label: t(`page.cargo_detail.action.${s}`, s.replace(/_/g, " ")),
+                  variant: s === "cancelled" ? ("danger" as const) : ("default" as const),
+                  onClick: () => void transitionTo(s),
+                })),
+                ...(cargo.voyage_id
+                  ? [{
+                      key: "voyage",
+                      label: t("page.cargo_detail.open_voyage", "Open voyage"),
+                      onClick: () => router.push(`/operations/voyages/${cargo.voyage_id}/workspace`),
+                    }]
+                  : []),
+                ...(cargo.charter_id
+                  ? [{
+                      key: "charter",
+                      label: t("page.cargo_detail.open_fixture", "Open fixture"),
+                      onClick: () => router.push(`/charters/${cargo.charter_id}`),
+                    }]
+                  : []),
+              ]}
+            />
 
-      {tab === "options" ? (
-        <>
-          {(["load", "disch"] as const).map((kind) => (
-            <section key={kind} className="panel mt-sm">
-              <div className="desk-toolbar">
-                <strong>
-                  {kind === "load"
-                    ? t("page.cargo_detail.load_options", "Load Options")
-                    : t("page.cargo_detail.disch_options", "Discharge Options")}
-                </strong>
-                <span className="muted">
-                  {t("page.cargo_detail.options_count", "{n} row(s)", { n: optRows.filter((r) => r.kind === kind).length })}
-                </span>
-              </div>
-              <DataGrid<CargoOptRow>
-                columns={optColumns}
-                data={optRows.filter((r) => r.kind === kind)}
-                rowKey={(r) => r.id}
-                loading={optBusy}
-                showFooter
-                storageKey={`cargo_options_${kind}_grid`}
-                emptyText={t("page.cargo_detail.opt_empty", "No options — add one below.")}
-              />
-              <div className="desk-toolbar mt-sm">
-                <input
-                  type="number"
-                  aria-label={t("page.fixtures.seq", "Seq")}
-                  placeholder={t("page.fixtures.seq", "Seq")}
-                  value={optForms[kind].seq}
-                  onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], seq: e.target.value } }))}
+            <Tabs items={tabs} value={tab} onChange={(k) => setTab(k as TabId)} variant="line" />
+          </>
+        }
+      >
+
+        {refErr ? (
+          <p className="flash-err">
+            {t("page.cargo_detail.ref_load_failed", "Reference data failed to load: {msg}", { msg: refErr })}
+          </p>
+        ) : null}
+        {transitionErr ? (
+          <p className="flash-err">
+            {t("page.transitions.load_failed", "Workflow actions unavailable: {msg}", { msg: transitionErr })}
+          </p>
+        ) : null}
+        {subErr ? (
+          <p className="flash-err">
+            {t("page.cargo_detail.sub_load_failed", "Some lists failed to load: {msg}", { msg: subErr })}
+          </p>
+        ) : null}
+
+        {tab === "terms" ? (
+          <FormPanel columns={3}>
+            <FormSection title={t("page.cargo_detail.sec_cargo", "Cargo")} dense>
+              <FieldRow label={t("page.cargo_detail.cargo_name", "Cargo name")}>
+                <select value={val("cargo_name_id")} onChange={(e) => set("cargo_name_id")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  {cargoNames.map((n) => (
+                    <option key={n.id} value={n.id}>{n.name}</option>
+                  ))}
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.cargo.type", "Cargo type")}>
+                <select value={val("cargo_type")} onChange={(e) => set("cargo_type")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  <option value="bulk">bulk</option>
+                  <option value="liquid">liquid</option>
+                  <option value="dry">dry</option>
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.commodity", "Commodity")}>
+                <input value={val("commodity")} onChange={(e) => set("commodity")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo.qty", "Qty")}>
+                <input type="number" step="any" value={val("qty")} onChange={(e) => set("qty")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.qty_unit", "Unit")}>
+                <input value={val("qty_unit")} onChange={(e) => set("qty_unit")(e.target.value)} placeholder="mt" />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.charterer", "Charterer")}>
+                <select value={val("charterer_id")} onChange={(e) => set("charterer_id")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  {parties.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.cargo.load_port", "Load port")}>
+                <select value={val("load_port_id")} onChange={(e) => set("load_port_id")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  {ports.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.cargo.disch_port", "Disch port")}>
+                <select value={val("disch_port_id")} onChange={(e) => set("disch_port_id")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  {ports.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.api_gravity", "API gravity")}>
+                <input type="number" step="any" value={val("api_gravity")} onChange={(e) => set("api_gravity")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.spec_gravity", "Spec. gravity")}>
+                <input type="number" step="any" value={val("specific_gravity")} onChange={(e) => set("specific_gravity")(e.target.value)} />
+              </FieldRow>
+            </FormSection>
+
+            <FormSection title={t("page.cargo_detail.sec_cp", "CP terms")} dense>
+              <FieldRow label={t("page.cargo_detail.cp_date", "CP date")}>
+                <DateInput value={val("cp_date")} onChange={set("cp_date")} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.cp_form", "CP form")}>
+                <select value={val("cp_form")} onChange={(e) => set("cp_form")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  <option value="GENCON">GENCON</option>
+                  <option value="NYPE">NYPE</option>
+                  <option value="LINERTIME">LINERTIME</option>
+                  <option value="BOLEVOY">BOLEVOY</option>
+                  <option value="SAFECON">SAFECON</option>
+                  <option value="RECPC">RECPC</option>
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.option_type", "Option type")}>
+                <select value={val("option_type")} onChange={(e) => set("option_type")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  <option value="MOLOO">MOLOO</option>
+                  <option value="MINLO">MINLO</option>
+                  <option value="MOLOA">MOLOA</option>
+                  <option value="MINLOA">MINLOA</option>
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.option_pct", "Option %")}>
+                <input type="number" step="any" value={val("option_pct")} onChange={(e) => set("option_pct")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.min_qty", "Min qty")}>
+                <input type="number" step="any" value={val("min_qty")} onChange={(e) => set("min_qty")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.max_qty", "Max qty")}>
+                <input type="number" step="any" value={val("max_qty")} onChange={(e) => set("max_qty")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.freight_type", "Freight type")}>
+                <select value={val("freight_type")} onChange={(e) => set("freight_type")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  <option value="F">F — Freight prepaid</option>
+                  <option value="L">L — Liner</option>
+                  <option value="LS">LS — Liner out</option>
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.freight_basis", "Freight basis")}>
+                <select value={val("freight_basis")} onChange={(e) => set("freight_basis")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  <option value="per_mt">per mt</option>
+                  <option value="lumpsum">lumpsum</option>
+                  <option value="worldscale">worldscale</option>
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.estimates.freight_rate", "Freight rate")}>
+                <input type="number" step="any" value={val("freight_rate")} onChange={(e) => set("freight_rate")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.tc.terms.currency", "Currency")}>
+                <input value={val("currency")} onChange={(e) => set("currency")(e.target.value)} placeholder="USD" />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.exchange_rate", "Exch. rate")}>
+                <input type="number" step="any" value={val("exchange_rate")} onChange={(e) => set("exchange_rate")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.min_inv_qty", "Min inv. qty")}>
+                <input type="number" step="any" value={val("min_inv_qty")} onChange={(e) => set("min_inv_qty")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.cp_draft", "CP draft (m)")}>
+                <input type="number" step="any" value={val("cp_draft_m")} onChange={(e) => set("cp_draft_m")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.freight_via", "Freight via")}>
+                <input value={val("freight_via")} onChange={(e) => set("freight_via")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.demurrage_via", "Demurrage via")}>
+                <input value={val("demurrage_via")} onChange={(e) => set("demurrage_via")(e.target.value)} />
+              </FieldRow>
+            </FormSection>
+
+            <FormSection title={t("page.cargo_detail.sec_laycan", "Laycan")} dense>
+              <FieldRow label={t("page.cargo_detail.laycan_from", "From (local)")}>
+                <DateInput value={val("laycan_from")} onChange={set("laycan_from")} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.laycan_to", "To (local)")}>
+                <DateInput value={val("laycan_to")} onChange={set("laycan_to")} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.laycan_from_ovr", "Override from")}>
+                <DateTimeInput value={val("laycan_from_override")} onChange={set("laycan_from_override")} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.laycan_to_ovr", "Override to")}>
+                <DateTimeInput value={val("laycan_to_override")} onChange={set("laycan_to_override")} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.laycan_confirmed", "Confirmed")}>
+                <select value={val("laycan_confirmed")} onChange={(e) => set("laycan_confirmed")(e.target.value)}>
+                  <option value="0">{t("common.no", "No")}</option>
+                  <option value="1">{t("common.yes", "Yes")}</option>
+                </select>
+              </FieldRow>
+            </FormSection>
+
+            <FormSection title={t("page.cargo_detail.sec_payment", "Payment")} dense>
+              <FieldRow label={t("page.cargo_detail.remittance_bank", "Remittance bank")}>
+                <input value={val("remittance_bank")} onChange={(e) => set("remittance_bank")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.invoice_pct", "Invoice %")}>
+                <input type="number" step="any" value={val("invoice_pct")} onChange={(e) => set("invoice_pct")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.balance_pct", "Balance %")}>
+                <input type="number" step="any" value={val("balance_pct")} onChange={(e) => set("balance_pct")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.pay_terms_code", "Terms code")}>
+                <input value={val("payment_terms_code")} onChange={(e) => set("payment_terms_code")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.pay_terms_desc", "Terms description")} span={3}>
+                <input value={val("payment_terms_desc")} onChange={(e) => set("payment_terms_desc")(e.target.value)} />
+              </FieldRow>
+            </FormSection>
+
+            <FormSection title={t("page.cargo_detail.sec_header", "Reference")} dense>
+              <FieldRow label={t("page.cargo_detail.coordinator", "Coordinator")}>
+                <input value={val("coordinator")} onChange={(e) => set("coordinator")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.reference_no", "Reference no.")}>
+                <input value={val("reference_no")} onChange={(e) => set("reference_no")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.booking_no", "Booking no.")}>
+                <input value={val("booking_no")} onChange={(e) => set("booking_no")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.vc_in_id", "VC In id")}>
+                <input value={val("vc_in_id")} onChange={(e) => set("vc_in_id")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.nominated_vessel", "Nominated vessel")}>
+                <select value={val("nominated_vessel_id")} onChange={(e) => set("nominated_vessel_id")(e.target.value)}>
+                  <option value="">{t("common.select", "Select…")}</option>
+                  {vessels.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+              </FieldRow>
+              <FieldRow label={t("page.fixtures.voyage_no", "Voyage No.")}>
+                <input value={val("voyage_no")} onChange={(e) => set("voyage_no")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.contract_link", "Contract link")}>
+                <input value={val("contract_link")} onChange={(e) => set("contract_link")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.tc.header.company_code", "Company")}>
+                <input value={val("company_code")} onChange={(e) => set("company_code")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.department", "Department")}>
+                <input value={val("department")} onChange={(e) => set("department")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.tc.header.trade_area", "Trade area")}>
+                <input value={val("trade_area")} onChange={(e) => set("trade_area")(e.target.value)} />
+              </FieldRow>
+              <FieldRow label={t("page.cargo_detail.notes", "Notes")} span={3}>
+                <textarea rows={3} value={val("notes")} onChange={(e) => set("notes")(e.target.value)} />
+              </FieldRow>
+            </FormSection>
+          </FormPanel>
+        ) : null}
+
+        {tab === "itinerary" ? (
+          <>
+            <DataGrid<CargoItinRow>
+              columns={itinColumns}
+              data={itinRows}
+              rowKey={(r) => r.id}
+              loading={itinBusy}
+              showFooter
+              storageKey="cargo_itinerary_grid"
+              emptyText={t("page.cargo_detail.itin_empty", "No itinerary rows — add the first leg below.")}
+            />
+            <div className="desk-toolbar mt-sm">
+              <input type="number" placeholder={t("page.fixtures.seq", "Seq")} aria-label={t("page.fixtures.seq", "Seq")} value={itinForm.seq} onChange={(e) => setItinForm((f) => ({ ...f, seq: e.target.value }))} />
+              <select aria-label={t("page.cargo_detail.flag", "F")} value={itinForm.flag} onChange={(e) => setItinForm((f) => ({ ...f, flag: e.target.value }))}>
+                <option value="L">L — Load</option>
+                <option value="D">D — Discharge</option>
+              </select>
+              <select aria-label={t("page.cargo_detail.port", "Port")} value={itinForm.port_id} onChange={(e) => setItinForm((f) => ({ ...f, port_id: e.target.value }))}>
+                <option value="">{t("common.select", "Select…")}</option>
+                {ports.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <input placeholder={t("page.cargo_detail.berth", "Berth")} aria-label={t("page.cargo_detail.berth", "Berth")} value={itinForm.berth} onChange={(e) => setItinForm((f) => ({ ...f, berth: e.target.value }))} />
+              <input type="number" step="any" placeholder={t("page.cargo_detail.qty", "Qty")} aria-label={t("page.cargo_detail.qty", "Qty")} value={itinForm.qty} onChange={(e) => setItinForm((f) => ({ ...f, qty: e.target.value }))} />
+              <input type="number" step="any" placeholder={t("page.cargo_detail.ld_rate", "L/D rate")} aria-label={t("page.cargo_detail.ld_rate", "L/D rate")} value={itinForm.ld_rate} onChange={(e) => setItinForm((f) => ({ ...f, ld_rate: e.target.value }))} />
+              <input placeholder={t("page.fixtures.terms", "Terms")} aria-label={t("page.fixtures.terms", "Terms")} value={itinForm.terms} onChange={(e) => setItinForm((f) => ({ ...f, terms: e.target.value }))} />
+              <input placeholder={t("page.cargo_detail.incoterms", "Incoterms")} aria-label={t("page.cargo_detail.incoterms", "Incoterms")} value={itinForm.incoterms} onChange={(e) => setItinForm((f) => ({ ...f, incoterms: e.target.value }))} />
+              <input type="number" step="any" placeholder={t("page.cargo_detail.salinity", "Salinity")} aria-label={t("page.cargo_detail.salinity", "Salinity")} value={itinForm.salinity} onChange={(e) => setItinForm((f) => ({ ...f, salinity: e.target.value }))} />
+              <input type="number" step="any" placeholder={t("page.fixtures.port_exp", "PortExp")} aria-label={t("page.fixtures.port_exp", "PortExp")} value={itinForm.port_exp} onChange={(e) => setItinForm((f) => ({ ...f, port_exp: e.target.value }))} />
+              <input type="number" step="any" placeholder={t("page.fixtures.liner_exp", "LinerExp")} aria-label={t("page.fixtures.liner_exp", "LinerExp")} value={itinForm.liner_exp} onChange={(e) => setItinForm((f) => ({ ...f, liner_exp: e.target.value }))} />
+              <input placeholder={t("page.cargo_detail.unit", "Unit")} aria-label={t("page.cargo_detail.unit", "Unit")} value={itinForm.unit} onChange={(e) => setItinForm((f) => ({ ...f, unit: e.target.value }))} />
+              <button type="button" className="btn btn-primary" disabled={itinBusy} onClick={() => void addItinRow()}>
+                {t("common.add", "Add")}
+              </button>
+            </div>
+          </>
+        ) : null}
+
+        {tab === "options" ? (
+          <>
+            {(["load", "disch"] as const).map((kind) => (
+              <section key={kind} className="panel mt-sm">
+                <div className="desk-toolbar">
+                  <strong>
+                    {kind === "load"
+                      ? t("page.cargo_detail.load_options", "Load Options")
+                      : t("page.cargo_detail.disch_options", "Discharge Options")}
+                  </strong>
+                  <span className="muted">
+                    {t("page.cargo_detail.options_count", "{n} row(s)", { n: optRows.filter((r) => r.kind === kind).length })}
+                  </span>
+                </div>
+                <DataGrid<CargoOptRow>
+                  columns={optColumns}
+                  data={optRows.filter((r) => r.kind === kind)}
+                  rowKey={(r) => r.id}
+                  loading={optBusy}
+                  showFooter
+                  storageKey={`cargo_options_${kind}_grid`}
+                  emptyText={t("page.cargo_detail.opt_empty", "No options — add one below.")}
                 />
-                <input
-                  aria-label={t("page.cargo_detail.port_area", "Port / Area")}
-                  placeholder={t("page.cargo_detail.port_area", "Port / Area")}
-                  value={optForms[kind].port_area}
-                  onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], port_area: e.target.value } }))}
-                />
-                <input
-                  type="number"
-                  step="any"
-                  aria-label={t("page.cargo_detail.ld_rate", "L/D rate")}
-                  placeholder={t("page.cargo_detail.ld_rate", "L/D rate")}
-                  value={optForms[kind].ld_rate}
-                  onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], ld_rate: e.target.value } }))}
-                />
-                <input
-                  aria-label={t("page.fixtures.terms", "Terms")}
-                  placeholder={t("page.fixtures.terms", "Terms")}
-                  value={optForms[kind].terms}
-                  onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], terms: e.target.value } }))}
-                />
-                <input
-                  type="number"
-                  step="any"
-                  aria-label={t("page.cargo_detail.tt_days", "TT days")}
-                  placeholder={t("page.cargo_detail.tt_days", "TT days")}
-                  value={optForms[kind].tt_days}
-                  onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], tt_days: e.target.value } }))}
-                />
-                <input
-                  type="number"
-                  step="any"
-                  aria-label={t("page.cargo_detail.pexp", "PExp")}
-                  placeholder={t("page.cargo_detail.pexp", "PExp")}
-                  value={optForms[kind].pexp}
-                  onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], pexp: e.target.value } }))}
-                />
-                <input
-                  type="number"
-                  step="any"
-                  aria-label={t("page.cargo_detail.draft", "Draft")}
-                  placeholder={t("page.cargo_detail.draft", "Draft")}
-                  value={optForms[kind].draft}
-                  onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], draft: e.target.value } }))}
-                />
-                <button type="button" className="btn btn-primary" disabled={optBusy} onClick={() => void addOptRow(kind)}>
-                  {t("common.add", "Add")}
-                </button>
-              </div>
-            </section>
-          ))}
-        </>
-      ) : null}
-      <ConfirmDialog
-        open={pendingDel !== null}
-        title={t("common.confirm", "Confirm")}
-        message={t("page.cargo_detail.confirm_delete_row", 'Delete the row "{label}"? This cannot be undone.', {
-          label: pendingDel?.label ?? "",
-        })}
-        confirmLabel={t("common.delete", "Delete")}
-        danger
-        onConfirm={() => {
-          const p = pendingDel;
-          setPendingDel(null);
-          if (!p) return;
-          if (p.kind === "itin") void delItinRow(p.id);
-          else void delOptRow(p.id);
-        }}
-        onCancel={() => setPendingDel(null)}
-      />
+                <div className="desk-toolbar mt-sm">
+                  <input
+                    type="number"
+                    aria-label={t("page.fixtures.seq", "Seq")}
+                    placeholder={t("page.fixtures.seq", "Seq")}
+                    value={optForms[kind].seq}
+                    onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], seq: e.target.value } }))}
+                  />
+                  <input
+                    aria-label={t("page.cargo_detail.port_area", "Port / Area")}
+                    placeholder={t("page.cargo_detail.port_area", "Port / Area")}
+                    value={optForms[kind].port_area}
+                    onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], port_area: e.target.value } }))}
+                  />
+                  <input
+                    type="number"
+                    step="any"
+                    aria-label={t("page.cargo_detail.ld_rate", "L/D rate")}
+                    placeholder={t("page.cargo_detail.ld_rate", "L/D rate")}
+                    value={optForms[kind].ld_rate}
+                    onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], ld_rate: e.target.value } }))}
+                  />
+                  <input
+                    aria-label={t("page.fixtures.terms", "Terms")}
+                    placeholder={t("page.fixtures.terms", "Terms")}
+                    value={optForms[kind].terms}
+                    onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], terms: e.target.value } }))}
+                  />
+                  <input
+                    type="number"
+                    step="any"
+                    aria-label={t("page.cargo_detail.tt_days", "TT days")}
+                    placeholder={t("page.cargo_detail.tt_days", "TT days")}
+                    value={optForms[kind].tt_days}
+                    onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], tt_days: e.target.value } }))}
+                  />
+                  <input
+                    type="number"
+                    step="any"
+                    aria-label={t("page.cargo_detail.pexp", "PExp")}
+                    placeholder={t("page.cargo_detail.pexp", "PExp")}
+                    value={optForms[kind].pexp}
+                    onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], pexp: e.target.value } }))}
+                  />
+                  <input
+                    type="number"
+                    step="any"
+                    aria-label={t("page.cargo_detail.draft", "Draft")}
+                    placeholder={t("page.cargo_detail.draft", "Draft")}
+                    value={optForms[kind].draft}
+                    onChange={(e) => setOptForms((s) => ({ ...s, [kind]: { ...s[kind], draft: e.target.value } }))}
+                  />
+                  <button type="button" className="btn btn-primary" disabled={optBusy} onClick={() => void addOptRow(kind)}>
+                    {t("common.add", "Add")}
+                  </button>
+                </div>
+              </section>
+            ))}
+          </>
+        ) : null}
+        <ConfirmDialog
+          open={pendingDel !== null}
+          title={t("common.confirm", "Confirm")}
+          message={t("page.cargo_detail.confirm_delete_row", 'Delete the row "{label}"? This cannot be undone.', {
+            label: pendingDel?.label ?? "",
+          })}
+          confirmLabel={t("common.delete", "Delete")}
+          danger
+          onConfirm={() => {
+            const p = pendingDel;
+            setPendingDel(null);
+            if (!p) return;
+            if (p.kind === "itin") void delItinRow(p.id);
+            else void delOptRow(p.id);
+          }}
+          onCancel={() => setPendingDel(null)}
+        />
+      </MasterDetail>
     </AppShell>
   );
 }

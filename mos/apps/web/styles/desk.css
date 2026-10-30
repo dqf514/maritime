@@ -36,7 +36,7 @@
   z-index: 1;
   margin: 0;
   padding: 0.65rem 0.75rem;
-  background: #fff;
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 .desk-item-list {
@@ -52,8 +52,8 @@
   padding: 0.55rem 0.65rem 0.55rem 0.5rem;
   border-bottom: 1px solid var(--border);
 }
-.desk-item-list > li:hover { background: #f3f8f9; }
-.desk-item-list > li.selected { background: #dff3f2; }
+.desk-item-list > li:hover { background: var(--row-hover); }
+.desk-item-list > li.selected { background: var(--row-selected); }
 .desk-item-check {
   display: flex;
   align-items: center;
@@ -103,8 +103,8 @@
 .desk-item-empty { padding: 1rem 0.75rem; }
 .desk-list .table { margin: 0; table-layout: fixed; width: 100%; }
 .desk-list tr { cursor: pointer; }
-.desk-list tr:hover td { background: #f3f8f9; }
-.desk-list tr.selected td { background: #dff3f2; }
+.desk-list tr:hover td { background: var(--row-hover); }
+.desk-list tr.selected td { background: var(--row-selected); }
 .desk-toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.75rem 0; }
 .desk-results {
   display: grid;
@@ -113,7 +113,7 @@
   margin-top: 0.75rem;
 }
 .desk-results .kv-box {
-  background: #f7fafb;
+  background: var(--foam);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.65rem 0.75rem;
@@ -123,7 +123,7 @@
 .desk-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.85rem; }
 .desk-tab {
   border: 1px solid var(--border);
-  background: #f7fafb;
+  background: var(--foam);
   border-radius: 8px;
   padding: 0.4rem 0.75rem;
   cursor: pointer;
@@ -132,9 +132,9 @@
   color: var(--muted);
 }
 .desk-tab.active {
-  background: #dff3f2;
-  border-color: #9fd4d1;
-  color: var(--sea-deep);
+  background: var(--accent-bg-strong);
+  border-color: var(--accent);
+  color: var(--ink);
 }
 .desk-section { margin-top: 1rem; }
 .desk-section h3 { margin: 0 0 0.65rem; font-size: 1rem; }
@@ -169,7 +169,7 @@
 .splitter.dragging::after {
   width: 2px;
   left: 1px;
-  background: var(--accent, #4c9f98);
+  background: var(--accent);
 }
 /* 右栏（船期块/证书告警）：吸顶 + 独立滚动 */
 .desk-side {
@@ -198,7 +198,7 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 0.85rem;
-  background: #f7fafb;
+  background: var(--foam);
 }
 
 .oauth-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin: 0.75rem 0 1rem; }

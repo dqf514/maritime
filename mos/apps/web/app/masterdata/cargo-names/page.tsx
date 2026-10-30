@@ -294,6 +294,7 @@ function CargoNamesPage() {
               data={rows}
               rowKey={(r) => r.id}
               onRowClick={(r) => router.push(`/masterdata/cargo-names/${r.id}`)}
+              onRowOpen={(r) => router.push(`/masterdata/cargo-names/${r.id}`)}
               storageKey="masterdata_cargo_names_grid"
               emptyText={t("common.empty", "No records")}
             />
