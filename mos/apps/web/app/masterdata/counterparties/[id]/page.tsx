@@ -1,9 +1,9 @@
 "use client";
 
-// U-PARTY 对手方卡片（IMOS Data Center > Address Book Detail 对齐）。
+// U-PARTY 对手方卡片。
 // Tabs: Details · Contacts · Properties · Bank。
 // Details = 身份编号 / 地址与联系 / 授信 / 合规 / GL 科目五组；
-// Address Types 是 IMOS 的多角色集合（Agents + Brokers + Charterers + Owners + Company Info + Misc）。
+// 类型为多选（一家公司可同时是船东 + 经纪人），取值来自 counterparty_types 参照表。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -14,9 +14,9 @@ import { RecordAttribution } from "@/components/RecordAttribution";
 import { StateView } from "@/components/StateView";
 import { Tabs } from "@/components/Tabs";
 import { FormSection } from "@/components/form/FormPanel";
-import { LookupSelect } from "@/components/LookupSelect";
+import { LookupSelect, useLookupItems } from "@/components/LookupSelect";
 import { VesselCrudGrid, type ColumnDef, type FieldDef } from "@/components/ship/VesselCrudGrid";
-import { PARTY_ROLES, PARTY_STATUS, SANCTIONS_STATUS } from "@/lib/party-catalog";
+import { PARTY_STATUS, SANCTIONS_STATUS, normalizePartyTypes } from "@/lib/party-catalog";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { apiGet, apiPatch } from "@/lib/api";
@@ -92,9 +92,11 @@ export default function CounterpartyDetailPage() {
   const [party, setParty] = useState<Record<string, any> | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [init, setInit] = useState<Record<string, string>>({});
-  const [roles, setRoles] = useState<Record<string, boolean>>({});
   const [glAccounts, setGlAccounts] = useState<{ account_code: string; account_name: string }[]>([]);
-  const [roleInit, setRoleInit] = useState<Record<string, boolean>>({});
+  // 类型多选：与列表页同一套参照表（counterparty_types），历史多角色码读入时归一
+  const { items: typeItems, error: typeErr } = useLookupItems("counterparty_types");
+  const [types, setTypes] = useState<string[]>([]);
+  const [typesInit, setTypesInit] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
@@ -107,7 +109,6 @@ export default function CounterpartyDetailPage() {
       setParty(data);
       const next: Record<string, string> = {};
       next.name = data?.name ?? "";
-      next.type = data?.type ?? "";
       next.country = data?.country ?? "";
       next.status = data?.status ?? "active";
       next.sanctions_status = data?.sanctions_status ?? "clear";
@@ -119,11 +120,15 @@ export default function CounterpartyDetailPage() {
       setForm(next);
       setInit({ ...next });
 
-      const selected: string[] = Array.isArray(data?.address_types) ? data.address_types : [];
-      const r: Record<string, boolean> = {};
-      for (const role of PARTY_ROLES) r[role] = selected.includes(role);
-      setRoles(r);
-      setRoleInit({ ...r });
+      // 类型多选：优先读多选集合，老数据只有单值 type 时退化为一项
+      const rawTypes: string[] = Array.isArray(data?.address_types) && data.address_types.length
+        ? data.address_types
+        : data?.type
+          ? [data.type]
+          : [];
+      const normalized = normalizePartyTypes(rawTypes);
+      setTypes(normalized);
+      setTypesInit(normalized);
       setLoadErr("");
     } catch (ex) {
       // 取数失败必须显性报错，不能静默留空表单
@@ -157,7 +162,7 @@ export default function CounterpartyDetailPage() {
     setBusy(true);
     try {
       const payload: Record<string, unknown> = {};
-      for (const key of ["name", "type", "country", "status", "sanctions_status", "address", "notes"] as const) {
+      for (const key of ["name", "country", "status", "sanctions_status", "address", "notes"] as const) {
         if (form[key] !== init[key]) payload[key] = form[key];
       }
       for (const f of TEXT_FIELDS) {
@@ -183,9 +188,11 @@ export default function CounterpartyDetailPage() {
         if (form[f.key] === init[f.key]) continue;
         payload[f.key] = form[f.key] === "" ? null : form[f.key];
       }
-      const nextRoles = PARTY_ROLES.filter((r) => roles[r]);
-      const prevRoles = PARTY_ROLES.filter((r) => roleInit[r]);
-      if (nextRoles.join(",") !== prevRoles.join(",")) payload.address_types = nextRoles.length ? nextRoles : null;
+      // 类型多选：type 保留单值（历史筛选字段，取首个勾选），完整集合写 address_types
+      if (types.join(",") !== typesInit.join(",")) {
+        payload.type = types[0] || "other";
+        payload.address_types = types.length ? types : null;
+      }
 
       if (Object.keys(payload).length === 0) {
         toast.success(t("common.saved", "Saved"));
@@ -381,10 +388,36 @@ export default function CounterpartyDetailPage() {
                     {t("common.name", "Name")}
                     <input value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
                   </label>
-                  <label>
-                    {t("page.parties.type", "Type")}
-                    <LookupSelect dataset="counterparty_types" value={form.type ?? ""} onChange={(v) => setForm({ ...form, type: v })} />
-                  </label>
+                  <div className="form-type-multi span-all">
+                    <span className="field-label">{t("page.parties.types", "Types")}</span>
+                    {/* 类型多选：一家公司常同时是船东 + 经纪人。勾选集合写 address_types，
+                        type 单值字段取首个勾选（历史筛选兼容） */}
+                    <div className="check-grid">
+                      {typeItems.map((it) => (
+                        <label key={it.code} className="check-row">
+                          <input
+                            type="checkbox"
+                            checked={types.includes(it.code)}
+                            onChange={(e) =>
+                              setTypes(
+                                e.target.checked
+                                  ? [...types, it.code]
+                                  : types.filter((c) => c !== it.code)
+                              )
+                            }
+                          />
+                          {`${it.code} — ${it.label}`}
+                        </label>
+                      ))}
+                    </div>
+                    {!typeItems.length && !typeErr ? (
+                      <span className="muted">{t("common.loading", "加载中…")}</span>
+                    ) : null}
+                    {typeErr ? (
+                      <span className="field-error" role="alert">{typeErr}</span>
+                    ) : null}
+                    <span className="hint">{t("page.parties.types_hint", "Select every role this company plays — one company is often both owner and broker.")}</span>
+                  </div>
                   <label>
                     {t("page.parties.country", "Country")}
                     <LookupSelect dataset="countries" value={form.country ?? ""} onChange={(v) => setForm({ ...form, country: v })} />
@@ -467,21 +500,6 @@ export default function CounterpartyDetailPage() {
               ) : null}
             </FormSection>
           ))}
-
-          <FormSection title={t("page.parties.address_types", "Address types (IMOS multi-role)")}>
-            <div className="check-grid span-all">
-              {PARTY_ROLES.map((role) => (
-                <label key={role} className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(roles[role])}
-                    onChange={(e) => setRoles({ ...roles, [role]: e.target.checked })}
-                  />
-                  {t(`page.parties.role_${role}`, role)}
-                </label>
-              ))}
-            </div>
-          </FormSection>
           </StateView>
         </div>
       ) : null}

@@ -32,6 +32,7 @@ import { downloadCsv } from "@/lib/csv";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
+import { normalizePartyTypes } from "@/lib/party-catalog";
 import { formatDateTimeShort } from "@/lib/datetime";
 
 type Party = {
@@ -40,7 +41,7 @@ type Party = {
   type: string;
   country: string | null;
   sanctions_status: string;
-  // IMOS 对齐字段（CounterpartyIn 全量序列化）
+  // 对手方扩展字段
   short_name?: string | null;
   company_no?: string | null;
   ref_no?: string | null;
@@ -222,8 +223,10 @@ function CounterpartiesPage() {
     setOpen(r);
     setEdit({
       name: r.name,
-      // 类型多选：优先读 IMOS 多角色集合；老数据只有单值 type 时退化为一项
-      types: r.address_types?.length ? r.address_types : r.type ? [r.type] : [],
+      // 类型多选：优先读多选集合；老数据只有单值 type 时退化为一项
+      types: normalizePartyTypes(
+        r.address_types?.length ? r.address_types : r.type ? [r.type] : []
+      ),
       country: r.country || "", sanctions_status: r.sanctions_status || "clear",
       address: r.address || "", tax_id: r.tax_id || "", swift_code: r.swift_code || "",
       registration_no: r.registration_no || "", website: r.website || "", phone: r.phone || "",
@@ -413,7 +416,12 @@ function CounterpartiesPage() {
       width: 120,
       value: (r) => r.type,
       // 多角色公司展示完整集合；老数据只有单值
-      render: (_v, r) => (r.address_types?.length ? r.address_types.join(", ") : r.type),
+      render: (_v, r) => {
+        const set = normalizePartyTypes(
+          r.address_types?.length ? r.address_types : r.type ? [r.type] : []
+        );
+        return set.length ? set.join(", ") : "—";
+      },
     },
     {
       key: "company_no",
@@ -767,7 +775,7 @@ function CounterpartiesPage() {
         </label>
         <div className="form-type-multi">
           <span className="field-label">{t("common.type", "Type")}</span>
-          {/* 类型多选：一家公司常同时是船东+经纪人。勾选集合写 IMOS address_types，
+          {/* 类型多选：一家公司常同时是船东+经纪人。勾选集合写 address_types，
               type 单值字段取首个勾选（历史筛选兼容） */}
           <div className="check-grid">
             {typeItems.map((it) => (

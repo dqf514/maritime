@@ -286,6 +286,16 @@ def seed_i18n(db: Session) -> None:
         ("page.finance.no", "No.", "编号"),
         # 历史种子写的是 {days}，组件传 {n}——强刷以治愈已入库的旧值
         ("ship.cert.days_left", "{n} d left", "剩余 {n} 天"),
+        # 对手方类型：去掉竞品名残留，多选标签与提示一并刷
+        ("page.parties.address_types", "Address types", "地址类型"),
+        ("page.parties.types", "Types", "类型（可多选）"),
+        (
+            "page.parties.types_hint",
+            "Select every role this company plays — one company is often both owner and broker.",
+            "可多选：同一家公司常常既是船东又是经纪人。",
+        ),
+        # 船舶页分区标题同样去掉竞品名残留
+        ("page.vessels.section_commercial", "Commercial identity", "商业标识"),
     ):
         row_en = db.scalar(select(UiMessage).where(UiMessage.msg_key == key, UiMessage.locale == "en"))
         if row_en:
