@@ -40,6 +40,7 @@ type OfficeCfg = {
   client_id: string | null;
   client_secret_masked: string | null;
   ms_tenant: string;
+  sso_scopes?: string | null;
   effective_mode: string;
   redirect_uri: string;
   has_secret: boolean;
@@ -85,7 +86,7 @@ function PlatformTenantsPage() {
   const [initialPw, setInitialPw] = useState("");
   const [confirm, setConfirm] = useState<{ message: string; danger?: boolean; action: () => void } | null>(null);
   const [ocfg, setOcfg] = useState<OfficeCfg | null>(null);
-  const [oform, setOform] = useState({ override_enabled: false, client_id: "", client_secret: "", ms_tenant: "" });
+  const [oform, setOform] = useState({ override_enabled: false, client_id: "", client_secret: "", ms_tenant: "", sso_scopes: "" });
   const [oclear, setOclear] = useState(false);
   const [otest, setOtest] = useState<{ ok: boolean; text: string } | null>(null);
   const [otestBusy, setOtestBusy] = useState(false);
@@ -173,6 +174,7 @@ function PlatformTenantsPage() {
         client_id: oc.client_id || "",
         client_secret: "",
         ms_tenant: oc.ms_tenant || "",
+        sso_scopes: oc.sso_scopes || "",
       });
       setOclear(false);
       setOtest(null);
@@ -514,6 +516,7 @@ function PlatformTenantsPage() {
       override_enabled: oform.override_enabled,
       client_id: oform.client_id,
       ms_tenant: oform.ms_tenant,
+      sso_scopes: oform.sso_scopes,
     };
     if (oclear) body.client_secret = null;
     else if (oform.client_secret) body.client_secret = oform.client_secret;
@@ -895,7 +898,21 @@ function PlatformTenantsPage() {
                     placeholder="common"
                   />
                 </label>
+                <label>
+                  {t("platform.officecfg.sso_scopes", "SSO 登录 Scope（留空=平台默认）")}
+                  <input
+                    value={oform.sso_scopes}
+                    onChange={(e) => setOform({ ...oform, sso_scopes: e.target.value })}
+                    placeholder="openid profile email offline_access User.Read"
+                  />
+                </label>
               </div>
+              <p className="muted" style={{ fontSize: "0.82rem", marginTop: "0.35rem" }}>
+                {t(
+                  "platform.officecfg.sso_scopes_hint",
+                  "仅有 SSO 权限（无 Graph 权限）的 Entra 应用请填：openid profile email",
+                )}
+              </p>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.85rem", alignItems: "center" }}>
                 <button
                   className="btn btn-primary"

@@ -46,6 +46,7 @@ class MsConfig:
     client_secret: str = ""
     ms_tenant: str = "common"
     source: str = "none"  # tenant | global | none
+    sso_scopes: str | None = None  # per-tenant OIDC login scopes; None = default
 
 
 class GraphError(Exception):

@@ -1058,6 +1058,9 @@ class TenantOfficeConfigIn(BaseModel):
     # secret semantics: omitted / "" = keep current, null = clear, value = replace
     client_secret: str | None = None
     ms_tenant: str | None = None
+    # Optional per-tenant OIDC login scopes (e.g. "openid profile email" for an
+    # SSO-only app). Omitted = keep current; "" = clear (use platform default).
+    sso_scopes: str | None = None
 
 
 def _office_config_out(db: Session, tenant: Tenant) -> dict:
@@ -1068,6 +1071,7 @@ def _office_config_out(db: Session, tenant: Tenant) -> dict:
         "client_id": tenant.ms_client_id,
         "client_secret_masked": mask_ms_secret(tenant.ms_client_secret),
         "ms_tenant": tenant.ms_tenant or "",
+        "sso_scopes": tenant.ms_sso_scopes or "",
         "effective_mode": effective_mode(cfg),
         "redirect_uri": f"{settings.api_public_base.rstrip('/')}/api/v1/office/oauth/callback",
         "has_secret": bool(tenant.ms_client_secret),
@@ -1117,6 +1121,9 @@ def platform_put_office_config(
     if body.ms_tenant is not None:
         tenant.ms_tenant = body.ms_tenant.strip() or None
         changed.append("ms_tenant")
+    if body.sso_scopes is not None:
+        tenant.ms_sso_scopes = body.sso_scopes.strip() or None
+        changed.append("sso_scopes")
     tenant.updated_at = datetime.now(timezone.utc)
     # Audit trail must never contain the secret value itself
     audit(

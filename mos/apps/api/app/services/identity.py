@@ -487,13 +487,20 @@ def build_oauth_authorize_url(
         default_seg = (ms_config.ms_tenant if ms_config else s.microsoft_tenant) or "common"
         tenant_seg = (microsoft_tenant or default_seg or "common").strip() or "common"
         base = f"https://login.microsoftonline.com/{tenant_seg}/oauth2/v2.0/authorize"
+        # Per-tenant override (tenants.ms_sso_scopes) wins; otherwise keep the
+        # historic platform scope so existing tenants are unaffected. SSO-only
+        # apps (no Graph permission) can set "openid profile email".
+        scope = (
+            (ms_config.sso_scopes if ms_config and ms_config.sso_scopes else None)
+            or "openid profile email offline_access User.Read"
+        )
         q = urllib.parse.urlencode(
             {
                 "client_id": client_id,
                 "response_type": "code",
                 "redirect_uri": redirect_uri,
                 "response_mode": "query",
-                "scope": "openid profile email offline_access User.Read",
+                "scope": scope,
                 "state": state,
             }
         )

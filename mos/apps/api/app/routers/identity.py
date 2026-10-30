@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
@@ -849,6 +851,7 @@ def oauth_callback(
     state: str = "",
     code: str | None = None,
     error: str | None = None,
+    error_description: str | None = None,
     stub_email: str | None = None,
     db: Session = Depends(get_db),
 ):
@@ -869,7 +872,18 @@ def oauth_callback(
     settings = get_settings()
     web = settings.web_public_base.rstrip("/")
     if error:
-        return RedirectResponse(f"{web}/login?oauth_error={error}")
+        # Microsoft/Google return ?error=...&error_description=... (AADSTS codes
+        # live in the description). Surface it in logs so SSO setup failures are
+        # diagnosable; the description contains no secrets.
+        logging.getLogger(__name__).warning(
+            "oauth callback rejected provider=%s error=%s description=%s",
+            provider,
+            error,
+            (error_description or "")[:400],
+        )
+        detail = quote((error_description or "")[:300], safe="")
+        suffix = f"&oauth_error_detail={detail}" if detail else ""
+        return RedirectResponse(f"{web}/login?oauth_error={error}{suffix}")
 
     # ── stub_email 是后门：只在显式打开 stub 模式时可用 ──
     if stub_email and not settings.oauth_allow_stub:

@@ -159,10 +159,15 @@ export default function LoginPage() {
 
   // Surface OAuth callback failures (?oauth_error=… from the backend redirect).
   useEffect(() => {
-    const code = new URLSearchParams(window.location.search).get("oauth_error");
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("oauth_error");
     if (!code) return;
+    const detail = params.get("oauth_error_detail");
     const map: Record<string, string> = {
-      access_denied: t("login.oauth_err_access_denied", "Sign-in was cancelled at the identity provider."),
+      access_denied: t("login.oauth_err_access_denied", "Sign-in was cancelled or consent was denied at the identity provider."),
+      consent_required: t("login.oauth_err_consent", "The identity provider requires admin consent for the requested permissions."),
+      interaction_required: t("login.oauth_err_state", "Sign-in session expired — please try again."),
+      login_required: t("login.oauth_err_state", "Sign-in session expired — please try again."),
       invalid_state: t("login.oauth_err_state", "Sign-in session expired — please try again."),
       expired_state: t("login.oauth_err_state", "Sign-in session expired — please try again."),
       domain_not_allowed: t("login.error_domain", "This email domain is not allowed by the tenant."),
@@ -175,7 +180,8 @@ export default function LoginPage() {
       invalid_id_token: t("login.oauth_err_token", "Identity provider rejected the sign-in — check the tenant SSO configuration."),
       token_endpoint_unreachable: t("login.error_network", "Cannot reach API — check that the backend is running."),
     };
-    setError(map[code] || t("login.oauth_err_generic", "SSO sign-in failed.", { code }));
+    const base = map[code] || t("login.oauth_err_generic", "SSO sign-in failed.", { code });
+    setError(detail ? `${base} (${detail})` : base);
     window.history.replaceState(null, "", window.location.pathname);
   }, [t]);
 

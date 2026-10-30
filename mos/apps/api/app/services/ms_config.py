@@ -36,6 +36,7 @@ def resolve_ms_config(db: Session, tenant_id: UUID, *, settings: Settings | None
             client_secret=_decrypt(tenant.ms_client_secret),
             ms_tenant=(tenant.ms_tenant or "").strip() or "common",
             source="tenant",
+            sso_scopes=(tenant.ms_sso_scopes or "").strip() or None,
         )
     if s.microsoft_client_id:
         return MsConfig(

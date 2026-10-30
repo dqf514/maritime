@@ -24,6 +24,9 @@ class Tenant(Base):
     ms_client_secret: Mapped[str | None] = mapped_column(Text)
     ms_tenant: Mapped[str | None] = mapped_column(Text)  # empty/None = "common"
     ms_override_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Optional per-tenant OIDC login scopes (space-separated). NULL = platform
+    # default. SSO-only Entra apps can use "openid profile email" (no Graph).
+    ms_sso_scopes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
