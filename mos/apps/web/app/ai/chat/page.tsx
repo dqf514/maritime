@@ -6,6 +6,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { StatusLegend } from "@/components/StatusLegend";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
@@ -247,6 +248,7 @@ export default function AiChatPage() {
         breadcrumb={[{ label: t("nav.ai_chat", "MariAI") }]}
         title={t("page.ai.chat.title", "MariAI Chat")}
         subtitle={t("page.ai.chat.sub", "Ask the fleet copilot — estimates, voyages, laytime and market context.")}
+        actions={<PageGuide pageKey="ai_chat" />}
       />
       <div className="ai-chat">
         {/* 大模型未配置 → 友好常驻提示；已配置但回落 → 回复后提示 */}

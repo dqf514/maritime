@@ -16,6 +16,7 @@ CATEGORIES: list[dict[str, str]] = [
     {"id": "operations", "en": "Operations", "zh": "航次运营"},
     {"id": "finance", "en": "Finance & claims", "zh": "财务与索赔"},
     {"id": "office", "en": "Microsoft 365", "zh": "Microsoft 365"},
+    {"id": "automation", "en": "AI & automation", "zh": "AI 与自动化"},
     {"id": "platform", "en": "Administration", "zh": "系统管理"},
     {"id": "integration", "en": "API & integrations", "zh": "API 与集成"},
 ]
@@ -50,15 +51,15 @@ Use this Knowledge Centre to learn workflows, configure Office connectivity, and
         "title_zh": "登录与第一天上手",
         "summary_en": "How to sign in, pick a workspace, and find your desk.",
         "summary_zh": "如何登录、选择工作区并进入对应业务台面。",
-        "body_en": """1. Open the web app and sign in with your company tenant code, email and password (or Microsoft / Google SSO if enabled).
+        "body_en": """1. Open the web app and sign in with your company tenant code, email and password — or, when your tenant has Microsoft / Google SSO enabled, the identity provider button on the sign-in screen comes first.
 2. After login you land on the Workbench. Use workspace tabs (e.g. Chartering Day, Ops Night) to switch focus.
 3. Left navigation lists modules licensed for your role. Control plane (Settings) is for tenant administrators.
-4. Press Ctrl+K anytime to search pages, vessels, and common actions.
+4. Press Ctrl+K anytime to search pages, vessels, and common actions; press Ctrl+J to open the AI assistant on the current page.
 5. Open Help → Knowledge Centre from the sidebar or top links when you need guidance.""",
-        "body_zh": """1. 打开网站，使用公司租户代码、邮箱与密码登录（若已开通，也可使用 Microsoft / Google 单点登录）。
+        "body_zh": """1. 打开网站，使用公司租户代码、邮箱与密码登录 —— 若租户已开通 Microsoft / Google SSO，登录页会优先展示身份提供方按钮。
 2. 登录后进入工作台。可用顶部工作区标签切换关注重点（如租船日班、操作夜班）。
 3. 左侧导航按角色与许可证显示模块；「控制平面」供租户管理员使用。
-4. 随时按 Ctrl+K 搜索页面、船舶与常用操作。
+4. 随时按 Ctrl+K 搜索页面、船舶与常用操作；按 Ctrl+J 打开当前页面的 AI 助手。
 5. 需要指引时，从侧栏或顶部进入「帮助 → 知识中心」。""",
     },
     {
@@ -127,25 +128,27 @@ Tip: keep naming consistent (vessel + load/disch + laycan) so search and analyti
 - Submit for workflow approval when your tenant policy requires it.
 - On activation, cargo and schedule context become available to Operations for voyage creation.
 - COA liftings can be recorded against contract of affreightment structures where enabled.
+- An approved charter can be created directly from an email draft in Email Review, and an estimate can be converted into a charter draft with one click.
 
 Always confirm counterparty KYC / compliance status before activation if your policy requires it.""",
         "body_zh": """「租约」台面覆盖从草稿、审批到激活的成交过程。
 
 - 录入商务条款；可关联来源估算。
-- 若租户启用了审批流，提交后进入工作流收件箱。
+- 若租户启用了审批流，提交后进入审批收件箱。
 - 激活后，货载与船期上下文可供运营创建航次。
 - 在启用场景下，可登记 COA 提货（lifting）。
+- 邮件复核中可由一封邮件直接生成估算与租约草稿；估算也可一键转成租约草稿。
 
 若公司政策要求，激活前请确认对手方合规 / KYC 状态。""",
     },
     {
         "slug": "voyages",
         "category": "operations",
-        "tags": ["voyage", "sof", "noon", "port call", "航次", "午报"],
-        "title_en": "Voyages, port calls and SOF",
-        "title_zh": "航次、靠港与 SOF",
-        "summary_en": "Run the operational voyage: port calls, noon reports, SOF and schedule.",
-        "summary_zh": "执行航次运营：靠港、午报、SOF 与船期。",
+        "tags": ["voyage", "sof", "noon", "port call", "closeout", "航次", "午报", "收尾"],
+        "title_en": "Voyages, port calls, SOF and closeout",
+        "title_zh": "航次、靠港、SOF 与收尾",
+        "summary_en": "Run the operational voyage: port calls, noon reports, SOF, schedule and the closeout checklist.",
+        "summary_zh": "执行航次运营：靠港、午报、SOF、船期与收尾清单。",
         "body_en": """Open Voyages under Operations.
 
 - Create or open a voyage linked to an activated charter.
@@ -153,6 +156,7 @@ Always confirm counterparty KYC / compliance status before activation if your po
 - Record noon reports and SOF events that feed laytime calculations.
 - Watch schedule blocks for conflicts; hard conflicts should be resolved before sailing.
 - Fleet Twin shows positions and alerts for situational awareness.
+- The Closeout tab lists the pre-close items (port calls, SOF facts, laytime finalisation, claims, invoices, bunker delivery, emissions, accrual reconciliation). Completing a voyage turns every missing item into a task for the owning role, and the panel shows actual versus estimate TCE side by side.
 
 Use consistent local times for port events — MariOS stores and displays local time, not UTC-only.""",
         "body_zh": """在「运营」中打开「航次」。
@@ -162,6 +166,7 @@ Use consistent local times for port events — MariOS stores and displays local 
 - 录入午报与 SOF 事件，供后续装卸时间计算使用。
 - 关注船期块冲突；硬冲突应在开航前处理。
 - 「船队孪生」提供船位与告警态势。
+- 「收尾」页签列出关航前的检查项（挂港、SOF 事实、装卸时间定稿、索赔、账单、加油交付、排放、计提对账）。航次完成时，每一项未完成内容都会变成对应角色的任务，同页并排显示实际 TCE 与估算 TCE。
 
 港口事件请使用当地时间；系统按本地时间存储与展示，而非仅用 UTC。""",
     },
@@ -179,6 +184,7 @@ Use consistent local times for port events — MariOS stores and displays local 
 - Invoices: freight, demurrage and related types with payment tracking.
 - Analytics → Voyage P&L compares estimated vs actual revenue, cost and variance.
 - GL post helpers prepare entries for your accounting connector when configured.
+- Invoices and laytime calculations carry an Export PDF button; the layout comes from System settings → Document templates.
 
 Demurrage users typically work from the demurrage workspace and claim inbox.""",
         "body_zh": """「财务」台面覆盖发票、收付款、装卸时间与索赔。
@@ -187,6 +193,7 @@ Demurrage users typically work from the demurrage workspace and claim inbox.""",
 - 发票：运费、滞期费等类型，并跟踪收款。
 - 「分析 → 航次损益」对比估算与实际的收入、成本与差异。
 - 配置会计连接后，可使用过账辅助生成分录。
+- 账单与装卸时间计算详情带「导出 PDF」按钮，版式取自「系统设置 → 单据模板」。
 
 滞期岗位通常使用滞期工作区与索赔相关收件箱。""",
     },
@@ -207,10 +214,14 @@ Demurrage users typically work from the demurrage workspace and claim inbox.""",
 
 **What you can do**
 - Browse sample inbox context and send mail via Graph when enabled.
+- Sync mail into the Email Review desk, where each message is classified and turned into a reviewed business draft.
 - List drives and provision voyage / charter folders linked back into MariOS.
 - Post channel messages for approvals and ETA alerts.
 - Register outbound webhooks for Power Automate or partner systems.
 - Sideload add-in manifests for Outlook, Teams and Excel from the add-ins table.
+
+**Email Review**
+Office mail feeds Email Review (`/email/review`): inbound mail is classified, given a suggested action, and can create a business draft — with the mail reviewable side by side. See "Email review and AI-assisted paperwork".
 
 **API keys**
 Create keys under Control plane → API keys. Office add-ins and partners may call the API with header `X-API-Key`.
@@ -225,10 +236,14 @@ Linked files and folders appear as Office resource links on the related business
 
 **可做事项**
 - 查看收件上下文，并在启用 Graph 时发送邮件。
+- 把邮件同步进邮件复核台面：每封邮件被分类、给出处理建议，并可生成待复核的业务草稿。
 - 列出驱动器，并为航次 / 租约创建文件夹并回写链接。
 - 向 Teams 频道发送审批与 ETA 等通知。
 - 注册出站 Webhook，对接 Power Automate 或合作伙伴系统。
 - 从插件列表侧载 Outlook、Teams、Excel 清单。
+
+**邮件复核**
+Office 邮件汇入邮件复核台面（`/email/review`）：来件被分类、给出建议动作，并可生成业务草稿，邮件原文与草稿并排复核。详见「邮件复核与 AI 辅助落单」。
 
 **API 密钥**
 在「控制平面 → API 密钥」创建。Office 插件与伙伴可通过请求头 `X-API-Key` 调用接口。
@@ -273,6 +288,10 @@ Commercial and technical views share the same vessel master data.""",
 - Languages & terms — default locale and maritime terminology overrides.
 - Feature permissions & workflows — fine-grained capabilities and approval definitions.
 - Company & brand — logo and legal name for portals.
+- AI Hub — providers, default models, skill bindings and usage for the tenant.
+- Document templates — fourteen editable single-document layouts.
+
+On the sign-in screen, an enabled identity provider is offered first: if Microsoft or Google SSO is configured for the tenant, that button is shown ahead of the password form, so colleagues reach their desk through one click. Password sign-in remains available as a fallback.
 
 Platform operators (sys tenant) manage multi-tenant estate, plans and product branding.""",
         "body_zh": """租户管理员常用：
@@ -282,6 +301,10 @@ Platform operators (sys tenant) manage multi-tenant estate, plans and product br
 - 语言与术语 — 默认语言与航运术语覆盖。
 - 功能权限与工作流 — 细粒度能力与审批定义。
 - 公司与品牌 — 门户 Logo 与法定名称。
+- AI Hub — 租户级的提供商、默认模型、技能绑定与用量。
+- 单据模板 — 十四类可编辑的单据版式。
+
+在登录页，已启用的身份提供方优先展示：若租户配置了 Microsoft 或 Google SSO，该按钮会排在密码表单之前，同事一键即可进入工作台；密码登录作为兜底仍然保留。
 
 平台运营方（sys 租户）管理多租户资产、套餐与产品品牌。""",
     },
@@ -347,6 +370,8 @@ MariOS 以共享主库 + `tenant_id` 隔离为主。平台运营方可按租户�
 - API keys: Control plane → API keys; send `Authorization: Bearer` (user JWT) or `X-API-Key`.
 - Integration Hub: FX, sanctions lists, AIS, bunker index, PMS, email and Microsoft 365 connectors with health tests.
 - Office webhooks: subscribe to events such as charter.activated, voyage.started, invoice.issued, office.sync.done.
+- Business events: the same events drive in-app automation — tasks, desk notifications, the voyage closeout checklist and automatic GL posting for a closed disbursement. See "Event automation, closeout checklists and approvals".
+- Task rules: `/api/v1/config/task-rules` creates a task when a condition on an entity is met.
 - DataOps: AI-assisted migration from mailbox / PST / Excel and one-click tenant backup.
 
 Treat secrets as confidential; rotate keys if a device or partner is retired.""",
@@ -355,6 +380,8 @@ Treat secrets as confidential; rotate keys if a device or partner is retired."""
 - API 密钥：控制平面 → API 密钥；使用 `Authorization: Bearer`（用户 JWT）或 `X-API-Key`。
 - 集成中枢：汇率、制裁名单、AIS、燃油指数、PMS、邮件与 Microsoft 365 等连接器，支持健康检测。
 - Office Webhook：可订阅 charter.activated、voyage.started、invoice.issued、office.sync.done 等事件。
+- 业务事件：同一批事件驱动应用内自动化 —— 任务、台面通知、航次收尾清单，以及使费关闭时自动记账总账凭证。详见「事件自动化、收尾清单与审批」。
+- 任务规则：`/api/v1/config/task-rules` 可在满足实体条件时创建任务。
 - DataOps：从邮箱 / PST / Excel 等 AI 辅助迁入，以及一键租户备份。
 
 请妥善保管密钥；设备或合作伙伴停用后应及时轮换。""",
@@ -375,7 +402,13 @@ Treat secrets as confidential; rotate keys if a device or partner is retired."""
 
 **Does search find help articles?** Global search finds app pages; use Knowledge Centre search or Ask for documentation answers.
 
-**Is time stored in UTC?** Business times are handled in local time for port and laytime facts.""",
+**Is time stored in UTC?** Business times are handled in local time for port and laytime facts.
+
+**Does the AI write into my records?** No. Every AI feature proposes values, drafts or suggestions; a person confirms before anything is stored.
+
+**Something was created without me asking.** Check the Routine task hub and the voyage Closeout tab — the system creates follow-up tasks when business events fire.
+
+**Can I export a document as PDF?** Invoice and laytime calculation details have an Export PDF button; the other document types are reachable from their render URL under System settings → Document templates.""",
         "body_zh": """**如何切换语言？** 使用顶栏语言切换，或管理员中的「语言与术语」。
 
 **为什么看不到某个模块？** 可能是角色或模块许可证未包含，请联系租户管理员。
@@ -384,7 +417,184 @@ Treat secrets as confidential; rotate keys if a device or partner is retired."""
 
 **全局搜索能找到帮助文章吗？** 全局搜索以应用页面为主；文档请用知识中心的搜索或问答。
 
-**时间是否只用 UTC？** 港口与装卸时间等业务时间按本地时间处理与展示。""",
+**时间是否只用 UTC？** 港口与装卸时间等业务时间按本地时间处理与展示。
+
+**AI 会直接写入我的记录吗？** 不会。所有 AI 功能只产出建议值、草稿或提示，落地前一律由人确认。
+
+**我没操作却生成了东西？** 请看例行任务中枢与航次「收尾」页签 —— 业务事件触发时系统会自动创建跟进任务。
+
+**单据能导出 PDF 吗？** 账单与装卸时间计算详情带「导出 PDF」按钮，其余类型可在「系统设置 → 单据模板」的渲染地址打开。""",
+    },
+    {
+        "slug": "ai-assistant",
+        "category": "automation",
+        "tags": ["ai", "assistant", "copilot", "人工智能", "助手", "大模型", "chat"],
+        "title_en": "AI assistant, MariAI chat and AI Hub",
+        "title_zh": "AI 助手、MariAI 对话与 AI Hub",
+        "summary_en": "Where AI lives in MariOS — the in-app assistant, the MariAI desk, and the tenant AI Hub.",
+        "summary_zh": "MariOS 中 AI 的三个位置：应用内助手、MariAI 对话台，以及租户级 AI Hub。",
+        "body_en": """AI in MariOS always suggests. It never writes business data on its own.
+
+**In-app assistant** — click "AI assistant" in the bottom status bar (or press Ctrl+J). The panel shows whether a model is configured, binds the page you are on and the estimate you are editing, and offers Summarize / Daily report / Explain values. Every answer carries a source badge: "AI" means a model answered, "rules" means the built-in deterministic engine answered because no model was reachable.
+
+**MariAI chat** (`/ai/chat`, nav: Analytics & AI → MariAI) — a full-page desk with preset agents: Voyage Advisor, Compliance Assistant, Market Analyst and Mari Copilot. Seed the agents from the empty-state button, start a conversation and ask about TCE, voyage P&L, port distances or compliance. Tool calls are listed under "Tool calls", so you can see which figures an answer used.
+
+**AI Hub** (`/settings/ai`, tenant admins) — four tabs. Providers: add your own Anthropic / OpenAI / Azure / Ollama endpoint, test connectivity; keys are stored encrypted and never returned in clear. Model settings: a global default model plus a per-agent override. Skill bindings: route a skill to a primary provider with an optional fallback. Usage: requests, tokens in and out, average latency by agent, conversation and by day.
+
+**Cost and quota** — a tenant's own provider key is not billed by the platform. Platform-shared endpoints are metered against the tenant allowance; when it runs out the assistant says so and you can switch to your own key. Metering is off by default.
+
+**Limits** — the assistant answers from the page context it was given, so open the record first. Without a configured model every AI feature degrades to the rules engine. That is intended, not an error.
+
+**Your own key, your own data** — keys are encrypted at rest, scoped to one tenant and never leave it. See AI Hub → Providers.""",
+        "body_zh": """MariOS 里的 AI 始终是「建议」，它不会自行写入业务数据。
+
+**应用内助手** —— 点击底栏的「AI 助手」（或按 Ctrl+J）。面板会显示是否已配置模型，绑定当前页面与正在编辑的估算，并提供「总结 / 生成日报 / 解释数值」等动作。每条回答都带来源徽标：「AI」表示由模型作答，「规则」表示没有可用模型时由内置确定性引擎作答。
+
+**MariAI 对话**（`/ai/chat`，导航：分析与 AI → MariAI）—— 独立对话台，预置四类智能体：航次顾问、合规助手、市场分析师与 Mari Copilot。可从空状态按钮一键创建智能体，开始对话后即可询问 TCE、航次损益、港口距离或合规问题。回答下方「工具调用」会列出用到的取数，便于核对口径。
+
+**AI Hub**（`/settings/ai`，租户管理员）—— 四个页签。提供商：接入自有 Anthropic / OpenAI / Azure / Ollama 端点并测试连通性，密钥加密存储且不再明文返回。模型设置：全局默认模型，并可为单个智能体指定覆盖模型。技能绑定：为技能指定主用提供商与可选的备用提供商。用量：请求数、输入/输出 token、按智能体的平均延迟、按会话与按日分布。
+
+**成本与额度** —— 租户自有密钥不计费平台额度；平台共享端点按租户额度计量，额度用尽时助手会明确告知，可切换为自有密钥。计量默认关闭。
+
+**边界** —— 助手基于当前页面的上下文作答，请先打开对应单据。未配置模型时所有 AI 功能退化为规则引擎，这是设计如此而非故障。
+
+**自有密钥与自有数据** —— 密钥静态加密、限定在单个租户内，不出租户。见 AI Hub → 提供商。""",
+    },
+    {
+        "slug": "email-ai",
+        "category": "commercial",
+        "tags": ["email", "mail", "m365", "ai", "邮件", "复核", "落单"],
+        "title_en": "Email review and AI-assisted paperwork",
+        "title_zh": "邮件复核与 AI 辅助落单",
+        "summary_en": "How inbound mail becomes quotes, charters, laytime, bunker and invoice drafts — always confirmed by a person.",
+        "summary_zh": "来件邮件如何变成询价、租约、装卸时间、加油与账单草稿 —— 每一步都由人工确认。",
+        "body_en": """Email Review (`/email/review`) classifies inbound and outbound mail and offers the action that fits the mail type. Nothing is created until you confirm it.
+
+**Suggested actions** — open a message and the panel parses it with rules first; business mail that is unclear or incomplete is additionally sent to the model. The badge tells you which happened: "AI identified", "Rule suggestion", or "AI identification failed — rule suggestion below". The reason line says why the action was suggested, and when the model re-classified the mail both types are shown.
+
+**Create a business draft** — depending on the mail type this creates an estimate and charter draft, stamps the NOR time, or creates a laytime calculation, bunker order, port disbursement, invoice or claim draft. A confirmation dialog precedes it, and applying the same mail twice does nothing.
+
+**Fill voyage estimate** — parse a recap into estimate fields. Review every value, tick the ones to use, then apply: only ticked fields are written, the rest stay untouched.
+
+**Ignore** — mark a mail as irrelevant. With "remember this mistake" the sender and mail type are remembered so similar mail stops reaching the review queue. Ignore rules can be revoked.
+
+**Archive** — attach a mail to a voyage, invoice, claim, bunker order or other record. The body is stored as a versioned attachment and the original mail appears in the record's linked resources.
+
+**Mailbox tabs** — inbox, sent and custom folders are browsable in tabs. Switching folder triggers a sync with a five-minute cooldown, and the header shows how many mails were synced and when. The sync window and per-folder cap are adjustable.""",
+        "body_zh": """邮件复核（`/email/review`）对收发邮件分类并给出匹配的动作建议；在你确认之前不会创建任何单据。
+
+**处理建议** —— 打开邮件后，面板先用规则解析；对业务含义不明或字段不全的邮件，会再送模型识别。徽标说明走了哪条路：「AI 已识别」「规则建议」或「AI 识别失败 —— 以下为规则建议」。理由行说明为何给出该建议；若模型改判了邮件类型，两种类型都会并列显示。
+
+**生成业务草稿** —— 按邮件类型创建「估算 + 租约草稿」、填报 NOR 时间，或创建装卸时间计算、加油订单、港口使费、账单或索赔草稿。创建前有确认弹窗；同一封邮件重复处理不会重复创建。
+
+**填入航次计算** —— 把 recap 解析为估算字段。逐项核对数值，勾选需要采用的字段后再应用：只有勾选的字段会写入，其余保持原样。
+
+**忽略** —— 标记为与业务无关。勾选「记住这个错误」后，发件人与邮件类型会被记住，同类邮件不再进入复核队列。忽略规则可撤销。
+
+**存档** —— 把邮件挂到航次、账单、索赔、加油订单等记录上。正文以版本化附件形式保存，原邮件出现在该记录的资源链接中。
+
+**邮箱分页** —— 收件箱、已发送与自定义文件夹以页签切换。切换文件夹会触发同步（五分钟冷却），页头显示本次同步数量与时间；同步时间窗与每文件夹条数上限可调。""",
+    },
+    {
+        "slug": "routine-hub",
+        "category": "automation",
+        "tags": ["routine", "draft", "automation", "例行", "中枢", "草稿", "四眼"],
+        "title_en": "Routine task hub — drafts, tasks, skills",
+        "title_zh": "例行任务中枢 —— 草稿、任务与技能",
+        "summary_en": "The pipeline that turns matching mail into reviewed drafts, with evidence, a four-eyes rule and write-back.",
+        "summary_zh": "把命中的邮件变成待复核草稿的流水线：逐字段溯源、四眼闸门与回写落库。",
+        "body_en": """The Routine task hub (`/routine`, nav: Operations → Routine tasks) turns inbound mail into reviewed drafts. Nothing reaches the books until a person confirms it.
+
+**Three tabs** — Drafts (what to review), Routine tasks (what to automate) and Skill templates (what each extractor guarantees).
+
+**How a draft is produced** — a trigger rule matches the mail (sender, domain, subject pattern, body markers, folder), a skill extracts the fields with a quote of the source line behind every value, and a pending draft appears. Fields with no traceable source line are dropped and listed as "Dropped for lack of evidence" rather than guessed.
+
+**Reviewing a draft** — every field shows its value, the evidence quote and whether the model or the rules produced it. Tick the fields to keep; unticked fields are neither stored nor used in any calculation. "Adopt selected fields" writes them; "Reject" asks for a reason and is recorded in the audit trail.
+
+**Four-eyes rule** — whoever triggered a draft cannot confirm it; a second person has to. The button is disabled and the reason is shown.
+
+**Writing back** — an adopted draft can create a noon report, a laytime calculation or an estimate / charter draft. Values are re-validated against the skill contract before they are stored, so a bad extraction cannot silently corrupt a calculation.
+
+**Limits** — today only inbound mail triggers a task; scheduled and event triggers are not implemented. A task is scanned every five minutes over the last seven days of synced mail, so only mail already synced into MariOS is visible.""",
+        "body_zh": """例行任务中枢（`/routine`，导航：运营 → 例行任务）把来件邮件变成待复核草稿。在人工确认之前，不会进入账务。
+
+**三个页签** —— 草稿（待复核）、例行任务（要自动化的规则）、技能模板（每个抽取器保证产出什么）。
+
+**草稿如何产生** —— 触发规则命中邮件（发件人、域名、主题模式、正文标记、文件夹），技能抽取字段，并为每个数值附上来源行的原文引用，于是生成一条待处理草稿。找不到可追溯来源行的字段会被丢弃并列入「因缺乏依据被舍弃」，而不是猜测补齐。
+
+**复核草稿** —— 每个字段显示取值、依据引用，以及由模型还是规则产出。勾选要采用的字段，未勾选的字段既不落库也不参与任何计算。「采用所选字段」执行写入；「驳回」需填写理由并记入审计轨迹。
+
+**四眼原则** —— 触发草稿的人不能确认自己的草稿，须由第二人确认。按钮置灰并显示原因。
+
+**回写落库** —— 被采用的草稿可生成船位报告、装卸时间计算或估算 / 租约草稿。落库前会按技能契约重新校验，因此错误的抽取不会悄悄污染计算结果。
+
+**边界** —— 目前只有来件邮件能触发任务，定时触发与事件触发尚未实现。任务每五分钟扫描一次近七天已同步的邮件，因此只有已同步进 MariOS 的邮件才可见。""",
+    },
+    {
+        "slug": "event-automation",
+        "category": "automation",
+        "tags": ["automation", "event", "workflow", "approval", "自动化", "事件", "工作流", "审批", "收尾清单"],
+        "title_en": "Event automation, closeout checklists and approvals",
+        "title_zh": "事件自动化、收尾清单与审批",
+        "summary_en": "What the system creates on its own: follow-up tasks, closeout checklists, approval chains and scheduled jobs.",
+        "summary_zh": "系统自动做的事：自动派生的待办、航次收尾清单、审批链与定时作业。",
+        "body_en": """Most routine follow-up in MariOS is created by the system rather than typed by hand.
+
+**What triggers work** — completing a voyage, fixing or completing a lifting, approving a charter amendment, issuing an invoice, closing a port disbursement, delivering a bunker order, settling a claim, stamping a NOR from mail, or creating a laytime draft. Each of these raises a business event; handlers then create tasks for the right role, notify the desk, and — for a closed disbursement — post the general-ledger voucher automatically.
+
+**Closure checklist** — the voyage workspace has a Closeout tab listing the pre-close items (port calls, SOF facts, laytime finalisation, claims, invoices, bunker delivery, emissions, accrual reconciliation). When a voyage completes, every missing item becomes a task for the owning role, and the panel shows actual versus estimate TCE at the same time.
+
+**Approval workflows** — tenant admins define a chain of approval steps under System settings → Workflows, one role per step. Submissions land in the Approval inbox, where you Approve or Reject with a comment; the initiator cannot approve their own submission. Approving a charter activates it and creates the voyage with its schedule block; approving an invoice issues it.
+
+**Task rules** — an API-level rule can create a task when a condition on an entity is met (for example, when a voyage completes). Rules are managed through `/api/v1/config/task-rules`; only voyage completion materialises them today.
+
+**Scheduled work** — scheduled reports (daily, weekly or monthly; Excel, PDF or CSV; delivered by e-mail) and tenant backups run on their own schedules from the background job queue.
+
+**What is still manual** — the events raise tasks and notifications; they do not by themselves move a business state. Approvals and confirmations stay with a person.""",
+        "body_zh": """MariOS 里大部分例行跟进由系统自动产生，而不是人工一条条建。
+
+**什么会触发工作** —— 完成航次、修正或完成一个 lifting、批准租约修订、开具账单、关闭港口使费、交付加油订单、了结索赔、从邮件填报 NOR、生成装卸时间草稿。这些动作各自产生业务事件；处理器随后为对应角色创建任务、通知相关台面，并在关闭使费时自动记账总账凭证。
+
+**收尾清单** —— 航次工作台的「收尾」页签列出关航前的检查项（挂港、SOF 事实、装卸时间定稿、索赔、账单、加油交付、排放、计提对账）。航次完成时，每一项未完成的内容都会变成对应角色的任务，同一页面并排显示实际 TCE 与估算 TCE。
+
+**审批工作流** —— 租户管理员在「系统设置 → 工作流」中定义审批链，每个环节一个角色。提交进入审批收件箱，可通过或驳回并附意见；提交人不能审批自己的提交。批准租约即激活租约并创建航次与船期块；批准账单即开具账单。
+
+**任务规则** —— 可通过 API 级的规则在满足条件时创建任务（例如航次完成时）。规则通过 `/api/v1/config/task-rules` 管理；目前只有「航次完成」会实际派发。
+
+**定时作业** —— 定时报表（按日/周/月，输出 Excel / PDF / CSV，按邮件投递）与租户备份由后台作业队列按各自计划运行。
+
+**仍然需要人的环节** —— 事件负责产生任务与通知，本身不会推进业务状态；审批与确认仍由人完成。""",
+    },
+    {
+        "slug": "documents",
+        "category": "finance",
+        "tags": ["document", "pdf", "template", "单据", "PDF", "模板", "抬头"],
+        "title_en": "Documents, PDF export and templates",
+        "title_zh": "单据、PDF 导出与模板",
+        "summary_en": "Fourteen document types rendered from editable templates, with letterhead, PDF export and e-mail sending.",
+        "summary_zh": "十四类单据由可编辑模板渲染，含抬头、PDF 导出与邮件发送。",
+        "body_en": """Documents are rendered from templates you can edit, then printed, exported as PDF or sent by e-mail.
+
+**Single document templates** — System settings → Document templates lists fourteen document types: invoice, credit note, laytime statement, hire statement, charter recap, estimate, PDA, claim, SOF, COA, voyage instruction, statement of account, remittance advice and BDN. Pick a type, edit its HTML and CSS, watch the live preview and save. Chinese and English layouts are separate.
+
+**Letterhead** — the company name, address, contacts, tax number and logo printed on every document come from the tenant company profile, so a change there updates every document.
+
+**Exporting** — invoice and laytime calculation details carry an "Export PDF" button; other document types are reachable through their render URL. Every render can be archived so you can download a copy later.
+
+**Sending** — a document can be sent as an e-mail attachment. If delivery fails the document is still produced and the delivery status is reported rather than swallowed.
+
+**Limits** — PDF output needs a rendering engine on the server; without it the document falls back to an HTML view. Only invoice and laytime carry the button today.""",
+        "body_zh": """单据由可编辑的模板渲染，随后可打印、导出 PDF 或按邮件发送。
+
+**单据模板** —— 「系统设置 → 单据模板」列出十四类单据：账单、贷记单、装卸时间证明、租金结算单、租约摘要、估算、港口使费、索赔、装卸事实单、代理指令、航次指示、对账单、汇款通知与提单。选中类型后可直接编辑 HTML 与 CSS，实时预览后保存。中英文版式相互独立。
+
+**抬头** —— 每份单据上的公司名称、地址、联系人、税号与标识来自租户公司档案，改一处即全局生效。
+
+**导出** —— 账单与装卸时间计算详情带「导出 PDF」按钮，其余类型可通过其渲染地址打开。每次渲染都可以归档，之后可再次下载。
+
+**发送** —— 单据可作为邮件附件发送。发送失败时单据仍然生成，失败状态会被如实反馈而不是被吞掉。
+
+**边界** —— PDF 输出依赖服务端的渲染引擎，缺失时降级为 HTML 视图。目前只有账单与装卸时间带该按钮。""",
     },
 ]
 
@@ -438,6 +648,34 @@ FAQS: list[dict[str, Any]] = [
         "answer_en": "Operations → Voyages: maintain port calls in local time, noon reports and SOF. Fleet Twin shows positions and alerts.",
         "answer_zh": "运营 → 航次：用当地时间维护靠港、午报与 SOF。船队孪生可看船位与告警。",
         "article_slugs": ["voyages", "ship-management"],
+    },
+    {
+        "id": "q_ai",
+        "patterns": [r"\bai\b", r"人工智能", r"智能", r"助手", r"大模型", r"copilot", r"聊天", r"chat", r"模型", r"model"],
+        "answer_en": "AI in MariOS always suggests and never writes on its own: use the assistant (Ctrl+J), the MariAI chat desk (/ai/chat) and the AI Hub (/settings/ai) for providers, models, skills and usage. Without a configured model everything falls back to the deterministic rules engine.",
+        "answer_zh": "MariOS 的 AI 始终只给建议，不会自行写入数据：应用内助手（Ctrl+J）、MariAI 对话台（/ai/chat），以及 AI Hub（/settings/ai，管理提供商、模型、技能与用量）。未配置模型时全部退化为确定性规则引擎。",
+        "article_slugs": ["ai-assistant", "email-ai"],
+    },
+    {
+        "id": "q_routine",
+        "patterns": [r"例行", r"routine", r"中枢", r"草稿", r"draft", r"自动化", r"automati", r"自动", r"四眼", r"four.?eyes"],
+        "answer_en": "Operations → Routine tasks turns matching mail into reviewed drafts with per-field evidence. Whoever triggered a draft cannot confirm it — a second person approves (four-eyes rule). Adopted drafts can write back a noon report, laytime calculation or estimate / charter draft.",
+        "answer_zh": "运营 → 例行任务把命中的邮件变成带逐字段依据的待复核草稿。触发者不能确认自己的草稿，须第二人批准（四眼原则）。被采用的草稿可回写船位报告、装卸时间计算或估算 / 租约草稿。",
+        "article_slugs": ["routine-hub", "event-automation"],
+    },
+    {
+        "id": "q_workflow",
+        "patterns": [r"审批", r"approval", r"approve", r"工作流", r"workflow", r"收件箱", r"inbox", r"自动创建", r"事件", r"event"],
+        "answer_en": "Voyage completion, invoice issue, disbursement closure and similar actions raise business events that create follow-up tasks, desk notifications and the voyage closeout checklist. Approval chains are defined in System settings → Workflows; submissions wait in the Approval inbox.",
+        "answer_zh": "航次完成、账单开具、使费关闭等动作会产生业务事件，自动派生跟进任务、台面通知与航次收尾清单。审批链在「系统设置 → 工作流」定义，提交后在审批收件箱等待处理。",
+        "article_slugs": ["event-automation", "admin-security"],
+    },
+    {
+        "id": "q_document",
+        "patterns": [r"单据", r"document", r"pdf", r"模板", r"template", r"打印", r"print", r"抬头", r"letterhead"],
+        "answer_en": "System settings → Document templates holds fourteen editable document types (invoice, laytime statement, PDA, SOF, COA, …). Invoice and laytime carry an Export PDF button; the company letterhead comes from the tenant company profile.",
+        "answer_zh": "「系统设置 → 单据模板」内置十四类可编辑单据（账单、装卸时间证明、港口使费、SOF、代理指令……）。账单与装卸时间带「导出 PDF」按钮，公司抬头取自租户公司档案。",
+        "article_slugs": ["documents", "finance-laytime"],
     },
 ]
 

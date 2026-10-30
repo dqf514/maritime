@@ -11,6 +11,7 @@ import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { SavedViews } from "@/components/SavedViews";
 import { Toolbar } from "@/components/Toolbar";
@@ -789,10 +790,13 @@ function AiSettingsPage() {
           zh: "供应商、模型默认值、技能绑定与 token 用量。",
         })}
         actions={
-          <SavedViews
-            storageKey="settings_ai"
-            onApply={(qs) => router.replace(`/settings/ai${qs}`)}
-          />
+          <>
+            <PageGuide pageKey="ai_settings" />
+            <SavedViews
+              storageKey="settings_ai"
+              onApply={(qs) => router.replace(`/settings/ai${qs}`)}
+            />
+          </>
         }
       />
       <div className="ai-shell">

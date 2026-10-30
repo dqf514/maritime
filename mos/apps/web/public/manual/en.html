@@ -261,16 +261,17 @@
       <a href="#chain">3. Commercial end-to-end chain</a>
       <a href="#ops">4. Voyage operations</a>
       <a href="#finance">5. Laytime &amp; finance</a>
-      <a href="#tech">6. Ship management &amp; dashboards</a>
-      <a href="#admin">7. Administration &amp; platform</a>
-      <a href="#test">8. End-to-end test results</a>
-      <a href="#limits">9. Limits &amp; recommendations</a>
+      <a href="#ai">6. AI &amp; automation</a>
+      <a href="#tech">7. Ship management &amp; dashboards</a>
+      <a href="#admin">8. Administration &amp; platform</a>
+      <a href="#test">9. End-to-end test results</a>
+      <a href="#limits">10. Limits &amp; recommendations</a>
     </nav>
 
     <article class="main">
       <header class="hero">
         <h1>MariOS End-to-End Operations Manual</h1>
-        <p>A day-in-the-life walkthrough for shipping companies: from estimating and fixtures, through voyage execution, laytime and claims, to finance settlement and management dashboards. Local demo entry <code style="background:rgba(255,255,255,.12);color:#fff">http://localhost:3000</code>.</p>
+        <p>A day-in-the-life walkthrough for shipping companies: from estimating and fixtures, through voyage execution, laytime and claims, to finance settlement and management dashboards — including the AI assistant, email review, the routine task hub and event automation. Local demo entry <code style="background:rgba(255,255,255,.12);color:#fff">http://localhost:3000</code>.</p>
         <span class="badge">Manual · in sync with the API end-to-end test suite · local time</span>
       </header>
 
@@ -280,7 +281,8 @@
           <p><strong>Verdict: yes for pilot / PoC / training-grade daily desk work — not yet as the single core production system of a large shipping company.</strong></p>
           <p class="muted" style="margin-bottom:0">
             The commercial trunk (estimate → charter → voyage → laytime/claims → bunkers → invoices &amp; payments) is wired through in the product desk and the automated test suite;
-            deep email workflows, hard ERP integration, hard conflict rules on the vessel Gantt, situational AI and some report drill-downs remain demo-grade or need more depth.
+            the email desk (review / AI landing / business drafts), the AI assistant and chat, event-driven task automation, the routine task hub and document PDF export are now part of the daily desk (section 6).
+            Hard ERP integration, conflict rules on the vessel Gantt and some report drill-downs remain demo-grade or need more depth.
           </p>
         </div>
         <div class="flow" aria-label="Main chain">
@@ -339,6 +341,7 @@
           <ol>
             <li>Go to <span class="path">/estimates</span> and create an estimate: pick vessel and counterparty, fill quantity, freight/lumpsum, commissions, voyage days, bunkers and port costs.</li>
             <li>Hit <strong>Calculate</strong> to get TCE; clone scenarios for <strong>comparison</strong> and sensitivity.</li>
+            <li>If you already have an email or chat thread, use “fill from text” to paste it, parse and check each field before it lands in the form (section 6).</li>
             <li>When happy, run <strong>To CP</strong> to generate a draft charter.</li>
           </ol>
           <p class="muted">Page: <span class="path">/estimates</span></p>
@@ -350,7 +353,7 @@
             <li>Go to <span class="path">/charters</span> and open the charter created from the estimate.</li>
             <li>State flow: <code>draft</code> → <code>pending_approval</code> → <code>active</code> (no skipping).</li>
             <li>Once active, the system can link and generate the voyage (depending on seed and chain configuration).</li>
-            <li>For COA scenarios, record liftings on the charter desk.</li>
+            <li>For COA scenarios, record liftings on the charter desk; an approved charter amendment raises a domain event that notifies the related teams and raises a finance review task.</li>
           </ol>
         </div>
       </section>
@@ -364,6 +367,8 @@
             <li>Move the voyage to in-progress; add load / discharge port calls (order, ETA, agents…).</li>
             <li>Enter noon reports (position, speed, ROB, next-port ETA); the system can flag ETA deviation.</li>
             <li>Register SOF events (e.g. NOR) under the port call — use the <strong>local timezone</strong>.</li>
+            <li>Work through the <strong>Closeout</strong> tab of the voyage workspace: port-call ATA/ATD, SOF facts, finalized laytime, settled claims, issued invoices, bunker delivery and the TCE comparison — every gap can be turned into a follow-up task.</li>
+            <li>Completing the voyage emits a <code>voyage.completed</code> event, which shrinks the schedule, raises tasks for the missing items and snapshots the TCE.</li>
           </ol>
         </div>
         <div class="step">
@@ -393,14 +398,101 @@
             <li>Port disbursements: draft PDA → submit → approve → FDA (record variance).</li>
             <li>Bunker orders: inquire → order → deliver, with ROB conservation checks.</li>
             <li>Freight invoice: draft → pending → issued → partial receipts until paid → supports GL posting.</li>
+            <li>Issuing an invoice or closing a PDA raises a domain event that auto-creates reconciliation / posting tasks (a failed GL posting degrades to a task — never silent).</li>
             <li>Review dynamic voyage P&amp;L (estimate vs actual vs variance) and AR aging.</li>
           </ol>
           <p class="muted">Analytics entry: <span class="path">/analytics</span></p>
         </div>
       </section>
 
+      <section id="ai" class="steps">
+        <h2>6. AI &amp; automation (across the first five sections)</h2>
+        <div class="card">
+          <p style="margin-bottom:0">
+            AI and automation are <strong>not a side-car module</strong> — they attach to both ends of the chain above:
+            on the <strong>input</strong> side, emails, chat threads and page context are parsed and drafted by AI;
+            on the <strong>output</strong> side, business milestones emit domain events that the workflow turns into tasks and notifications.
+            The rule that runs through all of it: <strong>AI only drafts, the workflow only materialises, and every write still needs human confirmation</strong> (four-eyes rule in the routine task hub).
+          </p>
+        </div>
+
+        <div class="step">
+          <h3>AI assistant (Ctrl+J on any page)</h3>
+          <ol>
+            <li>Press <span class="path">Ctrl+J</span> on any page to open the assistant and ask e.g. “what's the TCE on this voyage?”, “which invoices are overdue?”.</li>
+            <li>Answers are drawn from the signed-in tenant's data and the knowledge base; without a configured model they fall back to the built-in rules engine and are tagged <code>rules</code> — they are never passed off as AI.</li>
+            <li>The assistant can suggest actions and field values, but it <strong>never writes to the ledger</strong> — confirm back on the page and save.</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>MariAI chat (/ai/chat)</h3>
+          <ol>
+            <li>Open <span class="path">/ai/chat</span>, pick an agent (estimate / voyage / market…) and start a conversation.</li>
+            <li>Agents can call read-only tools against tenant data; expand “tool calls” on a message to see the actual query, so you can check the basis.</li>
+            <li>Conversations can be renamed, archived and deleted (to the recycle bin); with no model configured a banner stays visible, and a fallback reply is flagged underneath the answer.</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>AI Hub (/settings/ai)</h3>
+          <ol>
+            <li>Tenant admins configure the model provider and model under <span class="path">/settings/ai</span>, test the connection and set defaults.</li>
+            <li>Review usage and quota; you may also bring your own key (BYO key) — calls made with your own key are <strong>not billed against the platform quota</strong>.</li>
+            <li>Bind skills to modules and configure agents and the skill catalogue; metering is off by default and can be switched on when needed.</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>Email review and AI landing (/email/review)</h3>
+          <ol>
+            <li>Sync mail at <span class="path">/email/review</span>: pick a 7 / 14 / 30-day window and a message cap, and browse per folder (inbox / sent items…).</li>
+            <li>The system classifies by business type and extracts fields (vessel, ports, freight rate, laytime…), bodies are converted to plain text and parsed fields carry their source and confidence.</li>
+            <li>Act per type: fixture recap → <strong>estimate and charter drafts</strong>, disbursement → PDA draft, invoice → invoice draft; you can also confirm a parse, ignore and remember that sender, or archive to a business record.</li>
+            <li>Drafts are reviewed by a human in “pending drafts” before they land; from the detail view you can also “fill into voyage estimate” and carry the parsed values to the estimate page.</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>AI fill-in for voyage estimates (three entry points)</h3>
+          <ol>
+            <li>Available on the estimate page <span class="path">/estimates</span>, in the email detail view and in the voyage workspace.</li>
+            <li>Paste an email / chat thread → parse → a per-field card (value, source <code>llm</code> or <code>rules</code>, confidence); tick and edit before applying.</li>
+            <li>“Apply to form” writes vessel, counterparty, cargo, ports and freight rate into the estimate form — still reviewed by a human before saving.</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>Routine task hub (/routine)</h3>
+          <ol>
+            <li><span class="path">/routine</span> has three tabs: <strong>pending drafts</strong> / <strong>routine tasks</strong> / <strong>skill templates</strong>.</li>
+            <li>Every field of a draft carries its <strong>evidence</strong>; the four-eyes rule requires a second approver before the draft is written back to business tables (the originator cannot approve alone).</li>
+            <li>Routine tasks define a trigger (event / time window), an action and an owning role; they can be added, edited, deleted and run manually. Skill templates hold reusable action sets.</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>Domain-event automation and voyage closeout</h3>
+          <ol>
+            <li>Business milestones emit domain events automatically: voyage completed, lifting fixed / completed, charter amendment, invoice issued, PDA closed, bunker delivered, claim settled, NOR updated, laytime draft created.</li>
+            <li>Handlers materialise these into <strong>follow-up tasks + in-app notifications + GL posting attempts</strong>; a handler error is recorded but never rolls back the business operation (automation failure must not block the business).</li>
+            <li>Before completing a voyage, check the <strong>closeout checklist</strong> (voyage workspace → Closeout): port-call ATA/ATD, SOF facts, finalized laytime, settled claims, issued invoices, bunker delivery, TCE comparison — missing items automatically become tasks with an owner role and a due date.</li>
+            <li>Approval chains are processed in <span class="path">/workflows/inbox</span>; approval nodes are defined under System settings → Workflows.</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>Documents and PDF</h3>
+          <ol>
+            <li>14 document templates ship in: invoice, credit note, laytime statement, hire statement, fixture recap, estimate / TCE, PDA, statement of claim, SOF, COA, voyage instruction, statement of account, remittance advice, bunker delivery note.</li>
+            <li>Templates carry the company letterhead and can be customised and previewed at <span class="path">/settings/templates</span>; “Export PDF” on a business record exports directly, statements include the letterhead.</li>
+            <li>Renders can be looked up in the document centre and sent from within the app.</li>
+          </ol>
+        </div>
+      </section>
+
       <section id="tech" class="steps">
-        <h2>6. Ship management, approvals and dashboards</h2>
+        <h2>7. Ship management, approvals and dashboards</h2>
         <div class="step">
           <h3>Ship management</h3>
           <ol>
@@ -423,7 +515,7 @@
       </section>
 
       <section id="admin">
-        <h2>7. Tenant administration &amp; platform operations</h2>
+        <h2>8. Tenant administration &amp; platform operations</h2>
         <div class="card">
           <h3>Tenant control plane <span class="path">/settings</span></h3>
           <ul>
@@ -440,13 +532,14 @@
       </section>
 
       <section id="test">
-        <h2>8. End-to-end automated test results</h2>
+        <h2>9. End-to-end automated test results</h2>
         <div class="card ok-box">
           <p><strong>Latest run:</strong> full pytest over <code>apps/api/tests</code></p>
-          <p><strong>Result: all green (800+ tests)</strong>, covering:</p>
+          <p><strong>Result: all green (1379 tests)</strong>, covering:</p>
           <ul>
             <li><code>test_full_chain.py</code>: estimate calculation → to-CP → approval &amp; activation → voyage in progress → port calls/noon/SOF → laytime finalize → claims → PDA/FDA → bunkers → invoice receipt &amp; GL → market/emissions/analytics → pool/risk/berth → Twin what-if → SelfCheck → voyage completion</li>
             <li>Clause library, performance claims, background job queue, webhooks and observability metrics</li>
+            <li>AI &amp; automation specifics: HTML-to-plain-text mail and multi-folder sync, AI extraction with llm / rules fallback, domain-event handlers materialising tasks and notifications, voyage closeout checklist, routine task hub (drafts / tasks / templates), four-eyes rule and write-back, document templates and PDF rendering</li>
             <li>Sanctions blocking, illegal state-machine jumps, identity/SaaS/Office/knowledge-centre/platform ops/smoke surfaces</li>
           </ul>
           <p class="muted" style="margin-bottom:0">Note: automation covers API business-chain correctness; do one manual browser walkthrough per role path described in this manual.</p>
@@ -465,25 +558,32 @@
             <tr><td>8</td><td>Role dashboard fullscreen</td><td>Management</td><td>Refresh &amp; fullscreen work</td></tr>
             <tr><td>9</td><td>Global search Ctrl+K</td><td>Any role</td><td>Finds vessels, charters, voyages and other core data</td></tr>
             <tr><td>10</td><td>Print / PDF export</td><td>Any role</td><td>Statement with letterhead prints cleanly</td></tr>
+            <tr><td>11</td><td>AI assistant Ctrl+J</td><td>Any role</td><td>Answers about tenant data; tagged <code>rules</code> without a model</td></tr>
+            <tr><td>12</td><td>Email review → draft</td><td>Chartering</td><td>Fixture recap mail creates estimate / charter drafts, queued for confirmation</td></tr>
+            <tr><td>13</td><td>Routine hub four-eyes</td><td>Mgmt / finance</td><td>Drafts carry evidence, originator cannot self-approve, write-back after confirmation</td></tr>
+            <tr><td>14</td><td>Closeout checklist &amp; event tasks</td><td>Operations</td><td>Gaps become follow-up tasks visible in /tasks</td></tr>
+            <tr><td>15</td><td>Document template PDF</td><td>Finance</td><td>Template previews and exports to PDF with letterhead</td></tr>
           </tbody>
         </table>
       </section>
 
       <section id="limits">
-        <h2>9. Limits &amp; adoption recommendations</h2>
+        <h2>10. Limits &amp; adoption recommendations</h2>
         <div class="card warn-box">
           <ul>
             <li><strong>Good for:</strong> process training, pre-sales demos, pilot desks for small teams, parallel verification alongside existing systems.</li>
-            <li><strong>Do not make it the single production core until:</strong> deep email/document closure, ERP posting, schedule visualization conflict strategy, key connectors and audit compliance meet your acceptance criteria.</li>
+            <li><strong>Do not make it the single production core until:</strong> ERP posting, schedule visualization conflict strategy, key connectors and audit compliance meet your acceptance criteria.</li>
             <li>Per-tenant databases can be registered and bound; business sessions currently still use the primary database by default. Cloud “one-click deploy” offerings are mostly template guidance.</li>
-            <li>Knowledge-Centre answers are retrieval-augmented FAQ, not real-time LLM generation.</li>
+            <li><strong>AI boundaries:</strong> with no model configured, Q&amp;A and extraction fall back to the built-in rules engine (answers tagged <code>rules</code>); AI only drafts and never writes to the ledger — drafts must be reviewed by a human in “pending drafts” (four-eyes rule) before they land; calls made with your own key (BYO key) are not billed against the platform quota.</li>
+            <li><strong>Automation boundaries:</strong> domain events only raise to-dos and notifications — they do not advance state machines and do not replace approvals; a task can always be edited, deleted or triggered manually by a person, overriding the automated result.</li>
+            <li>The in-app Knowledge Centre offers both retrieval-augmented FAQ and LLM answers; trust the source column and citations.</li>
           </ul>
         </div>
-        <p>See <span class="path">docs/user-guide.md</span> and <span class="path">docs/product-capabilities.md</span> in the repository for more; the in-app Knowledge Centre is available after sign-in.</p>
+        <p>See <span class="path">docs/user-guide.md</span> and <span class="path">docs/product-capabilities.md</span> in the repository for more; the in-app Knowledge Centre and the per-page “How do I…?” guides are available after sign-in.</p>
       </section>
 
       <footer>
-        <p>© MariOS · This manual is for internal drills and customer training · generated with the automated suite fully green</p>
+        <p>© MariOS · This manual is for internal drills and customer training · generated with the automated suite fully green (1379 tests)</p>
         <p>Online: dev environment <a href="/manual/en.html">/manual/en.html</a> · print via browser “Print → PDF”. <a href="/manual/index.html">中文版</a></p>
       </footer>
     </article>

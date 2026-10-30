@@ -7,6 +7,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Num } from "@/components/Num";
 import { PageHeader } from "@/components/PageHeader";
+import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { StateView } from "@/components/StateView";
 import { StatusLegend } from "@/components/StatusLegend";
@@ -1091,6 +1092,7 @@ export default function EmailReviewPage() {
         breadcrumb={[{ label: t("nav.email", "Email Review") }]}
         title={t("page.email.title", "Email Review")}
         subtitle={t("page.email.sub", "AI-parsed recaps awaiting confirmation.")}
+        actions={<PageGuide pageKey="email_review" />}
       />
       <Toolbar
         right={

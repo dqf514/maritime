@@ -6,8 +6,9 @@
 |------|------|
 | [产品介绍页](../index.html) | 对外产品介绍 |
 | 产品门户（Web `/`） | 在线介绍与模块一览 |
-| 产品内 **帮助 / 知识中心**（`/help`，需登录） | 可检索、可问答的操作与产品说明 |
-| [用户指南](./user-guide.md) | 登录、主链路、Office、API 总览 |
+| 产品内 **帮助 / 知识中心**（`/help`，需登录） | 可检索、可问答的操作与产品说明（含「AI 与自动化」栏目） |
+| **全流程操作手册**（`/manual/`，英文 `/manual/en.html`） | 分角色的逐步操作说明，含 AI 与自动化专章 |
+| [用户指南](./user-guide.md) | 登录、主链路、AI 与自动化、Office、API 总览 |
 | [能力一览](./product-capabilities.md) | 对外可陈述的能力清单 |
 | [Microsoft 365 说明](./office-ecosystem.md) | Office 生态连接与能力概览 |
 | [平台数据面与部署](./platform-data-deploy.md) | 默认数据库、租户库绑定、初始化与部署档案 |

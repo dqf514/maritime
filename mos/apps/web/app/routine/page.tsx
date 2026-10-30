@@ -12,6 +12,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
+import { PageGuide } from "@/components/PageGuide";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
@@ -734,6 +735,7 @@ function RoutinePageInner() {
           "page.routine.sub",
           "Inbound mail turns into reviewed drafts — nothing is written to the books until a human confirms it.",
         )}
+        actions={<PageGuide pageKey="routine_hub" />}
       />
 
       <Tabs

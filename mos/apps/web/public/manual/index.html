@@ -261,16 +261,17 @@
       <a href="#chain">3. 商务全链路</a>
       <a href="#ops">4. 航次运营</a>
       <a href="#finance">5. 滞期与财务</a>
-      <a href="#tech">6. 船管与数据看板</a>
-      <a href="#admin">7. 管理与平台</a>
-      <a href="#test">8. 全链路测试结果</a>
-      <a href="#limits">9. 边界与建议</a>
+      <a href="#ai">6. AI 与自动化</a>
+      <a href="#tech">7. 船管与数据看板</a>
+      <a href="#admin">8. 管理与平台</a>
+      <a href="#test">9. 全链路测试结果</a>
+      <a href="#limits">10. 边界与建议</a>
     </nav>
 
     <article class="main">
       <header class="hero">
         <h1>MariOS 全流程操作手册</h1>
-        <p>面向航运公司日常工作演练：从估算成交、航次执行、滞期索赔到财务结算与管理数据看板。本地演示入口 <code style="background:rgba(255,255,255,.12);color:#fff">http://localhost:3000</code>。</p>
+        <p>面向航运公司日常工作演练：从估算成交、航次执行、滞期索赔到财务结算与管理数据看板，并覆盖 AI 助手、邮件复核、例行任务中枢与事件自动化。本地演示入口 <code style="background:rgba(255,255,255,.12);color:#fff">http://localhost:3000</code>。</p>
         <span class="badge">手册版本 · 与 API 全链路测试同步 · 本地时间</span>
       </header>
 
@@ -280,7 +281,8 @@
           <p><strong>结论：可用于「试点 / PoC / 培训演练」级的全流程日常台面；尚不宜作为大型航运公司生产环境的唯一核心系统全面替代。</strong></p>
           <p class="muted" style="margin-bottom:0">
             商业主干（估算 → 租约 → 航次 → 装卸时间/索赔 → 燃油 → 发票收付款）在产品台面与自动化测试中已打通；
-            邮件深度业务、ERP 深集成、船期甘特硬冲突、情境 AI、部分报表钻取等仍偏演示或待加深。
+            邮件业务（复核 / AI 落地 / 业务草稿）、AI 助手与对话、事件驱动的任务自动化、例行任务中枢、单据 PDF 已接入日常台面（见第 6 节）。
+            ERP 深集成、船期甘特硬冲突、报表钻取仍偏演示或待加深。
           </p>
         </div>
         <div class="flow" aria-label="主链路">
@@ -339,6 +341,7 @@
           <ol>
             <li>进入 <span class="path">/estimates</span>，新建估算：选择船舶、对手方，填写货量、运价/包干、佣金、航次天数、燃油与港口费等。</li>
             <li>点击<strong>计算</strong>得到 TCE；可克隆方案做<strong>对比</strong>与敏感度。</li>
+            <li>已有邮件或聊天记录时，用「从文本填充」粘贴解析，逐字段核对后写入表单（见第 6 节）。</li>
             <li>满意后执行<strong>转租约（To CP）</strong>，生成草稿租约。</li>
           </ol>
           <p class="muted">页面路径：<span class="path">/estimates</span></p>
@@ -350,7 +353,7 @@
             <li>进入 <span class="path">/charters</span>，打开由估算生成的租约。</li>
             <li>状态流转：<code>draft</code> → <code>pending_approval</code> → <code>active</code>（不可跳过）。</li>
             <li>激活后系统可关联生成航次（视种子与链路配置）。</li>
-            <li>COA 场景可在租约台记录 lifting。</li>
+            <li>COA 场景可在租约台记录 lifting；租约修订获批会发出域事件，自动通知相关部门并派财务复核任务。</li>
           </ol>
         </div>
       </section>
@@ -364,6 +367,8 @@
             <li>将航次状态切至进行中；新增装港 / 卸港挂靠（顺序、ETA、代理等）。</li>
             <li>录入午报（船位、航速、ROB、下一港 ETA）；系统可提示 ETA 偏差。</li>
             <li>在挂靠港下登记 SOF 事件（如 NOR），注意使用<strong>本地时区</strong>。</li>
+            <li>航次工作台的<strong>Closeout（收尾）</strong>页逐项核对：挂靠港 ATA/ATD、SOF 事实、装卸时间定稿、索赔了结、发票签发、加油交付、TCE 对比；缺项可直接生成跟进任务。</li>
+            <li>完成航次时系统发出 <code>voyage.completed</code> 事件，自动收缩日程、生成缺项任务与 TCE 快照。</li>
           </ol>
         </div>
         <div class="step">
@@ -393,14 +398,101 @@
             <li>港口使费：PDA 编制 → 提交 → 批准 → FDA（记录差异）。</li>
             <li>燃油订单：询价 → 下单 → 交付，校验 ROB 守恒。</li>
             <li>运费发票：草稿 → 待批 → 开立 → 分次收款至 paid → GL 过账辅助。</li>
+            <li>发票签发、PDA 关闭会发出域事件，自动生成对账 / 过账任务（GL 过账失败时降级为任务，不静默）。</li>
             <li>查看动态航次损益（估算 vs 实际 vs 差异）与 AR 账龄。</li>
           </ol>
           <p class="muted">分析报表入口：<span class="path">/analytics</span></p>
         </div>
       </section>
 
+      <section id="ai" class="steps">
+        <h2>6. AI 与自动化（贯穿前 5 节的日常台面）</h2>
+        <div class="card">
+          <p style="margin-bottom:0">
+            AI 与自动化<strong>不是独立的旁路模块</strong>，而是挂在原有链路的两端：
+            <strong>读入端</strong>——邮件、聊天记录、页面上下文由 AI 解析并起草；
+            <strong>产出端</strong>——业务节点发出域事件，流程把「下一步该谁做什么」物化成任务与通知。
+            贯穿全链路的约束是：<strong>AI 只起草、流程只物化，落库一律人工确认</strong>（例行任务中枢的四眼规则）。
+          </p>
+        </div>
+
+        <div class="step">
+          <h3>AI 助手（任意页面 Ctrl+J）</h3>
+          <ol>
+            <li>在任意页面按 <span class="path">Ctrl+J</span> 打开助手面板，可问「这票航次的 TCE 是多少」「哪些发票逾期未收」。</li>
+            <li>回答取自当前登录租户的数据与知识库；未配置大模型时回落内置规则引擎，回答角标标 <code>rules</code>，不会伪装成 AI。</li>
+            <li>助手可给建议动作与字段建议，但<strong>不会直接改台账</strong>——需回到页面确认后保存。</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>MariAI 对话（/ai/chat）</h3>
+          <ol>
+            <li>打开 <span class="path">/ai/chat</span>，选择 Agent（估算 / 航次 / 市场等）并新建会话。</li>
+            <li>Agent 可调用只读工具查询租户数据；消息里的「工具调用」可展开看到实际执行的查询，便于核对口径。</li>
+            <li>会话支持重命名、归档、删除（进回收站）；未配置模型时页面顶部常驻提示，已配置但回落时在回复下方说明。</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>AI Hub（/settings/ai）</h3>
+          <ol>
+            <li>租户管理员在 <span class="path">/settings/ai</span> 配置模型服务商与模型，可做连通性测试，并设置默认参数。</li>
+            <li>查看用量与配额；也可自带密钥（BYO key），自带密钥的调用<strong>不计入平台额度</strong>。</li>
+            <li>把技能绑定到模块、配置 Agent 与技能目录；计量默认关闭，需要统计时再开。</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>邮件复核与 AI 落地（/email/review）</h3>
+          <ol>
+            <li>在 <span class="path">/email/review</span> 同步邮件：可设 7 / 14 / 30 天窗口与条数上限，按收件箱 / 已发送等文件夹分页浏览。</li>
+            <li>系统按业务类型分类并抽取字段（船舶、港口、运价、装卸时间等），正文已转纯文本，解析字段带来源与置信度。</li>
+            <li>逐类执行：成交回顾 → <strong>生成估算与租约草稿</strong>、港口使费 → PDA 草稿、发票 → 发票草稿；也可确认解析结果、忽略并记住该发件人、归档到业务单据。</li>
+            <li>草稿在「待确认草稿」中人工复核后才落库；详情里还能「填入航次计算」，把邮件解析结果带进估算页。</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>航次计算 AI 填充（三处入口）</h3>
+          <ol>
+            <li>估算页 <span class="path">/estimates</span>、邮件详情、航次工作台均可「从文本填充」。</li>
+            <li>粘贴邮件 / 聊天记录 → 解析 → 逐字段卡片（值、来源 llm 或 rules、置信度），可勾选、可改值。</li>
+            <li>「应用到表单」后写入估算表单（船舶、对手方、货名、装卸港、运价等），保存前仍需人工复核。</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>例行任务中枢（/routine）</h3>
+          <ol>
+            <li><span class="path">/routine</span> 三个 Tab：<strong>待确认草稿</strong> / <strong>例行任务</strong> / <strong>技能模板</strong>。</li>
+            <li>草稿的每个字段都带<strong>证据出处</strong>；四眼规则要求第二位确认人复核后才写回业务表（与发起人同人则不放行）。</li>
+            <li>例行任务可定义触发条件（事件 / 时间窗）、执行动作与分派角色，可手工新增、编辑、删除与立即运行；技能模板定义可复用的动作集。</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>域事件自动化与航次收尾</h3>
+          <ol>
+            <li>业务节点自动发出域事件：航次完成、lifting 固定 / 完成、租约修订、发票签发、PDA 关闭、加油交付、索赔和解、NOR 更新、装卸时间草稿。</li>
+            <li>处理器把事件物化为<strong>跟进任务 + 站内通知 + GL 过账尝试</strong>；处理器异常只留痕、不回滚业务操作（自动化失败不挡住业务）。</li>
+            <li>完成航次前看<strong>收尾清单</strong>（航次工作台 → Closeout）：挂靠港 ATA/ATD、SOF 装卸事实、装卸时间定稿、索赔了结、发票签发、加油交付、TCE 对比；缺项按角色与时限自动生成任务。</li>
+            <li>审批链在 <span class="path">/workflows/inbox</span> 处理；审批节点定义在「系统设置 → 工作流」。</li>
+          </ol>
+        </div>
+
+        <div class="step">
+          <h3>文档与 PDF</h3>
+          <ol>
+            <li>内置 14 类单据模板：发票、贷记通知单、装卸时间计算书、租金账单、成交回顾、估算报价单、PDA、索赔函、SOF、包运合同、航次指令、对账单、汇款通知、供油报告。</li>
+            <li>模板带公司抬头，可在 <span class="path">/settings/templates</span> 定制与预览；业务单据上「Export PDF」直接导出，计算书含抬头可打印。</li>
+            <li>渲染记录可在文档中心查询，并可从站内发送。</li>
+          </ol>
+        </div>
+      </section>
+
       <section id="tech" class="steps">
-        <h2>6. 船管、审批与管理数据看板</h2>
+        <h2>7. 船管、审批与管理数据看板</h2>
         <div class="step">
           <h3>船舶管理</h3>
           <ol>
@@ -423,7 +515,7 @@
       </section>
 
       <section id="admin">
-        <h2>7. 租户管理与平台运维</h2>
+        <h2>8. 租户管理与平台运维</h2>
         <div class="card">
           <h3>租户控制平面 <span class="path">/settings</span></h3>
           <ul>
@@ -440,13 +532,14 @@
       </section>
 
       <section id="test">
-        <h2>8. 全链路自动化测试结果</h2>
+        <h2>9. 全链路自动化测试结果</h2>
         <div class="card ok-box">
           <p><strong>本次执行：</strong> <code>apps/api/tests</code> 全量 pytest</p>
-          <p><strong>结果：全量 pytest 全绿（800+ 个测试，覆盖 90+ 个测试文件）</strong>，含：</p>
+          <p><strong>结果：全量 pytest 全绿（1379 个测试，覆盖 90+ 个测试文件）</strong>，含：</p>
           <ul>
             <li><code>test_full_chain.py</code>：估算计算 → 转租约 → 审批激活 → 航次进行 → 挂靠/午报/SOF → Laytime 定稿 → 索赔 → PDA/FDA → 燃油 → 发票收款与 GL → 市场/排放/分析 → Pool/Risk/Berth → Twin what-if → SelfCheck → 航次完成</li>
             <li>条款库、性能索赔（performance claims）、后台作业队列（job queue）、Webhooks、可观测性指标等新特性的覆盖</li>
+            <li>AI 与自动化专项：邮件 HTML 转纯文本与多文件夹同步、AI 解析抽取与回退（llm / rules）、域事件处理器物化任务与通知、航次收尾清单、例行任务中枢（草稿 / 任务 / 模板）、四眼规则与写回、文档模板与 PDF 渲染</li>
             <li>制裁拦截、状态机非法跳转、身份/SaaS/Office/知识中心/平台运维/冒烟面等</li>
           </ul>
           <p class="muted" style="margin-bottom:0">说明：自动化覆盖的是 API 业务链路正确性；浏览器 UI 请按本手册各角色路径做一次人工走查。</p>
@@ -465,25 +558,32 @@
             <tr><td>8</td><td>角色数据看板全屏</td><td>管理层</td><td>刷新与全屏正常</td></tr>
             <tr><td>9</td><td>全局搜索 Ctrl+K</td><td>任意角色</td><td>可搜到船舶、租约、航次等核心数据</td></tr>
             <tr><td>10</td><td>打印 / PDF 导出</td><td>任意角色</td><td>计算书含公司抬头，PDF 可正常打印</td></tr>
+            <tr><td>11</td><td>AI 助手 Ctrl+J</td><td>任意角色</td><td>可问答租户数据，未配模型时标 rules</td></tr>
+            <tr><td>12</td><td>邮件复核 → 生成草稿</td><td>租船</td><td>成交回顾邮件生成估算 / 租约草稿，落到待确认</td></tr>
+            <tr><td>13</td><td>例行任务中枢四眼</td><td>管理 / 财务</td><td>草稿带证据出处，同人不可自批，确认后写回</td></tr>
+            <tr><td>14</td><td>航次收尾清单与事件任务</td><td>操作</td><td>Closeout 缺项生成跟进任务，出现在 /tasks</td></tr>
+            <tr><td>15</td><td>文档模板 PDF</td><td>财务</td><td>模板可预览并导出 PDF，含抬头</td></tr>
           </tbody>
         </table>
       </section>
 
       <section id="limits">
-        <h2>9. 边界说明与落地建议</h2>
+        <h2>10. 边界说明与落地建议</h2>
         <div class="card warn-box">
           <ul>
             <li><strong>适合：</strong> 流程培训、售前演示、中小团队试点台面、与现有系统并行验证。</li>
-            <li><strong>慎用为唯一生产核心，直至：</strong> 邮件/单据深度闭环、ERP 过账、船期可视化冲突策略、关键连接器与审计合规达到贵司验收标准。</li>
+            <li><strong>慎用为唯一生产核心，直至：</strong> ERP 过账、船期可视化冲突策略、关键连接器与审计合规达到贵司验收标准。</li>
             <li>租户独立库可登记绑定，当前业务会话默认仍走主库；云厂商「一键部署」多为模板指引。</li>
-            <li>知识中心问答为检索增强 FAQ，非实时大模型生成。</li>
+            <li><strong>AI 的边界：</strong> 未配置模型时问答与抽取回落内置规则引擎（回复角标标 <code>rules</code>）；AI 只起草、不直接写台账，草稿需在「待确认草稿」经人工复核（四眼规则）后才落库；自带密钥（BYO key）的调用不计入平台额度。</li>
+            <li><strong>自动化的边界：</strong> 域事件只产生待办与通知，不推进状态机、不代替审批；任务可由人手工改、删、提前触发，覆盖自动化结果。</li>
+            <li>应用内知识中心兼有检索增强 FAQ 与大模型问答两条路径，回答口径以来源栏目与引用为准。</li>
           </ul>
         </div>
-        <p>更多产品说明见仓库 <span class="path">docs/user-guide.md</span>、<span class="path">docs/product-capabilities.md</span>；登录后亦可使用应用内知识中心。</p>
+        <p>更多产品说明见仓库 <span class="path">docs/user-guide.md</span>、<span class="path">docs/product-capabilities.md</span>；登录后亦可使用应用内知识中心与各页面右上角的「❓ 页面指引」操作指引。</p>
       </section>
 
       <footer>
-        <p>© MariOS · 本手册供内部演练与客户培训使用 · 生成时 pytest <strong>全量 800+ 全绿</strong></p>
+        <p>© MariOS · 本手册供内部演练与客户培训使用 · 生成时 pytest <strong>全量 1379 全绿</strong></p>
         <p>在线打开：开发环境 <a href="/manual">/manual</a> · 打印可用浏览器「打印 → PDF」。</p>
       </footer>
     </article>

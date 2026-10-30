@@ -89,7 +89,9 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.3rem 0.55rem;
-  background: #f7fafb;
+  /* 主题感知：暗色主题下固定浅底 + 浅字会糊成一片，必须用 token */
+  background: var(--surface);
+  color: var(--ink);
 }
 .guide-flow-node.current { border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 .guide-flow-arrow { color: var(--muted); }
