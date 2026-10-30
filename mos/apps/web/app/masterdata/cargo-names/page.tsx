@@ -22,6 +22,7 @@ import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { useListQuery } from "@/lib/useListQuery";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type CargoName = {
   id: string;
@@ -200,7 +201,7 @@ function CargoNamesPage() {
       title: t("list.last_modified", "Last modified"),
       width: 135,
       value: (r) => r.updated_at ?? null,
-      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      render: (v) => formatDateTimeShort(v as string | null),
     },
     {
       key: "actions",
@@ -223,7 +224,7 @@ function CargoNamesPage() {
       title: t("list.last_modified", "Last modified"),
       width: 135,
       value: (r) => r.created_at ?? null,
-      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      render: (v) => formatDateTimeShort(v as string | null),
     },
   ], [t]);
 

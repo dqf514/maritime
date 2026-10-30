@@ -12,6 +12,7 @@ import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type Agent = {
   agent_name: string;
@@ -225,7 +226,7 @@ export default function AiChatPage() {
 
   function formatTs(iso: string | null | undefined): string {
     if (!iso) return "—";
-    return iso.slice(0, 16).replace("T", " ");
+    return formatDateTimeShort(iso);
   }
 
   const convMenuItems = (c: Conversation): ContextMenuItem[] => [

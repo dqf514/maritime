@@ -15,7 +15,7 @@ type Attr = {
   updated_at?: string | null;
 };
 
-// 后端时间戳为 UTC（无偏移量即 UTC）；按 UTC 展示，避免浏览器时区偏移 8 小时。
+// 后端时间戳为 UTC（无偏移量即 UTC）；展示按全局默认时区（租户 default_timezone）。
 function fmt(iso: string | null | undefined, locale?: string | null): string {
   if (!iso) return "";
   const d = parseUtc(iso);

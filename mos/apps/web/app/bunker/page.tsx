@@ -24,6 +24,7 @@ import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type Ref = { id: string; name: string; voyage_no?: string };
 type Order = {
@@ -565,7 +566,7 @@ export default function BunkerDeskPage() {
         title: t("list.last_modified", "Last modified"),
         width: 135,
         value: (r) => r.updated_at ?? null,
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
       {
         key: "_actions",
@@ -615,7 +616,7 @@ export default function BunkerDeskPage() {
         title: t("list.last_modified", "Last modified"),
         width: 135,
         value: (r) => r.updated_at ?? null,
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
       {
         key: "actions",

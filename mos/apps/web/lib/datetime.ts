@@ -1,5 +1,28 @@
 // D2 时区策略：存储统一 UTC（ISO），展示按港口/租户本地时区；Intl 原生 DST 感知。
-// 未给 tz 时按 UTC 展示（避免浏览器时区差异导致同屏不一致）。
+// 未给 tz 时使用「租户默认时区」（AppShell 从 /me 注入；未取到前回退 UTC）。
+// 这样所有未显式传时区的 formatInTz 调用都会跟随租户设置，而不是固定 UTC。
+
+const TZ_STORAGE_KEY = "marios_tz";
+
+// 初始为 UTC（与服务端渲染一致，避免 hydration 不匹配）；AppShell 拿到
+// /me 后立即用租户 default_timezone 覆盖并触发重渲染。
+let defaultTz: string = "UTC";
+
+/** 设置全局默认展示时区（租户 default_timezone）；持久化以便下次首屏即正确。 */
+export function setDefaultTimeZone(tz?: string | null): void {
+  defaultTz = (tz || "UTC").trim() || "UTC";
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(TZ_STORAGE_KEY, defaultTz);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export function getDefaultTimeZone(): string {
+  return defaultTz;
+}
 
 /**
  * 解析后端时间戳。
@@ -28,6 +51,30 @@ export function parseUtc(
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * 列表/详情用短日期时间（跟随全局默认时区，即租户 default_timezone）。
+ * 用于替换历史上直接截断 ISO 字符串（会显示 UTC）的写法。
+ */
+export function formatDateTimeShort(
+  value: string | number | Date | null | undefined,
+  locale?: string | null,
+  withSeconds = false,
+): string {
+  return formatInTz(
+    value,
+    null,
+    {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      ...(withSeconds ? { second: "2-digit" as const } : {}),
+    },
+    locale,
+  );
+}
+
 /** 按时区格式化时间；无效输入原样返回，无效 tz 回退 UTC。 */
 export function formatInTz(
   value: string | number | Date | null | undefined,
@@ -46,7 +93,7 @@ export function formatInTz(
     minute: "2-digit",
     hour12: false,
     ...(opts ?? {}),
-    timeZone: tz || "UTC",
+    timeZone: tz || defaultTz,
   };
   try {
     return new Intl.DateTimeFormat(locale || undefined, base).format(d);
@@ -69,8 +116,8 @@ export function formatDateInTz(
   const d = parseUtc(value);
   if (!d) return String(value);
   const base: Intl.DateTimeFormatOptions = withYear
-    ? { year: "numeric", month: "2-digit", day: "2-digit", timeZone: tz || "UTC" }
-    : { month: "2-digit", day: "2-digit", timeZone: tz || "UTC" };
+    ? { year: "numeric", month: "2-digit", day: "2-digit", timeZone: tz || defaultTz }
+    : { month: "2-digit", day: "2-digit", timeZone: tz || defaultTz };
   try {
     return new Intl.DateTimeFormat(locale || undefined, base).format(d);
   } catch {

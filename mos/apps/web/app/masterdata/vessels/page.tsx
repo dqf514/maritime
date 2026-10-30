@@ -24,6 +24,7 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { useListQuery } from "@/lib/useListQuery";
 import { CLASS_SOCIETIES, FLEET_GROUPS, OWNERSHIP_OPTIONS, TRADE_AREAS } from "@/lib/vessel-catalog";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type Vessel = {
   id: string;
@@ -352,7 +353,7 @@ function VesselsPage() {
       title: t("list.last_modified", "Last modified"),
       width: 135,
       value: (r) => r.updated_at ?? null,
-      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      render: (v) => formatDateTimeShort(v as string | null),
     },
     {
       key: "actions",

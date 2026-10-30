@@ -25,7 +25,7 @@ import { API_BASE, apiDelete, apiGet, apiPatch, apiPost, readStorage, TOKEN_STOR
 import { downloadCsv } from "@/lib/csv";
 import { fmt } from "@/lib/fmt";
 import { useI18n } from "@/lib/i18n";
-import { parseUtc } from "@/lib/datetime";
+import { parseUtc, formatDateTimeShort } from "@/lib/datetime";
 import { useListQuery } from "@/lib/useListQuery";
 
 type Batch = {
@@ -352,7 +352,7 @@ function PaymentsPage() {
         title: t("list.last_modified", "Last modified"),
         width: 135,
         value: (r) => r.updated_at ?? null,
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
       {
         key: "_actions",

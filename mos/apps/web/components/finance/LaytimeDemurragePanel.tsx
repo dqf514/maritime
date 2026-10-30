@@ -10,6 +10,7 @@ import { Num } from "@/components/Num";
 import { StateView } from "@/components/StateView";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type Estimated = {
   demurrage_amount: number;
@@ -241,12 +242,12 @@ export function LaytimeDemurragePanel({ laytimeId }: { laytimeId: string }) {
       {
         key: "start_at",
         title: t("common.start", "Start"),
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
       {
         key: "end_at",
         title: t("common.end", "End"),
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
       { key: "duration_hours", title: t("page.finance.lt_hours", "Hours"), align: "right", render: (v) => <Num v={v as number} digits={2} /> },
       {

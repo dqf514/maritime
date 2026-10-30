@@ -26,6 +26,7 @@ import { downloadCsv } from "@/lib/csv";
 import { fmt } from "@/lib/fmt";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type Tab = "accounts" | "journals" | "trial" | "balance" | "income" | "cashflow";
 const TAB_IDS: readonly string[] = ["accounts", "journals", "trial", "balance", "income", "cashflow"];
@@ -372,7 +373,7 @@ function GlPage() {
         title: t("list.last_modified", "Last modified"),
         width: 135,
         value: (r) => r.updated_at ?? null,
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
     ],
     [t],
@@ -409,7 +410,7 @@ function GlPage() {
         title: t("list.last_modified", "Last modified"),
         width: 135,
         value: (r) => r.updated_at ?? null,
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
       {
         key: "_actions",

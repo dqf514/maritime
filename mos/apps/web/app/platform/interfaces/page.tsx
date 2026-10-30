@@ -18,6 +18,7 @@ import type { ColumnDef } from "@/components/grid/types";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type Msg = {
   id: string;
@@ -46,7 +47,7 @@ type Tab = "in" | "out" | "stats";
 const PAGE_SIZE = 100;
 
 function fmtTime(v: string | null | undefined) {
-  return v ? String(v).replace("T", " ").slice(0, 19) : "—";
+  return formatDateTimeShort(v, undefined, true);
 }
 
 function prettyPayload(p: unknown) {

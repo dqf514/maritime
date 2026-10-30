@@ -31,6 +31,7 @@ import { apiGet, apiList, apiPost } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 const TRADE_KINDS = ["ffa", "swap", "option", "physical", "paper"] as const;
 
@@ -381,7 +382,7 @@ function TradingWorkspace() {
         title: t("list.last_modified", "Last modified"),
         width: 135,
         value: (r) => r.updated_at ?? null,
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
     ],
     [t],

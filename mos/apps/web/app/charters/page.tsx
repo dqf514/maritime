@@ -23,6 +23,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ToastProvider";
 import { useListQuery } from "@/lib/useListQuery";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 // U2：行点击直达单据详情页 /charters/{id}（编辑/变更单/hire/liftings 在详情页）。
 // A5 双重 UI 归并：本页为租约列表唯一入口。原 /charters/tc、/charters/coa 列表
@@ -470,7 +471,7 @@ function ChartersPage() {
       title: t("list.last_modified", "Last modified"),
       width: 135,
       value: (r) => r.updated_at ?? null,
-      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      render: (v) => formatDateTimeShort(v as string | null),
     },
   ], [partyName, t, vesselName]);
 

@@ -15,6 +15,7 @@ import { downloadCsv } from "@/lib/csv";
 import { msgOf, handled } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type Claim = { id: string; claim_no: string; status: string; amount: number; days_to_timebar?: number | null; updated_at?: string | null };
 
@@ -79,7 +80,7 @@ export function ClaimsPanel() {
         title: t("list.last_modified", "Last modified"),
         width: 135,
         value: (r) => r.updated_at ?? null,
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
     ],
     [t],

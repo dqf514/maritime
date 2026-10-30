@@ -32,6 +32,7 @@ import { downloadCsv } from "@/lib/csv";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type Party = {
   id: string;
@@ -492,7 +493,7 @@ function CounterpartiesPage() {
       title: t("list.last_modified", "Last modified"),
       width: 135,
       value: (r) => r.updated_at ?? null,
-      render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+      render: (v) => formatDateTimeShort(v as string | null),
     },
     {
       key: "actions",

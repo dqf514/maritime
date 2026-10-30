@@ -19,6 +19,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type RefItem = { id: string; name: string; build_year?: number | null; dwt?: number | null };
 
@@ -298,7 +299,7 @@ export function TcListPanel() {
         title: t("list.last_modified", "Last modified"),
         width: 135,
         value: (r) => r.updated_at ?? null,
-        render: (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—"),
+        render: (v) => formatDateTimeShort(v as string | null),
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -19,6 +19,7 @@ import { Breadcrumb, type BreadcrumbItem } from "@/components/Breadcrumb";
 import { clearLookupCache } from "@/components/LookupSelect";
 import { apiGet, apiLogout, apiMe, assetUrl, readStorage, removeStorage, TOKEN_STORAGE_KEY, type Me } from "@/lib/api";
 import { LanguageSwitcher, useI18n } from "@/lib/i18n";
+import { setDefaultTimeZone } from "@/lib/datetime";
 import { AiAssistant } from "@/components/ai/AiAssistant";
 import { patchAiContext } from "@/components/ai/aiContextStore";
 import { useFocusTrap } from "@/components/useFocusTrap";
@@ -145,6 +146,9 @@ export function AppShell({
     ]);
     setMe(m);
     setShell(s);
+    // 全局默认时区：租户 default_timezone（如 Asia/Singapore = UTC+8）。
+    // 所有未显式传 tz 的 formatInTz 调用都会跟随它，而不是固定 UTC。
+    setDefaultTimeZone(m?.tenant?.default_timezone);
     if (b?.icon_url) setIconUrl(assetUrl(b.icon_url));
     if (b?.product_name) setProductName(b.product_name);
     if (s?.company?.logo_url) setIconUrl(assetUrl(s.company.logo_url));

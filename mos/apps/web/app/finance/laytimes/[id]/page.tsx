@@ -20,6 +20,7 @@ import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid";
 import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatDateTimeShort } from "@/lib/datetime";
 
 type StatementEventRow = {
   start: string;
@@ -128,7 +129,7 @@ export default function LaytimeDetailPage() {
     }
   }
 
-  const fmtTs = (v: unknown) => (v ? String(v).replace("T", " ").slice(0, 16) : "—");
+  const fmtTs = (v: unknown) => formatDateTimeShort(v as string | null);
 
   const eventCols = useMemo<ColumnDef<StatementEventRow>[]>(
     () => [
