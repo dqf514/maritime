@@ -1661,7 +1661,7 @@ function VoyagesPageInner() {
                       <option value="">—</option>
                       {["calm", "slight", "moderate", "rough", "very_rough", "high", "phenomenal"].map((s) => (
                         <option key={s} value={s}>
-                          {s}
+                          {t(`sea_state.${s}`, s)}
                         </option>
                       ))}
                     </select>
@@ -1671,7 +1671,7 @@ function VoyagesPageInner() {
                     <input type="number" step="any" value={noonCurrent} onChange={(e) => setNoonCurrent(e.target.value)} />
                   </label>
                   <label>
-                    ETA next
+                    {t("page.voyages.eta_next", "ETA next")}
                     <DateTimeInput value={noonEta} onChange={setNoonEta} />
                   </label>
                   <label style={{ gridColumn: "1 / -1" }}>
@@ -1692,7 +1692,9 @@ function VoyagesPageInner() {
                     </div>
                     <div className="kv-box">
                       <span>{t("page.voyages.sea_state", "Sea state")}</span>
-                      <strong>{lastNoon.sea_state || "—"}</strong>
+                      <strong>
+                        {lastNoon.sea_state ? t(`sea_state.${lastNoon.sea_state}`, lastNoon.sea_state) : "—"}
+                      </strong>
                     </div>
                     <div className="kv-box">
                       <span>{t("page.voyages.current_kn", "Current (kn)")}</span>

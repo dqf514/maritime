@@ -36,6 +36,7 @@ from jinja2 import StrictUndefined
 from jinja2.exceptions import TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models_doc import DocumentRender, DocumentTemplate
@@ -252,10 +253,17 @@ def ensure_templates(db: Session, tenant_id: UUID) -> int:
     - 租户没改过（``body == system_body``）→ 直接换成新的内置版
     - 租户改过 → 只更新 ``system_body``/``system_css``，不动他们的 ``body``；
       这样"恢复默认"能拿到新版，而他们的定制不会被覆盖
+
+    **并发安全**：这是个读端点也会调的写操作（``GET /documents/templates``）。
+    两个请求同时进来会看到同样的"不存在"，然后同时 INSERT，撞
+    ``UNIQUE(tenant_id, entity_type, code, locale)`` → 整个请求 500，
+    浏览器只看到一句 CORS 报错，页面直接白掉。
+    所以插入包在 SAVEPOINT 里：撞了就认输（模板已经在库里了，功能不受影响）。
     """
     from app.services.doc_templates import SYSTEM_TEMPLATES
 
     created = 0
+    pending: list[DocumentTemplate] = []
     for spec in SYSTEM_TEMPLATES:
         system_body = spec["body"]
         system_css = spec.get("css", "")
@@ -267,7 +275,7 @@ def ensure_templates(db: Session, tenant_id: UUID) -> int:
             )
         )
         if exists is None:
-            db.add(
+            pending.append(
                 DocumentTemplate(
                     tenant_id=tenant_id,
                     entity_type=spec["entity_type"],
@@ -284,7 +292,6 @@ def ensure_templates(db: Session, tenant_id: UUID) -> int:
                     enabled=True,
                 )
             )
-            created += 1
             continue
         if not exists.is_system:
             continue  # 租户自建的同名模板，不碰
@@ -302,6 +309,20 @@ def ensure_templates(db: Session, tenant_id: UUID) -> int:
         exists.version = (exists.version or 1) + 1
         exists.updated_at = datetime.now(timezone.utc)
         created += 1
+
+    if pending:
+        try:
+            # SAVEPOINT：撞唯一约束时只回滚这一批，不牵连整个请求
+            with db.begin_nested():
+                for row in pending:
+                    db.add(row)
+                db.flush()
+            created += len(pending)
+        except IntegrityError:
+            # 并发插入 —— 赢家已经建好了，输家认输即可（模板照常能读）。
+            # SAVEPOINT 回滚已经把 pending 里那批对象踢出会话，不用再清理。
+            log.info("document templates already seeded concurrently; skipping")
+
     if created:
         db.commit()
     return created

@@ -113,7 +113,7 @@ function PlatformBrandingPage() {
       toast.success(t("page.branding.uploaded", "Uploaded {kind}", { kind }));
       setCrop(null);
     } catch (ex) {
-      setCropErr(msgOf(ex, t("page.branding.upload_fail", "Upload failed")));
+      setCropErr(msgOf(ex, t("page.branding.upload_fail", "Upload failed: {err}", { err: msgOf(ex) })));
     } finally {
       setUploading(null);
     }

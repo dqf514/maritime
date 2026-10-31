@@ -175,7 +175,17 @@ export default function OfficeEcosystemPage() {
 
   const testHook = useCallback(async (id: string) => {
     const res = await apiPost(`/api/v1/office/webhooks/${id}/test`);
-    toast.success(t("page.office.hook_test", "Delivery {status}", { status: res.status }));
+    // 投递失败也是「调用成功」—— 必须看投递状态，不能一律报成功
+    const status = String(res?.status || "");
+    if (status === "delivered") {
+      toast.success(t("page.office.hook_test", "Delivery {status}", { status }));
+    } else {
+      toast.error(
+        t("page.office.hook_test_fail", "Delivery failed ({status})", {
+          status: status || "unknown",
+        }),
+      );
+    }
     await load();
   }, [load, t, toast]);
 

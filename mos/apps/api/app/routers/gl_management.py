@@ -34,6 +34,7 @@ from app.services.period_close import (
     reverse_voyage_accrual,
 )
 from app.services.state_machine import PERIOD_TRANSITIONS, transition
+from app.services.domain_events import emit
 from app.services.tenant_guard import scoped_get, scoped_query
 
 router = APIRouter()
@@ -828,6 +829,19 @@ def reverse_accrual(
         reverse_voyage_accrual(db, row)
     except HTTPException:
         raise
+    db.commit()
+    # 域事件：计提被冲销 → 航次上的「计提对账」任务不该还挂着"已完成"
+    emit(
+        db, auth.tenant_id, "accrual.reversed", "accrual", row.id,
+        payload={
+            "accrual_id": str(row.id),
+            "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+            "amount": float(row.amount or 0),
+            "currency": row.currency or "USD",
+        },
+        user_id=auth.user_id,
+    )
+    # 事件必须自己提交 —— 上一次 commit 已过去，不提交会随会话回滚丢失
     db.commit()
     db.refresh(row)
     return _accrual_out(row)

@@ -2,24 +2,29 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import User
+from app.models_domain import BunkerOrder, Charter, Claim, Estimate, Invoice, Voyage
 from app.models_task import Task
 from app.models_task_center import TaskComment
 from app.models_wave1 import Notification
 from app.security import AuthContext, get_current_auth, require_roles
 from app.services.audit import audit
+from app.services.action_catalog import get_action
 from app.services.data_scope import apply_module_scope
 from app.services.notifications import notify_once
+from app.services import task_due
+# 本模块里 `text` 是评论正文的局部变量 —— 系统文案用别名，避免撞名
+from app.services.system_text import text as sys_text
 
 router = APIRouter(tags=["Tasks"])
 
@@ -30,19 +35,6 @@ MANAGE_ROLES = {"tenant_admin", "management"}
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _as_utc(dt: datetime) -> datetime:
-    """把数据库里读出的时间归一到 aware UTC。
-
-    ``tasks.due_at`` 是 ``DateTime(timezone=True)``，但 SQLite 里存的是
-    naive 串（平台约定 naive = UTC），读回来就是 naive —— 直接和
-    ``datetime.now(timezone.utc)`` 比会抛
-    ``can't compare offset-naive and offset-aware datetimes``。
-    """
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 class TaskIn(BaseModel):
@@ -87,6 +79,10 @@ def _user_brief(user: User | None) -> dict | None:
 
 
 def task_out(db: Session, row: Task) -> dict:
+    # 绑定的系统动作 —— 把 i18n 键一起给出去，前端才能显示
+    # 「航次收尾：港口记录」而不是技术码 voyage.closeout.port_calls
+    spec = get_action(row.action_code) if row.action_code else None
+    entity_id = str(row.entity_id) if row.entity_id else None
     return {
         "id": str(row.id),
         "title": row.title,
@@ -99,7 +95,12 @@ def task_out(db: Session, row: Task) -> dict:
         "created_by": str(row.created_by) if row.created_by else None,
         "creator": _user_brief(db.get(User, row.created_by) if row.created_by else None),
         "entity_type": row.entity_type,
-        "entity_id": str(row.entity_id) if row.entity_id else None,
+        "entity_id": entity_id,
+        # 任务挂的单据 —— 人话单号（VOY-2405）与可点深链。
+        # 任务中心 2.0 的承诺是"挂得上系统里的动作"，那从任务跳回单据也得
+        # 一步可达 —— 否则关联只是标题里的一串字符。
+        "entity_title": _entity_title(db, row),
+        "entity_href": _entity_href(row.entity_type, row.entity_id),
         "source": row.source,
         "completed_at": row.completed_at.isoformat() if row.completed_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -107,6 +108,8 @@ def task_out(db: Session, row: Task) -> dict:
         # —— 任务中心 2.0 ——
         "parent_id": str(row.parent_id) if row.parent_id else None,
         "action_code": row.action_code,
+        # 动作的可读文案键（前端 t() 翻译；没有就回落到 action_code）
+        "action_label_key": spec.label_key if spec else None,
         "weight": float(row.weight) if row.weight is not None else None,
         "collaborator_ids": [str(x) for x in (row.collaborator_ids or [])],
         "auto_complete": bool(row.auto_complete),
@@ -118,18 +121,84 @@ def task_out(db: Session, row: Task) -> dict:
     }
 
 
-def _entity_href(entity_type: str | None, entity_id: UUID | None) -> str:
-    """任务关联系统实体时，通知直达对应页面；否则回任务箱。"""
-    if entity_type and entity_id:
-        if entity_type == "voyage":
-            return f"/operations/voyages/{entity_id}/workspace"
-        if entity_type in ("invoice",):
-            return f"/finance/invoices/{entity_id}"
-        if entity_type in ("charter", "time_charter"):
-            return f"/charters/{entity_id}"
-        if entity_type == "estimate":
-            return f"/estimates"
-    return "/tasks"
+# 任务挂的系统实体 → 人话单号（哪一列是"人看的编号"）
+_ENTITY_TITLE_SPEC: dict[str, tuple[type, str]] = {
+    "voyage": (Voyage, "voyage_no"),
+    "invoice": (Invoice, "invoice_no"),
+    "claim": (Claim, "claim_no"),
+    "charter": (Charter, "charter_no"),
+    "estimate": (Estimate, "title"),
+    "bunker_order": (BunkerOrder, "order_no"),
+}
+
+
+def _entity_href(entity_type: str | None, entity_id: UUID | None) -> str | None:
+    """任务关联系统实体时给出可点深链。
+
+    只给**真能打开**的页面 —— 猜测一个不存在的路由比不给链接更糟（点了 404）。
+    通知那边拿不到链接时回任务箱，所以这里返回 ``None`` 表示"没有深链"。
+    """
+    if not entity_type or not entity_id:
+        return None
+    if entity_type == "voyage":
+        return f"/operations/voyages/{entity_id}/workspace"
+    if entity_type == "invoice":
+        return f"/finance/invoices/{entity_id}"
+    if entity_type == "claim":
+        return f"/finance/claims/{entity_id}"
+    if entity_type == "laytime":
+        return f"/finance/laytimes/{entity_id}"
+    if entity_type in ("charter", "time_charter"):
+        return f"/charters/{entity_id}"
+    if entity_type == "estimate":
+        # 估算没有独立详情页，列表页用 ?id= 直接打开抽屉
+        return f"/estimates?id={entity_id}"
+    return None
+
+
+def _resolve_entity_titles(db: Session, rows: list[Task], tenant_id: UUID) -> dict[str, str]:
+    """批量取出任务挂着的单据的"人话单号"（VOY-2405 而不是一串 UUID）。"""
+    wanted: dict[str, tuple[type, str]] = {}
+    for r in rows:
+        if not r.entity_type or not r.entity_id:
+            continue
+        spec = _ENTITY_TITLE_SPEC.get(r.entity_type)
+        if spec:
+            wanted[str(r.entity_id)] = spec
+    if not wanted:
+        return {}
+    out: dict[str, str] = {}
+    for eid, (model, col) in wanted.items():
+        try:
+            uid = UUID(eid)
+        except ValueError:
+            continue
+        val = db.scalar(
+            select(getattr(model, col)).where(model.id == uid, model.tenant_id == tenant_id)
+        )
+        if val:
+            out[eid] = str(val)
+    return out
+
+
+def _entity_title(db: Session, row: Task) -> str | None:
+    """取任务挂着的单据的人话单号（带请求级缓存，避免 N+1）。"""
+    if not row.entity_type or not row.entity_id:
+        return None
+    spec = _ENTITY_TITLE_SPEC.get(row.entity_type)
+    if not spec:
+        return None
+    key = f"{row.entity_type}:{row.entity_id}"
+    cache = db.info.setdefault("_task_entity_titles", {})
+    if key in cache:
+        return cache[key]
+    model, col = spec
+    val = db.scalar(
+        select(getattr(model, col)).where(model.id == row.entity_id, model.tenant_id == row.tenant_id)
+    )
+    title = str(val) if val else None
+    cache[key] = title
+    return title
 
 
 def _task_or_404(db: Session, tenant_id: UUID, task_id: UUID) -> Task:
@@ -254,9 +323,10 @@ def list_tasks(
     if objective_id:
         stmt = stmt.where(Task.objective_id == objective_id)
     if overdue:
+        # 逾期口径 = 到期日（UTC）早于今日 —— 与首页角标、前端列表同口径
         stmt = stmt.where(
             Task.due_at.is_not(None),
-            Task.due_at < _now(),
+            Task.due_at < task_due.utc_day_start(),
             Task.status.notin_(["done", "cancelled"]),
         )
     if q:
@@ -315,10 +385,48 @@ def _apply_task_tab(stmt, db: Session, auth: AuthContext, tab: str):
             Task.assignee_user_id.in_([me, *subs]) if (me or subs) else Task.id.is_(None)
         )
     if tab == "work_package":
-        return stmt.where(Task.work_package_id.is_not(None))
+        stmt = stmt.where(Task.work_package_id.is_not(None))
+        return _restrict_to_visible(stmt, db, auth)
     if tab == "okr":
-        return stmt.where(Task.objective_id.is_not(None))
+        stmt = stmt.where(Task.objective_id.is_not(None))
+        return _restrict_to_visible(stmt, db, auth)
     raise HTTPException(400, detail={"code": "UNKNOWN_TAB", "message": f"Unknown task tab {tab}"})
+
+
+def _restrict_to_visible(stmt, db: Session, auth: AuthContext):
+    """把工作包 / OKR 视角收窄到"与我有关"的任务。
+
+    这两个视角是全租户维度的（一个目标树 / 一个工作包横跨所有人），
+    但普通角色不该因此看到全公司的任务明细 —— 与任务中心自己的可见性
+    口径保持一致：主责 / 协作人 / 创建人 / 我的下属。
+    """
+    if _is_supervisor(auth):
+        return stmt
+    from app.services.assignment import subordinate_ids
+
+    me = auth.user_id
+    subs = subordinate_ids(db, auth.tenant_id, me) if me else []
+    clauses = [Task.assignee_user_id == me, Task.created_by == me]
+    if subs:
+        clauses.append(Task.assignee_user_id.in_(subs))
+    return stmt.where(or_(*clauses))
+
+
+def _assert_can_view(db: Session, auth: AuthContext, task: Task) -> None:
+    """任务可见性：主责 / 协作人 / 创建人 / 上级（下属的任务）/ 管理员。
+
+    看不到就当不存在（404 而不是 403 —— 不泄露"这条任务存在"）。
+    """
+    if _is_supervisor(auth):
+        return
+    if _touches_me(task, auth.user_id):
+        return
+    from app.services.assignment import subordinate_ids
+
+    subs = subordinate_ids(db, auth.tenant_id, auth.user_id) if auth.user_id else []
+    if task.assignee_user_id in subs:
+        return
+    raise HTTPException(404, "Task not found")
 
 
 def _lazy_refresh(db: Session, rows: list[Task]) -> None:
@@ -398,25 +506,131 @@ def task_people(auth: AuthContext = Depends(get_current_auth), db: Session = Dep
     ]
 
 
+@router.get("/tasks/entity-options")
+def task_entity_options(
+    entity_type: str = Query(..., description="voyage | invoice | claim | laytime | bunker_order | ..."),
+    q: str | None = None,
+    limit: int = Query(20, ge=1, le=100),
+    auth: AuthContext = Depends(get_current_auth),
+    db: Session = Depends(get_db),
+):
+    """动作绑定用的「关联单据」候选列表。
+
+    以前前端让用户手填 UUID —— 那不是人用的界面。这里按实体类型给出
+    最近的单据（编号 + 状态），前端直接选。
+    """
+    from app.models_domain import (
+        BunkerOrder,
+        CharterAmendment,
+        Claim,
+        CoaLifting,
+        Invoice,
+        LaytimeCalc,
+        PortDisbursement,
+        Voyage,
+    )
+    from app.models_ship import ShipCertificate
+
+    rows: list[dict] = []
+    t = auth.tenant_id
+    if entity_type == "voyage":
+        for r in db.scalars(
+            select(Voyage).where(Voyage.tenant_id == t).order_by(Voyage.created_at.desc()).limit(limit * 3)
+        ).all():
+            rows.append({"id": str(r.id), "label": f"{r.voyage_no} · {r.status}", "status": r.status, "ref": r.voyage_no})
+    elif entity_type == "invoice":
+        for r in db.scalars(
+            select(Invoice).where(Invoice.tenant_id == t, Invoice.status != "deleted")
+            .order_by(Invoice.created_at.desc()).limit(limit * 3)
+        ).all():
+            rows.append({"id": str(r.id), "label": f"{r.invoice_no} · {r.status}", "status": r.status, "ref": r.invoice_no})
+    elif entity_type == "claim":
+        for r in db.scalars(
+            select(Claim).where(Claim.tenant_id == t).order_by(Claim.created_at.desc()).limit(limit * 3)
+        ).all():
+            rows.append({"id": str(r.id), "label": f"{r.claim_no} · {r.status}", "status": r.status, "ref": r.claim_no})
+    elif entity_type == "laytime":
+        for r in db.scalars(
+            select(LaytimeCalc).where(LaytimeCalc.tenant_id == t).order_by(LaytimeCalc.id.desc()).limit(limit * 3)
+        ).all():
+            ref = r.booking_reference or str(r.id)[:8]
+            rows.append({"id": str(r.id), "label": f"{ref} · {r.status}", "status": r.status, "ref": ref})
+    elif entity_type == "port_disbursement":
+        for r in db.scalars(
+            select(PortDisbursement).where(PortDisbursement.tenant_id == t)
+            .order_by(PortDisbursement.id.desc()).limit(limit * 3)
+        ).all():
+            ref = f"PDA {str(r.id)[:8]}"
+            rows.append({"id": str(r.id), "label": f"{ref} · {r.status}", "status": r.status, "ref": ref})
+    elif entity_type == "bunker_order":
+        for r in db.scalars(
+            select(BunkerOrder).where(BunkerOrder.tenant_id == t).order_by(BunkerOrder.id.desc()).limit(limit * 3)
+        ).all():
+            rows.append({"id": str(r.id), "label": f"{r.order_no} · {r.status}", "status": r.status, "ref": r.order_no})
+    elif entity_type == "charter_amendment":
+        for r in db.scalars(
+            select(CharterAmendment).where(CharterAmendment.tenant_id == t)
+            .order_by(CharterAmendment.id.desc()).limit(limit * 3)
+        ).all():
+            ref = f"AMD-{r.seq}"
+            rows.append({"id": str(r.id), "label": f"{ref} · {r.status}", "status": r.status, "ref": ref})
+    elif entity_type == "coa_lifting":
+        for r in db.scalars(
+            select(CoaLifting).where(CoaLifting.tenant_id == t).order_by(CoaLifting.id.desc()).limit(limit * 3)
+        ).all():
+            ref = f"{r.period_label or 'LIFT'} #{str(r.id)[:6]}"
+            rows.append({"id": str(r.id), "label": f"{ref} · {r.status}", "status": r.status, "ref": ref})
+    elif entity_type == "ship_certificate":
+        for r in db.scalars(
+            select(ShipCertificate).where(ShipCertificate.tenant_id == t).order_by(ShipCertificate.id.desc()).limit(limit * 3)
+        ).all():
+            rows.append({"id": str(r.id), "label": f"{r.cert_code} · {r.cert_name}", "status": r.status, "ref": r.cert_code})
+    else:
+        raise HTTPException(
+            400,
+            detail={"code": "UNKNOWN_ENTITY_TYPE", "message": f"No entity options for {entity_type}"},
+        )
+    if q:
+        needle = q.strip().lower()
+        rows = [r for r in rows if needle in str(r["label"]).lower() or needle in str(r.get("ref") or "").lower()]
+    return rows[:limit]
+
+
 @router.get("/tasks/stats")
 def task_stats(auth: AuthContext = Depends(get_current_auth), db: Session = Depends(get_db)):
-    """任务中心统计：在办 / 逾期 / 今日到期 / 已完成 + 按人负载。"""
-    today = _now().date()
+    """任务中心统计：在办 / 逾期 / 今日到期 / 已完成 + 按人负载。
+
+    **按角色收窄**：主管（management/tenant_admin）看全租户；其他人只看
+    与自己有关的任务，负载表也只列自己 —— 否则只读角色能从这个端点看到
+    全公司每个人的在办数与姓名。
+    """
     base = (Task.tenant_id == auth.tenant_id, Task.status != "deleted")
+    supervisor = _is_supervisor(auth)
     open_rows = db.scalars(
         select(Task).where(*base, Task.status.in_(["todo", "in_progress"]))
     ).all()
+    if not supervisor:
+        open_rows = [t for t in open_rows if _touches_me(t, auth.user_id)]
     now = _now()
-    overdue = [t for t in open_rows if t.due_at is not None and _as_utc(t.due_at) < now]
-    due_today = [
-        t for t in open_rows if t.due_at is not None and t.due_at.date() == today
-    ]
-    done = db.scalar(select(func.count()).select_from(Task).where(*base, Task.status == "done")) or 0
+    # 逾期 / 今日到期 —— 与首页角标、前端列表同一口径（UTC 自然日）
+    overdue = [t for t in open_rows if task_due.is_overdue(t.due_at, now)]
+    due_today = [t for t in open_rows if task_due.is_due_today(t.due_at, now)]
+    done_stmt = select(func.count()).select_from(Task).where(*base, Task.status == "done")
+    if not supervisor:
+        done = 0
+        for t in db.scalars(select(Task).where(*base, Task.status == "done")).all():
+            if _touches_me(t, auth.user_id):
+                done += 1
+    else:
+        done = db.scalar(done_stmt) or 0
     load: dict[str, int] = {}
     for t in open_rows:
         if t.assignee_user_id:
             key = str(t.assignee_user_id)
             load[key] = load.get(key, 0) + 1
+    if not supervisor:
+        mine = str(auth.user_id)
+        load = {k: v for k, v in load.items() if k == mine}
     people = {
         str(u.id): u.full_name or u.email
         for u in db.scalars(select(User).where(User.id.in_([UUID(k) for k in load]))).all()
@@ -426,11 +640,60 @@ def task_stats(auth: AuthContext = Depends(get_current_auth), db: Session = Depe
         "overdue": len(overdue),
         "due_today": len(due_today),
         "done": int(done),
+        "scope": "tenant" if supervisor else "mine",
         "load": [
             {"user_id": uid, "name": people.get(uid, uid), "open": cnt}
             for uid, cnt in sorted(load.items(), key=lambda kv: -kv[1])
         ],
     }
+
+
+def _is_supervisor(auth: AuthContext) -> bool:
+    from app.services.data_scope import SUPERVISOR_ROLES
+
+    return any(r in SUPERVISOR_ROLES for r in (auth.roles or []))
+
+
+def _touches_me(task: Task, user_id) -> bool:
+    """任务是否与某人有关（主责 / 协作人 / 创建人）。"""
+    if user_id is None:
+        return False
+    if task.assignee_user_id == user_id or task.created_by == user_id:
+        return True
+    for cid in task.collaborator_ids or []:
+        try:
+            if UUID(str(cid)) == user_id:
+                return True
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return False
+
+
+def _require_task_admin(db: Session, auth: AuthContext) -> None:
+    """OKR / 工作包 的写权限闸门。
+
+    管理角色（tenant_admin / management）直接放行；其余角色只要持有**任一
+    业务写权限**（不是只读）也放行 —— 否则自定义租户（角色码不是
+    tenant_admin）会彻底建不了目标；只读角色一律 403。
+    """
+    if _is_supervisor(auth):
+        return
+    from app.security import tenant_role_grants
+
+    grants = tenant_role_grants(db, auth.tenant_id)  # {module_code: {role_code, ...}}
+    roles = set(auth.roles or [])
+    if not roles:
+        raise HTTPException(
+            403,
+            detail={"code": "ROLE_REQUIRED", "roles": ["tenant_admin", "management"]},
+        )
+    for module_code, allowed in grants.items():
+        if roles & allowed:
+            return
+    raise HTTPException(
+        403,
+        detail={"code": "ROLE_REQUIRED", "roles": ["tenant_admin", "management"]},
+    )
 
 
 # ── 工作包 ─────────────────────────────────────────────────────────────
@@ -495,6 +758,8 @@ def create_work_package(
 ):
     from app.models_task_center import WorkPackage
 
+    _require_task_admin(db, auth)
+
     code = body.code.strip()
     if not code:
         raise HTTPException(400, detail={"code": "INVALID_CODE", "message": "Code is required"})
@@ -541,6 +806,8 @@ def update_work_package(
     db: Session = Depends(get_db),
 ):
     from app.models_task_center import WorkPackage
+
+    _require_task_admin(db, auth)
 
     pkg = db.get(WorkPackage, package_id)
     if not pkg or pkg.tenant_id != auth.tenant_id:
@@ -644,6 +911,8 @@ def create_objective(
 ):
     from app.models_task_center import Objective
 
+    _require_task_admin(db, auth)
+
     code = body.code.strip()
     if not code:
         raise HTTPException(400, detail={"code": "INVALID_CODE", "message": "Code is required"})
@@ -696,6 +965,8 @@ def update_objective(
     db: Session = Depends(get_db),
 ):
     from app.models_task_center import Objective
+
+    _require_task_admin(db, auth)
 
     obj = db.get(Objective, objective_id)
     if not obj or obj.tenant_id != auth.tenant_id:
@@ -769,6 +1040,8 @@ def create_key_result(
 ):
     from app.models_task_center import KeyResult, Objective
 
+    _require_task_admin(db, auth)
+
     obj = db.get(Objective, objective_id)
     if not obj or obj.tenant_id != auth.tenant_id:
         raise HTTPException(404, "Objective not found")
@@ -814,6 +1087,7 @@ def get_task(
     from app.services.task_progress import task_progress
 
     task = _task_or_404(db, auth.tenant_id, task_id)
+    _assert_can_view(db, auth, task)
     _lazy_refresh(db, [task])
     children = db.scalars(
         select(Task).where(Task.tenant_id == auth.tenant_id, Task.parent_id == task.id)
@@ -928,8 +1202,9 @@ def add_comment(
             db,
             auth.tenant_id,
             [u for u in mentioned if u is not None],
-            title=f"你被提及：{task.title}",
+            title=sys_text("task.mention.title", "en", title=task.title),
             body=text[:300],
+            title_i18n={"zh": sys_text("task.mention.title", "zh-CN", title=task.title)},
             href=f"/tasks?task={task.id}",
             level="info",
         )
@@ -955,15 +1230,13 @@ def create_task(
         raise HTTPException(400, detail={"code": "INVALID_PRIORITY", "allowed": sorted(TASK_PRIORITIES)})
     if body.assignee_user_id:
         _active_tenant_user(db, auth.tenant_id, body.assignee_user_id)
-    spec = None
-    if body.action_code:
-        from app.services.action_catalog import get_action
-
-        spec = get_action(body.action_code)
-        if spec is None:
-            raise HTTPException(
-                400, detail={"code": "UNKNOWN_ACTION", "message": f"Unknown action code {body.action_code}"}
-            )
+    spec, entity_type, entity_id = _validate_action_binding(
+        db,
+        auth.tenant_id,
+        action_code=body.action_code,
+        entity_type=body.entity_type,
+        entity_id=body.entity_id,
+    )
     if body.parent_id:
         parent = _task_or_404(db, auth.tenant_id, body.parent_id)
         if parent.parent_id is not None:
@@ -975,6 +1248,14 @@ def create_task(
     data["collaborator_ids"] = [str(x) for x in collaborators]
     data["weight"] = _validate_weight(body.weight)
     data["auto_complete"] = bool(body.auto_complete) and bool(body.action_code)
+    if spec is not None:
+        data["entity_type"] = entity_type
+        data["entity_id"] = entity_id
+        # 动作目录里的「默认时限」必须落地 —— 绑了系统动作却不给到期日，
+        # 任务会永远待在"稍后"桶里：既不会逾期，也不会被提醒，等于白绑。
+        # 用户显式给了 due_at 就听用户的。
+        if data.get("due_at") is None:
+            data["due_at"] = datetime.now(timezone.utc) + timedelta(days=spec.default_due_days)
     row = Task(tenant_id=auth.tenant_id, created_by=auth.user_id, **data)
     db.add(row)
     db.flush()
@@ -986,7 +1267,7 @@ def create_task(
                 title=row.title,
                 body=(row.description or "")[:500] or None,
                 level="info",
-                href=_entity_href(row.entity_type, row.entity_id),
+                href=_entity_href(row.entity_type, row.entity_id) or "/tasks",
             )
         )
     audit(
@@ -1011,6 +1292,74 @@ def _validate_weight(weight: float | None) -> Decimal:
     if value <= 0:
         raise HTTPException(400, detail={"code": "INVALID_WEIGHT", "message": "Weight must be positive"})
     return value
+
+
+def _validate_action_binding(
+    db: Session,
+    tenant_id: UUID,
+    *,
+    action_code: str | None,
+    entity_type: str | None,
+    entity_id: UUID | None,
+):
+    """校验"任务 ↔ 系统动作"的绑定，返回 (spec, 归一后的 entity_type, entity_id)。
+
+    三条硬规则（都是为了别让用户建出一个**永远不会自动完成**的任务）：
+
+    1. 动作的实体类型必须与任务的实体类型一致 —— 不一致时判定器永远不命中；
+    2. 绑了动作就必须指明关联单据 —— 没有单据无从判断动作是否做完；
+    3. 动作**已经完成**时拒绝绑定 —— 否则任务会瞬间变绿（"看起来系统识别了"）。
+
+    外加一条：关联单据必须真实存在且属于本租户 —— 指一个不存在的 ID
+    等于绑了个永远命中不了的动作。
+    """
+    if not action_code:
+        return None, entity_type, entity_id
+    from app.services.action_catalog import get_action
+    from app.services.task_completion import action_already_done, load_entity_for_spec
+
+    spec = get_action(action_code)
+    if spec is None:
+        raise HTTPException(
+            400, detail={"code": "UNKNOWN_ACTION", "message": f"Unknown action code {action_code}"}
+        )
+    if entity_type and entity_type != spec.entity_type:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "ACTION_ENTITY_MISMATCH",
+                "message": f"Action {action_code} applies to {spec.entity_type}, not {entity_type}",
+                "expected_entity_type": spec.entity_type,
+            },
+        )
+    if not entity_id:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "ACTION_ENTITY_REQUIRED",
+                "message": "Binding a system action requires the related record (entity_id)",
+            },
+        )
+    if load_entity_for_spec(db, tenant_id, spec, entity_id) is None:
+        # 关联单据不存在（或不属于本租户）→ 判定器永远命中不了，等于绑了个空动作
+        raise HTTPException(
+            400,
+            detail={
+                "code": "ACTION_ENTITY_NOT_FOUND",
+                "message": "The linked record does not exist in this tenant",
+                "entity_type": spec.entity_type,
+            },
+        )
+    if action_already_done(db, tenant_id, spec, entity_id):
+        raise HTTPException(
+            400,
+            detail={
+                "code": "ACTION_ALREADY_DONE",
+                "message": "The bound action is already complete — the task would be closed immediately",
+                "action_code": action_code,
+            },
+        )
+    return spec, spec.entity_type, entity_id
 
 
 def _validate_collaborators(
@@ -1060,12 +1409,18 @@ def update_task(
     if data.get("assignee_user_id"):
         _active_tenant_user(db, auth.tenant_id, data["assignee_user_id"])
     if "action_code" in data and data["action_code"]:
-        from app.services.action_catalog import get_action
-
-        if get_action(data["action_code"]) is None:
-            raise HTTPException(
-                400, detail={"code": "UNKNOWN_ACTION", "message": f"Unknown action code {data['action_code']}"}
-            )
+        spec, entity_type, entity_id = _validate_action_binding(
+            db,
+            auth.tenant_id,
+            action_code=data["action_code"],
+            entity_type=data.get("entity_type", task.entity_type),
+            entity_id=data.get("entity_id", task.entity_id),
+        )
+        data["entity_type"] = entity_type
+        data["entity_id"] = entity_id
+        # 补绑动作 = 打开自动完成开关（以前只校验动作码存在 → 绑了也永不自动勾）
+        if "auto_complete" not in data:
+            data["auto_complete"] = True
     if "collaborator_ids" in data and data["collaborator_ids"] is not None:
         data["collaborator_ids"] = [str(x) for x in _validate_collaborators(db, auth.tenant_id, data["collaborator_ids"])]
     if "weight" in data and data["weight"] is not None:
@@ -1073,12 +1428,22 @@ def update_task(
     if "parent_id" in data and data["parent_id"]:
         _task_or_404(db, auth.tenant_id, data["parent_id"])
     previous_assignee = task.assignee_user_id
+    new_status = data.pop("status", None)
     for k, v in data.items():
         setattr(task, k, v)
-    if data.get("status") == "done":
-        task.completed_at = task.completed_at or _now()
-    elif "status" in data:
-        task.completed_at = None
+    if new_status is not None and new_status != task.status:
+        # 完成/重开一律走 task_completion —— 审计、完成人、自动标记、通知只写一套
+        from app.services.task_completion import complete_task, reopen_task
+
+        if new_status == "done":
+            complete_task(db, task, actor_user_id=auth.user_id, auto=False, reason="patch")
+        elif new_status == "todo" and task.status == "done":
+            reopen_task(db, task, actor_user_id=auth.user_id)
+        else:
+            task.status = new_status
+            task.completed_at = None
+            task.completed_by = None
+            task.auto_completed = False
     task.updated_at = _now()
     # 改派要通知新负责人 —— 旧 PATCH 改 assignee 完全不通知，是个缺口。
     if "assignee_user_id" in data and data["assignee_user_id"] != previous_assignee:
@@ -1090,7 +1455,7 @@ def update_task(
         actor_user_id=auth.user_id,
         entity_type="task",
         entity_id=task.id,
-        detail={"fields": sorted(data.keys())},
+        detail={"fields": sorted(set(data.keys()) | ({"status"} if new_status else set()))},
     )
     db.commit()
     db.refresh(task)
@@ -1115,7 +1480,7 @@ def _notify_assignee(
             title=task.title,
             body=(task.description or "")[:500] or None,
             level=level,
-            href=_entity_href(task.entity_type, task.entity_id),
+            href=_entity_href(task.entity_type, task.entity_id) or "/tasks",
         )
     )
 

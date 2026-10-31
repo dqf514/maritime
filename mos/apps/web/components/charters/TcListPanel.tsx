@@ -356,7 +356,7 @@ export function TcListPanel() {
     { value: "tco", label: t("page.tc.type.tco", "TC Out") },
     { value: "bareboat", label: t("page.tc.type.bareboat", "Bareboat") },
   ];
-  const statusOptions = ["draft", "active", "completed", "cancelled"];
+  const statusOptions = ["draft", "pending_approval", "active", "completed", "cancelled"];
 
   return (
     <>
@@ -376,7 +376,7 @@ export function TcListPanel() {
           <option value="">{t("common.all", "All")}</option>
           {statusOptions.map((s) => (
             <option key={s} value={s}>
-              {s}
+              {t(`status.${s}`, s)}
             </option>
           ))}
         </select>

@@ -90,6 +90,30 @@ def _users_with_role(db: Session, tenant_id: UUID, role_code: str) -> list[User]
     )
 
 
+def _users_with_permission(db: Session, tenant_id: UUID, permission: str) -> list[User]:
+    """按**权限**找人 —— 角色码没人时的兜底。
+
+    动作目录写的是角色码（``claims``），但租户不一定建了这个角色
+    （演示租户就没有 —— 权限是挂在 ``demurrage`` 角色上的）。
+    找不到角色时退一步：谁有这块权限就归谁。
+    任务有人认领，比"角色码对得上"更重要。
+    """
+    roles = db.scalars(select(Role).where(Role.tenant_id == tenant_id)).all()
+    wanted = [r.id for r in roles if (r.permissions or {}).get(permission) is True]
+    if not wanted:
+        return []
+    user_ids = select(UserRole.user_id).where(UserRole.role_id.in_(wanted))
+    return list(
+        db.scalars(
+            select(User).where(
+                User.id.in_(user_ids),
+                User.tenant_id == tenant_id,
+                User.status == "active",
+            )
+        ).all()
+    )
+
+
 def _users_in_unit(db: Session, tenant_id: UUID, unit_id: UUID) -> list[User]:
     """某部门（org unit）内的 active 用户 —— 走主成员关系。"""
     from app.models_saas import UserOrgMembership
@@ -169,12 +193,17 @@ def resolve_assignment(
     if not role_code:
         return Assignment(strategy, None, {"strategy": strategy})
     candidates = _users_with_role(db, tenant_id, role_code)
+    resolved_by = "role"
+    if not candidates:
+        # 这个角色码下没人（租户没建这个角色）→ 找有同等权限的人接手
+        candidates = _users_with_permission(db, tenant_id, role_code)
+        resolved_by = "permission"
     load = _open_task_load(db, tenant_id)
     picked = _pick_least_loaded(candidates, load)
     return Assignment(
         strategy,
         picked.id if picked else None,
-        {"strategy": strategy, "role": role_code, "candidates": len(candidates)},
+        {"strategy": strategy, "role": role_code, "resolved_by": resolved_by, "candidates": len(candidates)},
     )
 
 

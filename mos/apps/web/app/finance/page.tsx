@@ -45,7 +45,7 @@ function FinanceHubPage() {
 
   // 各 tab 实际出现的状态集合（状态色图例）
   const legendStatuses: Record<Tab, string[]> = {
-    invoices: ["draft", "pending_approval", "issued", "partially_paid", "paid", "void"],
+    invoices: ["draft", "pending_approval", "issued", "partially_paid", "paid", "void", "overdue"],
     laytime: ["draft", "calculated", "finalized", "cancelled"],
     pnl: [],
     claims: ["open", "negotiating", "settled", "withdrawn"],

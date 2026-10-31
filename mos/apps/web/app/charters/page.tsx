@@ -423,7 +423,13 @@ function ChartersPage() {
         </>
       ),
     },
-    { key: "status", title: t("common.status", "状态"), width: 110, value: (r) => r.status },
+    {
+      key: "status",
+      title: t("common.status", "状态"),
+      width: 110,
+      value: (r) => r.status,
+      render: (_v, r) => <span className="pill">{t(`status.${r.status}`, r.status)}</span>,
+    },
     {
       key: "vessel",
       title: t("page.estimates.vessel", "船舶"),

@@ -48,6 +48,27 @@ from app.services.ui_text import resolve_user_locale
 
 router = APIRouter(tags=["Operations"])
 
+
+def _emit_nor_updated(db, auth, pc: PortCall, nor_at, *, source: str = "manual") -> None:
+    """NOR 落位 → 发域事件（两条入口共用：手工改挂靠港 / 录 SOF 的 NOR 事件）。"""
+    voyage = db.get(Voyage, pc.voyage_id) if pc.voyage_id else None
+    emit(
+        db,
+        auth.tenant_id,
+        "portcall.nor_updated",
+        "port_call",
+        pc.id,
+        payload={
+            "nor_at": nor_at.isoformat() if hasattr(nor_at, "isoformat") else nor_at,
+            "voyage_id": str(pc.voyage_id) if pc.voyage_id else None,
+            "voyage_no": getattr(voyage, "voyage_no", None),
+            "port_call_id": str(pc.id),
+            "source": source,
+        },
+        user_id=auth.user_id,
+    )
+
+
 # SOF（Statement of Facts）标准事件码表
 SOF_EVENT_CODES: dict[str, str] = {
     "NOR": "Notice of Readiness 递交备妥通知书",
@@ -572,6 +593,19 @@ def voyages_batch(
                     if prev == "completed":
                         row.completed_at = None  # reopen：清完成时间
                 assert_no_blocking_alerts(db, auth.tenant_id, "voyage", _voyage_alert_context(row))
+                # 域事件：批量关航次与逐条关必须等价，否则收尾任务/日程/通知整批丢失
+                if target == "completed":
+                    emit(
+                        db, auth.tenant_id, "voyage.completed", "voyage", row.id,
+                        payload={"voyage_no": row.voyage_no, "from": prev, "batch": True},
+                        user_id=auth.user_id,
+                    )
+                elif target == "in_progress" and prev == "completed":
+                    emit(
+                        db, auth.tenant_id, "voyage.reopened", "voyage", row.id,
+                        payload={"voyage_no": row.voyage_no, "batch": True},
+                        user_id=auth.user_id,
+                    )
                 audit(
                     db,
                     action="voyage.transition",
@@ -1400,6 +1434,7 @@ def update_port_call(
         # 否则租户过滤永远匹配不到，改挂靠港一律 404。
         if global_ref_get(db, Port, body.port_id, auth.tenant_id) is None:
             raise HTTPException(404, "Port not found")
+    old_nor_at = row.nor_at
     if "function_code" in fields:
         body.function_code = normalize_function_code(body.function_code)
     for name in (
@@ -1429,6 +1464,10 @@ def update_port_call(
         detail={"fields": sorted(fields)},
     )
     db.commit()
+    if "nor_at" in fields and body.nor_at is not None and body.nor_at != old_nor_at:
+        # 域事件：手工补录 NOR 也要能勾掉「递交 NOR」任务（否则只有邮件那条路能勾）
+        _emit_nor_updated(db, auth, row, body.nor_at, source="manual")
+        db.commit()  # 事件必须自己提交 —— 否则随会话回滚悄悄消失
     db.refresh(row)
     return PortCallOut.model_validate(row)
 
@@ -1783,6 +1822,11 @@ def create_sof(body: SofIn, auth: AuthContext = Depends(require_module("operatio
     if code in {"COMPLETED", "SAILED"}:
         pc.atd = body.event_at
     db.commit()
+    if code == "NOR":
+        # 域事件：NOR 落位 → 航次上的「递交 NOR」任务自动勾完成。
+        # 之前只有邮件解析那条路发事件，手工录 NOR 的任务永远等不到勾选。
+        _emit_nor_updated(db, auth, pc, body.event_at, source="sof")
+        db.commit()  # 事件必须自己提交 —— 否则随会话回滚悄悄消失
     return {"id": str(row.id), "event_code": row.event_code}
 
 
@@ -2035,6 +2079,18 @@ def _twin_alert_i18n(title: str, body: str | None) -> tuple[dict, dict | None]:
                 if m:
                     cert, days, vessel = m.groups()
                     t_zh = f"{vessel} {_TWIN_CERT_ZH.get(cert, cert)} {days} 天后到期"
+                else:
+                    m = re.match(r"COA over-lift: (.+)$", title)
+                    if m:
+                        t_zh = f"COA 超装：{m.group(1)}"
+                    else:
+                        m = re.match(r"Lift quantity deviation: (.+)$", title)
+                        if m:
+                            t_zh = f"提货量偏差：{m.group(1)}"
+                        else:
+                            m = re.match(r"Bunker delivery exception: (.+)$", title)
+                            if m:
+                                t_zh = f"加油交付异常：{m.group(1)}"
     if body:
         if body == "North Atlantic gale delay":
             b_zh = "北大西洋大风延误"
@@ -2042,6 +2098,17 @@ def _twin_alert_i18n(title: str, body: str | None) -> tuple[dict, dict | None]:
             m = re.match(r"Voyage (\S+) noon ETA drift$", body)
             if m:
                 b_zh = f"航次 {m.group(1)} 午报 ETA 偏移"
+            else:
+                m = re.match(
+                    r"Cumulative lift ([\d.,]+) exceeds the contract quantity ([\d.,]+) — confirm the variation or addendum\.$",
+                    body,
+                )
+                if m:
+                    b_zh = f"累计提货 {m.group(1)} 已超合同量 {m.group(2)}，请确认变更单/补充协议。"
+                else:
+                    m = re.match(r"Actual ([\d.,]+) vs planned ([\d.,]+)\.$", body)
+                    if m:
+                        b_zh = f"实际 {m.group(1)} vs 计划 {m.group(2)}。"
     return (
         {"en": title, "zh": t_zh},
         {"en": body, "zh": b_zh} if body else None,

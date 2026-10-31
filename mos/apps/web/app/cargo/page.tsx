@@ -55,6 +55,8 @@ function CargoBookWorkspace() {
   const [loadErr, setLoadErr] = useState("");
   const [rows, setRows] = useState<CargoBookRow[]>([]);
   const [total, setTotal] = useState(0);
+  // 状态页签角标 —— 后端给的租户级计数（不是当前页的行数）
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const rowCtx = useContextMenu<CargoBookRow>();
   const todo = useTodoAdd();
 
@@ -117,6 +119,9 @@ function CargoBookWorkspace() {
       if (statusFilter) params.status = statusFilter;
       const res = await apiList<CargoBookRow>("/api/v1/cargo-book", params);
       setTotal(res.total);
+      // 页签角标取后端的租户级状态计数（不是当前页行数）
+      const counts = (res as unknown as { status_counts?: Record<string, number> }).status_counts;
+      if (counts && typeof counts === "object") setStatusCounts(counts);
       setRows(
         res.items.map((r) => ({
           id: String(r.id),
@@ -152,11 +157,13 @@ function CargoBookWorkspace() {
 
   const setStatus = (s: string) => setQuery({ status: s || null }, { resetPage: true });
 
-  const statusCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const r of rows) m.set(r.status, (m.get(r.status) ?? 0) + 1);
+  // 角标：后端租户级计数；后端没给（旧版本）时退回「当前页行数」兜底
+  const statusCountMap = useMemo(() => {
+    if (Object.keys(statusCounts).length) return statusCounts;
+    const m: Record<string, number> = {};
+    for (const r of rows) m[r.status] = (m[r.status] ?? 0) + 1;
     return m;
-  }, [rows]);
+  }, [statusCounts, rows]);
 
   const cols = useMemo<ColumnDef<CargoBookRow>[]>(
     () => [
@@ -219,15 +226,17 @@ function CargoBookWorkspace() {
   );
 
   const tabs = useMemo<TabItem[]>(() => {
+    // 「全部」用总数（total），不是当前页行数
+    const allCount = Object.values(statusCountMap).reduce((a, b) => a + b, 0) || total;
     const items: TabItem[] = [
-      { key: "", label: t("common.all", "All"), badge: rows.length },
+      { key: "", label: t("common.all", "All"), badge: allCount },
     ];
     for (const s of STATUS_OPTIONS) {
-      const c = statusCounts.get(s) ?? 0;
+      const c = statusCountMap[s] ?? 0;
       if (c > 0) items.push({ key: s, label: t(`status.${s}`, s.replace("_", " ")), badge: c });
     }
     return items;
-  }, [rows.length, statusCounts, t]);
+  }, [statusCountMap, total, t]);
 
   return (
     <AppShell>
@@ -268,6 +277,9 @@ function CargoBookWorkspace() {
             emptyText={t("common.empty", "No records")}
           />
         </div>
+      </StateView>
+      {/* 分页器在 StateView 之外 —— 空白页时它必须还在，否则用户翻到空页就回不去了 */}
+      {total > 0 ? (
         <div className="dt-pager">
           <button
             type="button"
@@ -306,7 +318,7 @@ function CargoBookWorkspace() {
             ))}
           </select>
         </div>
-      </StateView>
+      ) : null}
 
       <ContextMenu controller={rowCtx} items={rowMenuItems} />
       {todo.element}

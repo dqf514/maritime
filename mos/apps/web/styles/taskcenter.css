@@ -112,6 +112,18 @@
   background: var(--accent-soft);
   color: var(--sea-deep);
 }
+/* 任务挂着的单据 —— 可点回系统里那一张 */
+.tk-badge-entity {
+  background: var(--foam);
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.tk-badge-entity:hover {
+  background: var(--accent-soft);
+  color: var(--sea-deep);
+}
 
 .tk-okr-tree {
   display: flex;

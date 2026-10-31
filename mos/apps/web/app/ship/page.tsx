@@ -12,6 +12,7 @@ import { DeskSection } from "@/components/DeskSection";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { StateView } from "@/components/StateView";
 import { CertOverview, VesselCertificates } from "@/components/ShipCertificates";
+import { taskPriorityLabel } from "@/components/TaskRow";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { msgOf } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
@@ -546,7 +547,8 @@ function ShipManagementPage() {
               <ul className="compact-list">
                 {detail.work_orders.map((w: any) => (
                   <li key={w.id} style={{ cursor: "pointer" }} onClick={() => selectWo(w)}>
-                    <span className={`pill ${w.priority}`}>{w.priority}</span> {w.wo_no} {w.title} ({w.status})
+                    <span className={`pill ${w.priority}`}>{taskPriorityLabel(t, w.priority)}</span>{" "}
+                    {w.wo_no} {w.title} ({t(`status.${w.status}`, w.status)})
                   </li>
                 ))}
               </ul>
@@ -554,7 +556,7 @@ function ShipManagementPage() {
                 <div className="desk-section" style={{ margin: "0.5rem 0" }}>
                   <div className="desk-toolbar" style={{ margin: 0 }}>
                     <h3 style={{ margin: 0, fontSize: "0.95rem" }}>
-                      {selWo.wo_no} · {selWo.status}
+                      {selWo.wo_no} · {t(`status.${selWo.status}`, selWo.status)}
                     </h3>
                     {selWo.status === "open" ? (
                       <button className="btn btn-sm" type="button" disabled={busy} onClick={() => woTransition("in_progress")}>
@@ -643,7 +645,13 @@ function ShipManagementPage() {
                       type="button"
                       onClick={() => {
                         setEditingCrew({ id: c.id, full_name: c.full_name });
-                        setCertRows([]);
+                        // 带出已有证书 —— 之前这里清空数组，保存时会把原证书整份覆盖掉
+                        setCertRows(
+                          (c.certificates ?? []).map((cert: any) => ({
+                            code: String(cert.code ?? ""),
+                            expires_on: cert.expires_on ? String(cert.expires_on) : "",
+                          })),
+                        );
                       }}
                     >
                       {t("page.ship.edit_certs", "Certificates")}
@@ -747,7 +755,7 @@ function ShipManagementPage() {
                 <div key={a.code} className="adapter-card">
                   <strong>{a.name}</strong>
                   <div className="muted">{a.code}</div>
-                  <div className="pill">{a.status}</div>
+                  <div className="pill">{t(`status.${a.status}`, a.status)}</div>
                   <div className="muted">{a.capabilities.join(" · ")}</div>
                 </div>
               ))}

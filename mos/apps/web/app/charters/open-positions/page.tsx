@@ -164,7 +164,12 @@ function OpenPositionsWorkspace() {
       align: "right",
       width: 115,
       value: (r) => r.freight_rate ?? null,
-      render: (v, r) => (v == null ? "—" : `${Number(v).toLocaleString()} ${r.freight_basis ? ` (${r.freight_basis})` : ""}`),
+      render: (v, r) =>
+        v == null
+          ? "—"
+          : `${Number(v).toLocaleString()} ${
+              r.freight_basis ? ` (${t(`rate_basis.${r.freight_basis}`, r.freight_basis)})` : ""
+            }`,
     },
     { key: "company_code", title: t("page.tc.header.company_code", "Company"), width: 100, value: (r) => r.company_code || "" },
     { key: "trade_area", title: t("page.tc.header.trade_area", "Trade area"), width: 110, value: (r) => r.trade_area || "" },

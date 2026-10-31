@@ -13,15 +13,27 @@ function abbrev(s: string): string {
   return (s.length <= 5 ? s : s.slice(0, 4)).toUpperCase();
 }
 
-export function StatusLegend({ statuses, className }: { statuses: string[]; className?: string }) {
+export function StatusLegend({
+  statuses,
+  labels,
+  className,
+}: {
+  statuses: string[];
+  /** 覆盖文案（图例与列里的说法要一致 —— 例如制裁状态用「审查中」而不是通用的「待审核」） */
+  labels?: Record<string, string>;
+  className?: string;
+}) {
   const { t } = useI18n();
   if (!statuses.length) return null;
   return (
     <div className={`status-legend${className ? ` ${className}` : ""}`} role="note" aria-label={t("legend.status", "Status legend")}>
       <span className="status-legend-title">{t("legend.status", "Status")}</span>
       {statuses.map((s) => {
-        const full = t(`status.${s}`, s.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()));
-        return <StatusBadge key={s} status={s} label={abbrev(s)} title={full} />;
+        // 优先用页面给的文案；否则用 status.* 的译文；再否则退回原始码的人话写法。
+        const raw = t(`status.${s}`);
+        const text = labels?.[s] ?? (raw !== `status.${s}` ? raw : null);
+        const full = text ?? s.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+        return <StatusBadge key={s} status={s} label={abbrev(text ?? s)} title={full} />;
       })}
     </div>
   );

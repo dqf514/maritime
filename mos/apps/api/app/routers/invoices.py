@@ -27,7 +27,9 @@ from app.services.finance_workflow import (
 )
 from app.services.hire_engine import _off_hire_in_period, create_hire_statement
 from app.services.audit import audit
-from app.services.domain_events import emit
+from app.services.domain_events import emit, ensure_task
+from app.services.system_text import text
+from app.services.ui_text import user_locale
 from app.services.recycle import soft_delete
 from app.services.state_machine import INVOICE_TRANSITIONS, transition
 from app.services.optimistic_lock import assert_fresh
@@ -563,6 +565,40 @@ def create_credit_note(
     # 幂等：分录挂在红冲单自己身上，重复调用只会拿到同一张。
     post_credit_note_reversal(db, auth.tenant_id, inv, cn_inv, user_id=auth.user_id)
     db.commit()
+    # 域事件 + 退款跟进：原单已经收过款的话，红冲之后钱多了 —— 必须有人安排退款，
+    # 否则这笔差额就悬在那儿（客户多付了，没人管）。
+    emit(
+        db, auth.tenant_id, "invoice.credit_note_issued", "invoice", cn_inv.id,
+        payload={
+            "invoice_no": inv.invoice_no,
+            "credit_note_no": row.credit_note_no,
+            "credit_note_of_id": str(inv.id),
+            "amount": float(amt),
+            "currency": inv.currency or "USD",
+        },
+        user_id=auth.user_id,
+    )
+    if inv.status in ("paid", "partially_paid"):
+        locale = user_locale(db, auth.user_id)
+        ensure_task(
+            db,
+            auth.tenant_id,
+            title=text("invoice.refund.task.title", locale, invoice_no=inv.invoice_no),
+            description=text(
+                "invoice.refund.task.desc", locale,
+                amount=f"{float(amt):,.2f}", currency=inv.currency or "USD",
+            ),
+            entity_type="invoice",
+            entity_id=inv.id,
+            priority="high",
+            due_days=3,
+            assign_role="finance",
+            created_by=auth.user_id,
+            dedupe_key=f"invoice.refund:{row.id}",
+        )
+    # 域事件与跟进任务必须**自己提交** —— 上一次 commit 已经过去了，
+    # 不提交的话事件和任务会随会话回滚悄悄消失（"退款没人管"）。
+    db.commit()
     return {
         "id": str(row.id),
         "credit_note_no": row.credit_note_no,
@@ -805,6 +841,17 @@ def add_payment(
             detail={"code": "CREDIT_NOTE_NOT_PAYABLE", "message": "A credit note (negative invoice) cannot receive payment"},
         )
     record_payment(db, inv, amount, reference=reference, created_by=auth.user_id)
+    # 域事件：收款登记 → 绑 invoice.payment.record 的任务即时勾掉
+    emit(
+        db, auth.tenant_id, "invoice.payment_recorded", "invoice", inv.id,
+        payload={
+            "invoice_no": inv.invoice_no,
+            "amount": float(amount or 0),
+            "currency": inv.currency or "USD",
+            "status": inv.status,
+        },
+        user_id=auth.user_id,
+    )
     db.commit()
     return {"invoice_id": str(inv.id), "status": inv.status, "paid_amount": float(inv.paid_amount)}
 
@@ -874,6 +921,16 @@ def gl_post(invoice_id: UUID, auth: AuthContext = Depends(require_module("financ
     }
     # P0-B2：红冲先于原发票过账时，在这里**补**红冲的反向分录（幂等）。
     post_reversals_for_credit_notes(db, auth.tenant_id, inv, user_id=auth.user_id)
+    # 域事件：过账完成 → 绑 invoice.post_gl 的任务即时勾掉（原来只能等 5 分钟兜底扫描）
+    emit(
+        db, auth.tenant_id, "invoice.gl_posted", "invoice", inv.id,
+        payload={
+            "invoice_no": inv.invoice_no,
+            "journal_id": str(journal.id),
+            "currency": journal.currency,
+        },
+        user_id=auth.user_id,
+    )
     db.commit()
     return {
         "id": str(inv.id),
@@ -959,6 +1016,17 @@ def void_payment(payment_id: UUID, auth: AuthContext = Depends(require_module("f
         if inv.status == "paid" and target == "issued":
             inv.status = transition("invoice", inv.status, "partially_paid", INVOICE_TRANSITIONS)
         inv.status = transition("invoice", inv.status, target, INVOICE_TRANSITIONS)
+    # 域事件：付款被冲正 → 绑 invoice.payment.record 的任务应回退（"钱已经收了"不再成立）
+    emit(
+        db, auth.tenant_id, "invoice.payment_voided", "invoice", inv.id,
+        payload={
+            "invoice_no": inv.invoice_no,
+            "payment_id": str(pay.id),
+            "reversal_id": str(reverse.id),
+            "status": inv.status,
+        },
+        user_id=auth.user_id,
+    )
     db.commit()
     return {
         "payment_id": str(pay.id),

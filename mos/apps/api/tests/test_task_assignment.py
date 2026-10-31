@@ -153,6 +153,31 @@ def test_resolve_assignment_prefers_least_loaded(db_engine):
         db.rollback()
 
 
+def test_role_strategy_falls_back_to_permission_holders(db_engine):
+    """角色码下没人时，按**权限**找人接手。
+
+    动作目录写的是角色码（``claims``），但演示租户并没有 ``claims`` 这个
+    角色 —— ``claims`` 权限挂在 ``demurrage`` 角色上。没有这条兜底，收尾
+    清单里的索赔类任务会变成"无人认领"，管理层看不到该谁做。
+    """
+    Session = sessionmaker(bind=db_engine)
+    from app.services.assignment import resolve_assignment
+
+    with Session() as db:
+        admin = _user(db, "admin@demo.marios")
+        dana = _user(db, "demurrage@demo.marios")
+        tenant_id = admin.tenant_id
+
+        a = resolve_assignment(db, tenant_id, strategy="role", role_code="claims")
+        assert a.assignee_user_id == dana.id, a.reason
+        assert a.reason.get("resolved_by") == "permission"
+
+        # 角色存在时优先按角色走，不走兜底
+        b = resolve_assignment(db, tenant_id, strategy="role", role_code="finance")
+        assert b.reason.get("resolved_by") == "role"
+        db.rollback()
+
+
 def test_ensure_task_uses_resolver_and_writes_audit(db_engine):
     """ensure_task 走策略解析器，并补上审计（原来系统任务完全不留痕）。"""
     Session = sessionmaker(bind=db_engine)

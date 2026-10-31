@@ -593,7 +593,7 @@ def create_laytime_calc(
             "action": "draft_created",
             "events": len(inputs["sof_events"] or []),
             "voyage": voyage.voyage_no if voyage else None,
-            "href": f"/finance/laytimes?id={calc.id}",
+            "href": "/finance?tab=laytime",
         }
     )
     return created, warnings, hints

@@ -471,10 +471,11 @@ function PaymentsPage() {
               aria-label={t("common.status", "Status")}
             >
               <option value="">{t("page.payments.all_status", "All statuses")}</option>
-              <option value="draft">draft</option>
-              <option value="processing">processing</option>
-              <option value="completed">completed</option>
-              <option value="reversed">reversed</option>
+              {["draft", "processing", "completed", "reversed"].map((s) => (
+                <option key={s} value={s}>
+                  {t(`status.${s}`, s)}
+                </option>
+              ))}
             </select>
           }
         >

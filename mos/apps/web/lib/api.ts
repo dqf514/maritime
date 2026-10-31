@@ -103,7 +103,7 @@ export async function apiLogout(): Promise<void> {
 
 export async function apiMe(): Promise<Me> {
   const res = await fetch(`${API_BASE}/api/v1/me`, { headers: { ...authHeaders() }, credentials: "include" });
-  if (!res.ok) throw new Error("Unauthorized");
+  if (!res.ok) throw apiError("GET", "/api/v1/me", res.status, await res.json().catch(() => ({})));
   return res.json();
 }
 
@@ -122,7 +122,9 @@ export async function apiRunSelfCheck() {
     headers: { ...authHeaders() },
     credentials: "include",
   });
-  if (!res.ok) throw new Error("SelfCheck failed");
+  if (!res.ok) {
+    throw apiError("POST", "/api/v1/settings/selfcheck/run", res.status, await res.json().catch(() => ({})));
+  }
   return res.json();
 }
 
@@ -132,7 +134,9 @@ export async function apiCreateBackup() {
     headers: { ...authHeaders() },
     credentials: "include",
   });
-  if (!res.ok) throw new Error("Backup failed");
+  if (!res.ok) {
+    throw apiError("POST", "/api/v1/settings/dataops/backups", res.status, await res.json().catch(() => ({})));
+  }
   return res.json();
 }
 
@@ -141,7 +145,9 @@ export async function apiListBackups() {
     headers: { ...authHeaders() },
     credentials: "include",
   });
-  if (!res.ok) throw new Error("List backups failed");
+  if (!res.ok) {
+    throw apiError("GET", "/api/v1/settings/dataops/backups", res.status, await res.json().catch(() => ({})));
+  }
   return res.json();
 }
 
@@ -152,7 +158,9 @@ export async function apiCreateMigration(note?: string) {
     credentials: "include",
     body: JSON.stringify({ note }),
   });
-  if (!res.ok) throw new Error("Create migration failed");
+  if (!res.ok) {
+    throw apiError("POST", "/api/v1/settings/dataops/migrations", res.status, await res.json().catch(() => ({})));
+  }
   return res.json();
 }
 
@@ -163,7 +171,14 @@ export async function apiAddMigrationSource(jobId: string, source_type: string) 
     credentials: "include",
     body: JSON.stringify({ source_type, config: {} }),
   });
-  if (!res.ok) throw new Error("Add source failed");
+  if (!res.ok) {
+    throw apiError(
+      "POST",
+      `/api/v1/settings/dataops/migrations/${jobId}/sources`,
+      res.status,
+      await res.json().catch(() => ({})),
+    );
+  }
   return res.json();
 }
 
@@ -173,7 +188,14 @@ export async function apiRunAnalyze(jobId: string) {
     headers: { ...authHeaders() },
     credentials: "include",
   });
-  if (!res.ok) throw new Error("Analyze failed");
+  if (!res.ok) {
+    throw apiError(
+      "POST",
+      `/api/v1/settings/dataops/migrations/${jobId}/run-analyze`,
+      res.status,
+      await res.json().catch(() => ({})),
+    );
+  }
   return res.json();
 }
 
@@ -182,7 +204,14 @@ export async function apiListProposals(jobId: string) {
     headers: { ...authHeaders() },
     credentials: "include",
   });
-  if (!res.ok) throw new Error("List proposals failed");
+  if (!res.ok) {
+    throw apiError(
+      "GET",
+      `/api/v1/settings/dataops/migrations/${jobId}/proposals`,
+      res.status,
+      await res.json().catch(() => ({})),
+    );
+  }
   return res.json();
 }
 
@@ -191,7 +220,9 @@ export async function apiListLicenses() {
     headers: { ...authHeaders() },
     credentials: "include",
   });
-  if (!res.ok) throw new Error("Licenses failed");
+  if (!res.ok) {
+    throw apiError("GET", "/api/v1/tenants/current/licenses", res.status, await res.json().catch(() => ({})));
+  }
   return res.json();
 }
 
@@ -337,7 +368,14 @@ export async function apiUploadMigrationExcel(jobId: string, file: File) {
     credentials: "include",
     body: form,
   });
-  if (!res.ok) throw new Error("Excel upload failed");
+  if (!res.ok) {
+    throw apiError(
+      "POST",
+      `/api/v1/settings/dataops/migrations/${jobId}/upload-excel`,
+      res.status,
+      await res.json().catch(() => ({})),
+    );
+  }
   return res.json();
 }
 
@@ -353,6 +391,10 @@ export type TaskOut = {
   creator?: { id: string; email: string; full_name: string | null } | null;
   entity_type: string | null;
   entity_id: string | null;
+  /** 关联单据的人话单号（VOY-2405）—— 显示用，别甩 UUID 给用户 */
+  entity_title?: string | null;
+  /** 关联单据的深链（后端给出，保证点得到真页面） */
+  entity_href?: string | null;
   source: string | null;
   completed_at: string | null;
   created_at: string;
@@ -361,6 +403,8 @@ export type TaskOut = {
   assignee_user_id?: string | null;
   parent_id?: string | null;
   action_code?: string | null;
+  /** 动作的可读文案键（i18n）—— 显示时用它，别把技术码甩给用户 */
+  action_label_key?: string | null;
   weight?: number | null;
   collaborator_ids?: string[];
   auto_complete?: boolean;
@@ -368,6 +412,14 @@ export type TaskOut = {
   completed_by?: string | null;
   work_package_id?: string | null;
   objective_id?: string | null;
+};
+
+/** 动作绑定用的「关联单据」候选项。 */
+export type EntityOption = {
+  id: string;
+  label: string;
+  status: string | null;
+  ref: string | null;
 };
 
 /** 系统动作目录条目（"动作做完任务自动勾完成"的绑定目标）。 */
@@ -475,6 +527,8 @@ export type HomeSummary = {
     due_today: number;
     done: number;
     groups: { overdue: number; today: number; week: number; later: number; done: number };
+    /** 各桶实际展示条数（列表被上限截断时 < groups[b]） */
+    shown?: { overdue: number; today: number; week: number; later: number; done: number };
     items: TaskOut[];
   };
   notifications: { unread: number; items: unknown[] };

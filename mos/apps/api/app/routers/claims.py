@@ -28,11 +28,13 @@ from app.services.claim_taxonomy import (
     is_valid_claim_subtype,
 )
 from app.services.doc_numbering import next_doc_number
-from app.services.domain_events import emit
+from app.services.domain_events import emit, ensure_task
 from app.services.money import FX_RATE_NOT_FOUND, FxRateUnavailable, require_fx_rate, to_base_amount
 from app.services.performance_engine import compute_performance
 from app.services.recycle import soft_delete
 from app.services.tenant_guard import scoped_get
+from app.services.system_text import text
+from app.services.ui_text import user_locale
 
 from app.routers._finance_common import _alive, _base_currency, _days_to_timebar, TIMEBAR_DAYS_AFTER_BL
 
@@ -415,6 +417,27 @@ def claim_to_invoice(claim_id: UUID, auth: AuthContext = Depends(require_module(
         meta={"claim_id": str(row.id), "claim_no": row.claim_no},
     )
     db.add(inv)
+    db.commit()
+    # 任务中心联动：索赔转成发票草稿之后，如果只写库就走人，这张草稿发票
+    # 没人管 —— 派一条"签发发票"任务给财务，绑 invoice.issue 动作，
+    # 发票真签发出去时任务自动勾完成（业务动作 → 任务闭环）。
+    locale = user_locale(db, auth.user_id)
+    ensure_task(
+        db,
+        auth.tenant_id,
+        title=text("claim.to_invoice.task.title", locale, invoice_no=inv.invoice_no),
+        description=text("claim.to_invoice.task.desc", locale, claim_no=row.claim_no),
+        entity_type="invoice",
+        entity_id=inv.id,
+        priority="normal",
+        due_days=2,
+        assign_role="finance",
+        created_by=auth.user_id,
+        action_code="invoice.issue",
+        dedupe_key=f"claim.to_invoice:{row.id}:{inv.id}",
+    )
+    # 跟进任务必须**自己提交** —— 上一次 commit 已经过去了，不提交的话这条
+    # 任务会随会话回滚悄悄消失（"草稿发票没人管"）。
     db.commit()
     return {
         "id": str(inv.id),

@@ -212,6 +212,31 @@ def test_login_rate_limited(client, monkeypatch):
     _limiters.pop("auth.login", None)
 
 
+def test_login_rate_limit_is_per_account_not_per_ip(client, monkeypatch):
+    """一个人连输错密码，不该把同一出口 IP 下的同事一起锁掉。
+
+    办公室 NAT 出口就是一个 IP —— 只按 IP 计的话，甲输错 5 次，
+    乙（正确密码）也进不来。防爆破的力度按账号计即可保持。
+    """
+    from app.config import get_settings
+    from app.services.ratelimit import _limiters
+
+    _limiters.pop("auth.login", None)
+    monkeypatch.setattr(get_settings(), "rate_limit_enabled", True)
+    for _ in range(6):
+        client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@demo.marios", "password": "wrong", "tenant_code": "demo"},
+        )
+    # 同一 IP、另一个账号 —— 不该被牵连
+    other = client.post(
+        "/api/v1/auth/login",
+        json={"email": "ops@demo.marios", "password": "Demo1234!", "tenant_code": "demo"},
+    )
+    assert other.status_code != 429, other.text
+    _limiters.pop("auth.login", None)
+
+
 # —— 9. tenant suspension + password version revocation ——
 def test_suspended_tenant_rejected(client, db_engine):
     from sqlalchemy import select

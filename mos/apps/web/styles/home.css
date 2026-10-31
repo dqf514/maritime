@@ -481,6 +481,8 @@
 /* 分桶标题：工作台任务面板按 逾期/今日/本周/稍后/已完成 分组 */
 .wb-task-group{border-bottom:1px solid var(--border-light)}
 .wb-task-group-head{display:flex;align-items:center;justify-content:space-between;gap:var(--gap-sm);padding:2px var(--gap-sm);background:var(--toolbar-bg);font-size:var(--font-label);color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.wb-task-group-more{display:block;padding:3px var(--gap-sm);font-size:0.74rem;color:var(--muted);text-decoration:none}
+.wb-task-group-more:hover{color:var(--accent-text)}
 .wb-task-due{font-size:9px;color:var(--muted);flex-shrink:0}
 .wb-task-due.overdue{color:var(--danger);font-weight:700}
 .wb-task-assignee{font-size:9px;color:var(--muted);flex-shrink:0}

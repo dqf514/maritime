@@ -4,6 +4,7 @@ import { RefreshButton } from "@/components/RefreshButton";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { RecordModal } from "@/components/RecordModal";
 import { Toolbar } from "@/components/Toolbar";
@@ -56,6 +57,8 @@ export default function WorkflowsAdminPage() {
   const [loadErr, setLoadErr] = useState("");
   // 角色列表是下拉参考数据，失败要可见但不能整页报错
   const [refWarn, setRefWarn] = useState("");
+  // 停用工作流前的二次确认
+  const [pendingDisable, setPendingDisable] = useState<Wf | null>(null);
 
   async function load() {
     setLoading(true);
@@ -156,6 +159,15 @@ export default function WorkflowsAdminPage() {
     await load();
   }
 
+  /** 停用工作流会让在途审批失去流转规则 —— 二次确认。 */
+  function requestToggle(r: Wf, enabled: boolean) {
+    if (enabled) {
+      toggleEnabled(r, enabled).catch(() => toast.error(t("common.failed", "失败")));
+      return;
+    }
+    setPendingDisable(r);
+  }
+
   async function deleteWorkflow(r: Wf) {
     try {
       await apiDelete(`/api/v1/admin/workflows/${r.id}`);
@@ -203,7 +215,7 @@ export default function WorkflowsAdminPage() {
           <input
             type="checkbox"
             checked={r.enabled}
-            onChange={(e) => toggleEnabled(r, e.target.checked).catch(() => toast.error(t("common.failed", "失败")))}
+            onChange={(e) => requestToggle(r, e.target.checked)}
           />
         </span>
       ),
@@ -362,6 +374,22 @@ export default function WorkflowsAdminPage() {
           </p>
         </div>
       </RecordModal>
+      <ConfirmDialog
+        open={Boolean(pendingDisable)}
+        title={t("page.wf.disable_title", "Deactivate workflow")}
+        message={t(
+          "page.wf.disable_confirm",
+          'Deactivate "{name}"? In-flight approvals will no longer follow its steps.',
+          { name: pendingDisable?.name || pendingDisable?.code || "" },
+        )}
+        danger
+        onConfirm={() => {
+          const row = pendingDisable;
+          setPendingDisable(null);
+          if (row) toggleEnabled(row, false).catch(() => toast.error(t("common.failed", "失败")));
+        }}
+        onCancel={() => setPendingDisable(null)}
+      />
     </AppShell>
   );
 }

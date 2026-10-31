@@ -8,7 +8,7 @@ import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell, useShellBootstrap } from "@/components/AppShell";
-import { ActivityLogModal, actionLabel, type ActivityItem } from "@/components/ActivityLogModal";
+import { ActivityLogModal, activityWithEntity, type ActivityItem } from "@/components/ActivityLogModal";
 import { OnboardingCard } from "@/components/OnboardingCard";
 import { PageGuide } from "@/components/PageGuide";
 import { PageHeader } from "@/components/PageHeader";
@@ -106,7 +106,9 @@ function WorkbenchPageInner() {
     // 主面板（summary）与动态流（次级列表）分别成败 —— 动态流失败只做局部提示
     const [sumR, actR] = await Promise.allSettled([
       apiGet("/api/v1/home/summary"),
-      apiGet("/api/v1/activity/feed?limit=12"),
+      // 把当前界面语言显式带上 —— 操作文案由后端出，不带的话会按用户档案里的
+      // 语言出，与屏幕上看到的语言对不上（界面中文、文案英文）。
+      apiGet(`/api/v1/activity/feed?limit=12&locale=${encodeURIComponent(locale)}`),
     ]);
     if (sumR.status === "fulfilled") {
       setSummary(sumR.value as HomeSummary);
@@ -122,7 +124,7 @@ function WorkbenchPageInner() {
       setActivityErr(msgOf(actR.reason));
     }
     setLoading(false);
-  }, [t]);
+  }, [t, locale]);
 
   useEffect(() => {
     apiMe()
@@ -207,6 +209,39 @@ function WorkbenchPageInner() {
 
   const visibleBuckets = taskFilter === "all" ? BUCKETS : [taskFilter];
   const visibleCount = visibleBuckets.reduce((n, b) => n + bucketed[b].length, 0);
+
+  /** 各桶真实总数（后端给的，不受列表上限影响） */
+  const bucketTotals = useMemo(() => {
+    const g = summary?.tasks.groups;
+    return {
+      overdue: g?.overdue ?? 0,
+      today: g?.today ?? 0,
+      week: g?.week ?? 0,
+      later: g?.later ?? 0,
+      done: g?.done ?? 0,
+    };
+  }, [summary?.tasks.groups]);
+
+  /** 面板里被截断的桶 —— 需要给出"去任务中心看全量"的出口 */
+  const truncatedBuckets = useMemo(
+    () => BUCKETS.filter((b) => bucketTotals[b] > bucketed[b].length),
+    [bucketTotals, bucketed],
+  );
+
+  /**
+   * 桶 → 任务中心的筛选（任务中心支持 overdue / include_done）。
+   * 必须落在 `mine` 这个视角上 —— 面板里的数据口径是「我建 + 我主责」
+   * （与 /home/summary 的 tasks 段一致），指到 `assigned_to_me` 会得到一张
+   * 空表：角标写着「逾期 8 条」，点进去却一条都没有。
+   */
+  const bucketHref = useCallback(
+    (b: TaskBucket) => {
+      if (b === "overdue") return "/tasks?tab=mine&overdue=1";
+      if (b === "done") return "/tasks?tab=mine&include_done=1&status=done";
+      return "/tasks?tab=mine";
+    },
+    [],
+  );
 
   const todayText = new Date().toLocaleDateString(locale.startsWith("zh") ? "zh-CN" : "en-US", {
     month: "short",
@@ -375,7 +410,11 @@ function WorkbenchPageInner() {
                     <div key={b} className="wb-task-group">
                       <div className="wb-task-group-head">
                         <span>{t(`page.tasks.bucket_${b}`, b)}</span>
-                        <span className="muted">{bucketed[b].length}</span>
+                        {/* 截断时显示「展示 / 总数」，不把上限说成"就这些" */}
+                        <span className="muted">
+                          {bucketed[b].length}
+                          {bucketTotals[b] > bucketed[b].length ? ` / ${bucketTotals[b]}` : ""}
+                        </span>
                       </div>
                       {bucketed[b].map((task) => (
                         <TaskRow
@@ -388,6 +427,12 @@ function WorkbenchPageInner() {
                           onOpen={(x) => setTaskDetailId(x.id)}
                         />
                       ))}
+                      {/* 这一桶被展示上限截断了 —— 给一个去全量的出口 */}
+                      {truncatedBuckets.includes(b) ? (
+                        <Link className="wb-task-group-more" href={bucketHref(b)}>
+                          {t("page.home.task_see_all", "See all {n} in the task centre", { n: bucketTotals[b] })} →
+                        </Link>
+                      ) : null}
                     </div>
                   ) : null,
                 )
@@ -397,10 +442,13 @@ function WorkbenchPageInner() {
             </div>
             <div className="wb-panel-foot">
               <span className="muted">
-                {t("page.home.task_count", "{n} tasks", { n: summary?.tasks.open ?? 0 })}
+                {t("page.home.task_count", "{n} tasks", {
+                  n: bucketTotals.overdue + bucketTotals.today + bucketTotals.week + bucketTotals.later + bucketTotals.done,
+                })}
               </span>
-              {/* 常驻入口 —— 工作台只是摘要，完整的协同在任务中心 */}
-              <Link href="/tasks?tab=assigned_to_me" className="wb-more">
+              {/* 常驻入口 —— 工作台只是摘要，完整的协同在任务中心。
+                  同样落在 `mine` 视角上，和上面的分桶入口保持一致 */}
+              <Link href="/tasks?tab=mine" className="wb-more">
                 {t("page.home.open_task_centre", "Open task centre")} →
               </Link>
             </div>
@@ -578,8 +626,14 @@ function WorkbenchPageInner() {
                     <>
                       <span className="wb-alert-title">
                         {a.actor || t("page.home.someone", "Someone")}{" "}
-                        <span className="wb-activity-action">{actionLabel(a.action)}</span>{" "}
-                        {a.entity_type}
+                        {/* 后端已按看的人的语言给出可读文案；没有就退回短码 */}
+                        <span className="wb-activity-action">{activityWithEntity(a)}</span>
+                        {a.entity_title ? (
+                          <>
+                            {" · "}
+                            {a.entity_title}
+                          </>
+                        ) : null}
                       </span>
                       <span className="wb-activity-time">{timeAgo(a.created_at, t)}</span>
                     </>

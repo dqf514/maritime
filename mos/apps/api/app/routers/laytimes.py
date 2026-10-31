@@ -35,6 +35,7 @@ from app.models_task import Task
 from app.services.laytime_engine import compute_laytime, compute_laytime_statement, settle_with_on_account
 from app.services.clause_library import materialize_params
 from app.services.doc_numbering import next_doc_number
+from app.services.domain_events import emit
 from app.services.money import FX_RATE_NOT_FOUND, FxRateUnavailable, money, require_fx_rate, to_base_amount
 from app.services.recycle import soft_delete
 from app.services.sanctions import assert_not_sanctioned
@@ -120,7 +121,7 @@ def _office_escalate_laytime(db: Session, tenant_id, row) -> None:
             tenant_id,
             title="Laytime statement finalized",
             lines=lines,
-            href="/finance/laytimes",
+            href="/finance?tab=laytime",
         )
     except Exception:  # noqa: BLE001
         log.exception("office escalate failed for laytime %s", row.id)
@@ -172,6 +173,16 @@ def finalize_laytime(laytime_id: UUID, auth: AuthContext = Depends(require_modul
         raise HTTPException(404, "Laytime not found")
     row.status = transition("laytime", row.status, "finalized", LAYTIME_TRANSITIONS)
     row.finalized_at = datetime.now(timezone.utc)
+    # 域事件：定稿才是"装卸时间这条动作做完了"的事实 —— 绑 laytime.finalize
+    # 的任务靠它即时勾掉（以前只在"草稿刚建"时发事件，语义反了）。
+    emit(
+        db, auth.tenant_id, "laytime.finalized", "laytime", row.id,
+        payload={
+            "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+            "booking_reference": row.booking_reference,
+        },
+        user_id=auth.user_id,
+    )
     db.commit()
     _office_escalate_laytime(db, auth.tenant_id, row)
     db.commit()

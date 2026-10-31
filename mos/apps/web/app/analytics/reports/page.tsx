@@ -580,7 +580,11 @@ export default function ReportsPage() {
             <button type="button" onClick={(e) => { e.stopPropagation(); executeReport(r, `rep:${r.id}`); }}>
               {runningKey === `rep:${r.id}` ? "…" : t("common.run", "Run")}
             </button>
-            <Link href="/analytics/reports/builder" className="btn btn-sm btn-ghost" onClick={(e) => e.stopPropagation()}>
+            <Link
+              href={`/analytics/reports/builder?id=${encodeURIComponent(String(r.id))}`}
+              className="btn btn-sm btn-ghost"
+              onClick={(e) => e.stopPropagation()}
+            >
               {t("common.edit", "Edit")}
             </Link>
             <button type="button" onClick={(e) => { e.stopPropagation(); exportCsv(r); }}>

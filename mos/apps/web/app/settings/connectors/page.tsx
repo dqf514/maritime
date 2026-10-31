@@ -151,7 +151,8 @@ export default function ConnectorsPage() {
           connector_type: edit.connector_type,
           instance_name: edit.instance_name,
           endpoint: edit.endpoint || null,
-          secret_ref: edit.secret_ref || null,
+          // 掩码 "***" 是只读回显 —— 原样提交会把凭据写成字面量 ***
+          secret_ref: edit.secret_ref === "***" ? undefined : edit.secret_ref || null,
           config: edit.config,
         });
         toast.success(t("common.saved", "Saved"));

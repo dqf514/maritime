@@ -450,12 +450,15 @@ def seed_full_demo_flow(db: Session) -> None:
     v1, v2, v3, v4 = vessels["9000001"], vessels["9000002"], vessels["9000003"], vessels["9000004"]
 
     # Estimates — results 同时含展示键与 P&L 引擎键（total_revenue/voyage_cost/tce）
+    # status 只能用估算页认得的词表：draft / calculated / confirmed / converted / cancelled。
+    # 以前这里写的是 working / submitted —— 两个词全系统没人产生，前端既没有
+    # 筛选项也没有翻译（列表页直接露出英文 "working"），TCE 分析页也因此是空的。
     est_data = [
         (
             "SEED SGSIN→NLRTM Capesize",
             v2,
             cps["Nordic Grain Traders"],
-            "working",
+            "calculated",
             {"load_port": "SGSIN", "disch_port": "NLRTM", "cargo_mt": 75000, "freight_usd": 1850000},
             {"tce_usd_day": 16850, "voyage_days": 42, "pnl_usd": 420000, "total_revenue": 1850000, "voyage_cost": 1430000, "tce": 16850},
         ),
@@ -471,7 +474,7 @@ def seed_full_demo_flow(db: Session) -> None:
             "BRSSZ→AUBNE grains TCT",
             v4,
             cps["Nordic Grain Traders"],
-            "submitted",
+            "confirmed",
             {"duration_days": 90, "hire_usd_day": 15500},
             {"tce_usd_day": 15100, "voyage_days": 90, "pnl_usd": 310000, "total_revenue": 1395000, "voyage_cost": 1085000, "tce": 15100},
         ),
@@ -518,7 +521,10 @@ def seed_full_demo_flow(db: Session) -> None:
         tenant_id=tenant.id,
         charter_no="CP-2408",
         charter_type="voyage",
-        status="submitted",
+        # 必须是状态机认得的词：draft → pending_approval → active → completed。
+        # 以前写 "submitted" —— 全系统没人产生这个值，于是这份租约在演示里
+        # 永远批不了（任何流转都 409 INVALID_STATE），是条死胡同。
+        status="pending_approval",
         vessel_id=v1.id,
         counterparty_id=cps["Pacific Steel Mills"].id,
         estimate_id=estimates[1].id,

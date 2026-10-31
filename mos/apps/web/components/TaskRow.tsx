@@ -13,6 +13,7 @@
 import { TaskOut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { utcDayDiff } from "@/lib/datetime";
+import Link from "next/link";
 
 export type TaskDueInfo = { text: string; overdue: boolean } | null;
 
@@ -84,6 +85,21 @@ export function TaskRow({ task, compact = false, busy = false, onComplete, onReo
   const done = task.status === "done" || task.status === "cancelled";
   const assigneeName = task.assignee?.full_name || task.assignee?.email || "";
   const click = () => onOpen?.(task);
+  // 绑定的系统动作 —— 显示可读文案，技术码留在 title 里备查
+  const actionBadge = task.action_code ? (
+    <span className="tk-badge tk-badge-action" title={task.action_code}>
+      {task.action_label_key
+        ? t(task.action_label_key, task.action_code)
+        : task.action_code}
+    </span>
+  ) : null;
+  // 任务挂着的单据 —— 跳回系统里那一张。标题里已经写了单号就不重复显示。
+  const entityChip =
+    task.entity_href && task.entity_title && !task.title.includes(task.entity_title) ? (
+      <Link href={task.entity_href} className="tk-badge tk-badge-entity" title={task.entity_type || undefined}>
+        {task.entity_title}
+      </Link>
+    ) : null;
 
   if (compact) {
     return (
@@ -104,7 +120,8 @@ export function TaskRow({ task, compact = false, busy = false, onComplete, onReo
         <span className="wb-task-title" onClick={click}>
           {task.title}
         </span>
-        {task.action_code ? <span className="tk-badge tk-badge-action">{task.action_code}</span> : null}
+        {actionBadge}
+        {entityChip}
         {due ? <span className={`wb-task-due ${due.overdue ? "overdue" : ""}`}>{due.text}</span> : null}
         {assigneeName ? <span className="wb-task-assignee">{assigneeName}</span> : null}
       </div>
@@ -131,7 +148,8 @@ export function TaskRow({ task, compact = false, busy = false, onComplete, onReo
           {task.auto_completed ? (
             <span className="pill tk-pill-auto">{t("page.tasks.auto_done", "Auto-completed")}</span>
           ) : null}
-          {task.action_code ? <span className="tk-badge tk-badge-action">{task.action_code}</span> : null}
+          {actionBadge}
+          {entityChip}
         </span>
         {task.description ? <small className="muted">{task.description}</small> : null}
         <small className="muted">

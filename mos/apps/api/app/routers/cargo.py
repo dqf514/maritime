@@ -222,8 +222,13 @@ def cargo_book_rows(
     from app.models_wave1 import Counterparty, Port, Vessel
 
     rows, total = cargo_svc.list_cargo(db, auth.tenant_id, status=status, limit=limit, offset=offset)
+    # 全量状态计数（不受 status 过滤影响）—— 前端状态页签的角标必须是
+    # 租户级口径，而不是「当前这一页里出现了几个」。
+    status_counts = cargo_svc.cargo_status_counts(db, auth.tenant_id)
     if not rows:
-        return envelope([], total, limit, offset)
+        out = envelope([], total, limit, offset)
+        out["status_counts"] = status_counts
+        return out
 
     port_ids = {r.load_port_id for r in rows if r.load_port_id} | {r.disch_port_id for r in rows if r.disch_port_id}
     cp_ids = {r.charterer_id for r in rows if r.charterer_id}
@@ -262,7 +267,7 @@ def cargo_book_rows(
         }
         for r in rows
     ]
-    return envelope(items, total, limit, offset)
+    return envelope(items, total, limit, offset) | {"status_counts": status_counts}
 
 
 @router.get("/cargo/{cargo_id}")

@@ -125,6 +125,8 @@ def ensure_task(
             select(Task).where(
                 Task.tenant_id == tenant_id,
                 Task.dedupe_key == dedupe_key,
+                # 回收站里删掉的任务不该再挡住重建（否则系统任务删掉后永远建不回来）
+                Task.status != "deleted",
             )
         )
         if existing is not None:
@@ -220,14 +222,16 @@ def materialize_task_rules(
     *,
     entity_id: UUID | None = None,
     created_by: UUID | None = None,
+    round_key: str | None = None,
 ) -> list[Task]:
     """把 evaluate_task_rules 的 dry-run 结果真正物化成 Task 行。
 
     TaskRule（配置 → 任务）原本只有 dry-run 端点，没有物化入口——
     这里补齐：规则命中 → 按实体+标题幂等建任务 → 分派到规则指定角色。
 
-    幂等键用 ``rule:<rule_id>:<entity_type>:<entity_id>``（真不变键）：
-    规则标题改了也不会重复建同一条任务。
+    幂等键用 ``rule:<rule_id>:<entity_type>:<entity_id>[:<轮次>]``（真不变键）：
+    规则标题改了也不会重复建同一条任务；``round_key`` 区分"同一实体的不同轮次"
+    （例如航次重开后再次完成）。
     """
     from app.services.alert_engine import evaluate_task_rules
 
@@ -235,7 +239,11 @@ def materialize_task_rules(
     for spec in evaluate_task_rules(db, tenant_id, trigger_entity_type, context):
         due = datetime.fromisoformat(spec["due_date"]) if spec.get("due_date") else None
         rule_id = spec.get("rule_id") or "?"
+        # 幂等键带"轮次"：同一实体重新走一轮（航次重开后再次完成）应再出一条
+        # 跟进任务，而不是被上一轮的任务永久挡住。
         dedupe_key = f"rule:{rule_id}:{trigger_entity_type}:{entity_id or 'none'}"
+        if round_key:
+            dedupe_key = f"{dedupe_key}:{round_key}"
         weight = spec.get("weight")
         created.append(
             ensure_task(

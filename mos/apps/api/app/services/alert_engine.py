@@ -21,6 +21,18 @@ from app.services.timeutil import utcnow_naive
 # 对应 ALERT ERROR/critical 的高危档）；低档 severity 只提醒不阻断。
 BLOCKING_PRIORITIES: frozenset[str] = frozenset({"high", "urgent"})
 
+#: 系统动作目录里的合法动作码（懒加载，避免导入环）。
+_KNOWN_ACTION_CODES: frozenset[str] | None = None
+
+
+def known_action_codes() -> frozenset[str]:
+    global _KNOWN_ACTION_CODES
+    if _KNOWN_ACTION_CODES is None:
+        from app.services.action_catalog import ACTION_BY_CODE
+
+        _KNOWN_ACTION_CODES = frozenset(ACTION_BY_CODE)
+    return _KNOWN_ACTION_CODES
+
 
 class AlertBlocked(HTTPException):
     """409 ALERT_BLOCKED — 命中 blocking 高优先级告警规则，拒绝保存（shape 对齐 InvalidState）。"""
@@ -194,7 +206,13 @@ def evaluate_task_rules(
                 # 任务中心 2.0：规则可声明"绑哪个系统动作"（动作做完自动勾完成）
                 # 与"怎么分派"。两者都放在 trigger_condition JSON 里，避免给
                 # task_rules 表再加列（迁移已定稿）。
-                "action_code": condition.get("action_code"),
+                # 目录里没有的 action_code 一律忽略 —— 免得生成一条永远
+                # 不会被自动完成的死任务（保存规则时已拦一道，这里兜底旧数据）。
+                "action_code": (
+                    condition.get("action_code")
+                    if condition.get("action_code") in known_action_codes()
+                    else None
+                ),
                 "assign_strategy": condition.get("assign_strategy"),
                 "weight": condition.get("weight"),
             })

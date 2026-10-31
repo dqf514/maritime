@@ -208,17 +208,15 @@ def _det_invoice_gl_posted(db: Session, tenant_id: UUID, entity) -> bool:
 
 
 def _det_invoice_paid(db: Session, tenant_id: UUID, entity) -> bool:
+    """发票已付清 —— 以**发票状态**为准，不看"有没有付款行"。
+
+    付款冲正（VOID）是"保留原行 + 追加负数行"，所以"存在付款行"在全额
+    冲正后依然为真 → 任务会显示完成但钱已经没了。收尾清单用同一口径。
+    """
     inv = entity if isinstance(entity, Invoice) else db.get(Invoice, getattr(entity, "id", entity))
     if not inv or inv.tenant_id != tenant_id:
         return False
-    from app.models_domain import Payment
-
-    return (
-        db.scalar(
-            select(Payment.id).where(Payment.tenant_id == tenant_id, Payment.invoice_id == inv.id).limit(1)
-        )
-        is not None
-    )
+    return inv.status in ("partially_paid", "paid")
 
 
 def _det_laytime_finalized(db: Session, tenant_id: UUID, entity) -> bool:
@@ -256,7 +254,12 @@ def _det_lifting_fixed(db: Session, tenant_id: UUID, entity) -> bool:
 
 
 def _det_cert_renewed(db: Session, tenant_id: UUID, entity) -> bool:
-    """证书已续期（有效期已推后且仍在有效期内）。"""
+    """证书已续期 —— 判据是**有效期被推后**这个事实，不是"还没过期"。
+
+    续证事实由 ``PATCH /ship/certificates/{id}`` 在推后有效期时写进
+    ``cert.meta["renewed_at"]``；没有这条事实，任何一张有效证书都会把
+    「续证」任务瞬间勾成完成（用户以为已续证，实际一天没动）。
+    """
     cert = entity if isinstance(entity, ShipCertificate) else db.get(
         ShipCertificate, getattr(entity, "id", entity)
     )
@@ -265,6 +268,9 @@ def _det_cert_renewed(db: Session, tenant_id: UUID, entity) -> bool:
     from datetime import date
 
     if cert.expires_on is None:
+        return False
+    meta = cert.meta or {}
+    if not meta.get("renewed_at"):
         return False
     return cert.expires_on >= date.today() and cert.status in ("valid", "expiring")
 
@@ -306,7 +312,7 @@ ACTIONS: tuple[ActionSpec, ...] = (
         label_key="task.action.voyage_closeout_laytime",
         hint_key="task.action.hint.voyage_closeout_laytime",
         detector=_det_voyage_laytime,
-        event_kinds=("laytime.draft_created",),
+        event_kinds=("laytime.finalized",),
         default_role="operations",
         default_due_days=3,
         href="/operations",
@@ -411,7 +417,7 @@ ACTIONS: tuple[ActionSpec, ...] = (
         label_key="task.action.invoice_post_gl",
         hint_key="task.action.hint.invoice_post_gl",
         detector=_det_invoice_gl_posted,
-        event_kinds=(),
+        event_kinds=("invoice.gl_posted",),
         default_role="finance",
         default_due_days=3,
         href="/finance/gl",
@@ -424,7 +430,7 @@ ACTIONS: tuple[ActionSpec, ...] = (
         label_key="task.action.invoice_payment_record",
         hint_key="task.action.hint.invoice_payment_record",
         detector=_det_invoice_paid,
-        event_kinds=(),
+        event_kinds=("invoice.payment_recorded",),
         default_role="finance",
         default_due_days=5,
         href="/finance/invoices",
@@ -437,10 +443,10 @@ ACTIONS: tuple[ActionSpec, ...] = (
         label_key="task.action.laytime_finalize",
         hint_key="task.action.hint.laytime_finalize",
         detector=_det_laytime_finalized,
-        event_kinds=("laytime.draft_created",),
+        event_kinds=("laytime.finalized",),
         default_role="operations",
         default_due_days=3,
-        href="/finance/laytimes",
+        href="/finance?tab=laytime",
         severity="warn",
     ),
     ActionSpec(
@@ -515,7 +521,7 @@ ACTIONS: tuple[ActionSpec, ...] = (
         label_key="task.action.cert_renew",
         hint_key="task.action.hint.cert_renew",
         detector=_det_cert_renewed,
-        event_kinds=(),
+        event_kinds=("ship.certificate.renewed",),
         default_role="operations",
         default_due_days=30,
         href="/technical",

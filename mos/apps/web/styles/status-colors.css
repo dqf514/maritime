@@ -62,7 +62,7 @@
   border-color: var(--border);
 }
 
-[data-theme="dark"] .status-badge--info {
+[data-theme="slate"] .status-badge--info {
   color: #6db3f2;
 }
 
@@ -73,7 +73,7 @@
 .val-projected {
   color: #1f6fb2;
 }
-[data-theme="dark"] .val-projected {
+[data-theme="slate"] .val-projected {
   color: #6db3f2;
 }
 .val-actual {

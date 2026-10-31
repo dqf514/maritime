@@ -2567,7 +2567,11 @@ def list_amendments(
     if not row or row.tenant_id != auth.tenant_id or not _alive(row.status):
         raise HTTPException(404, "Charter not found")
     rows = db.scalars(
-        select(CharterAmendment).where(CharterAmendment.charter_id == row.id).order_by(CharterAmendment.seq)
+        select(CharterAmendment).where(
+            CharterAmendment.charter_id == row.id,
+            # 租户过滤显式写出来：租户隔离靠手写条件，漏一处就是跨租户泄漏
+            CharterAmendment.tenant_id == auth.tenant_id,
+        ).order_by(CharterAmendment.seq)
     ).all()
     return [_amendment_out(a) for a in rows]
 

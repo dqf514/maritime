@@ -59,7 +59,32 @@
 .muted { color: var(--muted); font-size: 0.82rem; }
 .flash { color: var(--ok); font-weight: 600; }
 .flash-err { color: var(--danger); font-weight: 600; }
-.error { color: #ffb4a8; font-size: 0.85rem; margin-bottom: 0.75rem; }
+.error { color: var(--danger); font-size: 0.85rem; margin-bottom: 0.75rem; }
+
+/* ── 暗色主题（slate）覆盖 ──
+   上面的 pill / closing-* 用了浅色实底 + 深色文字；暗色主题下会变成
+   「浅底深字」的反向白字白底。统一改用 token 派生的半透明底。 */
+[data-theme="slate"] .pill { background: rgba(139, 148, 158, 0.18); color: var(--ink); }
+[data-theme="slate"] .pill.critical,
+[data-theme="slate"] .pill.expired,
+[data-theme="slate"] .pill.danger,
+[data-theme="slate"] .pill.urgent { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
+[data-theme="slate"] .pill.high,
+[data-theme="slate"] .pill.expiring,
+[data-theme="slate"] .pill.warn { background: var(--warn-bg); color: var(--warn-text); }
+[data-theme="slate"] .pill.valid,
+[data-theme="slate"] .pill.good,
+[data-theme="slate"] .pill.done { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+[data-theme="slate"] .pill.normal { background: var(--accent-bg); color: var(--accent-text); }
+[data-theme="slate"] .pill.low,
+[data-theme="slate"] .pill.pending,
+[data-theme="slate"] .pill.cancelled { background: rgba(139, 148, 158, 0.18); color: var(--muted); }
+
+[data-theme="slate"] .closing-ready { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+[data-theme="slate"] .closing-blocked { background: var(--warn-bg); color: var(--warn-text); }
+[data-theme="slate"] .closing-ok .closing-mark { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+[data-theme="slate"] .closing-missing .closing-mark { background: var(--warn-bg); color: var(--warn-text); }
+[data-theme="slate"] .coa-progress-bar { background: rgba(139, 148, 158, 0.22); }
 
 /* —— 航次收尾面板（ClosingPanel） —— */
 .closing-status { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); margin-bottom: 0.75rem; }

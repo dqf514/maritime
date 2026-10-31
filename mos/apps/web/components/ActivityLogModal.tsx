@@ -21,6 +21,12 @@ import { useI18n } from "@/lib/i18n";
 export type ActivityItem = {
   id: string;
   action: string;
+  /** 后端按看的人的语言给出的可读动作文案（"创建发票"） */
+  action_label?: string | null;
+  /** 可读实体名（"发票"） */
+  entity_label?: string | null;
+  /** 人能读的单号（"VOY-2407"）—— 没有就回落 entity_label */
+  entity_title?: string | null;
   entity_type: string | null;
   entity_id: string | null;
   module: string | null;
@@ -29,11 +35,43 @@ export type ActivityItem = {
   created_at: string | null;
 };
 
-/** 审计动作码 → 展示文案（去掉 action 前缀域，如 voyage.update → update） */
+/**
+ * 审计动作码 → 展示文案。
+ * 后端已经给了可读文案（按看的人的语言）；没有就退回去掉前缀域的短码
+ * （voyage.update → update）—— 但绝不把 "auto_complete" 这种技术码直接甩出去。
+ */
 export function actionLabel(action: string): string {
   const a = action || "";
   const dot = a.lastIndexOf(".");
   return dot >= 0 ? a.slice(dot + 1) : a;
+}
+
+/** 一条记录最终显示的动作文案 */
+export function activityActionLabel(item: ActivityItem): string {
+  return item.action_label || actionLabel(item.action);
+}
+
+/**
+ * 动作文案 + 实体名。
+ *
+ * 后端给的动作文案里通常已经带了实体名（"Created voyage"），
+ * 再把实体名拼一遍就成了 "Created voyage voyage" —— 所以先看有没有，
+ * 有就不再追加。
+ */
+export function activityWithEntity(item: ActivityItem): string {
+  const label = activityActionLabel(item);
+  const ent = item.entity_label;
+  if (!ent) return label;
+  if (!label) return ent;
+  return label.toLowerCase().includes(ent.toLowerCase()) ? label : `${label} ${ent}`;
+}
+
+/** 实体列的内容：单号优先，其次实体名，最后才是短 id */
+export function activityEntityText(item: ActivityItem): string {
+  if (item.entity_title) return item.entity_title;
+  if (item.entity_label) return item.entity_label;
+  if (item.entity_type) return item.entity_type;
+  return item.module || "";
 }
 
 const PAGE_SIZE = 25;
@@ -43,7 +81,7 @@ const PAGE_SIZE = 25;
  * 不用在 effect 里重置一堆 state。
  */
 export function ActivityLogModal({ onClose }: { onClose: () => void }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [full, setFull] = useState(false);
   /** 输入框里的即时值（未去抖） */
   const [kw, setKw] = useState("");
@@ -81,6 +119,9 @@ export function ActivityLogModal({ onClose }: { onClose: () => void }) {
     qs.set("limit", String(PAGE_SIZE));
     qs.set("offset", String(page * PAGE_SIZE));
     if (query) qs.set("q", query);
+    // 动作文案由后端按语言出 —— 显式带上当前界面语言，
+    // 否则跟用户档案里的语言走，界面中文/文案英文对不上。
+    if (locale) qs.set("locale", locale);
     apiGet(`/api/v1/activity/feed?${qs.toString()}`).then(
       (data) => {
         if (cancelled) return;
@@ -103,7 +144,7 @@ export function ActivityLogModal({ onClose }: { onClose: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, [page, query, t]);
+  }, [page, query, t, locale]);
 
   // ESC 关闭 + 打开时把焦点送进搜索框
   useEffect(() => {
@@ -218,13 +259,20 @@ export function ActivityLogModal({ onClose }: { onClose: () => void }) {
                         minute: "2-digit",
                       })
                     : "—";
-                  const entity = [a.entity_type, a.entity_id].filter(Boolean).join(" ");
+                  // 实体列：单号优先（VOY-2407），其次实体名，最后短 id
+                  const shortId = a.entity_id ? a.entity_id.slice(0, 8) : "";
+                  const entity = [
+                    activityEntityText(a),
+                    a.entity_title ? "" : shortId,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ");
                   return (
                     <tr key={a.id}>
                       <td className="activity-modal-when">{when}</td>
                       <td>{a.actor || t("page.home.someone", "Someone")}</td>
                       <td>
-                        <span className="wb-activity-action">{actionLabel(a.action)}</span>
+                        <span className="wb-activity-action">{activityWithEntity(a)}</span>
                         <span className="muted activity-modal-action-full">{a.action}</span>
                       </td>
                       <td className="activity-modal-entity">

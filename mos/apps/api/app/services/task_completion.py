@@ -38,6 +38,7 @@ from app.models_domain import (
     Claim,
     Invoice,
     LaytimeCalc,
+    PortCall,
     PortDisbursement,
     Voyage,
 )
@@ -47,6 +48,7 @@ from app.services.action_catalog import ACTIONS, ACTION_BY_CODE, ActionSpec
 from app.services.audit import audit
 from app.services.domain_events import on
 from app.services.notifications import notify_once
+from app.services.system_text import text
 from app.services.state_machine import TASK_TRANSITIONS, transition
 
 log = logging.getLogger(__name__)
@@ -62,6 +64,7 @@ _PARENT_RESOLVERS = {
     "bunker_order": (BunkerOrder, "voyage_id"),
     "laytime": (LaytimeCalc, "voyage_id"),
     "port_disbursement": (PortDisbursement, "voyage_id"),
+    "port_call": (PortCall, "voyage_id"),
 }
 
 
@@ -70,7 +73,8 @@ def _now() -> datetime:
 
 
 def _task_href(task: Task) -> str:
-    return "/tasks"
+    """任务深链：带上任务 id，通知点进去能落到那一条（而不是任务中心首页）。"""
+    return f"/tasks?task={task.id}"
 
 
 # ── 完成动作（唯一出口） ─────────────────────────────────────────────────
@@ -154,7 +158,8 @@ def _notify_creator(db: Session, task: Task) -> None:
         task.tenant_id,
         [creator],
         title=task.title,
-        body="该任务的系统动作已完成，任务已自动勾选完成。",
+        body=text("task.auto_complete.body", "en"),
+        body_i18n={"zh": text("task.auto_complete.body", "zh-CN")},
         href=_task_href(task),
         level="info",
     )
@@ -163,7 +168,8 @@ def _notify_creator(db: Session, task: Task) -> None:
 # ── 判定器刷新 ───────────────────────────────────────────────────────────
 
 
-def _load_entity(db: Session, tenant_id: UUID, spec: ActionSpec, entity_id: UUID | None):
+def load_entity_for_spec(db: Session, tenant_id: UUID, spec: ActionSpec, entity_id: UUID | None):
+    """按动作目录取关联单据 —— 不存在 / 跨租户 → None（判定器据此判定"没命中"）。"""
     if entity_id is None:
         return None
     model = _ENTITY_MODELS.get(spec.entity_type)
@@ -182,7 +188,7 @@ def _detect(db: Session, tenant_id: UUID, task: Task) -> bool:
         return False
     if task.entity_type and task.entity_type != spec.entity_type:
         return False
-    entity = _load_entity(db, tenant_id, spec, task.entity_id)
+    entity = load_entity_for_spec(db, tenant_id, spec, task.entity_id)
     if entity is None:
         return False
     try:
@@ -201,6 +207,56 @@ def refresh_task(db: Session, task: Task) -> bool:
     if not _detect(db, task.tenant_id, task):
         return False
     return complete_task(db, task, auto=True, reason=f"action:{task.action_code}")
+
+
+def action_already_done(db: Session, tenant_id: UUID, spec: ActionSpec, entity_id: UUID | None) -> bool:
+    """这个动作**是不是已经做完了**（判定器当前是否命中）。
+
+    建/改任务时用它挡住"绑了等于白绑"的组合：动作已完成 → 任务会在下一次
+    列表刷新时瞬间变绿，用户以为系统识别了，其实是他自己建了个空任务。
+    """
+    entity = load_entity_for_spec(db, tenant_id, spec, entity_id)
+    if entity is None:
+        return False
+    try:
+        return bool(spec.detector(db, tenant_id, entity))
+    except Exception:  # noqa: BLE001 —— 判定器异常不得影响写路径
+        log.exception("action detector failed: action=%s entity=%s", spec.code, entity_id)
+        return False
+
+
+def reopen_tasks_for(
+    db: Session,
+    tenant_id: UUID,
+    action_codes: tuple[str, ...],
+    entity_id: UUID | None,
+    *,
+    reason: str = "",
+) -> int:
+    """动作被撤销 → 把**因此自动勾完**的任务重新打开。
+
+    只回退系统自动完成的任务（``auto_completed=True``）；人工勾完的任务
+    永远由人自己决定，撤销业务事实不动它。
+    """
+    if not action_codes or entity_id is None:
+        return 0
+    rows = db.scalars(
+        select(Task).where(
+            Task.tenant_id == tenant_id,
+            Task.action_code.in_(action_codes),
+            Task.entity_id == entity_id,
+            Task.status == "done",
+            Task.auto_completed.is_(True),
+        )
+    ).all()
+    n = 0
+    for t in rows:
+        if reopen_task(db, t, actor_user_id=None):
+            t.updated_at = _now()
+            n += 1
+    if n:
+        log.info("reopened %s auto-completed tasks: actions=%s entity=%s reason=%s", n, action_codes, entity_id, reason)
+    return n
 
 
 def refresh_tasks(db: Session, tenant_id: UUID, tasks: list[Task]) -> int:

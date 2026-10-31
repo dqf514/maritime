@@ -89,12 +89,12 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** 列表响应宽容取数组：裸数组 / envelope.items / rows / results。 */
+/** 列表响应宽容取数组：裸数组 / envelope.items / rows / results / routes / trades。 */
 function unwrapList(data: unknown): Record<string, unknown>[] {
   if (Array.isArray(data)) return data as Record<string, unknown>[];
   if (data && typeof data === "object") {
-    const o = data as { items?: unknown; rows?: unknown; results?: unknown };
-    const arr = o.items ?? o.rows ?? o.results;
+    const o = data as { items?: unknown; rows?: unknown; results?: unknown; routes?: unknown; trades?: unknown };
+    const arr = o.items ?? o.rows ?? o.results ?? o.routes ?? o.trades;
     if (Array.isArray(arr)) return arr as Record<string, unknown>[];
   }
   return [];
@@ -161,22 +161,27 @@ function TradingWorkspace() {
         setTrades(res.items);
         setTradesTotal(res.total);
       } else if (tab === "positions") {
+        // 后端：{routes:[{route, paper_net, physical_net, net_qty, trades}], totals}
         const data = await apiGet("/api/v1/trading/positions");
         setPositions(
           unwrapList(data).map((r) => ({
-            id: r.id ? String(r.id) : undefined,
+            id: r.route ? String(r.route) : undefined,
             route: (r.route as string) ?? null,
-            period: (r.period as string) ?? formatPeriod(r.period_from, r.period_to),
-            paper_qty: num(r.paper_qty),
-            physical_qty: num(r.physical_qty),
-            net_qty: num(r.net_qty ?? num(r.physical_qty) - num(r.paper_qty)),
+            period:
+              r.period_from || r.period_to
+                ? formatPeriod(r.period_from as string, r.period_to as string)
+                : null,
+            paper_qty: num(r.paper_net ?? r.paper_qty),
+            physical_qty: num(r.physical_net ?? r.physical_qty),
+            net_qty: num(r.net_qty),
           })),
         );
       } else if (tab === "mtm") {
+        // 后端：{trades:[{trade_id, trade_no, book_price, market_price, unrealized_pnl, ...}]}
         const data = await apiGet(`/api/v1/trading/mtm/summary?date=${encodeURIComponent(mtmDate)}`);
         setMtmRows(
           unwrapList(data).map((r) => ({
-            id: r.id ? String(r.id) : undefined,
+            id: r.trade_id ? String(r.trade_id) : r.id ? String(r.id) : undefined,
             trade_no: String(r.trade_no ?? r.trade_no_id ?? ""),
             book_price: num(r.book_price),
             market_price: num(r.market_price),
@@ -185,13 +190,14 @@ function TradingWorkspace() {
           })),
         );
       } else {
+        // 后端：{rows:[{route, period, net_qty, gross_qty, net_notional, unrealized_pnl}]}
         const data = await apiGet("/api/v1/trading/exposure");
         setExposure(
           unwrapList(data).map((r) => ({
-            id: r.id ? String(r.id) : undefined,
+            id: r.route ? `${String(r.route)}-${String(r.period ?? "")}` : undefined,
             route: (r.route as string) ?? null,
-            period: (r.period as string) ?? formatPeriod(r.period_from, r.period_to),
-            net_exposure: num(r.net_exposure ?? r.exposure),
+            period: (r.period as string) ?? null,
+            net_exposure: num(r.net_notional ?? r.net_exposure ?? r.net_qty),
             limit: r.limit != null ? num(r.limit) : null,
             limit_breach: Boolean(r.limit_breach ?? r.breach),
           })),
@@ -503,12 +509,15 @@ function TradingWorkspace() {
         key: "limit_breach",
         title: t("page.trading.breach", "Breach"),
         width: 90,
-        render: (_v, r) =>
-          r.limit_breach ? (
+        render: (_v, r) => {
+          // 没有配限额就没有"是否超限"可言 —— 别给一颗永远绿的 OK 徽章
+          if (r.limit == null) return <span className="muted">—</span>;
+          return r.limit_breach ? (
             <span className="badge badge-fail">{t("page.trading.breach_yes", "BREACH")}</span>
           ) : (
             <span className="badge badge-pass">OK</span>
-          ),
+          );
+        },
       },
     ],
     [t],

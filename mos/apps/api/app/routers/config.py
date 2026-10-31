@@ -15,6 +15,7 @@ from app.models_config import ConfigFlag, BusinessRuleDefinition, ConfigAlertRul
 from app.services.config_service import ConfigService
 from app.services import rule_engine
 from app.services import alert_engine
+from app.services.action_catalog import ACTION_BY_CODE
 
 # 无自前缀：main.py 以 /api/v1 统一挂载（此前 /api/v1/config 双前缀导致路由落在 /api/v1/api/v1/...）
 router = APIRouter(prefix="/config", tags=["config"])
@@ -131,7 +132,12 @@ def update_config_flag(
 ):
     """Update configuration flag at tenant scope (partial)."""
     flag = db.get(ConfigFlag, flag_id)
-    if not flag or flag.tenant_id != auth.tenant_id:
+    # 平台级 flag（tenant_id 为空）在列表里可见，但只有平台管理员能改 ——
+    # 否则界面上的开关点了就是 404。
+    platform_flag = flag is not None and flag.scope_key == "platform"
+    if not flag or (
+        flag.tenant_id != auth.tenant_id and not (platform_flag and "platform_admin" in auth.roles)
+    ):
         raise HTTPException(404, "Flag not found")
     fields = body.model_fields_set
     if "value_type" in fields and body.value_type is not None:
@@ -170,7 +176,11 @@ def delete_config_flag(
     flag = db.get(ConfigFlag, flag_id)
     if not flag:
         raise HTTPException(404, "Flag not found")
-    if flag.tenant_id != auth.tenant_id and flag.scope_key != "platform":
+    if flag.scope_key == "platform":
+        # 平台级 flag 影响所有租户 —— 只允许平台管理员动
+        if flag.tenant_id != auth.tenant_id and "platform_admin" not in auth.roles:
+            raise HTTPException(403, "Cannot delete platform flags")
+    elif flag.tenant_id != auth.tenant_id:
         raise HTTPException(403, "Cannot delete platform flags")
     db.delete(flag)
     db.commit()
@@ -601,8 +611,30 @@ class TaskRuleUpdate(BaseModel):
     enabled: bool | None = None
 
 
-def _task_rule_out(rule: TaskRule) -> TaskRuleOut:
-    return TaskRuleOut(
+def _check_rule_action_code(trigger_condition: dict | None) -> None:
+    """规则里声明的 ``action_code`` 必须真的存在于系统动作目录。
+
+    动作目录是"业务动作做完 → 任务自动勾完成"的唯一支点；规则里写一个
+    不存在的 code，会生成一条**永远不会被自动完成**的任务，而且没有任何提示。
+    与其事后在界面上看到一条死任务，不如在保存规则时就说人话。
+    """
+    if not trigger_condition:
+        return
+    code = trigger_condition.get("action_code")
+    if not code:
+        return
+    if code not in ACTION_BY_CODE:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "UNKNOWN_ACTION",
+                "message": f"Unknown action code {code}",
+                "allowed": sorted(ACTION_BY_CODE),
+            },
+        )
+
+
+def _task_rule_out(rule: TaskRule) -> TaskRuleOut:    return TaskRuleOut(
         id=str(rule.id),
         rule_name=rule.rule_name,
         trigger_entity_type=rule.trigger_entity_type,
@@ -646,6 +678,7 @@ def create_task_rule(
     db: Session = Depends(get_db),
 ):
     """Create a new task automation rule."""
+    _check_rule_action_code(body.trigger_condition)
     rule = alert_engine.create_task_rule(
         db,
         tenant_id=auth.tenant_id,
@@ -688,6 +721,7 @@ def update_task_rule(
     if "trigger_entity_type" in fields and body.trigger_entity_type is not None:
         rule.trigger_entity_type = body.trigger_entity_type
     if "trigger_condition" in fields and body.trigger_condition is not None:
+        _check_rule_action_code(body.trigger_condition)
         rule.trigger_condition = body.trigger_condition
     if "task_title" in fields and body.task_title is not None:
         rule.task_title = body.task_title

@@ -99,7 +99,10 @@ export default function PlatformIdentityPage() {
     try {
       const res = await apiPost("/api/v1/platform/identity/smtp-test", testTo ? { to_email: testTo } : {});
       if (res.ok) toast.success(t("page.identity.smtp_test_ok", "Test mail delivered to the SMTP relay."));
-      else toast.error(t("page.identity.smtp_test_fail", "SMTP test failed: {msg}").replace("{msg}", res.message || ""));
+      else
+        toast.error(
+          t("page.identity.smtp_test_fail", "SMTP test failed: {msg}", { msg: res.message || "" }),
+        );
     } catch (err) {
       toast.error(msgOf(err, t("common.failed", "Failed")));
     } finally {

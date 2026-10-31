@@ -349,7 +349,13 @@ function PoolPageInner() {
         value: (r) => r.total_pool_result,
         render: (v) => <Num v={v as number} digits={2} />,
       },
-      { key: "status", title: t("common.status", "Status"), width: 100, value: (r) => r.status },
+      {
+        key: "status",
+        title: t("common.status", "Status"),
+        width: 100,
+        value: (r) => r.status,
+        render: (_v, r) => <span className="pill">{t(`status.${r.status}`, r.status)}</span>,
+      },
       {
         key: "distribution",
         title: t("page.pool.distribution", "Distribution"),

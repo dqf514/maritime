@@ -4,7 +4,7 @@
 // 租户 + 平台两级 flags：查看/搜索/新建/编辑/删除，bool 值内联开关。
 
 import { RefreshButton } from "@/components/RefreshButton";
-import { msgOf } from "@/lib/errors";
+import { msgOf, handled } from "@/lib/errors";
 import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -18,7 +18,7 @@ import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
 import { RowActions } from "@/components/RowActions";
-import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiDelete, apiGet, apiMe, apiPatch, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
@@ -51,6 +51,14 @@ function ConfigFlagsPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // 平台级 flag 只有平台管理员能改 —— 否则界面上的开关点了就是 404
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+
+  useEffect(() => {
+    apiMe()
+      .then((me) => setIsPlatformAdmin((me.user?.roles || []).includes("platform_admin")))
+      .catch(handled);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -89,6 +97,9 @@ function ConfigFlagsPage() {
   }
 
   useListHotkeys(openCreate);
+
+  /** 平台级 flag（对所有租户生效）—— 租户管理员只读。 */
+  const isPlatformFlag = useCallback((row: Flag) => row.scope_key === "platform", []);
 
   const openEdit = useCallback((row: Flag) => {
     setForm({
@@ -154,6 +165,12 @@ function ConfigFlagsPage() {
     };
     const field = fieldMap[colKey];
     if (!field) return;
+    // 平台级 flag 对租户管理员只读 —— 内联编辑同样要挡住
+    if (isPlatformFlag(row) && !isPlatformAdmin) {
+      toast.error(t("flags.platform_readonly", "Platform flag — editable by platform admins only"));
+      await load();
+      return;
+    }
     const prev = colKey === "flag_value" ? row.flag_value : (row as unknown as Record<string, unknown>)[colKey];
     if ((prev ?? "") === (value ?? "")) return;
     try {
@@ -181,11 +198,14 @@ function ConfigFlagsPage() {
       title: t("flags.col_key", "Flag"),
       width: 260,
       value: (r) => r.flag_key,
-      render: (v, r) => (
-        <button type="button" className="linklike" onClick={() => openEdit(r)} title={r.description || undefined}>
-          {String(v)}
-        </button>
-      ),
+      render: (v, r) =>
+        isPlatformFlag(r) && !isPlatformAdmin ? (
+          <span title={t("flags.platform_readonly", "Platform flag — editable by platform admins only")}>{String(v)}</span>
+        ) : (
+          <button type="button" className="linklike" onClick={() => openEdit(r)} title={r.description || undefined}>
+            {String(v)}
+          </button>
+        ),
     },
     {
       key: "flag_value",
@@ -195,15 +215,25 @@ function ConfigFlagsPage() {
       editor: { type: "text" },
       render: (v, r) =>
         r.value_type === "bool" ? (
-          <button
-            type="button"
-            className="linklike"
-            onClick={() => toggleBool(r)}
-            title={t("flags.toggle_hint", "Click to toggle")}
-            aria-label={t("flags.toggle_value", "Toggle flag value")}
-          >
-            <StatusBadge status={String(v)} tone={/^(true|1|yes|on)$/i.test(String(v)) ? "ok" : "muted"} label={/^(true|1|yes|on)$/i.test(String(v)) ? t("flags.on", "ON") : t("flags.off", "OFF")} />
-          </button>
+          isPlatformFlag(r) && !isPlatformAdmin ? (
+            <span title={t("flags.platform_readonly", "Platform flag — editable by platform admins only")}>
+              <StatusBadge
+                status={String(v)}
+                tone={/^(true|1|yes|on)$/i.test(String(v)) ? "ok" : "muted"}
+                label={/^(true|1|yes|on)$/i.test(String(v)) ? t("flags.on", "ON") : t("flags.off", "OFF")}
+              />
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="linklike"
+              onClick={() => toggleBool(r)}
+              title={t("flags.toggle_hint", "Click to toggle")}
+              aria-label={t("flags.toggle_value", "Toggle flag value")}
+            >
+              <StatusBadge status={String(v)} tone={/^(true|1|yes|on)$/i.test(String(v)) ? "ok" : "muted"} label={/^(true|1|yes|on)$/i.test(String(v)) ? t("flags.on", "ON") : t("flags.off", "OFF")} />
+            </button>
+          )
         ) : (
           <span title={String(v)}>{String(v)}</span>
         ),
@@ -249,15 +279,20 @@ function ConfigFlagsPage() {
       title: "",
       width: 72,
       align: "right",
-      render: (_v, r) => (
-        <RowActions
-          onEdit={() => openEdit(r)}
-          onDelete={() => remove(r)}
-          label={r.flag_key}
-        />
-      ),
+      render: (_v, r) => {
+        const locked = isPlatformFlag(r) && !isPlatformAdmin;
+        return (
+          <RowActions
+            onEdit={() => openEdit(r)}
+            onDelete={() => remove(r)}
+            canEdit={!locked}
+            canDelete={!locked}
+            label={r.flag_key}
+          />
+        );
+      },
     },
-  ], [t, openEdit, toggleBool, remove]);
+  ], [t, openEdit, toggleBool, remove, isPlatformAdmin]);
 
   const formFields = (
     <>

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections import defaultdict, deque
@@ -54,16 +55,38 @@ class SlidingWindowLimiter:
 _limiters: dict[str, SlidingWindowLimiter] = {}
 
 
-def rate_limit(scope: str, *, max_hits: int = 5, window_seconds: float = 60.0) -> Callable:
-    """FastAPI dependency: 429 when `scope` exceeds max_hits per window per client IP."""
+def rate_limit(
+    scope: str,
+    *,
+    max_hits: int = 5,
+    window_seconds: float = 60.0,
+    per_account: bool = False,
+) -> Callable:
+    """FastAPI dependency: 429 when `scope` exceeds max_hits per window per client IP.
+
+    ``per_account=True`` 时，计数键是 ``IP + 请求体里的邮箱`` —— 登录专用。
+    只按 IP 计的话，一个人连输错几次密码会把**同一出口 IP 下的同事**一起
+    锁掉（办公室 NAT 出口就是一个 IP）。按账号计之后，防爆破的力度不变
+    （同一账号同一 IP 仍是 5 次/分钟），但互不牵连。
+    """
 
     limiter = _limiters.setdefault(scope, SlidingWindowLimiter(max_hits, window_seconds))
 
-    def _dep(request: Request) -> None:
+    async def _dep(request: Request) -> None:
         if not get_settings().rate_limit_enabled:
             return
         ip = request.client.host if request.client else "unknown"
-        if not limiter.allow(ip):
+        key = ip
+        if per_account:
+            try:
+                raw = await request.body()
+                payload = json.loads(raw or b"{}")
+                email = str(payload.get("email") or payload.get("username") or "").strip().lower()
+            except Exception:  # noqa: BLE001 — 解析不了就按 IP 计，不放行
+                email = ""
+            if email:
+                key = f"{ip}|{email}"
+        if not limiter.allow(key):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail={"code": "RATE_LIMITED", "message": "Too many requests, try again later"},

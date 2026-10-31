@@ -12,6 +12,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models_cargo import Cargo
@@ -207,6 +208,22 @@ def list_cargo(
     if date_to is not None:
         stmt = stmt.where(Cargo.laycan_from.is_(None) | (Cargo.laycan_from <= date_to))
     return paginate(db, stmt, limit, offset)
+
+
+def cargo_status_counts(db: Session, tenant_id: UUID) -> dict[str, int]:
+    """租户级货物状态计数（不受任何过滤影响）。
+
+    前端状态页签的角标必须来自这里 —— 用「当前页行数」统计会让分页后
+    的角标完全失真（某状态在这页没出现时页签甚至会整个消失）。
+    """
+    # SQLAlchemy 2.0 没有 Select.with_entities —— 用 add_columns 追加聚合列，
+    # 主实体仍然保留在结果里（软删过滤沿用 scoped_query 的口径）。
+    stmt = (
+        scoped_query(db, Cargo, tenant_id)
+        .add_columns(func.count(Cargo.id))
+        .group_by(Cargo.status)
+    )
+    return {str(row[0].status or ""): int(row[1]) for row in db.execute(stmt).all()}
 
 
 def allocate_to_voyage(db: Session, cargo_id: UUID, voyage_id: UUID) -> Cargo:

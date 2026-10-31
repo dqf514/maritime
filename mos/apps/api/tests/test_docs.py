@@ -71,6 +71,50 @@ def test_seeding_is_idempotent(client, auth_headers, open_db):
         db.close()
 
 
+def test_concurrent_seeding_never_500s(db_engine, open_db):
+    """并发补种不能把读端点打成 500。
+
+    ``GET /documents/templates`` 是读端点，但会顺手补种内置模板。两个请求
+    同时进来会看到同样的"不存在"，然后同时 INSERT，撞
+    ``UNIQUE(tenant_id, entity_type, code, locale)`` —— 整个请求 500，
+    浏览器只看到一句 CORS 报错，单据模板页直接白掉。
+
+    这里把"存在性检查"改成永远查不到，**确定性地**复现那个竞争窗口：
+    插入必然撞约束，补种必须自己扛下来（模板已经在了，功能不受影响）。
+    """
+    from sqlalchemy import func, select
+
+    from app.models import Tenant
+    from app.models_doc import DocumentTemplate
+    from app.services import doc_engine
+
+    db = open_db()
+    try:
+        tid = db.scalar(select(Tenant.id).where(Tenant.code == "demo"))
+        doc_engine.ensure_templates(db, tid)
+        db.commit()
+
+        orig = doc_engine._template_query
+
+        def _blind(session, tenant_id):
+            return orig(session, tenant_id).where(DocumentTemplate.id.is_(None))
+
+        doc_engine._template_query = _blind
+        try:
+            # 不抛异常就是过了
+            doc_engine.ensure_templates(db, tid)
+        finally:
+            doc_engine._template_query = orig
+
+        # 会话还能用（SAVEPOINT 回滚没把外层事务带坏）
+        n = db.scalar(select(func.count()).select_from(DocumentTemplate).where(
+            DocumentTemplate.tenant_id == tid))
+        assert n == 14, n
+    finally:
+        db.rollback()
+        db.close()
+
+
 def test_builtin_template_updates_reach_untouched_tenants(client, auth_headers, open_db):
     """内置模板发版改进必须同步到存量租户 —— 否则修了 bug 孰户永远用旧版。"""
     from app.models_doc import DocumentTemplate

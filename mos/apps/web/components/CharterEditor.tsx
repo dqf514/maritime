@@ -2093,7 +2093,7 @@ export function CharterEditor({ charterId, breadcrumb }: { charterId: string; br
                 className="btn btn-sm"
                 onClick={() => setVoyModalOpen(false)}
               >
-                {v.voyage_no} · {v.status}
+                {v.voyage_no} · {t(`status.${v.status}`, v.status)}
               </Link>
             ))}
           </div>

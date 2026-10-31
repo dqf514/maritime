@@ -284,6 +284,8 @@ def seed_i18n(db: Session) -> None:
         ("settings.title", "System settings", "系统设置"),
         ("settings.sub", "Tenant settings hub for users, security, licenses and integrations.", "租户级配置入口：用户、安全、许可、集成等。"),
         ("page.finance.no", "No.", "编号"),
+        # 租约编号列的表头 —— 旧种子写的是 "No"/"否"（否定词），与列义不符
+        ("page.charters.no", "No.", "编号"),
         # 历史种子写的是 {days}，组件传 {n}——强刷以治愈已入库的旧值
         ("ship.cert.days_left", "{n} d left", "剩余 {n} 天"),
         # 对手方类型：去掉竞品名残留，多选标签与提示一并刷
@@ -296,6 +298,35 @@ def seed_i18n(db: Session) -> None:
         ),
         # 船舶页分区标题同样去掉竞品名残留
         ("page.vessels.section_commercial", "Commercial identity", "商业标识"),
+        # —— 占位符对齐：文案里的 {x} 必须与前端传入的变量名一致 ——
+        # 不一致时界面会直接显示 "{issues}" 这种字面量（EXTRA 段只在缺键时插入，
+        # 已入库的旧值不会被刷新，所以必须在这里强刷）。
+        (
+            "page.office.hook_created",
+            "Webhook created — copy the secret to a safe place now.",
+            "Webhook 已创建 —— 请立即复制并妥善保存密钥。",
+        ),
+        ("ship.cert.upload_ok", "Scan file uploaded.", "扫描件已上传。"),
+        (
+            "page.finance.blocking_issues",
+            "There are {n} blocking issue(s) — the action was aborted: {list}",
+            "存在 {n} 项阻断级问题，操作已中止：{list}",
+        ),
+        (
+            "page.finance.void_payment_confirm",
+            "Void payment {amount} {cur}? An equal reverse payment will be created.",
+            "冲正付款 {amount} {cur}？将生成等额反向付款行。",
+        ),
+        (
+            "page.gl.reverse_journal_confirm",
+            "Reverse posted journal {label}? An equal reverse entry will be created — the original cannot be undone.",
+            "冲销已过账日记账 {label}？将生成等额反向分录，原凭证不可撤销。",
+        ),
+        (
+            "page.gl.delete_journal_confirm",
+            "Delete journal {label}? It will move to the recycle bin and can be restored.",
+            "删除日记账 {label}？记录将移入回收站，可恢复。",
+        ),
     ):
         row_en = db.scalar(select(UiMessage).where(UiMessage.msg_key == key, UiMessage.locale == "en"))
         if row_en:

@@ -153,6 +153,7 @@ export function CoaListPanel() {
         title: t("page.coa.col.rate_basis", "Rate basis"),
         width: 110,
         value: (r) => r.rate_basis,
+        render: (_v, r) => t(`rate_basis.${r.rate_basis}`, r.rate_basis),
       },
       {
         key: "rate",
@@ -167,7 +168,9 @@ export function CoaListPanel() {
         title: t("common.status", "Status"),
         width: 95,
         value: (r) => r.status,
-        render: (v) => <span className={`badge tc-status-${String(v)}`}>{String(v)}</span>,
+        render: (v) => (
+          <span className={`badge tc-status-${String(v)}`}>{t(`status.${String(v)}`, String(v))}</span>
+        ),
       },
       {
         key: "updated_at",
@@ -224,9 +227,9 @@ export function CoaListPanel() {
       <div className="coa-toolbar" style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", margin: "0.5rem 0" }}>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label={t("common.status", "Status")}>
           <option value="">{t("common.all", "All")}</option>
-          {["draft", "active", "completed", "cancelled"].map((s) => (
+          {["draft", "pending_approval", "active", "completed", "cancelled"].map((s) => (
             <option key={s} value={s}>
-              {s}
+              {t(`status.${s}`, s)}
             </option>
           ))}
         </select>
@@ -234,7 +237,7 @@ export function CoaListPanel() {
           <option value="">{t("common.all", "All")}</option>
           {["per_voyage", "per_mt", "lumpsum"].map((s) => (
             <option key={s} value={s}>
-              {s}
+              {t(`rate_basis.${s}`, s)}
             </option>
           ))}
         </select>

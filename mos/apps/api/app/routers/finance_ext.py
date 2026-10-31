@@ -532,10 +532,27 @@ def export_emissions(auth: AuthContext = Depends(require_module("emissions")), d
 
 @router.get("/analytics/reports/tce")
 def report_tce(auth: AuthContext = Depends(require_module("analytics")), db: Session = Depends(get_db)):
+    """TCE 汇总。
+
+    口径：**凡是算出了 TCE 的估算都算数**，不看 status 白名单。
+    以前只认 ``calculated``/``converted``，但估算列表页对任何有结果的估算都
+    显示 TCE —— 于是列表里明明有数字，分析页却是空的（同一份数据两个口径）。
+    """
     from app.models_domain import Estimate
 
-    rows = db.scalars(select(Estimate).where(Estimate.tenant_id == auth.tenant_id, Estimate.status.in_(["calculated", "converted"]))).all()
-    return [{"title": r.title, "tce": (r.results or {}).get("tce"), "id": str(r.id)} for r in rows]
+    rows = db.scalars(
+        select(Estimate).where(Estimate.tenant_id == auth.tenant_id, Estimate.status != "deleted")
+    ).all()
+    out = []
+    for r in rows:
+        results = r.results or {}
+        tce = results.get("tce")
+        if tce is None:
+            tce = results.get("tce_usd_day")
+        if tce is None:
+            continue
+        out.append({"title": r.title, "tce": tce, "id": str(r.id), "status": r.status})
+    return out
 
 
 # P&L aggregation lives in app.services.pnl (shared with the exception centre

@@ -69,16 +69,40 @@ def test_create_task_rejects_unknown_action(client, auth_headers):
     assert r.json()["detail"]["code"] == "UNKNOWN_ACTION"
 
 
-def test_create_task_accepts_known_action(client, auth_headers):
+def test_create_task_accepts_known_action(client, auth_headers, db_engine):
+    """绑系统动作必须指明关联单据 —— 没有单据，判定器无从下手。"""
+    Session = sessionmaker(bind=db_engine)
+    with Session() as db:
+        admin = _admin(db)
+        voyage = _voyage(db, admin.tenant_id, "V-ACT-BIND-1")
+        db.commit()  # 必须落库 —— API 端在另一个连接上看得到
+        voyage_id = str(voyage.id)
     r = client.post(
         f"{API}/tasks",
         headers=auth_headers,
-        json={"title": "完成航次", "action_code": "voyage.complete", "entity_type": "voyage"},
+        json={
+            "title": "完成航次",
+            "action_code": "voyage.complete",
+            "entity_type": "voyage",
+            "entity_id": voyage_id,
+        },
     )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["action_code"] == "voyage.complete"
     assert body["auto_complete"] is True
+    assert body["entity_id"] == voyage_id
+
+
+def test_create_task_action_requires_entity(client, auth_headers):
+    """只给动作不给单据 → 400（否则任务永远不会自动完成）。"""
+    r = client.post(
+        f"{API}/tasks",
+        headers=auth_headers,
+        json={"title": "完成航次", "action_code": "voyage.complete", "entity_type": "voyage"},
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "ACTION_ENTITY_REQUIRED"
 
 
 # ── 判定器兜底通道 ───────────────────────────────────────────────────────

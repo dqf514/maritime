@@ -167,7 +167,11 @@ def test_task_comment_and_mention_notifies(client, auth_headers):
 
     ops_h = login(client, OPS)
     notifs = client.get(f"{API}/notifications", headers=ops_h).json()
-    assert any("你被提及" in (n["title"] or "") for n in notifs), "被提及人应收到通知"
+    # 通知标题按收件人语言落库（en/zh）—— 断言与语言无关的部分：指向这条任务 + 带上任务标题
+    assert any(
+        f"task={task['id']}" in (n.get("href") or "") and task["title"] in (n["title"] or "")
+        for n in notifs
+    ), "被提及人应收到通知"
 
     r = client.get(f"{API}/tasks/{task['id']}/comments", headers=h)
     assert r.status_code == 200, r.text

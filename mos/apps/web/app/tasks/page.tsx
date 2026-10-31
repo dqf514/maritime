@@ -24,6 +24,7 @@ import {
   apiPatch,
   apiPost,
   type ActionSpec,
+  type EntityOption,
   type KeyResultOut,
   type ObjectiveOut,
   type TaskOut,
@@ -262,6 +263,16 @@ function TasksPageInner() {
       toast.error(t("page.tasks.bad_entity_id", "The linked record id must be a UUID."));
       return;
     }
+    // 绑了系统动作就必须指明关联单据 —— 否则判定器无从下手（后端也会拒）
+    if (draft.action_code && !draft.entity_id.trim()) {
+      toast.error(
+        t(
+          "page.tasks.action_needs_entity",
+          "A system action must be linked to the record it applies to — pick the linked record first.",
+        ),
+      );
+      return;
+    }
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {
@@ -322,6 +333,33 @@ function TasksPageInner() {
   const chosenAction = draft?.action_code
     ? catalog.find((a) => a.code === draft.action_code) || null
     : null;
+
+  // 关联单据候选：绑动作要指到一张具体单据 —— 让人手填 UUID 不是人用的界面。
+  const entityTypeForOptions = draft?.entity_type || chosenAction?.entity_type || "";
+  const draftOpen = draft !== null;
+  const [entityOptions, setEntityOptions] = useState<EntityOption[]>([]);
+  const [entityOptionsErr, setEntityOptionsErr] = useState("");
+  useEffect(() => {
+    if (!draftOpen || !entityTypeForOptions) {
+      setEntityOptions([]);
+      return;
+    }
+    let alive = true;
+    apiGet(`/api/v1/tasks/entity-options?entity_type=${encodeURIComponent(entityTypeForOptions)}&limit=50`)
+      .then((rows) => {
+        if (!alive) return;
+        setEntityOptions(Array.isArray(rows) ? (rows as EntityOption[]) : []);
+        setEntityOptionsErr("");
+      })
+      .catch(() => {
+        if (!alive) return;
+        setEntityOptions([]);
+        setEntityOptionsErr(t("page.tasks.entity_options_fail", "Could not load linked records."));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [entityTypeForOptions, draftOpen, t]);
 
   return (
     <AppShell>
@@ -444,7 +482,7 @@ function TasksPageInner() {
           <option value="">{t("page.tasks.filter_action", "Any action")}</option>
           {catalog.map((a) => (
             <option key={a.code} value={a.code}>
-              {a.label}
+              {t(a.label_key, a.label)}
             </option>
           ))}
         </select>
@@ -483,7 +521,9 @@ function TasksPageInner() {
                   <div className="tk-card-head">
                     <span className="tk-badge">{p.code}</span>
                     <strong>{p.title}</strong>
-                    <span className={`pill ${p.status === "closed" ? "cancelled" : "pending"}`}>{p.status}</span>
+                    <span className={`pill ${p.status === "closed" ? "cancelled" : "pending"}`}>
+                      {t(`status.${p.status}`, p.status)}
+                    </span>
                   </div>
                   {p.description ? <p className="muted">{p.description}</p> : null}
                   <progress
@@ -746,17 +786,28 @@ function TasksPageInner() {
             <option value="">{t("page.tasks.action_none_pick", "None")}</option>
             {actionOptions.map((a) => (
               <option key={a.code} value={a.code}>
-                {a.label}
+                {t(a.label_key, a.label)}
               </option>
             ))}
           </select>
         </label>
         {chosenAction ? (
           <p className="tk-hint">
-            {t(
+            {t(chosenAction.hint_key, t(
               "page.tasks.action_hint",
               "When this action is done in the system, the task is ticked automatically.",
-            )}
+            ))}
+            {/* 没填到期日时，后端会按动作目录里的默认时限兜底 —— 说清楚，
+                否则用户以为「不填 = 永远不过期」 */}
+            {!draft?.due_at && chosenAction.default_due_days ? (
+              <>{" "}
+                {t(
+                  "page.tasks.action_default_due",
+                  "Default deadline: {n} days from now.",
+                  { n: chosenAction.default_due_days },
+                )}
+              </>
+            ) : null}
           </p>
         ) : null}
         <label>
@@ -764,16 +815,54 @@ function TasksPageInner() {
           <input
             value={draft?.entity_type || ""}
             placeholder="voyage / invoice / claim …"
-            onChange={(e) => setDraft((d) => (d ? { ...d, entity_type: e.target.value } : d))}
+            // 选了系统动作 → 单据类型由动作决定（改了就对不上，后端会拒）
+            readOnly={Boolean(chosenAction)}
+            title={
+              chosenAction
+                ? t("page.tasks.entity_type_locked", "The action fixes the record type.")
+                : undefined
+            }
+            onChange={(e) =>
+              setDraft((d) =>
+                d
+                  ? {
+                      ...d,
+                      entity_type: e.target.value,
+                      // 换了单据类型，之前选的关联单据不再成立
+                      entity_id: "",
+                    }
+                  : d,
+              )
+            }
           />
         </label>
         <label>
-          {t("page.tasks.field_entity_id", "Linked record id")}
-          <input
-            value={draft?.entity_id || ""}
-            placeholder="UUID"
-            onChange={(e) => setDraft((d) => (d ? { ...d, entity_id: e.target.value } : d))}
-          />
+          {t("page.tasks.field_entity_id", "Linked record")}
+          {entityTypeForOptions && entityOptions.length ? (
+            <select
+              value={draft?.entity_id || ""}
+              onChange={(e) => setDraft((d) => (d ? { ...d, entity_id: e.target.value } : d))}
+            >
+              <option value="">{t("page.tasks.entity_pick_none", "— pick a record —")}</option>
+              {entityOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={draft?.entity_id || ""}
+              placeholder="UUID"
+              onChange={(e) => setDraft((d) => (d ? { ...d, entity_id: e.target.value } : d))}
+            />
+          )}
+          {entityOptionsErr ? <span className="muted">{entityOptionsErr}</span> : null}
+          {entityTypeForOptions && !entityOptions.length && !entityOptionsErr ? (
+            <span className="muted">
+              {t("page.tasks.entity_none", "No records of this type yet.")}
+            </span>
+          ) : null}
         </label>
         <label>
           {t("page.tasks.field_weight", "Weight")}

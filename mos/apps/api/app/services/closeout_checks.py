@@ -121,14 +121,18 @@ def claims_state(db: Session, tenant_id: UUID, voyage_id: UUID) -> dict:
 
 
 def invoices_state(db: Session, tenant_id: UUID, voyage_id: UUID) -> dict:
-    """发票已签发（≥1 张 issued；一张都没有则视为不适用 → ok）。"""
+    """发票已签发（**没有一张留在草稿/待审批**；一张都没有则视为不适用 → ok）。
+
+    旧口径是"≥1 张已签发就算 ok"，于是清单一边打勾一边写着"还有 2 张待签发"，
+    那 2 张草稿发票也不会生成任何跟进任务。改成"无草稿"后口径自洽。
+    """
     invs = list(
         db.scalars(select(Invoice).where(Invoice.tenant_id == tenant_id, Invoice.voyage_id == voyage_id)).all()
     )
     issued = [i for i in invs if i.status in ("issued", "partially_paid", "paid")]
     drafts = [i for i in invs if i.status in ("draft", "pending_approval")]
     return {
-        "ok": bool(issued) or not invs,
+        "ok": not drafts,
         "total": len(invs),
         "issued": len(issued),
         "drafts": len(drafts),

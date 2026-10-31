@@ -65,7 +65,7 @@ def login(
     response: Response,
     request: Request,
     db: Session = Depends(get_db),
-    _rl: None = Depends(rate_limit("auth.login", max_hits=5, window_seconds=60)),
+    _rl: None = Depends(rate_limit("auth.login", max_hits=5, window_seconds=60, per_account=True)),
 ):
     from app.services.identity import ensure_tenant_policy, now_utc_naive
 

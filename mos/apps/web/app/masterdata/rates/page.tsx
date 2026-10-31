@@ -267,7 +267,14 @@ function RatesPage() {
           else dims[k] = String(value);
           await apiPatch(`/api/v1/rates/tables/${selectedId}/rows/${rowId}`, { dims });
         } else if (colKey === "value" || colKey === "priority") {
-          const next = value === null || value === "" ? 0 : Number(value);
+          const cleared = value === null || value === undefined || value === "";
+          if (cleared && colKey === "value") {
+            // 费率列 NOT NULL：清空若写成 0，等于凭空造一条「0 费率」行，
+            // 报价时会被 lookup 当成有效费率命中 —— 必须挡住并说明怎么删。
+            toast.error(t("page.rates.err_value_empty", "费率不能留空；如需移除该行请删除该行"));
+            return;
+          }
+          const next = cleared ? 0 : Number(value);
           if (!Number.isFinite(next)) {
             // 非法数字不能静默写成 0 —— 明确告诉用户这一格没写进去
             toast.error(
@@ -433,18 +440,34 @@ function RatesPage() {
       headers.forEach((h, i) => {
         if (h in idxField) idxField[h] = i;
       });
+      if (idxField.value < 0) {
+        // 没有 value 列 → 若默认按 0 导入，整表费率全变 0，报价直接归零。
+        toast.error(t("page.rates.csv_no_value", "CSV 缺少 value 列，无法导入"));
+        return;
+      }
       let ok = 0;
       let skipped = 0;
+      let badValue = 0;
+      let noDims = 0;
       for (const line of matrix.slice(1)) {
+        if (!line.some((c) => (c ?? "").trim() !== "")) continue;
         const dims: Record<string, string> = {};
         headers.forEach((h, i) => {
           if (h in idxField) return;
           const v = (line[i] ?? "").trim();
           if (h && v) dims[h] = v;
         });
-        const rawVal = idxField.value >= 0 ? line[idxField.value] : "0";
-        const value = Number(rawVal);
+        if (!Object.keys(dims).length) {
+          // 无维度的行 = 通配行，lookup 时会命中任何查询（spec=0）——
+          // 费率 0 的通配行会把报价打成 0，必须挡下。
+          noDims++;
+          skipped++;
+          continue;
+        }
+        const rawVal = (line[idxField.value] ?? "").trim();
+        const value = rawVal === "" ? Number.NaN : Number(rawVal);
         if (!Number.isFinite(value)) {
+          badValue++;
           skipped++;
           continue;
         }
@@ -471,9 +494,17 @@ function RatesPage() {
         ok++;
       }
       if (skipped > 0) {
-        toast.error(t("page.rates.csv_skipped", "已导入 {ok} 行，跳过 {n} 行（数值非法）", { ok, n: skipped }));
+        toast.error(
+          t("page.rates.csv_skipped", "已导入 {ok} 行，跳过 {n} 行（费率非法 {bad} 行、缺维度 {nodims} 行）", {
+            ok,
+            n: skipped,
+            bad: badValue,
+            nodims: noDims,
+          }),
+        );
+      } else {
+        toast.success(t("page.rates.csv_imported", "Imported {n} rows", { n: ok }));
       }
-      toast.success(t("page.rates.csv_imported", "Imported {n} rows", { n: ok }));
       await loadRows(selectedId);
     } catch (ex) {
       toast.error(msgOf(ex));
@@ -604,9 +635,10 @@ function RatesPage() {
         width: 100,
         editor: {
           type: "select",
-          options: RATE_UNITS.map((u) => ({ value: u, label: u })),
+          options: RATE_UNITS.map((u) => ({ value: u, label: t(`rate_basis.${u}`, u) })),
         },
         value: (r) => r.unit ?? "",
+        render: (_v, r) => (r.unit ? t(`rate_basis.${r.unit}`, r.unit) : ""),
       },
       {
         key: "priority",
@@ -1101,7 +1133,7 @@ function RatesPage() {
                 <option value="">{t("common.select", "Select…")}</option>
                 {RATE_UNITS.map((u) => (
                   <option key={u} value={u}>
-                    {u}
+                    {t(`rate_basis.${u}`, u)}
                   </option>
                 ))}
               </select>

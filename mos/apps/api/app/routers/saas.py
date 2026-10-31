@@ -36,6 +36,7 @@ from app.models import User
 from app.routers.admin_platform import require_roles
 from app.security import AuthContext, get_current_auth
 from app.services.data_scope import DATA_SCOPE_MODULES, canonical_module
+from app.services.domain_events import emit
 from app.services.recycle import soft_delete
 from app.services.upload_policy import get_upload_policy
 from app.services.saas_engine import (
@@ -1437,7 +1438,7 @@ def workflow_decide(
             # advance_workflow 已经 flush 了工作流推进 —— 回滚，实例保持 running
             db.rollback()
             raise
-        _apply_approved_entity(db, inst)
+        _apply_approved_entity(db, inst, actor_user_id=auth.user_id)
     db.commit()
     return {"id": str(inst.id), "status": inst.status, "current_step": inst.current_step}
 
@@ -1473,7 +1474,7 @@ def _assert_workflow_approval_limit(db: Session, inst: WorkflowInstance, approve
     )
 
 
-def _apply_approved_entity(db: Session, inst: WorkflowInstance) -> None:
+def _apply_approved_entity(db: Session, inst: WorkflowInstance, actor_user_id=None) -> None:
     from datetime import timedelta
     from uuid import uuid4
 
@@ -1516,6 +1517,21 @@ def _apply_approved_entity(db: Session, inst: WorkflowInstance) -> None:
         if row and row.status == "pending_approval":
             row.status = transition("invoice", row.status, "issued", INVOICE_TRANSITIONS)
             row.issued_at = datetime.now(timezone.utc)
+            # 域事件：工作流签发与手工签发必须等价 —— 否则「过账总账」「计提对账」
+            # 任务不生成、财务收不到通知、收尾清单的「发票已签发」不自动勾。
+            emit(
+                db, row.tenant_id, "invoice.issued", "invoice", row.id,
+                payload={
+                    "invoice_no": row.invoice_no,
+                    "amount": float(row.amount or 0),
+                    "tax_amount": float(row.tax_amount or 0),
+                    "currency": row.currency or "USD",
+                    "invoice_type": row.invoice_type or "invoice",
+                    "voyage_id": str(row.voyage_id) if row.voyage_id else None,
+                    "via_workflow": True,
+                },
+                user_id=actor_user_id,
+            )
 
 
 # re-export helper for other routers

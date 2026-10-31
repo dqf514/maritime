@@ -216,6 +216,8 @@ function RoutinePageInner() {
   const [rulesTask, setRulesTask] = useState<TaskOut | null>(null);
   const [rules, setRules] = useState<TriggerRule[]>([]);
   const [rulesLoading, setRulesLoading] = useState(false);
+  // 规则读取失败 —— 保存按钮必须禁用，否则会把空/旧的规则整组覆盖回去
+  const [rulesError, setRulesError] = useState<string | null>(null);
 
   // 技能详情
   const [skillView, setSkillView] = useState<SkillOut | null>(null);
@@ -425,21 +427,25 @@ function RoutinePageInner() {
     async (task: TaskOut) => {
       setRulesTask(task);
       setRulesLoading(true);
+      // 先清空上一个任务的规则：切换任务时旧规则若留在界面上，
+      // 用户在加载完成前点「保存」会把 A 的规则写进 B。
+      setRules([]);
+      setRulesError(null);
       try {
         const res = await apiList<TriggerRule>(`/api/v1/routine/tasks/${task.id}/triggers`);
         setRules(res.items || []);
       } catch (e) {
-        toast.error(msgOf(e, t("common.failed", "Failed")));
+        setRulesError(msgOf(e, t("common.failed", "Failed")));
         setRules([]);
       } finally {
         setRulesLoading(false);
       }
     },
-    [t, toast],
+    [t],
   );
 
   const saveRules = useCallback(async () => {
-    if (!rulesTask) return;
+    if (!rulesTask || rulesLoading || rulesError) return;
     setBusy(true);
     try {
       await apiPut(`/api/v1/routine/tasks/${rulesTask.id}/triggers`, {
@@ -461,7 +467,7 @@ function RoutinePageInner() {
     } finally {
       setBusy(false);
     }
-  }, [rulesTask, rules, t, toast]);
+  }, [rulesTask, rules, rulesLoading, rulesError, t, toast]);
 
   // ── 排序（当前页内排序）─────────────────────────────────────────────────
 
@@ -1143,9 +1149,9 @@ function RoutinePageInner() {
             onChange={(e) => setTaskDraft((d) => (d ? { ...d, output_target: e.target.value } : d))}
           >
             <option value="">{t("page.routine.no_target", "None")}</option>
-            <option value="noon_report">noon_report</option>
-            <option value="laytime_calc">laytime_calc</option>
-            <option value="estimate">estimate</option>
+            <option value="noon_report">{t("page.routine.target_noon_report", "Noon report")}</option>
+            <option value="laytime_calc">{t("page.routine.target_laytime_calc", "Laytime calculation")}</option>
+            <option value="estimate">{t("page.routine.target_estimate", "Estimate")}</option>
           </select>
         </label>
         <label>
@@ -1181,11 +1187,16 @@ function RoutinePageInner() {
         title={t("page.routine.triggers_title", "Trigger rules — {code}", { code: rulesTask?.code || "" })}
         onClose={() => setRulesTask(null)}
         onSave={saveRules}
-        saving={busy}
+        saving={busy || rulesLoading || Boolean(rulesError)}
         size="lg"
       >
         {rulesLoading ? <p className="muted">{t("common.loading", "Loading…")}</p> : null}
-        {!rulesLoading && rules.length === 0 ? (
+        {rulesError ? (
+          <p className="state-view-error" role="alert">
+            {t("page.routine.rules_load_fail", "Trigger rules could not be loaded: {err}", { err: rulesError })}
+          </p>
+        ) : null}
+        {!rulesLoading && !rulesError && rules.length === 0 ? (
           <p className="muted">
             {t(
               "page.routine.no_rules",

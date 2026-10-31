@@ -317,8 +317,8 @@ function PlatformTenantsPage() {
         ok: true,
         text: t("page.tenants.backup_done", "备份完成：{n} 行 → {p}", { n: res.total_rows ?? 0, p: res.storage_path || "" }),
       });
-    } catch {
-      setDbMsg({ ok: false, text: t("page.tenants.backup_failed", "备份失败") });
+    } catch (err) {
+      setDbMsg({ ok: false, text: t("page.tenants.backup_failed", "备份失败：{err}", { err: msgOf(err) }) });
     } finally {
       setDbBusy(false);
     }
@@ -334,8 +334,8 @@ function PlatformTenantsPage() {
         ok: true,
         text: t("page.tenants.restore_done", "恢复完成：新插入 {n} 行（已存在主键跳过）", { n: res.inserted_total ?? 0 }),
       });
-    } catch {
-      setDbMsg({ ok: false, text: t("page.tenants.restore_failed", "恢复失败") });
+    } catch (err) {
+      setDbMsg({ ok: false, text: t("page.tenants.restore_failed", "恢复失败：{err}", { err: msgOf(err) }) });
     } finally {
       setDbBusy(false);
     }
@@ -358,8 +358,11 @@ function PlatformTenantsPage() {
         ok: true,
         text: t("page.tenants.purge_done", "已清理 {n} 行业务数据（清理前已自动备份）", { n: res.deleted_total ?? 0 }),
       });
-    } catch {
-      setDbMsg({ ok: false, text: t("page.tenants.purge_failed", "清理失败（确认代码需与租户代码一致）") });
+    } catch (err) {
+      setDbMsg({
+        ok: false,
+        text: t("page.tenants.purge_failed", "清理失败（确认代码需与租户代码一致）：{err}", { err: msgOf(err) }),
+      });
     } finally {
       setDbBusy(false);
     }

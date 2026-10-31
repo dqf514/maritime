@@ -152,6 +152,10 @@ def update_connector(
     if "config" in data:
         # P0-19：合并（``***`` = 保持原值）+ 加密落库
         data["config"] = _merge_config(row.config, data["config"], row.connector_type)
+    if data.get("secret_ref") == SECRET_MASK:
+        # 掩码回传 = 「保持原值」—— 与 config 同一口径。
+        # 否则前端把只读回显的 "***" 原样写回去，连接器凭据当场报废。
+        data["secret_ref"] = row.secret_ref
     for k, v in data.items():
         if k == "status" and v == "deleted":
             continue

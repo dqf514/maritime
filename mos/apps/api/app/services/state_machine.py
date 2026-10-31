@@ -46,6 +46,12 @@ INVOICE_TRANSITIONS = {
     "draft": {"pending_approval", "void"},
     "pending_approval": {"issued", "draft", "void"},
     "issued": {"partially_paid", "paid", "void"},
+    # overdue 是"已开出但到期未收"的账龄状态 —— 报告（report_engine 的
+    # open_statuses）、告警规则（alert_engine 的 invoice.status == overdue）
+    # 和前端账龄图例都认它。但它以前不在状态机里，于是任何一张逾期发票
+    # 都收不了款（overdue → paid 直接 409）—— 演示库里唯一那张逾期发票
+    # 就是死的。逾期发票的出路与已开出发票一致。
+    "overdue": {"partially_paid", "paid", "void", "issued"},
     # partially_paid → void is only legitimate together with a credit note /
     # red-flush (红冲) refund of the received amount; the invariant is enforced
     # in services/finance_workflow.assert_void_allowed (INV-VOID-CREDIT).

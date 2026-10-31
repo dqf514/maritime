@@ -390,6 +390,13 @@ function CounterpartiesPage() {
     { key: "delete", label: t("common.delete", "Delete"), danger: true, onClick: () => requestDeleteContact(r) },
   ];
 
+  // 类型码 → 参照表标签（列表要显示人话，不是 broker / address_agent 这种码）
+  const typeLabels = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of typeItems) m.set(it.code, it.label);
+    return m;
+  }, [typeItems]);
+
   const partyColumns = useMemo<ColumnDef<Party>[]>(() => [
     {
       key: "name",
@@ -420,7 +427,9 @@ function CounterpartiesPage() {
         const set = normalizePartyTypes(
           r.address_types?.length ? r.address_types : r.type ? [r.type] : []
         );
-        return set.length ? set.join(", ") : "—";
+        if (!set.length) return "—";
+        // 参照表里没有的历史码原样显示（不丢信息），有标签的用标签
+        return set.map((c) => typeLabels.get(c) ?? c).join(", ");
       },
     },
     {
@@ -451,7 +460,7 @@ function CounterpartiesPage() {
       value: (r) => r.sanctions_status,
       render: (_v, r) => (
         <span className={`pill ${r.sanctions_status === "clear" ? "valid" : r.sanctions_status === "blocked" ? "danger" : "warn"}`}>
-          {r.sanctions_status}
+          {t(`page.parties.sanctions_${r.sanctions_status}`, r.sanctions_status)}
         </span>
       ),
     },
@@ -521,7 +530,7 @@ function CounterpartiesPage() {
         </button>
       ),
     },
-  ], [t, openRow]);
+  ], [t, openRow, typeLabels]);
 
   const contactColumns = useCallback((opts: { showCompany: boolean; compact?: boolean }): ColumnDef<Contact>[] => {
     const cols: ColumnDef<Contact>[] = [
@@ -694,7 +703,14 @@ function CounterpartiesPage() {
 
       {tab === "parties" ? (
         <div className="panel">
-          <StatusLegend statuses={["clear", "review", "blocked"]} />
+          <StatusLegend
+            statuses={["clear", "review", "blocked"]}
+            labels={{
+              clear: t("page.parties.sanctions_clear", "Clear"),
+              review: t("page.parties.sanctions_review", "Under review"),
+              blocked: t("page.parties.sanctions_blocked", "Blocked"),
+            }}
+          />
           <StateView
             loading={loading}
             error={listErr || undefined}
@@ -809,9 +825,9 @@ function CounterpartiesPage() {
         </label>
         <label>{t("page.parties.sanctions", "Sanctions status")}
           <select value={edit.sanctions_status} onChange={(e) => setEdit({ ...edit, sanctions_status: e.target.value })}>
-            <option value="clear">clear</option>
-            <option value="review">review</option>
-            <option value="blocked">blocked</option>
+            <option value="clear">{t("page.parties.sanctions_clear", "Clear")}</option>
+            <option value="review">{t("page.parties.sanctions_review", "Under review")}</option>
+            <option value="blocked">{t("page.parties.sanctions_blocked", "Blocked")}</option>
           </select>
         </label>
         <label>{t("common.email", "Email")}

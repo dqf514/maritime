@@ -52,6 +52,21 @@ def _tasks(db, tenant_id, title_contains=None):
     return rows
 
 
+def _tasks_for(db, tenant_id, entity_type, entity_id):
+    """按**关联单据**找任务 —— 系统生成的标题随触发者语言落库（en/zh），
+    实体关联才是与语言无关的稳定锚点。"""
+    from app.models_task import Task
+
+    if isinstance(entity_id, str):
+        entity_id = _uuidlib.UUID(entity_id)
+    q = select(Task).where(
+        Task.tenant_id == tenant_id,
+        Task.entity_type == entity_type,
+        Task.entity_id == entity_id,
+    )
+    return db.scalars(q).all()
+
+
 # ── 全链路主干 ─────────────────────────────────────────────────────────────
 
 
@@ -179,7 +194,7 @@ def test_full_chain_event_driven_closeout(client, auth_headers, db_engine):
     )
     # 索赔和解 → 财务转结算任务
     with Session() as db:
-        tasks = _tasks(db, tenant_id, "索赔转结算")
+        tasks = _tasks_for(db, tenant_id, "claim", claim_id)
         assert tasks, "claim.settled 应生成财务任务"
         assert tasks[0].source == "system"
         assert tasks[0].assignee_user_id is not None  # finance 角色 → 首个在职用户
@@ -201,7 +216,7 @@ def test_full_chain_event_driven_closeout(client, auth_headers, db_engine):
     assert client.post(f"/api/v1/invoices/{iid}/transition?target=pending_approval", headers=h).status_code == 200
     assert client.post(f"/api/v1/invoices/{iid}/transition?target=issued", headers=h).status_code == 200
     with Session() as db:
-        assert _tasks(db, tenant_id, "过账总账：发票"), "invoice.issued 应生成财务过账任务"
+        assert _tasks_for(db, tenant_id, "invoice", iid), "invoice.issued 应生成财务过账任务"
 
     # 4) PDA 关闭 → 自动过账或降级任务（测试库无科目规则 → 任务，不静默）
     pda = client.post(
@@ -222,7 +237,7 @@ def test_full_chain_event_driven_closeout(client, auth_headers, db_engine):
         evs = _events(db, tenant_id, "pda.closed")
         assert evs, "pda.closed 事件应落 domain_events"
         # 降级任务或成功通知 —— 测试库通常无 port_disbursement 科目规则
-        pda_tasks = _tasks(db, tenant_id, "PDA 待过账")
+        pda_tasks = _tasks_for(db, tenant_id, "port_disbursement", pid)
         assert pda_tasks or evs[0].handler_errors is not None  # 二者至少有痕迹
 
     # 5) 加油交付（正常交付，无偏差 → 无任务）
@@ -386,16 +401,23 @@ def test_coa_overlift_generates_alert_and_task(client, auth_headers, db_engine):
     fx = client.post(f"/api/v1/coa-liftings/{lid}/fix", headers=h, json={})
     assert fx.status_code == 200, fx.text
     with Session() as db:
-        assert _tasks(db, tenant_id, "执行提货航次"), "lifting.fixed 应生成 ops 跟进任务"
+        # lifting.fixed → ops 跟进任务（normal 优先级）
+        rows = _tasks_for(db, tenant_id, "charter", cid)
+        assert any(t.priority == "normal" for t in rows), "lifting.fixed 应生成 ops 跟进任务"
 
     done = client.post(f"/api/v1/coa-liftings/{lid}/complete", headers=h, json={"actual_qty": 32000.0})
     assert done.status_code == 200, done.text
     with Session() as db:
-        assert _tasks(db, tenant_id, "COA 超装复核"), "累计超装 102% 应生成商务复核任务"
+        # 累计超装 → 商务复核任务（high 优先级）
+        rows = _tasks_for(db, tenant_id, "charter", cid)
+        assert any(t.priority == "high" for t in rows), "累计超装 102% 应生成商务复核任务"
         from app.models_domain import TwinAlert
 
+        # 告警标题随语言落库 —— 按链接（指向该租约）断言，与语言无关
         alerts = db.scalars(
-            select(TwinAlert).where(TwinAlert.tenant_id == tenant_id, TwinAlert.title.like("%超装%"))
+            select(TwinAlert).where(
+                TwinAlert.tenant_id == tenant_id, TwinAlert.href == f"/charters/{cid}"
+            )
         ).all()
         assert alerts, "超装应生成 TwinAlert"
 
@@ -457,7 +479,8 @@ def test_amendment_approval_notifies_and_flags_finance(client, auth_headers, db_
     with Session() as db:
         assert _events(db, tenant_id, "charter.amendment_approved"), "修订批准应落域事件"
         if voyage_id:
-            assert _tasks(db, tenant_id, "按修订条款复核发票"), "金额条款变更 + 未结发票 → 财务复核任务"
+            rows = _tasks_for(db, tenant_id, "charter", cid)
+            assert any(t.priority == "high" for t in rows), "金额条款变更 + 未结发票 → 财务复核任务"
 
 
 def test_sanctions_recheck_blocks_charter_activation(client, auth_headers):

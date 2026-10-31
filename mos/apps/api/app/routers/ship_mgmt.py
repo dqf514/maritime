@@ -27,6 +27,7 @@ from app.models_ship import (
 from app.models_wave1 import Attachment, ConnectorInstance, Vessel
 from app.security import AuthContext, require_module
 from app.services.audit import audit
+from app.services.domain_events import emit
 from app.services.timeutil import utcnow_naive
 
 router = APIRouter(tags=["Ship Management"])
@@ -405,6 +406,9 @@ def vessel_technical(
                 "nationality": c.nationality,
                 "status": c.status,
                 "contract_end": c.contract_end.isoformat() if c.contract_end else None,
+                # 证书一并返回：前端编辑证书时必须能看到已有证书，
+                # 否则"打开编辑器 → 保存"会把原有证书整份覆盖掉。
+                "certificates": (c.meta or {}).get("certificates") or [],
             }
             for c in crew
         ],
@@ -689,10 +693,31 @@ def update_certificate(
 ):
     cert = _cert_or_404(db, auth.tenant_id, cert_id)
     data = body.model_dump(exclude_unset=True)
+    old_expires = cert.expires_on
     for k, v in data.items():
         setattr(cert, k, v)
     if "expires_on" in data:
         cert.status = _cert_status_for(cert.expires_on, "valid")
+        # 续证留痕：有效期被推后 → 记 renewed_at（动作目录 cert.renew 的判定依据）。
+        # 没有这个事实，任何"未过期的证书"都会被误判成"已续证"。
+        if (
+            cert.expires_on is not None
+            and old_expires is not None
+            and cert.expires_on > old_expires
+        ):
+            meta = dict(cert.meta or {})
+            meta["previous_expires_on"] = old_expires.isoformat()
+            meta["renewed_at"] = datetime.now(timezone.utc).isoformat()
+            cert.meta = meta
+            emit(
+                db, auth.tenant_id, "ship.certificate.renewed", "ship_certificate", cert.id,
+                payload={
+                    "cert_code": cert.cert_code,
+                    "expires_on": cert.expires_on.isoformat(),
+                    "previous_expires_on": old_expires.isoformat(),
+                },
+                user_id=auth.user_id,
+            )
     audit(
         db,
         action="ship.certificate.update",

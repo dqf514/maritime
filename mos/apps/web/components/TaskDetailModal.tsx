@@ -174,6 +174,16 @@ export function TaskDetailModal({ taskId, people, onClose, onChanged }: Props) {
                   <span className="tk-k">{t("page.tasks.field_progress", "Progress")}</span>
                   <span className="tk-v">{detail.progress}%</span>
                 </div>
+                {detail.entity_href && detail.entity_title ? (
+                  <div>
+                    <span className="tk-k">{t("page.tasks.field_linked_record", "Linked record")}</span>
+                    <span className="tk-v">
+                      <a href={detail.entity_href} className="tk-link">
+                        {detail.entity_title}
+                      </a>
+                    </span>
+                  </div>
+                ) : null}
               </div>
 
               {detail.description ? <p className="tk-detail-desc">{detail.description}</p> : null}
@@ -192,7 +202,7 @@ export function TaskDetailModal({ taskId, people, onClose, onChanged }: Props) {
                 {action ? (
                   <div className="tk-action-box">
                     <div className="tk-action-head">
-                      <strong>{action.label}</strong>
+                      <strong>{t(action.label_key, action.label)}</strong>
                       <span className="tk-badge">{action.code}</span>
                     </div>
                     <p className="muted">

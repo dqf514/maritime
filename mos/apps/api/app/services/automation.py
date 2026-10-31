@@ -34,8 +34,9 @@ from app.models_domain import (
     Voyage,
 )
 from app.services.domain_events import DomainEvent, ensure_task, materialize_task_rules, notify_task, on
-from app.services.action_catalog import ACTION_BY_CODE
+from app.services.action_catalog import ACTION_BY_CODE, ACTIONS
 from app.services.notifications import notify_roles_once
+from app.services.system_text import text
 from app.services.voyage_close import closing_check, shrink_voyage_schedule_blocks
 from app.services.ui_text import user_locale
 
@@ -63,6 +64,28 @@ def _q2(x) -> float:
 
 
 # ── 航次完成：收尾链总入口 ────────────────────────────────────────────────
+
+
+def _voyage_completed_body(locale: str, missing: list, task_count: int, shrunk: int) -> str:
+    """航次完成汇总正文（按 locale 拼装，可选片段用分隔符连起来）。"""
+    zh = locale.startswith("zh")
+    sep = "；" if zh else "; "
+    parts: list[str] = []
+    if missing:
+        parts.append(
+            text(
+                "voyage.completed.notify.missing",
+                locale,
+                items=("、".join(missing) if zh else ", ".join(missing)),
+            )
+        )
+    else:
+        parts.append(text("voyage.completed.notify.all_clear", locale))
+    if task_count:
+        parts.append(text("voyage.completed.notify.tasks", locale, count=task_count))
+    if shrunk:
+        parts.append(text("voyage.completed.notify.schedule", locale, count=shrunk))
+    return sep.join(parts)
 
 
 def create_closeout_tasks(
@@ -166,18 +189,16 @@ def on_voyage_completed(db: Session, ev: DomainEvent) -> None:
     }
     materialize_task_rules(db, tenant_id, "voyage", ctx, entity_id=voyage.id, created_by=ev.created_by)
 
-    # 5) 汇总通知（运营/管理）
+    # 5) 汇总通知（运营/管理）—— 收件人各按自己的语言收（notify_once 逐人挑）
     missing = check.get("missing") or []
     notify_roles_once(
         db,
         tenant_id,
         ("operations", "management"),
-        title=f"航次 {voyage.voyage_no} 已完成",
-        body=(
-            f"收尾清单：{'全部齐备' if not missing else '缺 ' + '、'.join(missing)}"
-            + (f"；已生成 {len(created_titles)} 项跟进任务" if created_titles else "")
-            + (f"；船期块收缩 {shrunk} 段" if shrunk else "")
-        ),
+        title=text("voyage.completed.notify.title", "en", voyage_no=voyage.voyage_no),
+        body=_voyage_completed_body("en", missing, len(created_titles), shrunk),
+        title_i18n={"zh": text("voyage.completed.notify.title", "zh-CN", voyage_no=voyage.voyage_no)},
+        body_i18n={"zh": _voyage_completed_body("zh-CN", missing, len(created_titles), shrunk)},
         href=ws,
         level="info" if not missing else "warn",
     )
@@ -192,11 +213,14 @@ def on_lifting_fixed(db: Session, ev: DomainEvent) -> None:
     charter = db.get(Charter, _uid(p.get("charter_id"))) if p.get("charter_id") else None
     cno = charter.charter_no if charter is not None else "COA"
     voyage_no = p.get("voyage_no") or ""
+    locale = user_locale(db, ev.created_by)
     task = ensure_task(
         db,
         ev.tenant_id,
-        title=f"执行提货航次 {voyage_no} — {cno}",
-        description=f"COA 提货 {p.get('period_label') or ''} 已订租（fixed），请跟进航次执行与装期。",
+        title=text("lifting.fixed.task.title", locale, voyage_no=voyage_no, charter_no=cno),
+        description=text(
+            "lifting.fixed.task.desc", locale, period=p.get("period_label") or ""
+        ),
         entity_type="charter",
         entity_id=charter.id if charter is not None else None,
         priority="normal",
@@ -225,28 +249,39 @@ def on_lifting_completed(db: Session, ev: DomainEvent) -> None:
 
     if total > 0 and lifted > total * Decimal("1.02"):
         # 超装：需要变更单/补充协议 —— 告警 + 分派任务
+        locale = user_locale(db, ev.created_by)
         db.add(TwinAlert(
             tenant_id=ev.tenant_id,
             level="warn",
-            title=f"COA 超装：{cno}",
-            body=f"累计提货 {float(lifted):,.2f} 已超合同量 {float(total):,.2f}，请确认变更单/补充协议。",
+            title=text("lifting.over.alert.title", "en", charter_no=cno),
+            body=text(
+                "lifting.over.alert.body", "en",
+                lifted=f"{float(lifted):,.2f}", total=f"{float(total):,.2f}",
+            ),
             href=href,
             vessel_id=charter.vessel_id,
         ))
         task = ensure_task(
             db, ev.tenant_id,
-            title=f"COA 超装复核 — {cno}",
-            description=f"累计提货 {float(lifted):,.2f} > 合同量 {float(total):,.2f}。",
+            title=text("lifting.over.task.title", locale, charter_no=cno),
+            description=text(
+                "lifting.over.task.desc", locale,
+                lifted=f"{float(lifted):,.2f}", total=f"{float(total):,.2f}",
+            ),
             entity_type="charter", entity_id=charter.id,
             priority="high", due_days=2, assign_role="chartering", created_by=ev.created_by,
         )
         notify_task(db, ev.tenant_id, task, assign_role="chartering", href=href, level="warn")
     elif total > 0 and lifted < total * Decimal("0.95") and not p.get("has_open_liftings", True):
         # 短装且无剩余开放 lifting：提醒商务跟进
+        locale = user_locale(db, ev.created_by)
         task = ensure_task(
             db, ev.tenant_id,
-            title=f"COA 短装跟进 — {cno}",
-            description=f"累计提货 {float(lifted):,.2f} 低于合同量 {float(total):,.2f}，请确认余量安排。",
+            title=text("lifting.short.task.title", locale, charter_no=cno),
+            description=text(
+                "lifting.short.task.desc", locale,
+                lifted=f"{float(lifted):,.2f}", total=f"{float(total):,.2f}",
+            ),
             entity_type="charter", entity_id=charter.id,
             priority="normal", due_days=5, assign_role="chartering", created_by=ev.created_by,
         )
@@ -256,8 +291,14 @@ def on_lifting_completed(db: Session, ev: DomainEvent) -> None:
         db.add(TwinAlert(
             tenant_id=ev.tenant_id,
             level="info",
-            title=f"提货量偏差：{cno} {p.get('period_label') or ''}",
-            body=f"实际 {float(actual):,.2f} vs 计划 {float(planned):,.2f}。",
+            title=text(
+                "lifting.deviation.alert.title", "en",
+                charter_no=cno, period=p.get("period_label") or "",
+            ),
+            body=text(
+                "lifting.deviation.alert.body", "en",
+                actual=f"{float(actual):,.2f}", planned=f"{float(planned):,.2f}",
+            ),
             href=href,
             vessel_id=charter.vessel_id,
         ))
@@ -279,12 +320,16 @@ def on_amendment_approved(db: Session, ev: DomainEvent) -> None:
     cno = charter.charter_no
     href = f"/charters/{charter.id}"
     change_desc = "、".join(f"{k}→{changes[k]}" for k in list(changes)[:6])
+    change_desc_en = ", ".join(f"{k}→{changes[k]}" for k in list(changes)[:6])
+    locale = user_locale(db, ev.created_by)
 
     notify_roles_once(
         db, ev.tenant_id,
         ("chartering", "operations", "finance", "management"),
-        title=f"租约修订已批准：{cno}",
-        body=f"变更：{change_desc}。原因：{p.get('reason') or '—'}",
+        title=text("amendment.notify.title", "en", charter_no=cno),
+        body=text("amendment.notify.body", "en", changes=change_desc_en, reason=p.get("reason") or "—"),
+        title_i18n={"zh": text("amendment.notify.title", "zh-CN", charter_no=cno)},
+        body_i18n={"zh": text("amendment.notify.body", "zh-CN", changes=change_desc, reason=p.get("reason") or "—")},
         href=href,
         level="info",
     )
@@ -309,8 +354,11 @@ def on_amendment_approved(db: Session, ev: DomainEvent) -> None:
     if needs_review:
         task = ensure_task(
             db, ev.tenant_id,
-            title=f"按修订条款复核发票与计提 — {cno}",
-            description=f"条款已变更（{ '、'.join(money_touched) }），请复核未结发票/计提是否需要重开或调整。",
+            title=text("amendment.task.title", locale, charter_no=cno),
+            description=text(
+                "amendment.task.desc", locale,
+                fields=("、".join(money_touched) if locale.startswith("zh") else ", ".join(sorted(money_touched))),
+            ),
             entity_type="charter", entity_id=charter.id,
             priority="high", due_days=3, assign_role="finance", created_by=ev.created_by,
         )
@@ -326,10 +374,14 @@ def on_invoice_issued(db: Session, ev: DomainEvent) -> None:
     if inv is None:
         return
     inv_no = inv.invoice_no or str(inv.id)[:8]
+    locale = user_locale(db, ev.created_by)
     task = ensure_task(
         db, ev.tenant_id,
-        title=f"过账总账：发票 {inv_no}",
-        description=f"发票已签发（{_q2(inv.amount)} {inv.currency or 'USD'}），复核科目后过账 GL。",
+        title=text("invoice.issued.task.title", locale, invoice_no=inv_no),
+        description=text(
+            "invoice.issued.task.desc", locale,
+            amount=_q2(inv.amount), currency=inv.currency or "USD",
+        ),
         entity_type="invoice", entity_id=inv.id,
         priority="normal", due_days=3, assign_role="finance", created_by=ev.created_by,
         # 发票已签发但 GL 未过账 → 绑 invoice.post_gl：过账后任务自动勾完成。
@@ -351,8 +403,8 @@ def on_invoice_issued(db: Session, ev: DomainEvent) -> None:
         if accruals:
             task2 = ensure_task(
                 db, ev.tenant_id,
-                title=f"计提对账：航次发票 {inv_no}",
-                description="该航次存在已过账计提 —— 发票签发后请核对差异并冲回计提。",
+                title=text("invoice.accruals.task.title", locale, invoice_no=inv_no),
+                description=text("invoice.accruals.task.desc", locale),
                 entity_type="voyage", entity_id=inv.voyage_id,
                 priority="normal", due_days=5, assign_role="finance", created_by=ev.created_by,
                 # 计提与发票对齐后自动勾完成（voyage.closeout.accruals 与收尾清单同一判定）。
@@ -405,11 +457,17 @@ def on_pda_closed(db: Session, ev: DomainEvent) -> None:
     if pda is None:
         return
     journal, outcome = try_post_pda_journal(db, ev.tenant_id, pda, user_id=ev.created_by)
+    locale = user_locale(db, ev.created_by)
     if journal is not None:
+        amount = _q2(pda.fda_amount or pda.pda_amount)
+        currency = pda.currency or "USD"
+        period = datetime.now(timezone.utc).strftime("%Y-%m")
         notify_roles_once(
             db, ev.tenant_id, ("finance",),
-            title=f"PDA 已自动过账：{_q2(pda.fda_amount or pda.pda_amount)} {pda.currency or 'USD'}",
-            body=f"港口使费凭证已过账（period {datetime.now(timezone.utc):%Y-%m}）。",
+            title=text("pda.posted.notify.title", "en", amount=amount, currency=currency),
+            body=text("pda.posted.notify.body", "en", period=period),
+            title_i18n={"zh": text("pda.posted.notify.title", "zh-CN", amount=amount, currency=currency)},
+            body_i18n={"zh": text("pda.posted.notify.body", "zh-CN", period=period)},
             href=f"/operations/voyages/{pda.voyage_id}/workspace" if pda.voyage_id else "/finance/gl",
             level="info",
         )
@@ -417,8 +475,8 @@ def on_pda_closed(db: Session, ev: DomainEvent) -> None:
     # 降级：科目规则缺失 / 期间关闭 → 财务任务，不静默
     task = ensure_task(
         db, ev.tenant_id,
-        title=f"PDA 待过账：{str(pda.id)[:8]}",
-        description=f"PDA 已关闭但自动过账未完成（{outcome}），请补录凭证或调整科目规则。",
+        title=text("pda.pending.task.title", locale, ref=str(pda.id)[:8]),
+        description=text("pda.pending.task.desc", locale, outcome=outcome),
         entity_type="port_disbursement", entity_id=pda.id,
         priority="high", due_days=3, assign_role="finance", created_by=ev.created_by,
     )
@@ -437,19 +495,22 @@ def on_bunker_delivered(db: Session, ev: DomainEvent) -> None:
     codes = {w.get("code") for w in warnings}
     level = "warn" if "BDN_QTY_DEVIATION" in codes or "ROB_CONSERVATION" in codes else "info"
     voyage_id = p.get("voyage_id")
+    order_no = p.get("order_no") or str(ev.entity_id)[:8]
+    locale = user_locale(db, ev.created_by)
     db.add(TwinAlert(
         tenant_id=ev.tenant_id,
         level=level,
-        title=f"加油交付异常：{p.get('order_no') or str(ev.entity_id)[:8]}",
-        body="；".join(w.get("message", "") for w in warnings),
+        title=text("bunker.alert.title", "en", order_no=order_no),
+        body="; ".join(w.get("message", "") for w in warnings),
         href=f"/operations/voyages/{voyage_id}/workspace" if voyage_id else "/bunker",
         vessel_id=p.get("vessel_id"),
         voyage_id=voyage_id,
     ))
     task = ensure_task(
         db, ev.tenant_id,
-        title=f"核对加油交付：{p.get('order_no') or str(ev.entity_id)[:8]}",
-        description="；".join(w.get("message", "") for w in warnings),
+        title=text("bunker.task.title", locale, order_no=order_no),
+        description="；".join(w.get("message", "") for w in warnings)
+        if locale.startswith("zh") else "; ".join(w.get("message", "") for w in warnings),
         entity_type="bunker_order", entity_id=ev.entity_id,
         priority="high" if level == "warn" else "normal",
         due_days=2, assign_role="operations", created_by=ev.created_by,
@@ -471,24 +532,69 @@ def on_claim_settled(db: Session, ev: DomainEvent) -> None:
         return
     task = ensure_task(
         db, ev.tenant_id,
-        title=f"索赔转结算：{claim.claim_no}",
-        description=f"索赔已和解（{_q2(claim.settlement_amount or claim.amount)} {claim.currency or 'USD'}），请开具发票/登记收付款。",
+        title=text("claim.settled.task.title", user_locale(db, ev.created_by), claim_no=claim.claim_no),
+        description=text(
+            "claim.settled.task.desc", user_locale(db, ev.created_by),
+            amount=_q2(claim.settlement_amount or claim.amount), currency=claim.currency or "USD",
+        ),
         entity_type="claim", entity_id=claim.id,
         priority="high", due_days=5, assign_role="finance", created_by=ev.created_by,
     )
     notify_task(db, ev.tenant_id, task, assign_role="finance", href=f"/claims?id={claim.id}")
 
 
-# ── 邮件落位（NOR / 装卸时间草稿） ───────────────────────────────────────
+# ── 撤销通道：动作被撤销 → 自动勾完的任务回退 ──────────────────────────
 
+
+@on("voyage.reopened")
+def on_voyage_reopened(db: Session, ev: DomainEvent) -> None:
+    """航次被重开 → 上一轮被系统勾掉的收尾任务回退成待办。
+
+    没有这条通道，航次重新开跑时清单上却还挂着 7 条绿的"已收尾"任务。
+    """
+    from app.services.task_completion import reopen_tasks_for
+
+    codes = tuple(a.code for a in ACTIONS if a.code.startswith("voyage.closeout.")) + ("voyage.complete",)
+    reopen_tasks_for(db, ev.tenant_id, codes, ev.entity_id, reason="voyage.reopened")
+
+
+@on("invoice.payment_voided")
+def on_invoice_payment_voided(db: Session, ev: DomainEvent) -> None:
+    """收款被冲正 → "已收款"不再成立，任务回退。"""
+    from app.services.task_completion import reopen_tasks_for
+
+    reopen_tasks_for(db, ev.tenant_id, ("invoice.payment.record",), ev.entity_id, reason="payment_voided")
+
+
+@on("accrual.reversed")
+def on_accrual_reversed(db: Session, ev: DomainEvent) -> None:
+    """计提被冲销 → 航次的「计提对账」任务回退（计提与发票又对不上了）。"""
+    from app.services.task_completion import reopen_tasks_for
+
+    voyage_id = (ev.payload or {}).get("voyage_id")
+    if not voyage_id:
+        return
+    vid = _uid(voyage_id)
+    if vid is None:
+        return
+    reopen_tasks_for(
+        db, ev.tenant_id, ("voyage.closeout.accruals",), vid,
+        reason="accrual_reversed",
+    )
+
+
+# ── 邮件落位（NOR / 装卸时间草稿） ───────────────────────────────────────
 
 @on("portcall.nor_updated")
 def on_nor_updated(db: Session, ev: DomainEvent) -> None:
     p = ev.payload or {}
+    voyage_no = (p.get("voyage_no") or "").strip()
     notify_roles_once(
         db, ev.tenant_id, ("operations",),
-        title=f"NOR 已落位：{p.get('voyage_no') or ''}".strip(),
-        body=f"邮件识别的 NOR 时间 {p.get('nor_at') or ''} 已写入挂靠港。",
+        title=text("nor.notify.title", "en", voyage_no=voyage_no),
+        body=text("nor.notify.body", "en", nor_at=p.get("nor_at") or ""),
+        title_i18n={"zh": text("nor.notify.title", "zh-CN", voyage_no=voyage_no)},
+        body_i18n={"zh": text("nor.notify.body", "zh-CN", nor_at=p.get("nor_at") or "")},
         href=f"/operations/voyages/{p.get('voyage_id')}/workspace" if p.get("voyage_id") else "/email/review",
         level="info",
     )
@@ -498,16 +604,17 @@ def on_nor_updated(db: Session, ev: DomainEvent) -> None:
 def on_laytime_draft_created(db: Session, ev: DomainEvent) -> None:
     p = ev.payload or {}
     voyage_id = p.get("voyage_id")
+    locale = user_locale(db, ev.created_by)
     task = ensure_task(
         db, ev.tenant_id,
-        title=f"复核装卸时间草稿：{p.get('voyage_no') or ''}".strip(),
-        description="邮件解析生成了装卸时间计算草稿，请核对事件与条款后定稿。",
+        title=text("laytime.draft.task.title", locale, voyage_no=(p.get("voyage_no") or "").strip()),
+        description=text("laytime.draft.task.desc", locale),
         entity_type="laytime", entity_id=ev.entity_id,
         priority="normal", due_days=3, assign_role="operations", created_by=ev.created_by,
     )
     notify_task(
         db, ev.tenant_id, task, assign_role="operations",
-        href=f"/finance/laytimes?id={ev.entity_id}",
+        href="/finance?tab=laytime",
     )
 
 
@@ -550,5 +657,30 @@ def on_any_event_materialize_task_rules(db: Session, ev: DomainEvent) -> None:
     payload.setdefault("id", str(ev.entity_id) if ev.entity_id else None)
     ctx = {trigger: payload}
     materialize_task_rules(
-        db, ev.tenant_id, trigger, ctx, entity_id=ev.entity_id, created_by=ev.created_by
+        db, ev.tenant_id, trigger, ctx, entity_id=ev.entity_id, created_by=ev.created_by,
+        round_key=_round_token(db, ev, trigger),
     )
+
+
+def _round_token(db: Session, ev: DomainEvent, trigger: str) -> str | None:
+    """实体的"轮次"标记 —— 同一实体重新走一轮时用它区分幂等键。
+
+    没有轮次标记时，同一实体一生只出一条规则任务：航次重开后再次完成，
+    规则配的跟进任务就再也不出现了。
+    """
+    if ev.entity_id is None:
+        return None
+    try:
+        if trigger == "voyage":
+            from app.models_domain import Voyage
+
+            row = db.get(Voyage, ev.entity_id)
+            return row.completed_at.isoformat() if row is not None and row.completed_at else None
+        if trigger == "invoice":
+            from app.models_domain import Invoice
+
+            row = db.get(Invoice, ev.entity_id)
+            return row.issued_at.isoformat() if row is not None and row.issued_at else None
+    except Exception:  # noqa: BLE001 —— 取不到轮次就退回旧口径
+        return None
+    return None

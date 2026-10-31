@@ -66,6 +66,56 @@ const DICT: Record<string, Msg> = {
     zh: "公司间镜像功能未启用（配置标志）。",
   },
   NOT_MIRRORABLE: { en: "This invoice cannot be mirrored.", zh: "该发票不可镜像。" },
+  // 任务中心（动作绑定 / 任务字段）
+  UNKNOWN_ACTION: { en: "Unknown system action.", zh: "未知的系统动作。" },
+  ACTION_ENTITY_REQUIRED: {
+    en: "Pick the record this action belongs to.",
+    zh: "请选择该动作对应的单据。",
+  },
+  ACTION_ENTITY_MISMATCH: {
+    en: "This action applies to a different kind of record.",
+    zh: "该动作适用于其他类型的单据。",
+  },
+  ACTION_ALREADY_DONE: {
+    en: "That action is already finished on this record — there is nothing left to track.",
+    zh: "该单据上的此动作已经完成，无需再跟踪。",
+  },
+  INVALID_ASSIGNEE: {
+    en: "The assignee is not an active user of this tenant.",
+    zh: "负责人不是本租户的有效用户。",
+  },
+  INVALID_PARENT: { en: "The parent record is invalid.", zh: "上级记录无效。" },
+  INVALID_PRIORITY: { en: "Invalid priority.", zh: "优先级取值无效。" },
+  INVALID_STATUS: { en: "Invalid status.", zh: "状态取值无效。" },
+  INVALID_WEIGHT: { en: "Weight must be greater than zero.", zh: "权重必须大于零。" },
+  INVALID_CODE: { en: "Code is required.", zh: "编码不能为空。" },
+  DUPLICATE_CODE: { en: "This code is already in use.", zh: "该编码已被占用。" },
+  EMPTY_COMMENT: { en: "Write something before posting.", zh: "请先填写内容再发送。" },
+  ROLE_REQUIRED: {
+    en: "Your role does not allow this action.",
+    zh: "当前角色不允许该操作。",
+  },
+  UNKNOWN_TAB: { en: "Unknown view.", zh: "未知的视图。" },
+  UNKNOWN_ENTITY_TYPE: {
+    en: "This record type cannot be linked.",
+    zh: "该记录类型不可关联。",
+  },
+  // 积分 / 会员
+  INVALID_POINTS: { en: "Points must be a positive number.", zh: "积分必须为正数。" },
+  // 连接器 / 集成
+  UNKNOWN_CONNECTOR: { en: "Unknown connector type.", zh: "未知的连接器类型。" },
+  CONNECTOR_UNHEALTHY: {
+    en: "The connector health check did not pass.",
+    zh: "连接器健康检查未通过。",
+  },
+  // 报表 / 设计器
+  INVALID_QUERY_SPEC: { en: "The query specification is invalid.", zh: "查询规格无效。" },
+  REPORT_NOT_FOUND: { en: "Report not found.", zh: "报表不存在。" },
+  // 迁移 / 数据运维
+  MIGRATION_FAILED: { en: "The migration job failed.", zh: "迁移任务失败。" },
+  BACKUP_FAILED: { en: "The backup could not be created.", zh: "备份创建失败。" },
+  // 凭据 / 密钥
+  INVALID_SECRET: { en: "The secret reference is invalid.", zh: "密钥引用无效。" },
 };
 
 const BY_STATUS: Record<number, Msg> = {

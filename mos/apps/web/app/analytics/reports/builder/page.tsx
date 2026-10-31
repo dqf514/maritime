@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { DataGrid } from "@/components/grid";
 import type { ColumnDef } from "@/components/grid/types";
@@ -104,6 +105,8 @@ export default function ReportBuilderPage() {
   const [reportDesc, setReportDesc] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
+  // Reset 在编辑既有报表时是破坏性操作（清空后 Save 会把空查询覆盖回原报表）
+  const [resetConfirm, setResetConfirm] = useState(false);
 
   useEffect(() => {
     apiGet("/api/v1/reports/datasets")
@@ -316,6 +319,19 @@ export default function ReportBuilderPage() {
     }
   }
 
+  /** 清空设计器 —— 同时脱钩正在编辑的报表（editId 置空即「另存为新报表」）。 */
+  const doReset = useCallback(() => {
+    setSelected([]);
+    setJoins([]);
+    setFieldState({});
+    setFilters([]);
+    setGroupKeys([]);
+    setPreview(null);
+    setEditId(null);
+    setReportName("");
+    setReportDesc("");
+  }, []);
+
   const previewColumns: ColumnDef<Record<string, unknown>>[] = useMemo(
     () =>
       (preview?.columns || []).map((c) => ({
@@ -381,12 +397,13 @@ export default function ReportBuilderPage() {
           className="btn btn-ghost"
           disabled={busy}
           onClick={() => {
-            setSelected([]);
-            setJoins([]);
-            setFieldState({});
-            setFilters([]);
-            setGroupKeys([]);
-            setPreview(null);
+            if (editId) {
+              // 编辑既有报表时 Reset 会脱钩（editId 也要清），否则下一步 Save
+              // 会把这份空查询 PUT 回原报表 —— 二次确认避免误触。
+              setResetConfirm(true);
+              return;
+            }
+            doReset();
           }}
         >
           {t("page.rb.reset", "Reset")}
@@ -794,6 +811,21 @@ export default function ReportBuilderPage() {
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={resetConfirm}
+        title={t("page.rb.reset", "Reset")}
+        message={t(
+          "page.rb.reset_confirm",
+          "You are editing a saved report. Reset clears the designer and detaches it from that report — the saved report is left untouched. Continue?",
+        )}
+        confirmLabel={t("page.rb.reset", "Reset")}
+        danger
+        onConfirm={() => {
+          setResetConfirm(false);
+          doReset();
+        }}
+        onCancel={() => setResetConfirm(false)}
+      />
     </AppShell>
   );
 }

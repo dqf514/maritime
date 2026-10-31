@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
@@ -12,7 +13,18 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import User
-from app.models_domain import Charter, Claim, Estimate, Invoice, LaytimeCalc, PortCall, PortDisbursement, Voyage
+from app.models_cargo import Cargo
+from app.models_domain import (
+    BunkerOrder,
+    Charter,
+    Claim,
+    Estimate,
+    Invoice,
+    LaytimeCalc,
+    PortCall,
+    PortDisbursement,
+    Voyage,
+)
 from app.models_ship import ShipCertificate, ShipCrewMember, ShipDefect, ShipWorkOrder
 from app.models_task import Task
 from app.models_wave1 import Notification, Port, Vessel
@@ -21,7 +33,11 @@ from app.routers.ship_mgmt import _refresh_certificate_status
 from app.routers.tasks import task_out
 from app.security import AuthContext, get_current_auth
 from app.services.notifications import notify_once, role_recipients
+from app.services import task_due
+from app.services import audit_labels
+from app.services.system_text import text
 from app.services.data_scope import apply_module_scope
+from app.services.ui_text import resolve_user_locale
 
 log = logging.getLogger("marios.home")
 
@@ -87,8 +103,8 @@ _ENTITY_HREF: dict[str, str] = {
     "tc_contract": "/charters/tc/{id}",
     "coa_contract": "/charters/coa/{id}",
     "estimate": "/estimates",
-    "claim": "/finance/claims",
-    "laytime_statement": "/finance/laytimes/{id}",
+    "claim": "/finance?tab=claims",
+    "laytime_statement": "/finance?tab=laytime",
     "bunker_order": "/bunker",
     "cargo": "/cargo",
     "vessel": "/masterdata/vessels",
@@ -112,6 +128,69 @@ def _aware(dt: datetime | None) -> datetime | None:
 # 工作台「最近活动」里要过滤掉的噪声动作（安全审计页仍保留全量）。
 _FEED_NOISE_ACTIONS = {"auth.login_success"}
 
+# entity_type -> (模型, 人类可读的那一列)
+# 操作日志里存的是 entity_id（UUID）—— 光看 UUID 谁也认不出是哪条航次。
+# 把这一列查出来，日志里显示的才是「VOY-2407」这种能直接读的东西。
+_ENTITY_DISPLAY: dict[str, tuple[type, str]] = {
+    "voyage": (Voyage, "voyage_no"),
+    "invoice": (Invoice, "invoice_no"),
+    "claim": (Claim, "claim_no"),
+    "charter": (Charter, "charter_no"),
+    "estimate": (Estimate, "title"),
+    "task": (Task, "title"),
+    "cargo": (Cargo, "cargo_no"),
+    "bunker_order": (BunkerOrder, "order_no"),
+    "ship_work_order": (ShipWorkOrder, "wo_no"),
+    "work_order": (ShipWorkOrder, "wo_no"),
+}
+
+
+def _resolve_entity_titles(db: Session, rows: list, tenant_id) -> dict[str, str]:
+    """审计行 id → 单号/标题（查不到就不给）。
+
+    ``api.*`` 那条路（审计中间件记的通用动作）没有 entity_type，
+    但路径里通常带着资源 id（``/api/v1/voyages/{id}/transition``）——
+    从路径认出资源类型和 id，一样能翻出「VOY-2407」。
+    """
+    buckets: dict[str, list[str]] = {}
+    row_ids: dict[str, list[str]] = {}
+    for r in rows:
+        et, eid = r.entity_type, r.entity_id
+        if not et and r.action.startswith("api."):
+            path = (r.detail or {}).get("path") or ""
+            et = audit_labels.entity_key_from_path(path)
+            m = re.search(
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                path,
+            )
+            eid = m.group(0) if m else None
+        if et in _ENTITY_DISPLAY and eid:
+            buckets.setdefault(et, []).append(str(eid))
+            row_ids.setdefault(et, []).append(str(r.id))
+    out: dict[str, str] = {}
+    for et, ids in buckets.items():
+        model, col = _ENTITY_DISPLAY[et]
+        try:
+            uuids = [UUID(i) for i in ids]
+        except (ValueError, AttributeError, TypeError):
+            continue  # 不是 UUID 的实体（如自定义 id）—— 认不出来就不显示
+        by_uuid = {
+            str(obj.id): str(getattr(obj, col, ""))
+            for obj in db.scalars(
+                select(model).where(model.id.in_(uuids), model.tenant_id == tenant_id)
+            ).all()
+            if getattr(obj, col, None)
+        }
+        for row_id, raw_id in zip(row_ids[et], ids):
+            title = by_uuid.get(str(UUID(raw_id)))
+            if title:
+                out[row_id] = title
+    return out
+
+
+# 工作台「我的任务」面板的展示条数上限（每桶保底 2 条，其余轮转补齐）
+MAX_TASK_ITEMS = 15
+
 
 def _tasks_section(db: Session, auth: AuthContext) -> dict:
     """工作台「我的任务」面板。
@@ -131,8 +210,6 @@ def _tasks_section(db: Session, auth: AuthContext) -> dict:
         )
     ).all()
     now = _now()
-    today = date.today()
-    week_end = today + timedelta(days=7)
     open_rows = [t for t in rows if t.status not in ("done", "cancelled")]
     done_rows = [t for t in rows if t.status == "done"]
 
@@ -142,19 +219,18 @@ def _tasks_section(db: Session, auth: AuthContext) -> dict:
     open_rows.sort(key=_sort_key)
     done_rows.sort(key=_sort_key, reverse=True)
 
+    # 分桶口径与前端、前端角标完全一致（UTC 自然日）—— 见 services/task_due.py
     overdue: list[Task] = []
     due_today: list[Task] = []
     due_week: list[Task] = []
     later: list[Task] = []
     for t in open_rows:
-        due = _aware(t.due_at)
-        if due is None:
-            later.append(t)
-        elif due < now:
+        b = task_due.bucket_of(t.due_at, now)
+        if b == "overdue":
             overdue.append(t)
-        elif due.date() == today:
+        elif b == "today":
             due_today.append(t)
-        elif due.date() <= week_end:
+        elif b == "week":
             due_week.append(t)
         else:
             later.append(t)
@@ -166,13 +242,31 @@ def _tasks_section(db: Session, auth: AuthContext) -> dict:
         "later": later,
         "done": done_rows,
     }
-    items = [t for t in (overdue + due_today + due_week + later + done_rows)][:15]
+    # 展示条数上限 15，但**每桶保底 2 条**：
+    # 以前直接对拼接列表取前 15 —— 逾期一多，"今日到期"整桶就被挤没了，
+    # 页签角标写着"今日 8 条"、列表里却一条今日任务都没有。
+    order = ("overdue", "today", "week", "later", "done")
+    shown: dict[str, list[Task]] = {k: list(groups[k][:2]) for k in order}
+    # 余下额度在五个桶之间轮转补齐（谁还有货就先给谁）
+    while sum(len(v) for v in shown.values()) < MAX_TASK_ITEMS:
+        grew = False
+        for k in order:
+            if len(shown[k]) < len(groups[k]):
+                shown[k].append(groups[k][len(shown[k])])
+                grew = True
+                if sum(len(v) for v in shown.values()) >= MAX_TASK_ITEMS:
+                    break
+        if not grew:
+            break
+    items = [t for k in order for t in shown[k]]
     return {
         "open": len(open_rows),
         "overdue": len(overdue),
         "due_today": len(due_today),
         "done": len(done_rows),
         "groups": {k: len(v) for k, v in groups.items()},
+        # 各桶实际展示条数 —— 前端据此显示「n / 总数」，不把截断说成"就这些"
+        "shown": {k: len(v) for k, v in shown.items()},
         "items": [task_out(db, t) for t in items],
     }
 
@@ -252,6 +346,15 @@ def _ship_alerts(db: Session, auth: AuthContext) -> list[dict]:
             recipients,
             title=title,
             body=f"{c.cert_code} expires {c.expires_on.isoformat() if c.expires_on else '—'}",
+            title_i18n={"zh": title_zh},
+            body_i18n={
+                "zh": text(
+                    "cert.expired.body" if expired else "cert.expiring.body",
+                    "zh-CN",
+                    code=c.cert_code,
+                    date=c.expires_on.isoformat() if c.expires_on else "—",
+                )
+            },
             href="/ship",
             level="critical" if expired else "warning",
         )
@@ -289,6 +392,16 @@ def _ship_alerts(db: Session, auth: AuthContext) -> list[dict]:
                 recipients,
                 title=title,
                 body=f"{member.full_name} · {cert.get('code') or '—'} expires {expires_on.isoformat()}",
+                title_i18n={"zh": title_zh},
+                body_i18n={
+                    "zh": text(
+                        "crew.cert.expired.body" if expired else "crew.cert.expiring.body",
+                        "zh-CN",
+                        name=member.full_name,
+                        code=cert.get("code") or "—",
+                        date=expires_on.isoformat(),
+                    )
+                },
                 href="/ship",
                 level="critical" if expired else "warning",
             )
@@ -590,6 +703,7 @@ def activity_feed(
     offset: int = 0,
     q: str | None = None,
     module: str | None = None,
+    locale: str | None = None,
     auth: AuthContext = Depends(get_current_auth),
     db: Session = Depends(get_db),
 ):
@@ -666,22 +780,38 @@ def activity_feed(
     )
 
     out: list[dict] = []
+    # 动作文案按**看的人**的语言出 —— 前端只管显示，不再自己猜技术码。
+    # 前端显式传 locale（界面当前语言）时以它为准 —— 否则界面中文、文案英文
+    # （用户档案里的语言没跟着界面走）。
+    loc = resolve_user_locale(db, auth=auth, explicit=locale, accept_language=None)
+    # UUID → 单号（VOY-2407 / 发票号 / 任务标题）
+    titles = _resolve_entity_titles(db, rows, auth.tenant_id)
     for r in rows:
         ent_mod = _ENTITY_MODULE.get(r.entity_type or "")
         actor = users.get(r.actor_user_id)
         href = None
         if r.entity_type in _ENTITY_HREF and r.entity_id:
             href = _ENTITY_HREF[r.entity_type].format(id=r.entity_id)
+        detail = r.detail or {}
+        # 实体名：语义动作走 entity_type；api.* 那条路从 path 里认资源
+        ent_key = r.entity_type or audit_labels.entity_key_from_path(detail.get("path"))
         out.append(
             {
                 "id": str(r.id),
                 "action": r.action,
+                # 可读文案："创建发票" / "任务已自动完成"，不是 "post" / "auto_complete"
+                "action_label": audit_labels.action_label(
+                    r.action, detail=detail, entity_type=r.entity_type, locale=loc
+                ),
+                "entity_label": audit_labels.entity_label(ent_key, loc),
+                # 人能读的单号（VOY-2407 / INV-…）—— 没有就 null，前端回落
+                "entity_title": titles.get(str(r.id)),
                 "entity_type": r.entity_type,
                 "entity_id": r.entity_id,
                 "module": ent_mod,
                 "actor": (actor.full_name or actor.email) if actor else None,
                 "actor_user_id": str(r.actor_user_id) if r.actor_user_id else None,
-                "detail": r.detail or {},
+                "detail": detail,
                 "href": href,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }

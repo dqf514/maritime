@@ -277,6 +277,9 @@ COUNTERPARTY_TYPES: list[ItemTuple] = [
     _c("owner", "Owner / Shipowner", "船东", 20),
     _c("broker", "Broker", "经纪人", 30),
     _c("agent", "Agent", "代理", 40),
+    # 船务代理（船舶代理 / 港口代理）—— 与通用「代理」分开：港口代理佣金
+    # （地址佣金）按单航次结算，与经纪佣金是两回事，报表要分开看。
+    _c("address_agent", "Address agent", "船务代理", 45),
     _c("shipper", "Shipper", "托运人", 50),
     _c("consignee", "Consignee", "收货人", 60),
     _c("supplier", "Supplier", "供应商", 70),

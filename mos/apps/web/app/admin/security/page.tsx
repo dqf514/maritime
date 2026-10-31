@@ -64,13 +64,23 @@ export default function TenantSecurityPage() {
   const [inviteName, setInviteName] = useState("");
   const [invites, setInvites] = useState<InviteRow[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
+  const [logsErr, setLogsErr] = useState<string | null>(null);
   const [demoToken, setDemoToken] = useState("");
   // 邀请列表加载失败必须走错误态，不能静默显示「无」（P1-4）
   const [invitesLoading, setInvitesLoading] = useState(true);
   const [invitesErr, setInvitesErr] = useState("");
+  // 策略读取失败 —— 必须显示错误态；否则整页永远停在「加载中…」
+  const [policyErr, setPolicyErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const p = await apiGet("/api/v1/admin/security/policy");
+    setPolicyErr(null);
+    let p: Policy;
+    try {
+      p = (await apiGet("/api/v1/admin/security/policy")) as Policy;
+    } catch (e) {
+      setPolicyErr(msgOf(e, t("page.security.admin_required", "需要租户管理员")));
+      return;
+    }
     setPolicy(p);
     setDomains((p.allowed_domains || []).join(", "));
     setMsHint(p.microsoft_tenant_hint || "");
@@ -95,7 +105,13 @@ export default function TenantSecurityPage() {
     } finally {
       setInvitesLoading(false);
     }
-    setLogs(await apiGet("/api/v1/admin/security/mail-logs"));
+    try {
+      setLogsErr(null);
+      setLogs(await apiGet("/api/v1/admin/security/mail-logs"));
+    } catch (e) {
+      setLogs([]);
+      setLogsErr(msgOf(e, t("common.failed", "Failed")));
+    }
   }, [t]);
 
   useEffect(() => {
@@ -239,7 +255,22 @@ export default function TenantSecurityPage() {
   if (!policy) {
     return (
       <AppShell>
-        <p>{t("common.loading", "加载中…")}</p>
+        <PageHeader
+          breadcrumb={[{ label: t("nav.admin", "Administration") }]}
+          title={t("page.security.title", "登录与安全")}
+        />
+        {policyErr ? (
+          <div className="panel">
+            <p className="state-view-error" role="alert">
+              {policyErr}
+            </p>
+            <button type="button" className="btn btn-primary" onClick={() => load().catch(handled)}>
+              {t("common.retry", "重试")}
+            </button>
+          </div>
+        ) : (
+          <p>{t("common.loading", "加载中…")}</p>
+        )}
       </AppShell>
     );
   }
@@ -408,6 +439,11 @@ export default function TenantSecurityPage() {
         </div>
         <div className="panel">
           <h2>{t("page.security.mail_log", "租户邮件日志")}</h2>
+          {logsErr ? (
+            <p className="state-view-error" role="alert">
+              {logsErr}
+            </p>
+          ) : null}
           <ul className="compact-list">
             {logs.slice(0, 8).map((l) => (
               <li key={l.id}>

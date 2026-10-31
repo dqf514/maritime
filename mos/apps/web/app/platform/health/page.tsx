@@ -146,7 +146,9 @@ export default function PlatformHealthPage() {
                       <td>{tu.code}</td>
                       <td>{tu.name}</td>
                       <td>
-                        <span className={`status-badge ${tu.status === "active" ? "ok" : "warn"}`}>{tu.status}</span>
+                        <span className={`status-badge ${tu.status === "active" ? "ok" : "warn"}`}>
+                          {t(`status.${tu.status}`, tu.status)}
+                        </span>
                       </td>
                       <td className="num">{tu.users}</td>
                       <td className="num">{tu.voyages}</td>
