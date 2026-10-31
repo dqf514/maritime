@@ -406,64 +406,7 @@ function WorkbenchPageInner() {
             </div>
           </div>
 
-          {/* 最近活动 —— 4 栏：只给最新 8 条预览，全量走弹窗 */}
-          <div className="wb-panel wb-span-4">
-            <div className="wb-panel-head">
-              <h2 className="wb-panel-title">
-                <NavIcon id="exceptions" size={14} />
-                {t("page.home.recent_activity", "Recent activity")}
-              </h2>
-              <div className="wb-panel-actions">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => setShowActivityLog(true)}
-                  title={t("page.home.activity_log", "Activity log")}
-                >
-                  {t("page.home.activity_view_all", "View all")}
-                </button>
-              </div>
-            </div>
-          <div className="wb-alert-list">
-            {activityErr ? (
-              <div className="wb-empty" role="alert">
-                {t("page.home.activity_fail", "Activity feed could not be loaded: {err}", { err: activityErr })}
-              </div>
-            ) : null}
-            {activity.length ? (
-              activity.slice(0, 8).map((a) => {
-                const body = (
-                  <>
-                    <span className="wb-alert-title">
-                      {a.actor || t("page.home.someone", "Someone")}{" "}
-                      <span className="wb-activity-action">{actionLabel(a.action)}</span>{" "}
-                      {a.entity_type}
-                    </span>
-                    <span className="wb-activity-time">{timeAgo(a.created_at, t)}</span>
-                  </>
-                );
-                return a.href ? (
-                  <Link key={a.id} href={a.href} className="wb-alert-item">
-                    {body}
-                  </Link>
-                ) : (
-                  <div key={a.id} className="wb-alert-item">
-                    {body}
-                  </div>
-                );
-              })
-            ) : (
-              <div className="wb-empty">{activityErr ? "" : t("page.home.no_activity", "No recent activity")}</div>
-            )}
-          </div>
-          <div className="wb-panel-foot">
-            <span className="muted">
-              {t("page.home.activity_count", "{n} activities (showing the latest 8)", { n: activity.length })}
-            </span>
-          </div>
-        </div>
-
-        {/* 待办与提醒 —— 4 栏 */}
+          {/* 待办与提醒 —— 4 栏 */}
         <div className="wb-panel wb-span-4">
           <div className="wb-panel-head">
             <h2 className="wb-panel-title">
@@ -604,6 +547,63 @@ function WorkbenchPageInner() {
             </div>
           </div>
         ) : null}
+
+          {/* 最近活动 —— 4 栏：只给最新 8 条预览，全量走弹窗；放最后（流水账不是要看的事） */}
+          <div className="wb-panel wb-span-4">
+            <div className="wb-panel-head">
+              <h2 className="wb-panel-title">
+                <NavIcon id="exceptions" size={14} />
+                {t("page.home.recent_activity", "Recent activity")}
+              </h2>
+              <div className="wb-panel-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setShowActivityLog(true)}
+                  title={t("page.home.activity_log", "Activity log")}
+                >
+                  {t("page.home.activity_view_all", "View all")}
+                </button>
+              </div>
+            </div>
+            <div className="wb-alert-list">
+              {activityErr ? (
+                <div className="wb-empty" role="alert">
+                  {t("page.home.activity_fail", "Activity feed could not be loaded: {err}", { err: activityErr })}
+                </div>
+              ) : null}
+              {activity.length ? (
+                activity.slice(0, 8).map((a) => {
+                  const body = (
+                    <>
+                      <span className="wb-alert-title">
+                        {a.actor || t("page.home.someone", "Someone")}{" "}
+                        <span className="wb-activity-action">{actionLabel(a.action)}</span>{" "}
+                        {a.entity_type}
+                      </span>
+                      <span className="wb-activity-time">{timeAgo(a.created_at, t)}</span>
+                    </>
+                  );
+                  return a.href ? (
+                    <Link key={a.id} href={a.href} className="wb-alert-item">
+                      {body}
+                    </Link>
+                  ) : (
+                    <div key={a.id} className="wb-alert-item">
+                      {body}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="wb-empty">{activityErr ? "" : t("page.home.no_activity", "No recent activity")}</div>
+              )}
+            </div>
+            <div className="wb-panel-foot">
+              <span className="muted">
+                {t("page.home.activity_count", "{n} activities (showing the latest 8)", { n: activity.length })}
+              </span>
+            </div>
+          </div>
         </div>
 
         {/* ── Quick links ── */}
