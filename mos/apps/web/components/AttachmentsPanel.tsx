@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { FilePicker } from "@/components/FilePicker";
 import { StateView } from "@/components/StateView";
 import { API_BASE, apiDelete, apiGet, apiPost, apiUpload } from "@/lib/api";
 import { handled, msgOf } from "@/lib/errors";
@@ -192,7 +193,7 @@ export function AttachmentsPanel({
         </table>
       </StateView>
       <p className="row-actions">
-        <input type="file" accept={FILE_ACCEPT} onChange={(e) => pickFile(e.target.files?.[0] ?? null)} />
+        <FilePicker accept={FILE_ACCEPT} file={uploadFile} onPick={pickFile} />
         <input
           type="text"
           value={note}

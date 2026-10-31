@@ -330,8 +330,10 @@ def test_voyage_completion_generates_followup_tasks_for_missing(client, auth_hea
 
     with Session() as db:
         titles = [t.title for t in _tasks(db, tenant_id, "V-EVT-BARE")]
-        assert any("补录挂靠港" in x for x in titles), titles
-        assert any("补录 SOF" in x for x in titles), titles
+        # 收尾缺项的任务文案跟随**操作人的语言**落库（英文界面要出英文，
+        # 否则英文用户的待办列表里全是中文）—— 两种文案都算数。
+        assert any("补录挂靠港" in x or "Record missing port calls" in x for x in titles), titles
+        assert any("补录 SOF" in x or "Record SOF loading/discharging facts" in x for x in titles), titles
         # 系统任务全部 source=system
         for t in _tasks(db, tenant_id, "V-EVT-BARE"):
             assert t.source == "system"
@@ -340,7 +342,11 @@ def test_voyage_completion_generates_followup_tasks_for_missing(client, auth_hea
     assert client.post(f"/api/v1/voyages/{vid}/transition", headers=h, json={"target": "in_progress"}).status_code == 200
     assert client.post(f"/api/v1/voyages/{vid}/transition", headers=h, json={"target": "completed"}).status_code == 200
     with Session() as db:
-        dup = [t for t in _tasks(db, tenant_id, "补录挂靠港 — V-EVT-BARE")]
+        dup = [
+            t
+            for t in _tasks(db, tenant_id, "V-EVT-BARE")
+            if "补录挂靠港" in (t.title or "") or "Record missing port calls" in (t.title or "")
+        ]
         assert len(dup) == 1, "ensure_task 应幂等"
 
 

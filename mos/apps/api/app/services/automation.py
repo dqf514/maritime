@@ -36,6 +36,7 @@ from app.models_domain import (
 from app.services.domain_events import DomainEvent, ensure_task, materialize_task_rules, notify_task, on
 from app.services.notifications import notify_roles_once
 from app.services.voyage_close import closing_check, shrink_voyage_schedule_blocks
+from app.services.ui_text import user_locale
 
 ZERO = Decimal("0")
 
@@ -74,7 +75,9 @@ def on_voyage_completed(db: Session, ev: DomainEvent) -> None:
     shrunk = shrink_voyage_schedule_blocks(db, tenant_id, voyage)
 
     # 2) 收尾清单缺项 → 分部门跟进任务 + 通知
-    check = closing_check(db, tenant_id, voyage)
+    #    任务文案随「完成航次的人」的语言落库（英文界面不该留中文任务）
+    locale = user_locale(db, ev.created_by)
+    check = closing_check(db, tenant_id, voyage, locale=locale)
     ws = f"/operations/voyages/{voyage.id}/workspace"
     created_titles: list[str] = []
     for item in check["items"]:
@@ -84,7 +87,8 @@ def on_voyage_completed(db: Session, ev: DomainEvent) -> None:
             db,
             tenant_id,
             title=f"{item['task_title']} — {voyage.voyage_no}",
-            description=f"航次收尾清单缺项：{item['label']}。{item.get('detail') or ''}",
+            description=item.get("task_description")
+            or f"{item['label']}. {item.get('detail') or ''}",
             entity_type="voyage",
             entity_id=voyage.id,
             priority="high",

@@ -1,0 +1,173 @@
+/* 操作日志弹窗 —— 全量活动 · 分页 · 关键字筛选 · 可全屏 */
+
+.activity-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(11, 31, 42, 0.35);
+  display: grid;
+  place-items: center;
+  padding: var(--gap-md);
+}
+
+.activity-modal {
+  width: min(1080px, 96vw);
+  max-height: min(88vh, 860px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--chrome-border);
+  box-shadow: 0 8px 32px rgba(11, 31, 42, 0.25);
+  overflow: hidden;
+}
+
+/* 全屏：铺满视口，日志表列多时窄弹窗读不清 */
+.activity-modal.activity-modal-full {
+  width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  border-radius: 0;
+  border: 0;
+}
+
+.activity-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+  padding: var(--gap-sm) var(--gap-md);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-header-bg);
+  flex-shrink: 0;
+}
+
+.activity-modal-head h2 {
+  margin: 0;
+  font-size: var(--font-ui);
+  font-weight: 700;
+}
+
+.activity-modal-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+}
+
+.activity-modal-fs,
+.activity-modal-x {
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.activity-modal-fs:hover,
+.activity-modal-x:hover {
+  background: var(--row-hover);
+  color: var(--accent);
+}
+
+.activity-modal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: var(--gap-sm) var(--gap-md);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.activity-modal-search {
+  flex: 1;
+  min-width: 0;
+  height: var(--input-h);
+  padding: 0 var(--gap-sm);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-ui);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.activity-modal-total {
+  font-size: var(--font-label);
+  white-space: nowrap;
+}
+
+.activity-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.activity-modal-table {
+  width: 100%;
+}
+
+.activity-modal-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-header-bg);
+}
+
+.activity-modal-when {
+  white-space: nowrap;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-modal-entity {
+  overflow-wrap: anywhere;
+}
+
+/* 动作码全名（voyage.update）只在宽屏补显示，窄屏靠 hover title */
+.activity-modal-action-full {
+  margin-left: var(--gap-xs);
+  font-size: 9px;
+}
+
+.activity-modal-err {
+  color: var(--danger);
+  padding: var(--gap-sm) var(--gap-md);
+  text-align: left;
+}
+
+.activity-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+  padding: var(--gap-xs) var(--gap-md);
+  border-top: 1px solid var(--border-light);
+  background: var(--toolbar-bg);
+  font-size: var(--font-label);
+  flex-shrink: 0;
+}
+
+.activity-modal-pager {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+
+@media (max-width: 720px) {
+  .activity-modal-foot {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--gap-xs);
+  }
+
+  .activity-modal-pager {
+    justify-content: space-between;
+  }
+
+  .activity-modal-action-full {
+    display: none;
+  }
+}

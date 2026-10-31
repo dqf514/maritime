@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -547,6 +547,8 @@ def _queues_section(db: Session, auth: AuthContext) -> list[dict]:
 @router.get("/activity/feed")
 def activity_feed(
     limit: int = 30,
+    offset: int = 0,
+    q: str | None = None,
     module: str | None = None,
     auth: AuthContext = Depends(get_current_auth),
     db: Session = Depends(get_db),
@@ -556,6 +558,9 @@ def activity_feed(
     - supervisors (management / tenant_admin / platform_admin): every module's log;
     - everyone else: their own actions + others' actions for modules their roles cover.
     Each item carries a frontend ``href`` so a click jumps straight to the record.
+
+    分页与关键字：角色可见性、模块过滤、关键字都下推到 SQL —— 否则「全部活动」
+    弹窗翻不到第二页（原来先在内存里过滤再截断，窗口只有 limit*4 条）。
     """
     from app.models_audit import AuditLog
 
@@ -565,17 +570,52 @@ def activity_feed(
     for r in roles:
         my_modules |= _ROLE_MODULES.get(r, frozenset())
 
-    window = min(max(limit, 1) * 4, 200)
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+
+    conds = [
+        AuditLog.tenant_id == auth.tenant_id,
+        # 登录事件不进工作台操作日志 —— 否则首屏被「谁登录了」刷屏，
+        # 主管想看的是各模块的业务操作。安全审计另有专页（/admin/security/audit-logs）。
+        AuditLog.action.notin_(tuple(_FEED_NOISE_ACTIONS)),
+    ]
+
+    if not supervisor:
+        # 与旧实现等价：本人动作 + 自己角色覆盖模块里的动作（未知实体类型只算本人动作）
+        seen_entities = [et for et, m in _ENTITY_MODULE.items() if m in my_modules]
+        conds.append(
+            or_(
+                AuditLog.actor_user_id == auth.user_id,
+                AuditLog.entity_type.in_(seen_entities),
+            )
+        )
+
+    if module:
+        conds.append(AuditLog.entity_type.in_([et for et, m in _ENTITY_MODULE.items() if m == module]))
+
+    kw = (q or "").strip()
+    if kw:
+        pat = f"%{kw}%"
+        conds.append(
+            or_(
+                AuditLog.action.ilike(pat),
+                AuditLog.entity_type.ilike(pat),
+                AuditLog.entity_id.ilike(pat),
+                cast(AuditLog.detail, String).ilike(pat),
+                # 操作人姓名/邮箱也要能搜到
+                AuditLog.actor_user_id.in_(
+                    select(User.id).where(or_(User.full_name.ilike(pat), User.email.ilike(pat)))
+                ),
+            )
+        )
+
+    total = db.scalar(select(func.count()).select_from(AuditLog).where(*conds)) or 0
     rows = db.scalars(
         select(AuditLog)
-        .where(
-            AuditLog.tenant_id == auth.tenant_id,
-            # 登录事件不进工作台操作日志 —— 否则首屏被「谁登录了」刷屏，
-            # 主管想看的是各模块的业务操作。安全审计另有专页（/admin/security/audit-logs）。
-            AuditLog.action.notin_(tuple(_FEED_NOISE_ACTIONS)),
-        )
-        .order_by(AuditLog.created_at.desc())
-        .limit(window)
+        .where(*conds)
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .offset(offset)
+        .limit(limit)
     ).all()
 
     actor_ids = {r.actor_user_id for r in rows if r.actor_user_id}
@@ -588,15 +628,6 @@ def activity_feed(
     out: list[dict] = []
     for r in rows:
         ent_mod = _ENTITY_MODULE.get(r.entity_type or "")
-        if module and ent_mod != module:
-            continue
-        visible = (
-            supervisor
-            or (r.actor_user_id is not None and r.actor_user_id == auth.user_id)
-            or (ent_mod in my_modules if ent_mod else False)
-        )
-        if not visible:
-            continue
         actor = users.get(r.actor_user_id)
         href = None
         if r.entity_type in _ENTITY_HREF and r.entity_id:
@@ -615,9 +646,14 @@ def activity_feed(
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
         )
-        if len(out) >= limit:
-            break
-    return {"items": out, "count": len(out), "supervisor": supervisor}
+    return {
+        "items": out,
+        "count": len(out),
+        "total": int(total),
+        "limit": limit,
+        "offset": offset,
+        "supervisor": supervisor,
+    }
 
 
 @router.get("/home/summary")

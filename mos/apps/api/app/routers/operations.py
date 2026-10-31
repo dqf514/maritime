@@ -44,6 +44,7 @@ from app.services.report_sequence import assert_report_sequence, derive_report_s
 from app.services.noon_service import create_noon_report
 from app.services.tenant_guard import global_ref_get, scoped_get
 from app.services.state_machine import VOYAGE_TRANSITIONS, InvalidState, transition
+from app.services.ui_text import resolve_user_locale
 
 router = APIRouter(tags=["Operations"])
 
@@ -445,7 +446,9 @@ def voyage_closing_check(
     row = scoped_get(db, Voyage, voyage_id, auth.tenant_id)
     if row is None:
         raise HTTPException(404, "Voyage not found")
-    return closing_check(db, auth.tenant_id, row)
+    # 清单文案由后端产出 —— 按请求人的语言取，避免英文界面漏中文
+    locale = resolve_user_locale(db, auth=auth, explicit=None, accept_language=None)
+    return closing_check(db, auth.tenant_id, row, locale=locale)
 
 
 # ── Batch operations (C2-P2) ──────────────────────────────────────────────

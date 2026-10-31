@@ -14,69 +14,26 @@ from app.db import get_db
 from app.models import Tenant, User
 from app.models_i18n import (
     Language,
-    TenantI18nSettings,
     TenantTerminologyOverride,
     TerminologyTerm,
     UiMessage,
 )
 from app.security import AuthContext, get_current_auth, get_current_auth_optional, require_auth, require_roles
 from app.services.timeutil import utcnow_naive
+from app.services.ui_text import (  # noqa: F401  （re-export：多处路由沿用这些名字）
+    ensure_tenant_i18n,
+    normalize_locale,
+    resolve_user_locale,
+)
 
 router = APIRouter(tags=["i18n & Terminology"])
-
-SUPPORTED = {"en", "zh-CN"}
-
 
 def _now() -> datetime:
     return utcnow_naive()
 
 
-def normalize_locale(raw: str | None) -> str:
-    if not raw:
-        return "en"
-    # Accept-Language may be "zh-CN,zh;q=0.9,en;q=0.8"
-    primary = raw.split(",")[0].strip().split(";")[0].strip()
-    if primary.lower() in ("zh", "zh-cn", "zh_cn", "zh-hans"):
-        return "zh-CN"
-    if primary.lower().startswith("en"):
-        return "en"
-    if primary in SUPPORTED:
-        return primary
-    return "en"
-
-
-def ensure_tenant_i18n(db: Session, tenant_id) -> TenantI18nSettings:
-    row = db.scalar(select(TenantI18nSettings).where(TenantI18nSettings.tenant_id == tenant_id))
-    if not row:
-        tenant = db.get(Tenant, tenant_id)
-        row = TenantI18nSettings(
-            tenant_id=tenant_id,
-            default_locale=(tenant.default_locale if tenant else "en") or "en",
-            allowed_locales=["en", "zh-CN"],
-            allow_user_override=True,
-        )
-        db.add(row)
-        db.flush()
-    return row
-
-
-def resolve_user_locale(
-    db: Session,
-    *,
-    auth: AuthContext | None,
-    explicit: str | None,
-    accept_language: str | None,
-) -> str:
-    if explicit:
-        return normalize_locale(explicit)
-    if auth:
-        # locale field may be "en|workspace_id"
-        base = (auth.user.locale or "").split("|")[0].strip()
-        if base:
-            return normalize_locale(base)
-        settings = ensure_tenant_i18n(db, auth.tenant_id)
-        return normalize_locale(settings.default_locale)
-    return normalize_locale(accept_language)
+# 语言归一 / 租户 i18n 设置 / 文案取用统一放在 services/ui_text.py（后端生成的
+# 文案也要按 locale 取，前端目录只管得到前端那部分）。
 
 
 def build_message_bundle(db: Session, locale: str) -> dict[str, str]:

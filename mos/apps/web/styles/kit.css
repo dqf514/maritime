@@ -342,3 +342,33 @@ a.row-link:hover {
   gap: var(--gap-sm);
   margin-top: var(--gap-md);
 }
+
+/* ── 自绘文件选择控件 ──
+   原生 <input type="file"> 的按钮文字（"选择文件 / 未选择文件"）跟随浏览器界面
+   语言，中文系统的 Chrome 在英文界面里也会显示中文 —— 故隐藏原生控件自绘。 */
+.file-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  min-width: 0;
+}
+.file-picker-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.file-picker-name {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--font-label);
+}

@@ -167,11 +167,11 @@
 .pill-normal { background: #e3ecfd; color: #2456a6; }
 .pill-low, .pill-pending { background: #e7f0f3; color: #5a6e7d; }
 .wb-task-title {
-  flex: 1;
+  /* 窄栏里长标题换行显示，不再截成一行省略号（原来 nowrap 会藏掉关键信息） */
+  flex: 1 1 160px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--font-ui);
+  overflow-wrap: anywhere;
   line-height: 1.3;
 }
 .wb-task-due {
@@ -208,11 +208,10 @@
 .wb-alert-warn { border-left-color: var(--warn); }
 .wb-alert-info { border-left-color: var(--accent); }
 .wb-alert-title {
+  /* 提醒/动态标题允许换行 —— 挤在窄栏里被省略号截掉的是关键信息 */
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .wb-alert-detail {
   flex: 0 0 auto;
@@ -442,8 +441,14 @@
 .wb-kpi-chip-label{color:var(--muted)}
 .wb-kpi-danger{border-color:var(--danger);background:rgba(192,57,43,.06)}
 .wb-kpi-danger .wb-kpi-chip-val{color:var(--danger)}
-.wb-grid{display:grid;grid-template-columns:1fr 320px;gap:var(--gap-sm);min-height:0}
-.wb-right-col{display:flex;flex-direction:column;gap:var(--gap-sm)}
+/* 工作台主区：12 栏网格，按内容权重分格。
+   —— align-items:start 让每个面板只占自己内容的高度（原来左右两栏被拉成等高，
+      5 条任务占着大半屏，右侧四块面板挤在 320px 里上下排队）。 */
+.wb-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--gap-sm);align-items:start}
+.wb-span-4{grid-column:span 4}
+.wb-span-8{grid-column:span 8}
+@media(max-width:1440px){.wb-span-4{grid-column:span 6}.wb-span-8{grid-column:span 12}}
+@media(max-width:900px){.wb-span-4,.wb-span-8{grid-column:span 12}}
 .wb-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
 .wb-panel-head{display:flex;align-items:center;justify-content:space-between;gap:var(--gap-sm);padding:var(--gap-xs) var(--gap-sm);background:var(--panel-header-bg);border-bottom:1px solid var(--border-light)}
 .wb-panel-title{display:flex;align-items:center;gap:var(--gap-xs);margin:0;font-size:var(--font-label);font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
@@ -457,15 +462,15 @@
 .wb-new-task{display:flex;gap:var(--gap-xs);padding:var(--gap-xs) var(--gap-sm);border-bottom:1px solid var(--border-light);background:var(--toolbar-bg)}
 .wb-new-task-input{flex:1;height:var(--input-h);padding:0 var(--gap-sm);border:1px solid var(--input-border);border-radius:var(--radius-sm);font-size:var(--font-ui)}
 .wb-new-task-pri,.wb-new-task-due{height:var(--input-h);border:1px solid var(--input-border);border-radius:var(--radius-sm);font-size:var(--font-label);padding:0 var(--gap-xs)}
-.wb-task-list{max-height:360px;overflow-y:auto}
-.wb-task-row{display:flex;align-items:center;gap:var(--gap-sm);padding:var(--gap-xs) var(--gap-sm);border-bottom:1px solid var(--border-light);min-height:26px}
+.wb-task-list{max-height:420px;overflow-y:auto}
+/* 任务行允许换行：窄栏里长标题不再被截断成一行省略号 */
+.wb-task-row{display:flex;align-items:center;gap:var(--gap-sm);padding:var(--gap-xs) var(--gap-sm);border-bottom:1px solid var(--border-light);min-height:26px;flex-wrap:wrap}
 .wb-task-row:hover{background:var(--row-hover)}
 .wb-task-row.done{opacity:.55}
 .wb-task-row.done .wb-task-title{text-decoration:line-through}
 .wb-task-check{width:16px;height:16px;border:1px solid var(--chrome-border);border-radius:50%;background:var(--surface);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--ok);flex-shrink:0}
 .wb-task-check:hover{border-color:var(--ok)}
 .wb-task-pri-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-.wb-task-title{flex:1;min-width:0;font-size:var(--font-ui);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wb-task-due{font-size:9px;color:var(--muted);flex-shrink:0}
 .wb-task-due.overdue{color:var(--danger);font-weight:700}
 .wb-task-assignee{font-size:9px;color:var(--muted);flex-shrink:0}
@@ -475,7 +480,8 @@
 .wb-alert-danger{color:var(--danger)}
 .wb-alert-warn{color: var(--warn-text)}
 .wb-alert-info{color:#1d4ed8}
-.wb-alert-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 提醒/动态标题允许换行 —— 挤在窄栏里被省略号截掉的是关键信息 */
+.wb-alert-title{flex:1;min-width:0;overflow-wrap:anywhere}
 .wb-alert-detail{font-size:9px;color:var(--muted)}
 .wb-activity-action{color: var(--accent-text);font-weight:600}
 .wb-activity-time{font-size:9px;color:var(--muted);flex-shrink:0}
@@ -501,4 +507,3 @@
 .wb-links{display:flex;flex-wrap:wrap;gap:var(--gap-xs)}
 .wb-link-tile{display:inline-flex;align-items:center;gap:var(--gap-xs);padding:var(--gap-xs) var(--gap-sm);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);text-decoration:none;color:var(--ink);font-size:var(--font-label)}
 .wb-link-tile:hover{border-color:var(--accent);background:var(--accent-bg)}
-@media(max-width:1000px){.wb-grid{grid-template-columns:1fr}}

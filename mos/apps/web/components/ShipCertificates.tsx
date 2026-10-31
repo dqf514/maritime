@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
+import { FilePicker } from "@/components/FilePicker";
 import { RecordModal } from "@/components/RecordModal";
 import { StateView } from "@/components/StateView";
 import { DataGrid } from "@/components/grid";
@@ -412,7 +413,7 @@ export function VesselCertificates({ certs, onChanged }: { certs: VesselCert[]; 
       >
         <label>
           {t("ship.cert.file", "文件（PDF / PNG / JPG / WebP，≤10MB）")}
-          <input type="file" accept={FILE_ACCEPT} onChange={(e) => pickFile(e.target.files?.[0] || null)} />
+          <FilePicker accept={FILE_ACCEPT} file={uploadFile} onPick={pickFile} />
         </label>
         <label>
           {t("ship.cert.note", "备注")}

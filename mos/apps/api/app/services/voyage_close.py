@@ -30,8 +30,40 @@ from app.models_domain import (
     VoyageAccrual,
 )
 from app.services.pnl_engine import voyage_pnl_4col
+from app.services.ui_text import fill, messages_for
 
 ZERO = Decimal("0")
+
+# 跟进任务标题/描述的目录键（任务落库时用同一份文案，不会因语言切换留下中文）
+TASK_DESC_KEY = "voyage.closeout.task_desc"
+
+
+def _localize_items(db: Session, items: list[dict], locale: str) -> None:
+    """把清单条目的 label / detail / 任务标题按 locale 取回（就地改写）。"""
+    keys: list[str] = [TASK_DESC_KEY]
+    for it in items:
+        if it.get("label_key"):
+            keys.append(it["label_key"])
+        if it.get("detail_key"):
+            keys.append(it["detail_key"])
+        if it.get("task_title_key"):
+            keys.append(it["task_title_key"])
+    cat = messages_for(db, keys, locale)
+    for it in items:
+        vars_ = it.get("detail_vars") or {}
+        if it.get("label_key"):
+            it["label"] = fill(cat.get(it["label_key"], it["label"]), vars_)
+        if it.get("detail_key"):
+            it["detail"] = fill(cat.get(it["detail_key"], it["detail"]), vars_)
+        if it.get("task_title_key"):
+            it["task_title"] = fill(
+                cat.get(it["task_title_key"], it.get("task_title") or ""), vars_
+            )
+        if it.get("task_title"):
+            it["task_description"] = fill(
+                cat.get(TASK_DESC_KEY, "Voyage closeout checklist gap: {label}. {detail}"),
+                {"label": it["label"], "detail": it["detail"]},
+            )
 
 
 def _q2(x) -> float | None:
@@ -124,25 +156,34 @@ def shrink_voyage_schedule_blocks(db: Session, tenant_id: UUID, voyage: Voyage) 
     return n
 
 
-def closing_check(db: Session, tenant_id: UUID, voyage: Voyage) -> dict:
+def closing_check(db: Session, tenant_id: UUID, voyage: Voyage, locale: str = "en") -> dict:
     """航次收尾清单：逐项 ok/缺失 + 缺项的跟进任务定义（角色/时限）+ TCE 对比。
 
     severity：``warn`` = 缺失则完成航次时自动生成跟进任务；``info`` = 仅展示。
+
+    文案按 ``locale`` 取（键见 ``app/seed_i18n.py`` 的 ``voyage.closeout.*``）：
+    清单与自动生成的跟进任务都由后端产出，不经过前端 i18n 目录，若直接返回
+    中文原文，英文界面里会整片漏出中文。目录缺键时回退到中文原文。
     """
     vid = voyage.id
     ws = f"/operations/voyages/{vid}/workspace"
     items: list[dict] = []
 
     def add(key, ok, label, detail, severity="warn", href=ws, task_title=None,
-            assign_role=None, due_days=3):
+            assign_role=None, due_days=3, label_key="", detail_key="",
+            detail_vars=None, task_title_key=""):
         items.append({
             "key": key,
             "ok": bool(ok),
             "label": label,
+            "label_key": label_key,
             "detail": detail,
+            "detail_key": detail_key,
+            "detail_vars": detail_vars or {},
             "severity": severity,
             "href": href,
             "task_title": task_title,
+            "task_title_key": task_title_key,
             "assign_role": assign_role,
             "due_days": due_days,
         })
@@ -157,14 +198,24 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage) -> dict:
     ).all())
     if not calls:
         add("port_calls", False, "挂靠港已录入", "尚无挂靠港记录",
-            task_title="补录挂靠港", assign_role="operations", due_days=1)
+            label_key="voyage.closeout.port_calls.label",
+            detail_key="voyage.closeout.port_calls.none",
+            task_title="补录挂靠港", task_title_key="voyage.closeout.task.port_calls",
+            assign_role="operations", due_days=1)
     else:
         missing = [c for c in calls if not (c.ata and c.atd)]
+        done = len(calls) - len(missing)
         add(
             "port_calls", not missing, "挂靠港事实齐备 (ATA/ATD)",
-            f"{len(calls) - len(missing)}/{len(calls)} 个挂靠港已录实际抵离港"
+            f"{done}/{len(calls)} 个挂靠港已录实际抵离港"
             + (f"，缺 {len(missing)} 个" if missing else ""),
-            task_title="补录挂靠港 ATA/ATD", assign_role="operations", due_days=1,
+            label_key="voyage.closeout.port_calls.full",
+            detail_key=("voyage.closeout.port_calls.detail_missing" if missing
+                        else "voyage.closeout.port_calls.detail"),
+            detail_vars={"done": done, "total": len(calls), "missing": len(missing)},
+            task_title="补录挂靠港 ATA/ATD",
+            task_title_key="voyage.closeout.task.port_calls_ata",
+            assign_role="operations", due_days=1,
         )
 
     # 2) SOF 装卸事实（laytime 可算性）
@@ -180,11 +231,18 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage) -> dict:
         ).all()
         codes = {e.event_code for e in evs}
     sof_ok = "COMMENCED" in codes and "COMPLETED" in codes
+    code_list = ", ".join(sorted(codes))
     add(
         "sof", sof_ok, "SOF 装卸事实已记录",
-        f"已有事件码：{', '.join(sorted(codes)) if codes else '无'}"
+        f"已有事件码：{code_list if codes else '无'}"
         + ("" if sof_ok else "（需 COMMENCED + COMPLETED）"),
-        task_title="补录 SOF 装卸事实", assign_role="operations", due_days=1,
+        label_key="voyage.closeout.sof.label",
+        detail_key=("voyage.closeout.sof.detail_need" if not sof_ok
+                    else ("voyage.closeout.sof.detail_ok" if codes
+                          else "voyage.closeout.sof.detail_none")),
+        detail_vars={"codes": code_list},
+        task_title="补录 SOF 装卸事实", task_title_key="voyage.closeout.task.sof",
+        assign_role="operations", due_days=1,
     )
 
     # 3) 装卸时间计算已定稿
@@ -195,7 +253,13 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage) -> dict:
     add(
         "laytime", bool(finalized), "装卸时间计算已定稿",
         f"{len(finalized)}/{len(lts)} 份计算已定稿" if lts else "尚无装卸时间计算",
-        task_title="完成装卸时间计算并定稿", assign_role="operations", due_days=3,
+        label_key="voyage.closeout.laytime.label",
+        detail_key=("voyage.closeout.laytime.detail" if lts
+                    else "voyage.closeout.laytime.none"),
+        detail_vars={"done": len(finalized), "total": len(lts)},
+        task_title="完成装卸时间计算并定稿",
+        task_title_key="voyage.closeout.task.laytime",
+        assign_role="operations", due_days=3,
     )
 
     # 4) 索赔已了结
@@ -209,7 +273,12 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage) -> dict:
     add(
         "claims", not open_claims, "索赔已了结",
         f"{len(open_claims)} 笔索赔未了结" if open_claims else "无未决索赔",
-        task_title="了结未决索赔", assign_role="claims", due_days=5,
+        label_key="voyage.closeout.claims.label",
+        detail_key=("voyage.closeout.claims.detail" if open_claims
+                    else "voyage.closeout.claims.none"),
+        detail_vars={"n": len(open_claims)},
+        task_title="了结未决索赔", task_title_key="voyage.closeout.task.claims",
+        assign_role="claims", due_days=5,
     )
 
     # 5) 发票已签发（有待开草稿 → 提醒财务）
@@ -222,7 +291,14 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage) -> dict:
         "invoices", bool(issued) or not invs, "发票已签发",
         f"{len(issued)} 张已签发" + (f"，{len(drafts)} 张待签发" if drafts else "")
         if invs else "尚无发票记录",
-        task_title="签发待开航次发票", assign_role="finance", due_days=3,
+        label_key="voyage.closeout.invoices.label",
+        detail_key=("voyage.closeout.invoices.none" if not invs
+                    else ("voyage.closeout.invoices.detail_pending" if drafts
+                          else "voyage.closeout.invoices.detail")),
+        detail_vars={"issued": len(issued), "pending": len(drafts)},
+        task_title="签发待开航次发票",
+        task_title_key="voyage.closeout.task.invoices",
+        assign_role="finance", due_days=3,
     )
 
     # 6) 加油订单已交付
@@ -233,7 +309,13 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage) -> dict:
     add(
         "bunker", not undelivered, "加油订单已交付",
         f"{len(orders) - len(undelivered)}/{len(orders)} 单已交付" if orders else "无加油订单",
-        task_title="交付未完成的加油订单", assign_role="operations", due_days=2,
+        label_key="voyage.closeout.bunker.label",
+        detail_key=("voyage.closeout.bunker.detail" if orders
+                    else "voyage.closeout.bunker.none"),
+        detail_vars={"done": len(orders) - len(undelivered), "total": len(orders)},
+        task_title="交付未完成的加油订单",
+        task_title_key="voyage.closeout.task.bunker",
+        assign_role="operations", due_days=2,
     )
 
     # 7) 排放已记录（info：由排放引擎/手工补录）
@@ -250,6 +332,10 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage) -> dict:
     add(
         "emissions", bool(emissions or noons), "排放数据已记录",
         "有排放记录" if emissions else ("有午报（可推算排放）" if noons else "无排放/午报记录"),
+        label_key="voyage.closeout.emissions.label",
+        detail_key=("voyage.closeout.emissions.detail" if emissions
+                    else ("voyage.closeout.emissions.detail_noon" if noons
+                          else "voyage.closeout.emissions.none")),
         severity="info",
     )
 
@@ -272,10 +358,25 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage) -> dict:
         add(
             "accruals", accr_ok, "计提与实际发票已对平",
             f"计提合计 {float(accr_total):.2f} vs 发票合计 {float(inv_total):.2f}，差异 {float(diff):.2f}",
-            task_title="核对计提与实际发票差异", assign_role="finance", due_days=5,
+            label_key="voyage.closeout.accruals.label",
+            detail_key="voyage.closeout.accruals.detail",
+            detail_vars={
+                "accrual": f"{float(accr_total):.2f}",
+                "invoice": f"{float(inv_total):.2f}",
+                "diff": f"{float(diff):.2f}",
+            },
+            task_title="核对计提与实际发票差异",
+            task_title_key="voyage.closeout.task.accruals",
+            assign_role="finance", due_days=5,
         )
     else:
-        add("accruals", True, "计提与实际发票已对平", "无已过账计提", severity="info")
+        add("accruals", True, "计提与实际发票已对平", "无已过账计提",
+            label_key="voyage.closeout.accruals.label",
+            detail_key="voyage.closeout.accruals.none",
+            severity="info")
+
+    # 按 locale 取文案（目录缺键 → 回退上面写的中文原文）
+    _localize_items(db, items, locale)
 
     ready = all(i["ok"] for i in items if i["severity"] == "warn")
     return {

@@ -1560,7 +1560,7 @@ export default function VoyageWorkspacePage() {
               { id: "finance", label: t("ws.tab_finance", "Finance"), content: financeTab },
               {
                 id: "closing",
-                label: t("ws.tab_closing", "收尾"),
+                label: t("ws.tab_closing", "Closeout"),
                 content: id ? <ClosingPanel voyageId={id} /> : null,
               },
               { id: "map", label: t("ws.tab_map", "Map"), content: mapTab },
