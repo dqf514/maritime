@@ -18,17 +18,21 @@ import { NavIcon, resolveIconId } from "@/components/NavIcon";
 import { useListHotkeys } from "@/components/useListHotkeys";
 import { formatInTz, parseUtc, utcDayDiff } from "@/lib/datetime";
 import { msgOf } from "@/lib/errors";
-import { apiGet, apiMe, apiPost, apiPatch, type HomeSummary, type TaskOut, type TaskAssignee } from "@/lib/api";
+import {
+  apiGet,
+  apiMe,
+  apiPost,
+  apiPatch,
+  type HomeSummary,
+  type TaskOut,
+  type TaskAssignee,
+  type TaskPerson,
+} from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
-
-const PRIORITY_COLORS: Record<string, string> = {
-  urgent: "#dc2626",
-  high: "#d97706",
-  normal: "#3b82f6",
-  low: "#6b7280",
-};
+import { TaskRow } from "@/components/TaskRow";
+import { TaskDetailModal } from "@/components/TaskDetailModal";
 
 function dueInfo(dueAt: string | null, t: any, locale: string) {
   if (!dueAt) return null;
@@ -42,7 +46,15 @@ function dueInfo(dueAt: string | null, t: any, locale: string) {
   return { text: dueAt.slice(5, 10), overdue: false, days: diff };
 }
 
-type TaskFilter = "all" | "open" | "today" | "overdue" | "done";
+/**
+ * 工作台「我的任务」按到期分桶 —— 与后端 `/home/summary` 的 groups 一致：
+ * 逾期 / 今日到期 / 本周 / 稍后 / 已完成。分桶计数用后端给的，
+ * 列表用前端同一套 dueInfo 再分一次（两边口径一致：UTC 日界）。
+ */
+type TaskBucket = "overdue" | "today" | "week" | "later" | "done";
+type TaskFilter = "all" | TaskBucket;
+
+const BUCKETS: TaskBucket[] = ["overdue", "today", "week", "later", "done"];
 
 function timeAgo(iso: string | null, t: any): string {
   if (!iso) return "";
@@ -71,15 +83,20 @@ function WorkbenchPageInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
-  const taskFilter: TaskFilter =
-    query.tf === "today" || query.tf === "overdue" || query.tf === "done" || query.tf === "all" ? query.tf : "open";
-  const setTaskFilter = (f: TaskFilter) => setQuery({ tf: f === "open" ? null : f });
+  const taskFilter: TaskFilter = (BUCKETS as string[]).includes(query.tf)
+    ? (query.tf as TaskBucket)
+    : "all";
+  const setTaskFilter = (f: TaskFilter) => setQuery({ tf: f === "all" ? null : f });
   const [showNewTask, setShowNewTask] = useState(false);
   /** 全量操作日志弹窗（分页 + 关键字筛选 + 可全屏） */
   const [showActivityLog, setShowActivityLog] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskPriority, setNewTaskPriority] = useState("normal");
   const [newTaskDue, setNewTaskDue] = useState("");
+  /** 任务详情弹窗（与任务中心共用同一个组件） */
+  const [taskDetailId, setTaskDetailId] = useState<string | null>(null);
+  /** 人员列表（转派 / @提及用） */
+  const [people, setPeople] = useState<TaskPerson[]>([]);
 
   useListHotkeys(() => setShowNewTask(true));
 
@@ -121,11 +138,22 @@ function WorkbenchPageInner() {
     loadSummary();
   }, [loadSummary]);
 
-  async function completeTask(task: TaskOut) {
+  // 人员列表（任务详情弹窗的转派 / @提及选择器用）
+  useEffect(() => {
+    apiGet("/api/v1/tasks/people")
+      .then((rows) => setPeople(Array.isArray(rows) ? (rows as TaskPerson[]) : []))
+      .catch(() => setPeople([]));
+  }, []);
+
+  async function completeTask(task: TaskOut, action: "complete" | "reopen" = "complete") {
     setBusyId(task.id);
     try {
-      await apiPost(`/api/v1/tasks/${task.id}/complete`);
-      toast.success(t("page.home.task_done", "Task completed"));
+      await apiPost(`/api/v1/tasks/${task.id}/${action}`);
+      toast.success(
+        action === "complete"
+          ? t("page.home.task_done", "Task completed")
+          : t("page.tasks.reopen", "Reopen"),
+      );
       await loadSummary();
     } catch {
       toast.error(t("common.failed", "Failed"));
@@ -153,27 +181,32 @@ function WorkbenchPageInner() {
     }
   }
 
-  // Filter tasks
-  const filteredTasks = useMemo(() => {
-    const items = summary?.tasks.items || [];
-    switch (taskFilter) {
-      case "done":
-        return items.filter((x) => x.status === "done");
-      case "today":
-        return items.filter((x) => {
-          const d = dueInfo(x.due_at, t, locale);
-          return d?.days === 0;
-        });
-      case "overdue":
-        return items.filter((x) => {
-          const d = dueInfo(x.due_at, t, locale);
-          return d?.overdue;
-        });
-      case "open":
-      default:
-        return items.filter((x) => x.status !== "done" && x.status !== "cancelled");
+  // 按到期分桶（后端 groups 给计数，列表按同一口径再分一次）
+  const bucketed = useMemo(() => {
+    const out: Record<TaskBucket, TaskOut[]> = {
+      overdue: [],
+      today: [],
+      week: [],
+      later: [],
+      done: [],
+    };
+    for (const item of summary?.tasks.items || []) {
+      if (item.status === "done" || item.status === "cancelled") {
+        out.done.push(item);
+        continue;
+      }
+      const d = dueInfo(item.due_at, t, locale);
+      if (!d) out.later.push(item);
+      else if (d.overdue) out.overdue.push(item);
+      else if (d.days === 0) out.today.push(item);
+      else if (d.days <= 7) out.week.push(item);
+      else out.later.push(item);
     }
-  }, [summary?.tasks.items, taskFilter, t, locale]);
+    return out;
+  }, [summary?.tasks.items, t, locale]);
+
+  const visibleBuckets = taskFilter === "all" ? BUCKETS : [taskFilter];
+  const visibleCount = visibleBuckets.reduce((n, b) => n + bucketed[b].length, 0);
 
   const todayText = new Date().toLocaleDateString(locale.startsWith("zh") ? "zh-CN" : "en-US", {
     month: "short",
@@ -269,24 +302,22 @@ function WorkbenchPageInner() {
                 {t("page.home.my_tasks", "My tasks")}
               </h2>
               <div className="wb-panel-actions">
-                {/* Filter tabs */}
+                {/* 分桶快捷筛选 —— 计数取自后端 /home/summary 的 groups */}
                 <div className="wb-task-filters">
-                  {(["open", "today", "overdue", "done"] as TaskFilter[]).map((f) => (
-                    <button
-                      key={f}
-                      type="button"
-                      className={`wb-filter-btn ${taskFilter === f ? "active" : ""}`}
-                      onClick={() => setTaskFilter(f)}
-                    >
-                      {f === "open"
-                        ? t("page.home.filter_open", "In progress")
-                        : f === "today"
-                          ? t("page.home.filter_today", "Today")
-                          : f === "overdue"
-                            ? t("page.home.filter_overdue", "Overdue")
-                            : t("page.home.filter_done", "Done")}
-                    </button>
-                  ))}
+                  {BUCKETS.map((b) => {
+                    const n = summary?.tasks.groups?.[b] ?? 0;
+                    return (
+                      <button
+                        key={b}
+                        type="button"
+                        className={`wb-filter-btn ${taskFilter === b ? "active" : ""}`}
+                        onClick={() => setTaskFilter(taskFilter === b ? "all" : b)}
+                        title={t(`page.tasks.bucket_${b}`, b)}
+                      >
+                        {t(`page.tasks.bucket_${b}`, b)} {n}
+                      </button>
+                    );
+                  })}
                 </div>
                 <button
                   type="button"
@@ -336,49 +367,42 @@ function WorkbenchPageInner() {
               </div>
             ) : null}
 
-            {/* Task list */}
+            {/* Task list —— 按到期分桶渲染，任务行与任务中心共用 TaskRow */}
             <div className="wb-task-list">
-              {filteredTasks.length ? (
-                filteredTasks.slice(0, 15).map((task) => {
-                  const due = dueInfo(task.due_at, t, locale);
-                  return (
-                    <div key={task.id} className={`wb-task-row ${task.status === "done" ? "done" : ""}`}>
-                      <button
-                        type="button"
-                        className="wb-task-check"
-                        disabled={busyId === task.id}
-                        onClick={() => completeTask(task)}
-                        title={t("page.home.mark_done", "Mark done")}
-                      >
-                        {task.status === "done" ? "✓" : ""}
-                      </button>
-                      <span
-                        className="wb-task-pri-dot"
-                        style={{ background: PRIORITY_COLORS[task.priority] || PRIORITY_COLORS.normal }}
-                      />
-                      <span className="wb-task-title">{task.title}</span>
-                      {due ? (
-                        <span className={`wb-task-due ${due.overdue ? "overdue" : ""}`}>{due.text}</span>
-                      ) : null}
-                      {task.assignee?.full_name || task.assignee?.email ? (
-                        <span className="wb-task-assignee">{task.assignee.full_name || task.assignee.email}</span>
-                      ) : null}
+              {visibleCount ? (
+                visibleBuckets.map((b) =>
+                  bucketed[b].length ? (
+                    <div key={b} className="wb-task-group">
+                      <div className="wb-task-group-head">
+                        <span>{t(`page.tasks.bucket_${b}`, b)}</span>
+                        <span className="muted">{bucketed[b].length}</span>
+                      </div>
+                      {bucketed[b].map((task) => (
+                        <TaskRow
+                          key={task.id}
+                          task={task}
+                          compact
+                          busy={busyId === task.id}
+                          onComplete={(x) => completeTask(x, "complete")}
+                          onReopen={(x) => completeTask(x, "reopen")}
+                          onOpen={(x) => setTaskDetailId(x.id)}
+                        />
+                      ))}
                     </div>
-                  );
-                })
+                  ) : null,
+                )
               ) : (
                 <div className="wb-empty">{t("page.home.no_tasks", "No tasks")}</div>
               )}
             </div>
             <div className="wb-panel-foot">
               <span className="muted">
-                {t("page.home.task_count", "{n} tasks", { n: summary?.tasks.items?.length ?? 0 })}
+                {t("page.home.task_count", "{n} tasks", { n: summary?.tasks.open ?? 0 })}
               </span>
-              {summary?.tasks.items && summary.tasks.items.length > 15 ? (
-                <Link href="/tasks" className="wb-more">
-                  {t("page.home.view_all", "View all")} →
-                </Link>
-              ) : null}
+              {/* 常驻入口 —— 工作台只是摘要，完整的协同在任务中心 */}
+              <Link href="/tasks?tab=assigned_to_me" className="wb-more">
+                {t("page.home.open_task_centre", "Open task centre")} →
+              </Link>
             </div>
           </div>
 
@@ -596,6 +620,14 @@ function WorkbenchPageInner() {
 
       {/* 全量操作日志（分页 + 关键字筛选 + 可全屏） */}
       {showActivityLog ? <ActivityLogModal onClose={() => setShowActivityLog(false)} /> : null}
+
+      {/* 任务详情 —— 与任务中心共用同一个弹窗（子任务 / 评论 / 转派 / 动作联动） */}
+      <TaskDetailModal
+        taskId={taskDetailId}
+        people={people}
+        onClose={() => setTaskDetailId(null)}
+        onChanged={loadSummary}
+      />
     </AppShell>
   );
 }

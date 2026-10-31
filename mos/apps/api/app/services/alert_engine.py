@@ -191,6 +191,12 @@ def evaluate_task_rules(
                 "description": rule.task_description,
                 "assign_to_role": rule.assign_to_role,
                 "due_date": due_date.isoformat() if due_date else None,
+                # 任务中心 2.0：规则可声明"绑哪个系统动作"（动作做完自动勾完成）
+                # 与"怎么分派"。两者都放在 trigger_condition JSON 里，避免给
+                # task_rules 表再加列（迁移已定稿）。
+                "action_code": condition.get("action_code"),
+                "assign_strategy": condition.get("assign_strategy"),
+                "weight": condition.get("weight"),
             })
 
     return tasks_to_create

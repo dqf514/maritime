@@ -31,6 +31,7 @@ import app.models_ops  # noqa: F401
 import app.models_recycle  # noqa: F401
 import app.models_reference  # noqa: F401
 import app.models_task  # noqa: F401
+import app.models_task_center  # noqa: F401
 import app.models_onboarding  # noqa: F401
 import app.models_finance_ext  # noqa: F401
 import app.models_gl  # noqa: F401
@@ -55,6 +56,7 @@ import app.models_field_perms  # noqa: F401
 import app.models_doc  # noqa: F401
 import app.models_voyage_ext  # noqa: F401
 import app.services.automation  # noqa: F401 — 注册域事件处理器（与路由导入顺序无关）
+import app.services.task_completion  # noqa: F401 — 注册任务自动完成的事件处理器
 from app.routers.admin_platform import router as admin_router
 from app.routers.ai_chat import router as ai_chat_router
 from app.routers.ai_actions import router as ai_actions_router
@@ -409,6 +411,10 @@ async def lifespan(_app: FastAPI):
                         seed_demo_routine_tasks(db, demo_tenant.id)
                         # 试点入站邮件 —— 中枢的演示输入（命中三条触发规则 → 待确认草稿）
                         seed_routine_pilot_emails(db, demo_tenant.id)
+                        # 任务中心演示数据：工作包 + OKR 目标树（幂等）
+                        from app.seed_task_centre import seed_task_centre_demo
+
+                        seed_task_centre_demo(db, demo_tenant.id)
                 db.commit()
     except Exception:
         log.exception("Startup seed failed")
@@ -426,10 +432,15 @@ async def lifespan(_app: FastAPI):
             install_scheduler as install_routine_scheduler,
             register_handlers as register_routine_handlers,
         )
+        from app.services.task_scheduler import (
+            install_scheduler as install_task_scheduler,
+            register_handlers as register_task_handlers,
+        )
 
         register_handlers()
         register_backup_handlers()
         register_routine_handlers()
+        register_task_handlers()
         try:
             with SessionLocal() as db:
                 install_scheduler(db)
@@ -445,6 +456,11 @@ async def lifespan(_app: FastAPI):
                 install_routine_scheduler(db)
         except Exception:
             log.exception("routine scheduler bootstrap failed")
+        try:
+            with SessionLocal() as db:
+                install_task_scheduler(db)
+        except Exception:
+            log.exception("task scheduler bootstrap failed")
         job_thread = threading.Thread(target=run_worker, args=(job_stop,), name="marios-jobs", daemon=True)
         job_thread.start()
     yield

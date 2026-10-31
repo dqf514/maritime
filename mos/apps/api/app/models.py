@@ -47,6 +47,10 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Bumped on every password change; JWT `pwv` claim must match
     password_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    # Reporting line (人 → 上级).  OrgUnit only models a *unit* manager, which
+    # cannot express "Alice reports to Bob" when both sit in the same dept —
+    # task delegation needs that pointer (上级对下级分配任务).
+    manager_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

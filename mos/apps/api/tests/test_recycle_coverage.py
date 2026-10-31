@@ -80,5 +80,7 @@ def test_task_delete_restore_roundtrip(client, auth_headers):
     restored = client.post(f"/api/v1/recycle-bin/{hit[0]['id']}/restore", headers=auth_headers)
     assert restored.status_code == 200, restored.text
 
+    # 任务中心列表返回统一分页信封 {items,total,limit,offset}
     rows = client.get("/api/v1/tasks", headers=auth_headers).json()
-    assert any(x["id"] == task_id for x in rows), "恢复后任务应重新出现在列表"
+    items = rows["items"] if isinstance(rows, dict) else rows
+    assert any(x["id"] == task_id for x in items), "恢复后任务应重新出现在列表"

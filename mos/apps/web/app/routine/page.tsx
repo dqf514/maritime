@@ -735,6 +735,16 @@ function RoutinePageInner() {
           "page.routine.sub",
           "Inbound mail turns into reviewed drafts — nothing is written to the books until a human confirms it.",
         )}
+        left={
+          /* 与任务中心划清界限：这里是「邮件 → 草稿 → 落库」的系统管道，
+             /tasks 才是「人与人之间」的任务协同。 */
+          <span className="muted">
+            {t(
+              "page.routine.vs_task_centre",
+              "System pipeline for inbound mail — for people-to-people task collaboration see Task centre.",
+            )}
+          </span>
+        }
         actions={<PageGuide pageKey="routine_hub" />}
       />
 

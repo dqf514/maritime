@@ -28,6 +28,9 @@ type UserRow = {
   org_unit_id?: string | null;
   org_unit_code?: string | null;
   org_unit_name?: string | null;
+  /** 汇报上级（任务中心据此分派 / 转派） */
+  manager_user_id?: string | null;
+  manager_name?: string | null;
 };
 type RoleRow = { code: string; name: string };
 type OrgUnit = { id: string; code: string; name: string; unit_type: string };
@@ -55,6 +58,7 @@ function UsersAdminPage() {
     status: "active",
     role_codes: ["viewer"] as string[],
     org_unit_id: "",
+    manager_user_id: "",
   });
   const [saving, setSaving] = useState(false);
   const [initialPw, setInitialPw] = useState("");
@@ -114,6 +118,7 @@ function UsersAdminPage() {
       status: "active",
       role_codes: ["viewer"],
       org_unit_id: "",
+      manager_user_id: "",
     });
   }
 
@@ -142,6 +147,7 @@ function UsersAdminPage() {
       status: u.status,
       role_codes: u.roles.length ? u.roles : ["viewer"],
       org_unit_id: u.org_unit_id || "",
+      manager_user_id: u.manager_user_id || "",
     });
   }
 
@@ -156,6 +162,7 @@ function UsersAdminPage() {
           password,
           role_codes: edit.role_codes.length ? edit.role_codes : ["viewer"],
           org_unit_id: edit.org_unit_id || null,
+          manager_user_id: edit.manager_user_id || null,
         });
         setInitialPw(password);
         toast.success(t("page.users.created", "用户已创建；初始密码已生成，请通过安全渠道传达。"));
@@ -167,6 +174,8 @@ function UsersAdminPage() {
           role_codes: edit.role_codes.length ? edit.role_codes : ["viewer"],
           org_unit_id: edit.org_unit_id || null,
           clear_org: clearOrg,
+          manager_user_id: edit.manager_user_id || null,
+          clear_manager: !edit.manager_user_id,
         });
         toast.success(t("common.saved", "已保存"));
       }
@@ -218,6 +227,12 @@ function UsersAdminPage() {
     );
   }
 
+  // 汇报上级候选人：同租户其他在职用户（不能选自己）
+  const managerCandidates = useMemo(
+    () => users.filter((u) => u.id !== open?.id && u.status === "active"),
+    [users, open?.id],
+  );
+
   const filtered = filterOrg ? users.filter((u) => u.org_unit_id === filterOrg) : users;
   // 分页（P1-28）：列表不再一次性渲染全表，且截断对用户可见
   const totalPages = Math.max(1, Math.ceil(filtered.length / limit));
@@ -244,6 +259,13 @@ function UsersAdminPage() {
       render: (_v, r) => (
         <span>{r.roles.map((c) => t(`role.${c}`, c)).join(locale.startsWith("zh") ? "、" : ", ")}</span>
       ),
+    },
+    {
+      key: "manager_name",
+      title: t("page.users.manager", "汇报上级"),
+      width: 140,
+      value: (r) => r.manager_name || "",
+      render: (_v, r) => r.manager_name || "—",
     },
     {
       key: "status",
@@ -379,6 +401,20 @@ function UsersAdminPage() {
             {orgs.map((o) => (
               <option key={o.id} value={o.id}>
                 {o.code} · {o.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t("page.users.manager", "汇报上级")}
+          <select
+            value={edit.manager_user_id}
+            onChange={(e) => setEdit({ ...edit, manager_user_id: e.target.value })}
+          >
+            <option value="">{t("page.users.manager_none", "无（部门负责人）")}</option>
+            {managerCandidates.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.full_name || u.email}
               </option>
             ))}
           </select>

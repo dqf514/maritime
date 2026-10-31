@@ -74,6 +74,7 @@ import app.models_ops  # noqa: F401,E402
 import app.models_recycle  # noqa: F401,E402
 import app.models_reference  # noqa: F401,E402
 import app.models_task  # noqa: F401,E402
+import app.models_task_center  # noqa: F401,E402
 import app.models_onboarding  # noqa: F401,E402
 import app.models_finance_ext  # noqa: F401,E402
 import app.models_gl  # noqa: F401,E402

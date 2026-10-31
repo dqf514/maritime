@@ -1,0 +1,430 @@
+/* 任务中心（Task Centre 2.0）—— 个人 todo + 团队协同 + 动作联动 + OKR。
+ *
+ * 前缀用 `tk-`（**不是** `tc-`）：`tc.css` 是 Time Charter 模块的样式，
+ * 两边都有 `.tc-inline-form` 这类同名类，混用会让「任务中心的行内表单」被
+ * 时间租约的样式改掉。新样式一律 `tk-` 开头，互不打架。
+ *
+ * 只用主题 token（var(--*)），暗色主题自动跟随 —— 不写死颜色。
+ */
+
+.tk-stat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-lg);
+  align-items: center;
+  padding: var(--gap-sm) var(--gap-md);
+  margin-bottom: var(--gap-md);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  font-size: var(--font-ui);
+  color: var(--muted);
+}
+.tk-stat strong {
+  color: var(--ink);
+  font-size: 1.05em;
+  margin-right: 2px;
+}
+.tk-stat-danger strong {
+  color: var(--danger);
+}
+
+/* ── 筛选条 ── */
+.tk-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-md);
+  align-items: center;
+  padding: var(--gap-sm) var(--gap-md);
+  margin-bottom: var(--gap-md);
+  background: var(--toolbar-bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+.tk-filter-input,
+.tk-filter-select {
+  height: var(--control-h);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0 var(--gap-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--font-ui);
+  min-width: 120px;
+}
+.tk-filter-input {
+  min-width: 200px;
+  flex: 1 1 200px;
+  max-width: 320px;
+}
+.tk-filter-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  font-size: var(--font-ui);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ── 工作包 / OKR 卡片 ── */
+.tk-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--gap-md);
+}
+.tk-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-sm);
+  padding: var(--gap-md);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+.tk-card.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.tk-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+.tk-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+}
+
+.tk-badge {
+  display: inline-block;
+  padding: 0 var(--gap-sm);
+  border-radius: var(--radius-sm);
+  background: var(--foam);
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-label);
+  letter-spacing: 0.02em;
+}
+.tk-badge-action {
+  background: var(--accent-soft);
+  color: var(--sea-deep);
+}
+
+.tk-okr-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-md);
+}
+.tk-okr-node {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-sm);
+  padding: var(--gap-md);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-md);
+}
+/* 目标节点里的按钮不要被 flex 拉满宽 —— 按钮只跟内容一样宽 */
+.tk-okr-node > .btn {
+  align-self: flex-start;
+}
+.tk-okr-node.active {
+  border-left-color: var(--accent);
+}
+.tk-okr-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+.tk-kr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--gap-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+}
+.tk-kr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gap-sm);
+  font-size: var(--font-ui);
+}
+.tk-kr-title {
+  color: var(--ink);
+}
+
+/* ── 进度条（原生 <progress>，用 accent-color 跟随主题） ── */
+.tk-progress {
+  width: 100%;
+  height: 6px;
+  accent-color: var(--accent);
+  background: var(--skeleton);
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+/* ── 分页 ── */
+.tk-pager {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+  justify-content: flex-end;
+  padding: var(--gap-sm) var(--gap-md);
+  border-top: 1px solid var(--border-light);
+  font-size: var(--font-ui);
+}
+
+/* ── 提示 ── */
+.tk-hint {
+  margin: 0;
+  padding: var(--gap-sm) var(--gap-md);
+  background: var(--foam);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--font-label);
+}
+
+/* ── 任务行（任务中心版） ── */
+.tk-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tk-link:hover {
+  text-decoration: underline;
+}
+.tk-pill-auto {
+  background: var(--accent-soft);
+  color: var(--sea-deep);
+}
+
+/* ── 团队看板（按部门分列，列内按人分组） ── */
+.tk-board {
+  display: flex;
+  gap: var(--gap-md);
+  align-items: flex-start;
+  overflow-x: auto;
+  padding-bottom: var(--gap-sm);
+}
+.tk-board-col {
+  flex: 1 1 280px;
+  min-width: 280px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-sm);
+  padding: var(--gap-md);
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+.tk-board-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+  padding-bottom: var(--gap-xs);
+  border-bottom: 1px solid var(--border-light);
+  color: var(--ink);
+}
+.tk-board-person {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tk-board-person-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gap-sm);
+  font-size: var(--font-label);
+}
+.tk-board-person-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+.tk-board-empty {
+  margin: 0;
+  font-size: var(--font-label);
+}
+
+/* ── 详情弹窗 ── */
+.tk-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--gap-lg);
+  background: rgba(11, 31, 42, 0.45);
+}
+.tk-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: 90vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+.tk-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-md);
+  padding: var(--gap-md) var(--gap-lg);
+  border-bottom: 1px solid var(--border-light);
+}
+.tk-modal-title {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  font-weight: 600;
+  color: var(--ink);
+}
+.tk-modal-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--gap-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-md);
+}
+.tk-modal-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+  padding: var(--gap-md) var(--gap-lg);
+  border-top: 1px solid var(--border-light);
+}
+
+.tk-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--gap-md);
+}
+.tk-detail-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tk-k {
+  font-size: var(--font-label);
+  color: var(--muted);
+}
+.tk-v {
+  color: var(--ink);
+}
+.tk-detail-desc {
+  margin: 0;
+  color: var(--muted);
+}
+
+.tk-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-sm);
+  padding-top: var(--gap-sm);
+  border-top: 1px solid var(--border-light);
+}
+.tk-section-title {
+  margin: 0;
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.tk-action-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-sm);
+  align-items: flex-start;
+  padding: var(--gap-md);
+  background: var(--foam);
+  border-radius: var(--radius-md);
+}
+.tk-action-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  color: var(--ink);
+}
+
+.tk-child-list,
+.tk-comment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+}
+.tk-child {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: var(--gap-xs) var(--gap-sm);
+  border-bottom: 1px solid var(--border-light);
+  font-size: var(--font-ui);
+}
+.tk-child.done .tk-child-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.tk-child-title {
+  flex: 1 1 auto;
+  color: var(--ink);
+}
+
+.tk-comment {
+  padding: var(--gap-sm);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-ui);
+  color: var(--ink);
+}
+.tk-comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gap-sm);
+  margin-bottom: 2px;
+}
+
+.tk-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+}
+.tk-inline-form input,
+.tk-inline-form select,
+.tk-inline-form textarea {
+  height: var(--control-h);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0 var(--gap-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--font-ui);
+  min-width: 120px;
+}
+.tk-inline-form textarea {
+  height: auto;
+  padding: var(--gap-sm) var(--gap-md);
+  width: 100%;
+}

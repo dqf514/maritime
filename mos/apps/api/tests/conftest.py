@@ -30,6 +30,7 @@ import app.models  # noqa: E402, F401
 import app.models_audit  # noqa: E402, F401
 import app.models_onboarding  # noqa: E402, F401
 import app.models_task  # noqa: E402, F401
+import app.models_task_center  # noqa: E402, F401
 import app.models_wave1  # noqa: E402, F401
 import app.models_vessel_ext  # noqa: E402, F401
 import app.models_domain  # noqa: E402, F401

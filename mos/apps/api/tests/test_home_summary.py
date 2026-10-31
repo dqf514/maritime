@@ -22,7 +22,9 @@ def test_summary_structure_for_admin(client, auth_headers):
     assert r.status_code == 200, r.text
     body = r.json()
     assert set(body.keys()) == {"tasks", "notifications", "approvals", "alerts", "schedule", "kpis", "exceptions", "queues"}
-    assert set(body["tasks"].keys()) == {"open", "overdue", "due_today", "items"}
+    # 任务段：分桶计数（逾期/今日/本周/稍后/已完成）+ 展示条目
+    assert set(body["tasks"].keys()) == {"open", "overdue", "due_today", "done", "groups", "items"}
+    assert set(body["tasks"]["groups"].keys()) == {"overdue", "today", "week", "later", "done"}
     assert set(body["notifications"].keys()) == {"unread", "items"}
     assert set(body["approvals"].keys()) == {"count", "items"}
     assert set(body["exceptions"].keys()) == {"critical", "warning"}

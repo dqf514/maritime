@@ -114,26 +114,66 @@ _FEED_NOISE_ACTIONS = {"auth.login_success"}
 
 
 def _tasks_section(db: Session, auth: AuthContext) -> dict:
+    """工作台「我的任务」面板。
+
+    修掉两个既有缺陷：
+      * 以前只回 ``items[:5]`` —— 面板永远最多 5 条，"查看全部"链接形同虚设；
+      * 以前只取未完成任务 —— 面板上的 "Done" 筛选恒为空。
+
+    现在按**分组**返回（逾期 / 今日到期 / 本周 / 稍后 / 已完成），
+    分组计数完整，展示条数上限 15（够滚、不刷屏）。
+    """
     rows = db.scalars(
         select(Task).where(
             Task.tenant_id == auth.tenant_id,
             or_(Task.assignee_user_id == auth.user_id, Task.created_by == auth.user_id),
-            Task.status.notin_(["done", "cancelled"]),
+            Task.status != "deleted",
         )
     ).all()
     now = _now()
     today = date.today()
-    open_rows = [t for t in rows if t.status != "done"]
+    week_end = today + timedelta(days=7)
+    open_rows = [t for t in rows if t.status not in ("done", "cancelled")]
+    done_rows = [t for t in rows if t.status == "done"]
 
     def _sort_key(t: Task):
         return (t.due_at is None, _aware(t.due_at) or now, t.created_at or now)
 
     open_rows.sort(key=_sort_key)
+    done_rows.sort(key=_sort_key, reverse=True)
+
+    overdue: list[Task] = []
+    due_today: list[Task] = []
+    due_week: list[Task] = []
+    later: list[Task] = []
+    for t in open_rows:
+        due = _aware(t.due_at)
+        if due is None:
+            later.append(t)
+        elif due < now:
+            overdue.append(t)
+        elif due.date() == today:
+            due_today.append(t)
+        elif due.date() <= week_end:
+            due_week.append(t)
+        else:
+            later.append(t)
+
+    groups = {
+        "overdue": overdue,
+        "today": due_today,
+        "week": due_week,
+        "later": later,
+        "done": done_rows,
+    }
+    items = [t for t in (overdue + due_today + due_week + later + done_rows)][:15]
     return {
         "open": len(open_rows),
-        "overdue": sum(1 for t in open_rows if _aware(t.due_at) and _aware(t.due_at) < now),
-        "due_today": sum(1 for t in open_rows if _aware(t.due_at) and _aware(t.due_at).date() == today),
-        "items": [task_out(db, t) for t in open_rows[:5]],
+        "overdue": len(overdue),
+        "due_today": len(due_today),
+        "done": len(done_rows),
+        "groups": {k: len(v) for k, v in groups.items()},
+        "items": [task_out(db, t) for t in items],
     }
 
 

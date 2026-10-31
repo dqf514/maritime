@@ -105,7 +105,8 @@ def test_manage_view_role_gate(client, auth_headers):
     mgmt_h = login(client, MGMT)
     r = client.get(f"{API}/tasks", headers=mgmt_h)
     assert r.status_code == 200, r.text
-    assert any(t["title"] == "Manage view probe" for t in r.json())
+    # 任务中心 2.0：列表统一走分页信封 {items,total,limit,offset}
+    assert any(t["title"] == "Manage view probe" for t in r.json()["items"])
 
     fin_h = login(client, FIN)
     r = client.get(f"{API}/tasks", headers=fin_h)

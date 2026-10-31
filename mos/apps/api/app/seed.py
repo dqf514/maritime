@@ -61,11 +61,105 @@ def seed_if_empty(db: Session) -> None:
         _ensure_demo_licenses(db)
     _ensure_platform_tenant(db)
     _ensure_tenant_roles_and_users(db)
+    # 组织树要在用户建好之后挂 —— 目录种子（seed_saas_catalog）跑在演示租户
+    # 之前，首次启动时那里拿不到 demo 租户。
+    demo = db.scalar(select(Tenant).where(Tenant.code == "demo"))
+    if demo is not None:
+        seed_demo_org_tree(db, demo.id)
+        seed_reporting_lines(db, demo.id)
     db.commit()
 
 
-LICENSED_MODULES = {
-    "masterdata",
+DEMO_DEPT_MAP = {
+    "charterer@demo.marios": "CHARTER",
+    "ops@demo.marios": "OPS",
+    "finance@demo.marios": "FIN",
+    "demurrage@demo.marios": "FIN",
+    "tech@demo.marios": "TECH",
+    "mgmt@demo.marios": "HQ",
+    "admin@demo.marios": "HQ",
+}
+
+
+def seed_demo_org_tree(db: Session, tenant_id) -> None:
+    """演示租户的组织树：HQ + 四个部门，并把演示用户挂进部门（幂等）。
+
+    「团队看板」按部门分列 —— 人没挂上部门，看板就塌成「未分配部门」一列，
+    组织视角就没了。
+    """
+    from app.models import User
+    from app.models_saas import OrgUnit, UserOrgMembership
+
+    root = db.scalar(select(OrgUnit).where(OrgUnit.tenant_id == tenant_id, OrgUnit.code == "HQ"))
+    if root is None:
+        root = OrgUnit(tenant_id=tenant_id, code="HQ", name="Headquarters", unit_type="company")
+        db.add(root)
+        db.flush()
+    for code, name in (
+        ("CHARTER", "Chartering"),
+        ("OPS", "Operations"),
+        ("FIN", "Finance"),
+        ("TECH", "Technical & Compliance"),
+    ):
+        if not db.scalar(select(OrgUnit).where(OrgUnit.tenant_id == tenant_id, OrgUnit.code == code)):
+            db.add(OrgUnit(tenant_id=tenant_id, parent_id=root.id, code=code, name=name, unit_type="dept"))
+    # 会话是 autoflush=False —— 不显式 flush，下面按 code 查部门会查不到
+    # 刚 add 的 CHARTER / OPS / FIN / TECH，结果人挂不进部门。
+    db.flush()
+
+    for email, code in DEMO_DEPT_MAP.items():
+        user = db.scalar(select(User).where(User.tenant_id == tenant_id, User.email == email))
+        unit = db.scalar(select(OrgUnit).where(OrgUnit.tenant_id == tenant_id, OrgUnit.code == code))
+        if not user or not unit:
+            continue
+        if db.scalar(
+            select(UserOrgMembership).where(
+                UserOrgMembership.user_id == user.id, UserOrgMembership.org_unit_id == unit.id
+            )
+        ):
+            continue
+        # demote existing primary
+        for m in db.scalars(
+            select(UserOrgMembership).where(
+                UserOrgMembership.user_id == user.id, UserOrgMembership.is_primary.is_(True)
+            )
+        ).all():
+            m.is_primary = False
+        db.add(UserOrgMembership(user_id=user.id, org_unit_id=unit.id, is_primary=True))
+        if code == "HQ" and email == "admin@demo.marios" and not unit.manager_user_id:
+            unit.manager_user_id = user.id
+        if code != "HQ" and not unit.manager_user_id:
+            unit.manager_user_id = user.id
+
+
+# 演示租户的人的汇报线：admin → mgmt → 各业务岗。
+# 与 OrgUnit.manager_user_id（部门经理）不同 —— 这里表达"甲汇报给乙"，
+# 是任务中心"上级派给下级 / 下级不能派给上级"这条规则的依据。
+DEMO_REPORTING_MAP = {
+    "mgmt@demo.marios": "admin@demo.marios",
+    "charterer@demo.marios": "mgmt@demo.marios",
+    "ops@demo.marios": "mgmt@demo.marios",
+    "finance@demo.marios": "mgmt@demo.marios",
+    "demurrage@demo.marios": "mgmt@demo.marios",
+    "tech@demo.marios": "mgmt@demo.marios",
+}
+
+
+def seed_reporting_lines(db: Session, tenant_id) -> int:
+    """给演示租户建人的汇报线（幂等：已设过的不覆盖）。"""
+    count = 0
+    for email, manager_email in DEMO_REPORTING_MAP.items():
+        user = db.scalar(select(User).where(User.tenant_id == tenant_id, User.email == email))
+        manager = db.scalar(select(User).where(User.tenant_id == tenant_id, User.email == manager_email))
+        if not user or not manager or user.id == manager.id:
+            continue
+        if user.manager_user_id is None:
+            user.manager_user_id = manager.id
+            count += 1
+    return count
+
+
+LICENSED_MODULES = {    "masterdata",
     "estimate",
     "chartering",
     "operations",
@@ -348,7 +442,6 @@ def seed_saas_catalog(db: Session) -> None:
     from decimal import Decimal
 
     from app.models_saas import (
-        OrgUnit,
         PaymentProvider,
         PlatformAiEndpoint,
         SaaSPlan,
@@ -480,46 +573,11 @@ def seed_saas_catalog(db: Session) -> None:
                     brand_primary="#1a8a8a",
                 )
             )
-        if not db.scalar(select(OrgUnit).where(OrgUnit.tenant_id == demo.id).limit(1)):
-            root = OrgUnit(tenant_id=demo.id, code="HQ", name="Headquarters", unit_type="company")
-            db.add(root)
-            db.flush()
-            db.add(OrgUnit(tenant_id=demo.id, parent_id=root.id, code="CHARTER", name="Chartering", unit_type="dept"))
-            db.add(OrgUnit(tenant_id=demo.id, parent_id=root.id, code="OPS", name="Operations", unit_type="dept"))
-            db.add(OrgUnit(tenant_id=demo.id, parent_id=root.id, code="FIN", name="Finance", unit_type="dept"))
+        # 组织树与部门归属（幂等）—— 与 seed_if_empty 共用同一实现。
+        seed_demo_org_tree(db, demo.id)
 
-        # Link demo users to departments (idempotent)
-        from app.models import User
-        from app.models_saas import UserOrgMembership
-
-        dept_map = {
-            "charterer@demo.marios": "CHARTER",
-            "ops@demo.marios": "OPS",
-            "finance@demo.marios": "FIN",
-            "mgmt@demo.marios": "HQ",
-            "admin@demo.marios": "HQ",
-        }
-        for email, code in dept_map.items():
-            user = db.scalar(select(User).where(User.tenant_id == demo.id, User.email == email))
-            unit = db.scalar(select(OrgUnit).where(OrgUnit.tenant_id == demo.id, OrgUnit.code == code))
-            if not user or not unit:
-                continue
-            if db.scalar(
-                select(UserOrgMembership).where(
-                    UserOrgMembership.user_id == user.id, UserOrgMembership.org_unit_id == unit.id
-                )
-            ):
-                continue
-            # demote existing primary
-            for m in db.scalars(
-                select(UserOrgMembership).where(UserOrgMembership.user_id == user.id, UserOrgMembership.is_primary.is_(True))
-            ).all():
-                m.is_primary = False
-            db.add(UserOrgMembership(user_id=user.id, org_unit_id=unit.id, is_primary=True))
-            if code == "HQ" and email == "admin@demo.marios" and not unit.manager_user_id:
-                unit.manager_user_id = user.id
-            if code != "HQ" and not unit.manager_user_id:
-                unit.manager_user_id = user.id
+        # 人的汇报线（任务中心"上级→下级"派单依据）在任务中心种子里建 ——
+        # 这里（目录种子）跑在演示租户创建之前，租户还不存在。
 
         fleet = db.scalar(select(SaaSPlan).where(SaaSPlan.code == "fleet"))
         if fleet and not db.scalar(select(TenantSubscription).where(TenantSubscription.tenant_id == demo.id).limit(1)):

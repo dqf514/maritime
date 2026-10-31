@@ -350,17 +350,133 @@ export type TaskOut = {
   due_at: string | null;
   assignee: { id: string; email: string; full_name: string | null } | null;
   created_by: string | null;
+  creator?: { id: string; email: string; full_name: string | null } | null;
   entity_type: string | null;
   entity_id: string | null;
   source: string | null;
   completed_at: string | null;
   created_at: string;
+  updated_at?: string | null;
+  // —— 任务中心 2.0 ——
+  assignee_user_id?: string | null;
+  parent_id?: string | null;
+  action_code?: string | null;
+  weight?: number | null;
+  collaborator_ids?: string[];
+  auto_complete?: boolean;
+  auto_completed?: boolean;
+  completed_by?: string | null;
+  work_package_id?: string | null;
+  objective_id?: string | null;
+};
+
+/** 系统动作目录条目（"动作做完任务自动勾完成"的绑定目标）。 */
+export type ActionSpec = {
+  code: string;
+  module: string;
+  entity_type: string;
+  label_key: string;
+  label: string;
+  event_kinds: string[];
+  default_role: string | null;
+  default_weight: number;
+  default_due_days: number;
+  href: string;
+  severity: string;
+  hint_key: string;
+  matches: string[];
+};
+
+export type TaskComment = {
+  id: string;
+  body: string;
+  author_user_id: string | null;
+  author: { id: string; email: string; full_name: string | null } | null;
+  mentions: string[];
+  created_at: string | null;
+};
+
+export type TaskDetail = TaskOut & {
+  progress: number;
+  parent: TaskOut | null;
+  children: TaskOut[];
+  comments: TaskComment[];
+  action: ActionSpec | null;
+};
+
+/** 任务中心人员（带汇报线）。 */
+export type TaskPerson = {
+  id: string;
+  email: string;
+  full_name: string | null;
+  manager_user_id: string | null;
+  manager_name: string | null;
+  is_report: boolean;
+  /** 所属部门（团队看板按此分列） */
+  org_unit_code?: string;
+  org_unit_name?: string;
+};
+
+export type WorkPackageOut = {
+  id: string;
+  code: string;
+  title: string;
+  description: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  owner_user_id: string | null;
+  period: string | null;
+  status: "open" | "closed";
+  progress: number;
+  created_at: string | null;
+};
+
+export type KeyResultOut = {
+  id: string;
+  objective_id: string;
+  title: string;
+  metric: string | null;
+  unit: string | null;
+  target_value: number;
+  current_value: number;
+  weight: number;
+  status: string;
+  progress: number;
+};
+
+export type ObjectiveOut = {
+  id: string;
+  code: string;
+  title: string;
+  description: string | null;
+  parent_id: string | null;
+  owner_user_id: string | null;
+  period: string | null;
+  weight: number;
+  status: "draft" | "active" | "closed";
+  progress: number;
+  created_at: string | null;
+};
+
+export type TaskStats = {
+  open: number;
+  overdue: number;
+  due_today: number;
+  done: number;
+  load: { user_id: string; name: string; open: number }[];
 };
 
 export type TaskAssignee = { id: string; email: string; full_name: string | null };
 
 export type HomeSummary = {
-  tasks: { open: number; overdue: number; due_today: number; items: TaskOut[] };
+  tasks: {
+    open: number;
+    overdue: number;
+    due_today: number;
+    done: number;
+    groups: { overdue: number; today: number; week: number; later: number; done: number };
+    items: TaskOut[];
+  };
   notifications: { unread: number; items: unknown[] };
   approvals: { count: number; items: { title?: string; href?: string }[] };
   alerts: {

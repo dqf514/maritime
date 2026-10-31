@@ -5,30 +5,53 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
-import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DateInput } from "@/components/DateInput";
 import { ExportButton } from "@/components/ExportButton";
 import { PageGuide } from "@/components/PageGuide";
 import { RecordModal } from "@/components/RecordModal";
 import { SavedViews } from "@/components/SavedViews";
-import { StatusLegend } from "@/components/StatusLegend";
 import { Tabs, type TabItem } from "@/components/Tabs";
 import { Toolbar } from "@/components/Toolbar";
 import { StateView } from "@/components/StateView";
+import { TaskDetailModal } from "@/components/TaskDetailModal";
+import { TaskRow, taskStatusLabel } from "@/components/TaskRow";
+import { TaskTeamBoard } from "@/components/TaskTeamBoard";
 import { useListHotkeys } from "@/components/useListHotkeys";
-import { apiDelete, apiGet, apiPatch, apiPost, type TaskAssignee, type TaskOut } from "@/lib/api";
-import { downloadCsv } from "@/lib/csv";
+import {
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
+  type ActionSpec,
+  type KeyResultOut,
+  type ObjectiveOut,
+  type TaskOut,
+  type TaskPerson,
+  type TaskStats,
+  type WorkPackageOut,
+} from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { formatInTz, utcDayDiff } from "@/lib/datetime";
+import { msgOf } from "@/lib/errors";
 import { useListQuery } from "@/lib/useListQuery";
 import { useToast } from "@/components/ToastProvider";
 
-type Tab = "open" | "done" | "all";
+/**
+ * 任务中心 —— 个人 todo + 团队协同 + 系统动作联动 + OKR 分解。
+ *
+ * 六个视角：
+ *   我的 / 分配给我的 / 我分配的 / 团队 / 工作包 / OKR
+ *
+ * 与 ``/routine``（例行任务中枢：邮件→草稿→落库）是两件事：这里是人与人之间的
+ * 任务协同；``/routine`` 是把外部邮件转成待办草稿的系统管道。
+ */
 
-type TaskRow = TaskOut & { updated_at?: string | null };
+const TABS = ["mine", "assigned_to_me", "assigned_by_me", "team", "work_package", "okr"] as const;
+type TabKey = (typeof TABS)[number];
 
 const PRIORITIES: TaskOut["priority"][] = ["low", "normal", "high", "urgent"];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Draft = {
   id: string | null;
@@ -37,6 +60,13 @@ type Draft = {
   priority: TaskOut["priority"];
   due_at: string;
   assignee_user_id: string;
+  action_code: string;
+  entity_type: string;
+  entity_id: string;
+  weight: string;
+  collaborator_ids: string[];
+  work_package_id: string;
+  objective_id: string;
 };
 
 const EMPTY_DRAFT: Draft = {
@@ -46,164 +76,163 @@ const EMPTY_DRAFT: Draft = {
   priority: "normal",
   due_at: "",
   assignee_user_id: "",
+  action_code: "",
+  entity_type: "",
+  entity_id: "",
+  weight: "1",
+  collaborator_ids: [],
+  work_package_id: "",
+  objective_id: "",
 };
 
 function TasksPageInner() {
   const { t } = useI18n();
   const toast = useToast();
   const router = useRouter();
-  const { query, setQuery } = useListQuery();
-  const tab: Tab = query.tab === "done" || query.tab === "all" ? query.tab : "open";
-  const [tasks, setTasks] = useState<TaskRow[]>([]);
-  const [assignees, setAssignees] = useState<TaskAssignee[]>([]);
+  const { query, setQuery, page, limit } = useListQuery();
+
+  const tab = (TABS as readonly string[]).includes(query.tab) ? (query.tab as TabKey) : "mine";
+  const offset = Math.max(0, (page - 1) * limit);
+
+  const [rows, setRows] = useState<TaskOut[]>([]);
+  const [total, setTotal] = useState(0);
+  const [people, setPeople] = useState<TaskPerson[]>([]);
+  const [catalog, setCatalog] = useState<ActionSpec[]>([]);
+  const [packages, setPackages] = useState<WorkPackageOut[]>([]);
+  const [objectives, setObjectives] = useState<ObjectiveOut[]>([]);
+  const [krs, setKrs] = useState<Record<string, KeyResultOut[]>>({});
+  const [stats, setStats] = useState<TaskStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [refWarn, setRefWarn] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState("");
-  const [refWarn, setRefWarn] = useState("");
-  // 破坏性操作二次确认（删除任务）：存待执行的删除动作（P1-8）。
   const [deletePending, setDeletePending] = useState<(() => void) | null>(null);
   const [deleteLabel, setDeleteLabel] = useState("");
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   useListHotkeys(() => setDraft({ ...EMPTY_DRAFT }));
 
-  const rowCtx = useContextMenu<TaskRow>();
+  // ── 参考数据（人员 / 动作目录 / 工作包 / 目标） ──────────────────────
+  useEffect(() => {
+    apiGet("/api/v1/tasks/people")
+      .then((rows) => setPeople(Array.isArray(rows) ? (rows as TaskPerson[]) : []))
+      .catch(() => setRefWarn(t("page.tasks.people_fail", "Could not load the people list.")));
+    apiGet("/api/v1/tasks/action-catalog")
+      .then((rows) => setCatalog(Array.isArray(rows) ? (rows as ActionSpec[]) : []))
+      .catch(() => setRefWarn(t("page.tasks.catalog_fail", "Could not load the system action catalogue.")));
+    // 统计条不在这里取 —— 统一由 load() → loadStats() 刷，避免两个请求竞态导致顶部数字回退
+    apiGet("/api/v1/tasks/work-packages")
+      .then((rows) => setPackages(Array.isArray(rows) ? (rows as WorkPackageOut[]) : []))
+      .catch(() => setRefWarn(t("page.tasks.packages_fail", "Could not load work packages.")));
+  }, [t]);
 
-  function fmtStamp(iso?: string | null) {
-    if (!iso) return "—";
-    return formatInTz(iso, null, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-  }
+  const loadObjectives = useCallback(async () => {
+    try {
+      const rows = await apiGet("/api/v1/tasks/objectives");
+      const list = Array.isArray(rows) ? (rows as ObjectiveOut[]) : [];
+      setObjectives(list);
+      const entries = await Promise.all(
+        list.map(async (o) => {
+          try {
+            const kr = await apiGet(`/api/v1/tasks/objectives/${o.id}/key-results`);
+            return [o.id, Array.isArray(kr) ? (kr as KeyResultOut[]) : []] as const;
+          } catch {
+            return [o.id, []] as const;
+          }
+        }),
+      );
+      setKrs(Object.fromEntries(entries));
+    } catch {
+      setObjectives([]);
+      setRefWarn(t("page.tasks.objectives_fail", "Could not load OKR objectives."));
+    }
+  }, []);
 
-  function exportRows(selected: TaskRow[]) {
-    downloadCsv(
-      "tasks",
-      ["id", "title", "status", "priority", "due_at", "updated_at", "assignee", "description"],
-      selected.map((r) => [
-        r.id,
-        r.title,
-        r.status,
-        r.priority,
-        r.due_at ?? "",
-        r.updated_at ?? "",
-        r.assignee?.full_name || r.assignee?.email || "",
-        r.description ?? "",
-      ]),
-    );
-  }
+  useEffect(() => {
+    void loadObjectives();
+  }, [loadObjectives]);
 
-  function openEdit(task: TaskRow) {
-    setDraft({
-      id: task.id,
-      title: task.title,
-      description: task.description || "",
-      priority: task.priority,
-      due_at: task.due_at ? task.due_at.slice(0, 10) : "",
-      assignee_user_id: task.assignee?.id || "",
-    });
-  }
+  // 统计条与列表一起刷新 —— 否则建任务 / 勾完成后顶部数字是旧的。
+  const loadStats = useCallback(async () => {
+    try {
+      setStats((await apiGet("/api/v1/tasks/stats")) as TaskStats);
+    } catch {
+      setStats(null);
+    }
+  }, []);
 
-  function rowMenuItems(target: TaskRow): ContextMenuItem[] {
-    const done = target.status === "done" || target.status === "cancelled";
-    return [
-      { key: "open", label: t("common.open", "Open"), onClick: () => openEdit(target) },
-      { key: "copy", label: t("common.copy_id", "Copy id"), onClick: () => void navigator.clipboard?.writeText(target.id) },
-      { key: "export", label: t("page.finance.export_selected", "Export selected"), onClick: () => exportRows([target]) },
-      { key: "div", divider: true, label: "" },
-      ...(done
-        ? [{ key: "reopen", label: t("page.tasks.reopen", "Reopen"), onClick: () => transition(target, "reopen") } as ContextMenuItem]
-        : [{ key: "complete", label: t("page.tasks.complete", "Complete"), onClick: () => transition(target, "complete") } as ContextMenuItem]),
-      { key: "edit", label: t("common.edit", "Edit"), onClick: () => openEdit(target) },
-      { key: "d2", divider: true, label: "" },
-      {
-        key: "delete",
-        label: t("common.delete", "Delete"),
-        danger: true,
-        onClick: () => {
-          setDeleteLabel(target.title);
-          setDeletePending(() => () => deleteTask(target.id));
-        },
-      },
-    ];
-  }
+  const loadPackages = useCallback(async () => {
+    try {
+      const rows = await apiGet("/api/v1/tasks/work-packages");
+      setPackages(Array.isArray(rows) ? (rows as WorkPackageOut[]) : []);
+    } catch {
+      setRefWarn(t("page.tasks.packages_fail", "Could not load work packages."));
+    }
+  }, [t]);
 
+  // ── 主列表 ─────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
-    const qs = tab === "done" ? "?status=done" : tab === "all" ? "?include_done=true" : "";
+    const params = new URLSearchParams();
+    params.set("tab", tab);
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    if (query.status) params.set("status", query.status);
+    if (query.priority) params.set("priority", query.priority);
+    if (query.assignee) params.set("assignee_user_id", query.assignee);
+    if (query.action) params.set("action_code", query.action);
+    if (query.overdue === "1") params.set("overdue", "true");
+    if (query.q) params.set("q", query.q);
+    if (query.include_done === "1") params.set("include_done", "true");
+    if (query.work_package_id) params.set("work_package_id", query.work_package_id);
+    if (query.objective_id) params.set("objective_id", query.objective_id);
     try {
-      const rows = await apiGet(`/api/v1/tasks/my${qs}`);
-      setTasks(Array.isArray(rows) ? rows : []);
+      const body = await apiGet(`/api/v1/tasks?${params.toString()}`);
+      const data = body as { items?: TaskOut[]; total?: number };
+      setRows(Array.isArray(data.items) ? data.items : []);
+      setTotal(data.total ?? 0);
     } catch (e: any) {
-      setError(e?.message || t("common.failed", "Failed"));
+      setError(msgOf(e, t("common.failed", "Failed")));
     } finally {
       setLoading(false);
     }
-  }, [tab, t]);
+    void loadStats();
+    if (tab === "work_package") void loadPackages();
+    if (tab === "okr") void loadObjectives();
+  }, [
+    tab,
+    limit,
+    offset,
+    query.status,
+    query.priority,
+    query.assignee,
+    query.action,
+    query.overdue,
+    query.q,
+    query.include_done,
+    query.work_package_id,
+    query.objective_id,
+    t,
+    loadStats,
+    loadPackages,
+    loadObjectives,
+  ]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
-  useEffect(() => {
-    // 参考数据（可选受理人列表）失败不阻断整页，但必须可见，不能静默（P1-4）。
-    apiGet("/api/v1/tasks/assignees")
-      .then((rows) => setAssignees(Array.isArray(rows) ? rows : []))
-      .catch(() =>
-        setRefWarn(t("page.tasks.assignees_fail", "Could not load the assignee list — the field may be empty.")),
-      );
-  }, [t]);
-
-  function dueLabel(task: TaskOut) {
-    if (!task.due_at) return null;
-    const diff = utcDayDiff(task.due_at);
-    if (diff === null) return null;
-    if (task.status !== "done" && task.status !== "cancelled") {
-      if (diff < 0) return { text: t("page.tasks.overdue_days", "Overdue by {n} days", { n: -diff }), overdue: true };
-      if (diff === 0) return { text: t("page.tasks.due_today", "Due today"), overdue: false };
-    }
-    return { text: task.due_at.slice(0, 10), overdue: false };
-  }
-
-  async function saveDraft() {
-    if (!draft) return;
-    if (!draft.title.trim()) {
-      // 校验失败不是成功 —— 必须报错并中止提交（P1-26）。
-      toast.error(t("page.tasks.need_title", "Enter a task title"));
-      return;
-    }
-    setSaving(true);
-    try {
-      const payload: Record<string, unknown> = {
-        title: draft.title.trim(),
-        description: draft.description.trim() || null,
-        priority: draft.priority,
-        due_at: draft.due_at || null,
-        assignee_user_id: draft.assignee_user_id || null,
-      };
-      if (draft.id) {
-        await apiPatch(`/api/v1/tasks/${draft.id}`, payload);
-        toast.success(t("page.tasks.updated", "Task updated."));
-      } else {
-        await apiPost("/api/v1/tasks", payload);
-        toast.success(t("page.tasks.created", "Task created."));
-      }
-      setDraft(null);
-      await load();
-    } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function transition(task: TaskRow, action: "complete" | "reopen") {
+  // ── 操作 ───────────────────────────────────────────────────────────
+  async function transition(task: TaskOut, action: "complete" | "reopen") {
     setBusyId(task.id);
     try {
       await apiPost(`/api/v1/tasks/${task.id}/${action}`);
       await load();
     } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+      toast.error(msgOf(e, t("common.failed", "Failed")));
     } finally {
       setBusyId("");
     }
@@ -217,24 +246,102 @@ function TasksPageInner() {
       setDraft(null);
       await load();
     } catch (e: any) {
-      toast.error(e?.message || t("common.failed", "Failed"));
+      toast.error(msgOf(e, t("common.failed", "Failed")));
     } finally {
       setBusyId("");
     }
   }
 
-  const tabs: TabItem[] = [
-    { key: "open", label: t("page.tasks.tab_open", "Open") },
-    { key: "done", label: t("page.tasks.tab_done", "Done") },
-    { key: "all", label: t("page.tasks.tab_all", "All") },
+  async function saveDraft() {
+    if (!draft) return;
+    if (!draft.title.trim()) {
+      toast.error(t("page.tasks.need_title", "Enter a task title"));
+      return;
+    }
+    if (draft.entity_id && !UUID_RE.test(draft.entity_id.trim())) {
+      toast.error(t("page.tasks.bad_entity_id", "The linked record id must be a UUID."));
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload: Record<string, unknown> = {
+        title: draft.title.trim(),
+        description: draft.description.trim() || null,
+        priority: draft.priority,
+        due_at: draft.due_at || null,
+        assignee_user_id: draft.assignee_user_id || null,
+        action_code: draft.action_code || null,
+        entity_type: draft.entity_type || null,
+        entity_id: draft.entity_id || null,
+        weight: Number(draft.weight) || 1,
+        collaborator_ids: draft.collaborator_ids,
+        work_package_id: draft.work_package_id || null,
+        objective_id: draft.objective_id || null,
+      };
+      if (draft.id) {
+        await apiPatch(`/api/v1/tasks/${draft.id}`, payload);
+        toast.success(t("page.tasks.updated", "Task updated."));
+      } else {
+        await apiPost("/api/v1/tasks", payload);
+        toast.success(t("page.tasks.created", "Task created."));
+      }
+      setDraft(null);
+      await load();
+    } catch (e: any) {
+      toast.error(msgOf(e, t("common.failed", "Failed")));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ── 渲染 ───────────────────────────────────────────────────────────
+  const tabItems: TabItem[] = [
+    { key: "mine", label: t("page.tasks.tab_mine", "My tasks") },
+    { key: "assigned_to_me", label: t("page.tasks.tab_assigned_to_me", "Assigned to me") },
+    { key: "assigned_by_me", label: t("page.tasks.tab_assigned_by_me", "Assigned by me") },
+    { key: "team", label: t("page.tasks.tab_team", "Team") },
+    { key: "work_package", label: t("page.tasks.tab_work_package", "Work packages") },
+    { key: "okr", label: t("page.tasks.tab_okr", "OKR") },
   ];
+
+  const filteredByPackage = !!query.work_package_id;
+  const filteredByObjective = !!query.objective_id;
+  const showList =
+    tab === "mine" ||
+    tab === "assigned_to_me" ||
+    tab === "assigned_by_me" ||
+    tab === "team" ||
+    filteredByPackage ||
+    filteredByObjective;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  // 不做 useMemo —— React Compiler 认为这里的依赖无法保持一致，直接算更省事。
+  const actionOptions = draft?.entity_type
+    ? catalog.filter((a) => a.entity_type === draft.entity_type)
+    : catalog;
+  const chosenAction = draft?.action_code
+    ? catalog.find((a) => a.code === draft.action_code) || null
+    : null;
 
   return (
     <AppShell>
       <PageHeader
         breadcrumb={[{ label: t("nav.tasks", "Tasks") }]}
-        title={t("page.tasks.title", "My tasks")}
-        subtitle={t("page.tasks.sub", "Track open items, due dates and completions assigned to you.")}
+        title={t("page.tasks.title", "Task centre")}
+        subtitle={
+          <>
+            {t(
+              "page.tasks.sub",
+              "Personal todos, team delegation, system-action linkage and OKR breakdown in one place.",
+            )}{" "}
+            <span className="muted">
+              {t(
+                "page.tasks.vs_routine",
+                "Not the inbound-mail pipeline — that lives in Routine Tasks.",
+              )}
+            </span>
+          </>
+        }
         actions={
           <>
             <PageGuide pageKey="tasks" />
@@ -249,93 +356,295 @@ function TasksPageInner() {
         </button>
       </Toolbar>
 
-      <Tabs items={tabs} value={tab} onChange={(k) => setQuery({ tab: k === "open" ? null : k })} variant="pill" />
+      {stats ? (
+        <div className="tk-stat-strip">
+          <span className="tk-stat">
+            <strong>{stats.open}</strong> {t("page.tasks.stat_open", "open")}
+          </span>
+          <span className="tk-stat tk-stat-danger">
+            <strong>{stats.overdue}</strong> {t("page.tasks.stat_overdue", "overdue")}
+          </span>
+          <span className="tk-stat">
+            <strong>{stats.due_today}</strong> {t("page.tasks.stat_due_today", "due today")}
+          </span>
+          <span className="tk-stat">
+            <strong>{stats.done}</strong> {t("page.tasks.stat_done", "done")}
+          </span>
+        </div>
+      ) : null}
 
-      <StatusLegend statuses={["todo", "in_progress", "done", "cancelled"]} />
+      <Tabs
+        items={tabItems}
+        value={tab}
+        onChange={(k) =>
+          setQuery(
+            { tab: k === "mine" ? null : k, work_package_id: null, objective_id: null },
+            { resetPage: true },
+          )
+        }
+        variant="pill"
+      />
+
+      {/* ── 筛选条 ── */}
+      <div className="tk-filters">
+        <input
+          className="tk-filter-input"
+          placeholder={t("page.tasks.filter_q", "Search tasks…")}
+          defaultValue={query.q || ""}
+          onKeyDown={(e) => {
+            if (e.key === "Enter")
+              setQuery({ q: (e.target as HTMLInputElement).value || null }, { resetPage: true });
+          }}
+        />
+        <select
+          className="tk-filter-select"
+          value={query.status || ""}
+          onChange={(e) => setQuery({ status: e.target.value || null }, { resetPage: true })}
+          aria-label={t("page.tasks.filter_status", "Any status")}
+        >
+          <option value="">{t("page.tasks.filter_status", "Any status")}</option>
+          {["todo", "in_progress", "done", "cancelled"].map((s) => (
+            <option key={s} value={s}>
+              {taskStatusLabel(t, s)}
+            </option>
+          ))}
+        </select>
+        <select
+          className="tk-filter-select"
+          value={query.priority || ""}
+          onChange={(e) => setQuery({ priority: e.target.value || null }, { resetPage: true })}
+          aria-label={t("page.tasks.filter_priority", "Any priority")}
+        >
+          <option value="">{t("page.tasks.filter_priority", "Any priority")}</option>
+          {PRIORITIES.map((p) => (
+            <option key={p} value={p}>
+              {t(`page.tasks.priority_${p}`, p)}
+            </option>
+          ))}
+        </select>
+        <select
+          className="tk-filter-select"
+          value={query.assignee || ""}
+          onChange={(e) => setQuery({ assignee: e.target.value || null }, { resetPage: true })}
+          aria-label={t("page.tasks.filter_assignee", "Anyone")}
+        >
+          <option value="">{t("page.tasks.filter_assignee", "Anyone")}</option>
+          {people.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.full_name || p.email}
+            </option>
+          ))}
+        </select>
+        <select
+          className="tk-filter-select"
+          value={query.action || ""}
+          onChange={(e) => setQuery({ action: e.target.value || null }, { resetPage: true })}
+          aria-label={t("page.tasks.filter_action", "Any action")}
+        >
+          <option value="">{t("page.tasks.filter_action", "Any action")}</option>
+          {catalog.map((a) => (
+            <option key={a.code} value={a.code}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+        <label className="tk-filter-check">
+          <input
+            type="checkbox"
+            checked={query.overdue === "1"}
+            onChange={(e) => setQuery({ overdue: e.target.checked ? "1" : null }, { resetPage: true })}
+          />
+          {t("page.tasks.filter_overdue", "Overdue only")}
+        </label>
+        <label className="tk-filter-check">
+          <input
+            type="checkbox"
+            checked={query.include_done === "1"}
+            onChange={(e) => setQuery({ include_done: e.target.checked ? "1" : null }, { resetPage: true })}
+          />
+          {t("page.tasks.filter_include_done", "Include done")}
+        </label>
+      </div>
 
       {refWarn ? <p className="flash-err">{refWarn}</p> : null}
 
-      <div className="panel">
-        <StateView
-          loading={loading}
-          error={error}
-          empty={!tasks.length}
-          emptyText={t("page.tasks.empty", "No tasks.")}
-          onRetry={load}
-        >
-          {tasks.map((task) => {
-            const due = dueLabel(task);
-            const done = task.status === "done" || task.status === "cancelled";
-            return (
-              <div
-                key={task.id}
-                className={`task-row ${done ? "task-done" : ""}`}
-                onContextMenu={rowCtx.open(task)}
-              >
-                <span className="task-row-main">
-                  <span className="task-row-title">
-                    <span className={`pill ${task.priority}`}>{task.priority}</span>
-                    {task.title}
-                    {task.status === "in_progress" ? (
-                      <span className="pill">{t("page.tasks.in_progress", "In progress")}</span>
-                    ) : null}
-                    {task.status === "cancelled" ? (
-                      <span className="pill cancelled">{t("page.tasks.cancelled", "Cancelled")}</span>
-                    ) : null}
-                  </span>
-                  {task.description ? <small className="muted">{task.description}</small> : null}
-                  <small className="muted">
-                    {task.assignee
-                      ? t("page.tasks.assignee", "Assignee", {
-                          name: task.assignee.full_name || task.assignee.email,
-                        })
-                      : t("page.tasks.unassigned", "Unassigned")}
-                    {due ? " · " : ""}
-                    {due ? <span className={due.overdue ? "overdue" : ""}>{due.text}</span> : null}
-                    {" · "}
-                    {t("common.last_modified", "Updated")} {fmtStamp(task.updated_at)}
-                  </small>
-                </span>
-                <span className="task-row-ops">
-                  {!done ? (
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      disabled={busyId === task.id}
-                      onClick={() => transition(task, "complete")}
-                    >
-                      {t("page.tasks.complete", "Complete")}
-                    </button>
-                  ) : (
+      {/* ── 工作包视角 ── */}
+      {tab === "work_package" ? (
+        <div className="panel">
+          <StateView
+            loading={false}
+            error=""
+            empty={!packages.length}
+            emptyText={t("page.tasks.no_packages", "No work packages yet.")}
+          >
+            <div className="tk-card-grid">
+              {packages.map((p) => (
+                <div key={p.id} className={`tk-card ${p.id === query.work_package_id ? "active" : ""}`}>
+                  <div className="tk-card-head">
+                    <span className="tk-badge">{p.code}</span>
+                    <strong>{p.title}</strong>
+                    <span className={`pill ${p.status === "closed" ? "cancelled" : "pending"}`}>{p.status}</span>
+                  </div>
+                  {p.description ? <p className="muted">{p.description}</p> : null}
+                  <progress
+                    className="tk-progress"
+                    value={Math.round(p.progress)}
+                    max={100}
+                    aria-label={t("page.tasks.progress", "Progress")}
+                  />
+                  <div className="tk-card-foot">
+                    <span className="muted">{Math.round(p.progress)}%</span>
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
-                      disabled={busyId === task.id}
-                      onClick={() => transition(task, "reopen")}
+                      onClick={() =>
+                        setQuery(
+                          {
+                            work_package_id: p.id === query.work_package_id ? null : p.id,
+                            objective_id: null,
+                          },
+                          { resetPage: true },
+                        )
+                      }
                     >
-                      {t("page.tasks.reopen", "Reopen")}
+                      {t("page.tasks.view_tasks", "View tasks")}
                     </button>
-                  )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </StateView>
+        </div>
+      ) : null}
+
+      {/* ── OKR 视角 ── */}
+      {tab === "okr" ? (
+        <div className="panel">
+          <StateView
+            loading={false}
+            error=""
+            empty={!objectives.length}
+            emptyText={t("page.tasks.no_objectives", "No objectives yet.")}
+          >
+            <div className="tk-okr-tree">
+              {objectives.map((o) => (
+                <div key={o.id} className={`tk-okr-node ${o.id === query.objective_id ? "active" : ""}`}>
+                  <div className="tk-okr-head">
+                    <span className="tk-badge">{o.code}</span>
+                    <strong>{o.title}</strong>
+                    {o.period ? <span className="muted">{o.period}</span> : null}
+                    <span className="muted">{Math.round(o.progress)}%</span>
+                  </div>
+                  <progress
+                    className="tk-progress"
+                    value={Math.round(o.progress)}
+                    max={100}
+                    aria-label={t("page.tasks.progress", "Progress")}
+                  />
+                  <ul className="tk-kr-list">
+                    {(krs[o.id] || []).map((kr) => (
+                      <li key={kr.id} className="tk-kr">
+                        <span className="tk-kr-title">{kr.title}</span>
+                        <span className="muted">
+                          {kr.current_value}/{kr.target_value} {kr.unit || ""}
+                        </span>
+                        <span className="muted">{Math.round(kr.progress)}%</span>
+                      </li>
+                    ))}
+                  </ul>
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    onClick={() => openEdit(task)}
+                    onClick={() =>
+                      setQuery(
+                        {
+                          objective_id: o.id === query.objective_id ? null : o.id,
+                          work_package_id: null,
+                        },
+                        { resetPage: true },
+                      )
+                    }
                   >
-                    {t("common.edit", "Edit")}
+                    {t("page.tasks.view_tasks", "View tasks")}
                   </button>
-                </span>
-              </div>
-            );
-          })}
-        </StateView>
-      </div>
+                </div>
+              ))}
+            </div>
+          </StateView>
+        </div>
+      ) : null}
 
-      <ContextMenu controller={rowCtx} items={rowMenuItems} />
+      {/* ── 列表视角 ── */}
+      {showList ? (
+        <div className="panel">
+          {tab === "team" ? (
+            <StateView
+              loading={loading}
+              error={error}
+              empty={!rows.length}
+              emptyText={t("page.tasks.empty", "No tasks.")}
+              onRetry={load}
+            >
+              <TaskTeamBoard
+                rows={rows}
+                people={people}
+                busyId={busyId}
+                onComplete={(x) => transition(x, "complete")}
+                onReopen={(x) => transition(x, "reopen")}
+                onOpen={(x) => setDetailId(x.id)}
+              />
+            </StateView>
+          ) : (
+            <StateView
+              loading={loading}
+              error={error}
+              empty={!rows.length}
+              emptyText={t("page.tasks.empty", "No tasks.")}
+              onRetry={load}
+            >
+              {rows.map((task) => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  busy={busyId === task.id}
+                  onComplete={(x) => transition(x, "complete")}
+                  onReopen={(x) => transition(x, "reopen")}
+                  onOpen={(x) => setDetailId(x.id)}
+                />
+              ))}
+            </StateView>
+          )}
+
+          {total > limit ? (
+            <div className="tk-pager">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={page <= 1}
+                onClick={() => setQuery({ page: page - 1 })}
+              >
+                {t("common.prev_page", "Previous")}
+              </button>
+              <span className="muted">
+                {t("page.tasks.page_of", "Page {p} of {n}", { p: page, n: totalPages })} · {total}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={page >= totalPages}
+                onClick={() => setQuery({ page: page + 1 })}
+              >
+                {t("common.next_page", "Next")}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <ConfirmDialog
         open={Boolean(deletePending)}
         title={t("common.confirm", "Confirm")}
-        message={t("common.confirm_delete_named", 'Delete "{name}"?', { name: deleteLabel })}
+        message={t("page.tasks.confirm_delete", 'Delete "{name}"?', { name: deleteLabel })}
         danger
         confirmLabel={t("common.delete", "Delete")}
         onConfirm={() => {
@@ -346,14 +655,23 @@ function TasksPageInner() {
         onCancel={() => setDeletePending(null)}
       />
 
+      {/* ── 新建 / 编辑任务 ── */}
       <RecordModal
         open={Boolean(draft)}
         title={draft?.id ? t("page.tasks.edit", "Edit task") : t("page.tasks.new", "New task")}
         onClose={() => setDraft(null)}
         onSave={saveDraft}
         canDelete={!!draft?.id}
-        onDelete={draft?.id ? () => void deleteTask(draft.id as string) : undefined}
+        onDelete={
+          draft?.id
+            ? () => {
+                setDeleteLabel(draft.title);
+                setDeletePending(() => () => deleteTask(draft.id as string));
+              }
+            : undefined
+        }
         saving={saving}
+        size="lg"
       >
         <label>
           {t("page.tasks.field_title", "Title")}
@@ -375,7 +693,9 @@ function TasksPageInner() {
           {t("page.tasks.field_priority", "Priority")}
           <select
             value={draft?.priority || "normal"}
-            onChange={(e) => setDraft((d) => (d ? { ...d, priority: e.target.value as TaskOut["priority"] } : d))}
+            onChange={(e) =>
+              setDraft((d) => (d ? { ...d, priority: e.target.value as TaskOut["priority"] } : d))
+            }
           >
             {PRIORITIES.map((p) => (
               <option key={p} value={p}>
@@ -398,14 +718,133 @@ function TasksPageInner() {
             onChange={(e) => setDraft((d) => (d ? { ...d, assignee_user_id: e.target.value } : d))}
           >
             <option value="">{t("page.tasks.unassigned", "Unassigned")}</option>
-            {assignees.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.full_name || a.email}
+            {people.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.full_name || p.email}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t("page.tasks.field_action", "System action (auto-complete)")}
+          <select
+            value={draft?.action_code || ""}
+            onChange={(e) => {
+              const code = e.target.value;
+              const spec = catalog.find((a) => a.code === code);
+              setDraft((d) =>
+                d
+                  ? {
+                      ...d,
+                      action_code: code,
+                      entity_type: spec ? spec.entity_type : d.entity_type,
+                    }
+                  : d,
+              );
+            }}
+          >
+            <option value="">{t("page.tasks.action_none_pick", "None")}</option>
+            {actionOptions.map((a) => (
+              <option key={a.code} value={a.code}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {chosenAction ? (
+          <p className="tk-hint">
+            {t(
+              "page.tasks.action_hint",
+              "When this action is done in the system, the task is ticked automatically.",
+            )}
+          </p>
+        ) : null}
+        <label>
+          {t("page.tasks.field_entity_type", "Linked record type")}
+          <input
+            value={draft?.entity_type || ""}
+            placeholder="voyage / invoice / claim …"
+            onChange={(e) => setDraft((d) => (d ? { ...d, entity_type: e.target.value } : d))}
+          />
+        </label>
+        <label>
+          {t("page.tasks.field_entity_id", "Linked record id")}
+          <input
+            value={draft?.entity_id || ""}
+            placeholder="UUID"
+            onChange={(e) => setDraft((d) => (d ? { ...d, entity_id: e.target.value } : d))}
+          />
+        </label>
+        <label>
+          {t("page.tasks.field_weight", "Weight")}
+          <input
+            type="number"
+            step="0.5"
+            min="0.5"
+            value={draft?.weight || "1"}
+            onChange={(e) => setDraft((d) => (d ? { ...d, weight: e.target.value } : d))}
+          />
+        </label>
+        <label>
+          {t("page.tasks.field_collaborators", "Collaborators")}
+          <select
+            multiple
+            size={4}
+            value={draft?.collaborator_ids || []}
+            onChange={(e) =>
+              setDraft((d) =>
+                d
+                  ? {
+                      ...d,
+                      collaborator_ids: Array.from(e.target.selectedOptions).map((o) => o.value),
+                    }
+                  : d,
+              )
+            }
+          >
+            {people.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.full_name || p.email}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t("page.tasks.field_work_package", "Work package")}
+          <select
+            value={draft?.work_package_id || ""}
+            onChange={(e) => setDraft((d) => (d ? { ...d, work_package_id: e.target.value } : d))}
+          >
+            <option value="">{t("page.tasks.none", "None")}</option>
+            {packages.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.code} · {p.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t("page.tasks.field_objective", "OKR objective")}
+          <select
+            value={draft?.objective_id || ""}
+            onChange={(e) => setDraft((d) => (d ? { ...d, objective_id: e.target.value } : d))}
+          >
+            <option value="">{t("page.tasks.none", "None")}</option>
+            {objectives.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.code} · {o.title}
               </option>
             ))}
           </select>
         </label>
       </RecordModal>
+
+      <TaskDetailModal
+        taskId={detailId}
+        people={people}
+        onClose={() => setDetailId(null)}
+        onChanged={load}
+      />
     </AppShell>
   );
 }

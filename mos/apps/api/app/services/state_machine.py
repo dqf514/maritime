@@ -219,3 +219,17 @@ JOURNAL_TRANSITIONS = {
     "posted": {"reversed"},
     "reversed": set(),
 }
+
+# 任务中心 2.0 —— Task 生命周期。此前任务状态只是"集合校验"（任何状态可跳
+# 任意状态），这里补成真正的状态机：非法跳转抛 409 INVALID_STATE。
+# - todo → in_progress：认领开工
+# - todo/in_progress → done：完成（人工或系统自动判定，见 services/task_completion）
+# - done → todo：reopen（人工覆盖系统的自动完成，权责在完成人手上）
+# - cancelled → todo：撤销取消，重新入列
+# - "deleted" 不在这里：它是软删标记（services/recycle），与业务状态正交。
+TASK_TRANSITIONS = {
+    "todo": {"in_progress", "done", "cancelled"},
+    "in_progress": {"done", "cancelled", "todo"},
+    "done": {"todo"},
+    "cancelled": {"todo"},
+}

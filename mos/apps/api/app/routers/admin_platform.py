@@ -252,6 +252,14 @@ def list_users(
         org_ids = [m.org_unit_id for m in memberships]
         if org_ids:
             org_by_id = {o.id: o for o in db.scalars(select(OrgUnit).where(OrgUnit.id.in_(org_ids))).all()}
+    # 汇报线上级可能不在当前分页里 —— 单独批量取一次。
+    manager_by_id: dict[UUID, User] = {}
+    manager_ids = {u.manager_user_id for u in users if u.manager_user_id}
+    if manager_ids:
+        manager_by_id = {
+            u.id: u
+            for u in db.scalars(select(User).where(User.id.in_(manager_ids), User.tenant_id == auth.tenant_id)).all()
+        }
     out = []
     for u in users:
         membership = membership_by_user.get(u.id)
@@ -268,6 +276,13 @@ def list_users(
                 "org_unit_id": str(org_unit.id) if org_unit else None,
                 "org_unit_code": org_unit.code if org_unit else None,
                 "org_unit_name": org_unit.name if org_unit else None,
+                # 人的汇报线（任务中心"上级→下级"派单依据）
+                "manager_user_id": str(u.manager_user_id) if u.manager_user_id else None,
+                "manager_name": (
+                    manager_by_id.get(u.manager_user_id).full_name
+                    if u.manager_user_id and manager_by_id.get(u.manager_user_id)
+                    else None
+                ),
             }
         )
     return out
@@ -279,6 +294,7 @@ class UserCreate(BaseModel):
     password: SetPassword = Field(min_length=8)
     role_codes: list[str] = Field(default_factory=lambda: ["viewer"])
     org_unit_id: UUID | None = None
+    manager_user_id: UUID | None = None
 
 
 @router.post("/admin/users")
@@ -317,6 +333,11 @@ def create_user(body: UserCreate, auth: AuthContext = Depends(require_roles("ten
         if not unit or unit.tenant_id != auth.tenant_id or unit.status == "deleted":
             raise HTTPException(400, detail={"code": "INVALID_ORG_UNIT"})
         db.add(UserOrgMembership(user_id=user.id, org_unit_id=unit.id, is_primary=True))
+    if body.manager_user_id:
+        from app.services.assignment import validate_manager
+
+        validate_manager(db, auth.tenant_id, user.id, body.manager_user_id)
+        user.manager_user_id = body.manager_user_id
     # Audit row commits atomically with the new user
     audit(
         db,
@@ -337,6 +358,9 @@ class UserUpdateIn(BaseModel):
     role_codes: list[str] | None = None
     org_unit_id: UUID | None = None
     clear_org: bool = False
+    # 人的汇报线（任务中心"上级→下级"派单依据）
+    manager_user_id: UUID | None = None
+    clear_manager: bool = False
 
 
 @router.patch("/admin/users/{user_id}")
@@ -404,6 +428,27 @@ def update_user(
                 existing.is_primary = True
             else:
                 db.add(UserOrgMembership(user_id=user.id, org_unit_id=unit.id, is_primary=True))
+    if body.clear_manager:
+        user.manager_user_id = None
+    elif body.manager_user_id is not None:
+        from app.services.assignment import validate_manager
+
+        validate_manager(db, auth.tenant_id, user.id, body.manager_user_id)
+        if user.manager_user_id != body.manager_user_id:
+            audit(
+                db,
+                tenant_id=auth.tenant_id,
+                actor_user_id=auth.user_id,
+                action="admin.user_manager_changed",
+                entity_type="user",
+                entity_id=user.id,
+                detail={
+                    "email": user.email,
+                    "from": str(user.manager_user_id) if user.manager_user_id else None,
+                    "to": str(body.manager_user_id),
+                },
+            )
+        user.manager_user_id = body.manager_user_id
     db.commit()
     roles = list(
         db.scalars(select(Role.code).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)).all()
@@ -418,6 +463,7 @@ def update_user(
         "status": user.status,
         "roles": roles,
         "org_unit_id": str(membership.org_unit_id) if membership else None,
+        "manager_user_id": str(user.manager_user_id) if user.manager_user_id else None,
     }
 
 

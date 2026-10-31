@@ -34,6 +34,7 @@ from app.models_domain import (
     Voyage,
 )
 from app.services.domain_events import DomainEvent, ensure_task, materialize_task_rules, notify_task, on
+from app.services.action_catalog import ACTION_BY_CODE
 from app.services.notifications import notify_roles_once
 from app.services.voyage_close import closing_check, shrink_voyage_schedule_blocks
 from app.services.ui_text import user_locale
@@ -64,6 +65,58 @@ def _q2(x) -> float:
 # ── 航次完成：收尾链总入口 ────────────────────────────────────────────────
 
 
+def create_closeout_tasks(
+    db: Session,
+    tenant_id: UUID,
+    voyage: Voyage,
+    *,
+    locale: str = "en",
+    created_by: UUID | None = None,
+    notify: bool = True,
+    check: dict | None = None,
+) -> list:
+    """按收尾清单缺项建跟进任务（每项绑定动作目录里的对应动作码）。
+
+    收尾清单项 ↔ 动作目录一一对应（同一份判定，见 ``services/closeout_checks``）：
+    任务带上 ``action_code`` 后，业务侧把缺项补齐 → 任务自动勾完成。
+
+    幂等键带上本轮完成时间 —— 航次重开后再次完成要重新生成一批任务，
+    但同一轮里重复触发不会重复建。
+
+    独立成函数是为了让演示种子能复用**同一条路径**造数据：
+    演示里那个"已完成航次"的收尾任务与真实收尾时生成的完全同源。
+    """
+    check = check or closing_check(db, tenant_id, voyage, locale=locale)
+    ws = f"/operations/voyages/{voyage.id}/workspace"
+    created: list = []
+    for item in check["items"]:
+        if item["ok"] or item["severity"] == "info" or not item.get("task_title"):
+            continue
+        action_code = f"voyage.closeout.{item['key']}"
+        if action_code not in ACTION_BY_CODE:
+            action_code = None
+        round_key = voyage.completed_at.isoformat() if voyage.completed_at else "na"
+        task = ensure_task(
+            db,
+            tenant_id,
+            title=f"{item['task_title']} — {voyage.voyage_no}",
+            description=item.get("task_description")
+            or f"{item['label']}. {item.get('detail') or ''}",
+            entity_type="voyage",
+            entity_id=voyage.id,
+            priority="high",
+            due_days=item.get("due_days") or 3,
+            assign_role=item.get("assign_role"),
+            created_by=created_by,
+            action_code=action_code,
+            dedupe_key=f"voyage.closeout:{item['key']}:{voyage.id}:{round_key}",
+        )
+        if notify:
+            notify_task(db, tenant_id, task, assign_role=item.get("assign_role"), href=ws)
+        created.append(task)
+    return created
+
+
 @on("voyage.completed")
 def on_voyage_completed(db: Session, ev: DomainEvent) -> None:
     voyage = db.get(Voyage, ev.entity_id)
@@ -79,25 +132,12 @@ def on_voyage_completed(db: Session, ev: DomainEvent) -> None:
     locale = user_locale(db, ev.created_by)
     check = closing_check(db, tenant_id, voyage, locale=locale)
     ws = f"/operations/voyages/{voyage.id}/workspace"
-    created_titles: list[str] = []
-    for item in check["items"]:
-        if item["ok"] or item["severity"] == "info" or not item.get("task_title"):
-            continue
-        task = ensure_task(
-            db,
-            tenant_id,
-            title=f"{item['task_title']} — {voyage.voyage_no}",
-            description=item.get("task_description")
-            or f"{item['label']}. {item.get('detail') or ''}",
-            entity_type="voyage",
-            entity_id=voyage.id,
-            priority="high",
-            due_days=item.get("due_days") or 3,
-            assign_role=item.get("assign_role"),
-            created_by=ev.created_by,
+    created_titles: list[str] = [
+        t.title
+        for t in create_closeout_tasks(
+            db, tenant_id, voyage, locale=locale, created_by=ev.created_by, check=check
         )
-        notify_task(db, tenant_id, task, assign_role=item.get("assign_role"), href=ws)
-        created_titles.append(task.title)
+    ]
 
     # 3) Actual TCE 快照进 meta（复盘/报表可追溯）
     tce = check.get("tce") or {}
@@ -292,6 +332,9 @@ def on_invoice_issued(db: Session, ev: DomainEvent) -> None:
         description=f"发票已签发（{_q2(inv.amount)} {inv.currency or 'USD'}），复核科目后过账 GL。",
         entity_type="invoice", entity_id=inv.id,
         priority="normal", due_days=3, assign_role="finance", created_by=ev.created_by,
+        # 发票已签发但 GL 未过账 → 绑 invoice.post_gl：过账后任务自动勾完成。
+        action_code="invoice.post_gl",
+        dedupe_key=f"invoice.post_gl:{inv.id}:{inv.issued_at.isoformat() if inv.issued_at else 'na'}",
     )
     notify_task(db, ev.tenant_id, task, assign_role="finance", href=f"/finance/invoices?id={inv.id}")
 
@@ -312,6 +355,9 @@ def on_invoice_issued(db: Session, ev: DomainEvent) -> None:
                 description="该航次存在已过账计提 —— 发票签发后请核对差异并冲回计提。",
                 entity_type="voyage", entity_id=inv.voyage_id,
                 priority="normal", due_days=5, assign_role="finance", created_by=ev.created_by,
+                # 计提与发票对齐后自动勾完成（voyage.closeout.accruals 与收尾清单同一判定）。
+                action_code="voyage.closeout.accruals",
+                dedupe_key=f"voyage.closeout.accruals:{inv.voyage_id}:{inv_no}",
             )
             notify_task(db, ev.tenant_id, task2, assign_role="finance", href=f"/operations/voyages/{inv.voyage_id}/workspace")
 
@@ -462,4 +508,47 @@ def on_laytime_draft_created(db: Session, ev: DomainEvent) -> None:
     notify_task(
         db, ev.tenant_id, task, assign_role="operations",
         href=f"/finance/laytimes?id={ev.entity_id}",
+    )
+
+
+# ── TaskRule 通用物化（任何域事件 → 匹配的租户规则 → 任务） ──────────────
+
+#: 域事件的实体类型 → TaskRule.trigger_entity_type 的取值
+#: 租户在「任务规则」里按 trigger_entity_type 配规则；这里把业务事件
+#: 的实体类型翻译成规则侧认识的类型。
+_ENTITY_TYPE_ALIASES = {
+    "voyage": "voyage",
+    "invoice": "invoice",
+    "claim": "claim",
+    "bunker_order": "bunker_order",
+    "port_disbursement": "port_disbursement",
+    "coa_lifting": "charter",
+    "charter_amendment": "charter",
+    "charter": "charter",
+}
+
+#: 这些 kind 已由专用处理器用更完整的上下文物化过 —— 通用处理器跳过，
+#: 避免同一规则被用两套 context 各判一次。
+_SPECIALIZED_KINDS = {"voyage.completed"}
+
+
+@on("*")
+def on_any_event_materialize_task_rules(db: Session, ev: DomainEvent) -> None:
+    """通配处理器：把命中的 TaskRule 物化成任务。
+
+    以前只有 ``voyage.completed`` 一条路径能物化规则任务，其余 trigger
+    只有 dry-run 端点（看得见却落不下）—— 这里补齐最后一环。
+    幂等靠 ``dedupe_key``（``rule:<id>:<实体类型>:<实体ID>``），重复事件
+    不会重复建任务。
+    """
+    if ev.kind in _SPECIALIZED_KINDS:
+        return
+    trigger = _ENTITY_TYPE_ALIASES.get(ev.entity_type or "")
+    if not trigger:
+        return
+    payload = dict(ev.payload or {})
+    payload.setdefault("id", str(ev.entity_id) if ev.entity_id else None)
+    ctx = {trigger: payload}
+    materialize_task_rules(
+        db, ev.tenant_id, trigger, ctx, entity_id=ev.entity_id, created_by=ev.created_by
     )

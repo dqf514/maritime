@@ -29,6 +29,16 @@ from app.models_domain import (
     Voyage,
     VoyageAccrual,
 )
+from app.services.closeout_checks import (
+    accruals_state,
+    bunker_state,
+    claims_state,
+    emissions_state,
+    invoices_state,
+    laytime_state,
+    port_calls_state,
+    sof_state,
+)
 from app.services.pnl_engine import voyage_pnl_4col
 from app.services.ui_text import fill, messages_for
 
@@ -189,6 +199,8 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage, locale: str = "e
         })
 
     # 1) 挂靠港事实（ATA/ATD）
+    #    判定来自 services/closeout_checks —— 与任务中心的自动勾完成同一份真相。
+    pc_state = port_calls_state(db, tenant_id, vid)
     calls = list(db.scalars(
         select(PortCall).where(
             PortCall.tenant_id == tenant_id,
@@ -203,34 +215,25 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage, locale: str = "e
             task_title="补录挂靠港", task_title_key="voyage.closeout.task.port_calls",
             assign_role="operations", due_days=1)
     else:
-        missing = [c for c in calls if not (c.ata and c.atd)]
-        done = len(calls) - len(missing)
+        missing = pc_state["missing"]
+        done = pc_state["done"]
         add(
-            "port_calls", not missing, "挂靠港事实齐备 (ATA/ATD)",
-            f"{done}/{len(calls)} 个挂靠港已录实际抵离港"
-            + (f"，缺 {len(missing)} 个" if missing else ""),
+            "port_calls", pc_state["ok"], "挂靠港事实齐备 (ATA/ATD)",
+            f"{done}/{pc_state['total']} 个挂靠港已录实际抵离港"
+            + (f"，缺 {missing} 个" if missing else ""),
             label_key="voyage.closeout.port_calls.full",
             detail_key=("voyage.closeout.port_calls.detail_missing" if missing
                         else "voyage.closeout.port_calls.detail"),
-            detail_vars={"done": done, "total": len(calls), "missing": len(missing)},
+            detail_vars={"done": done, "total": pc_state["total"], "missing": missing},
             task_title="补录挂靠港 ATA/ATD",
             task_title_key="voyage.closeout.task.port_calls_ata",
             assign_role="operations", due_days=1,
         )
 
     # 2) SOF 装卸事实（laytime 可算性）
-    pc_ids = [c.id for c in calls]
-    codes: set[str] = set()
-    if pc_ids:
-        evs = db.scalars(
-            select(SofEvent).where(
-                SofEvent.tenant_id == tenant_id,
-                SofEvent.port_call_id.in_(pc_ids),
-                SofEvent.deleted_at.is_(None),
-            )
-        ).all()
-        codes = {e.event_code for e in evs}
-    sof_ok = "COMMENCED" in codes and "COMPLETED" in codes
+    sof_st = sof_state(db, tenant_id, vid)
+    codes: set[str] = sof_st["codes"]
+    sof_ok = sof_st["ok"]
     code_list = ", ".join(sorted(codes))
     add(
         "sof", sof_ok, "SOF 装卸事实已记录",
@@ -246,124 +249,86 @@ def closing_check(db: Session, tenant_id: UUID, voyage: Voyage, locale: str = "e
     )
 
     # 3) 装卸时间计算已定稿
-    lts = list(db.scalars(
-        select(LaytimeCalc).where(LaytimeCalc.tenant_id == tenant_id, LaytimeCalc.voyage_id == vid)
-    ).all())
-    finalized = [l for l in lts if l.status == "finalized" or l.finalized_at]
+    lt_st = laytime_state(db, tenant_id, vid)
     add(
-        "laytime", bool(finalized), "装卸时间计算已定稿",
-        f"{len(finalized)}/{len(lts)} 份计算已定稿" if lts else "尚无装卸时间计算",
+        "laytime", lt_st["ok"], "装卸时间计算已定稿",
+        f"{lt_st['done']}/{lt_st['total']} 份计算已定稿" if lt_st["total"] else "尚无装卸时间计算",
         label_key="voyage.closeout.laytime.label",
-        detail_key=("voyage.closeout.laytime.detail" if lts
+        detail_key=("voyage.closeout.laytime.detail" if lt_st["total"]
                     else "voyage.closeout.laytime.none"),
-        detail_vars={"done": len(finalized), "total": len(lts)},
+        detail_vars={"done": lt_st["done"], "total": lt_st["total"]},
         task_title="完成装卸时间计算并定稿",
         task_title_key="voyage.closeout.task.laytime",
         assign_role="operations", due_days=3,
     )
 
     # 4) 索赔已了结
-    open_claims = list(db.scalars(
-        select(Claim).where(
-            Claim.tenant_id == tenant_id,
-            Claim.voyage_id == vid,
-            Claim.status.in_(("open", "negotiating")),
-        )
-    ).all())
+    cl_st = claims_state(db, tenant_id, vid)
     add(
-        "claims", not open_claims, "索赔已了结",
-        f"{len(open_claims)} 笔索赔未了结" if open_claims else "无未决索赔",
+        "claims", cl_st["ok"], "索赔已了结",
+        f"{cl_st['open']} 笔索赔未了结" if cl_st["open"] else "无未决索赔",
         label_key="voyage.closeout.claims.label",
-        detail_key=("voyage.closeout.claims.detail" if open_claims
+        detail_key=("voyage.closeout.claims.detail" if cl_st["open"]
                     else "voyage.closeout.claims.none"),
-        detail_vars={"n": len(open_claims)},
+        detail_vars={"n": cl_st["open"]},
         task_title="了结未决索赔", task_title_key="voyage.closeout.task.claims",
         assign_role="claims", due_days=5,
     )
 
     # 5) 发票已签发（有待开草稿 → 提醒财务）
-    invs = list(db.scalars(
-        select(Invoice).where(Invoice.tenant_id == tenant_id, Invoice.voyage_id == vid)
-    ).all())
-    issued = [i for i in invs if i.status in ("issued", "partially_paid", "paid")]
-    drafts = [i for i in invs if i.status in ("draft", "pending_approval")]
+    inv_st = invoices_state(db, tenant_id, vid)
     add(
-        "invoices", bool(issued) or not invs, "发票已签发",
-        f"{len(issued)} 张已签发" + (f"，{len(drafts)} 张待签发" if drafts else "")
-        if invs else "尚无发票记录",
+        "invoices", inv_st["ok"], "发票已签发",
+        f"{inv_st['issued']} 张已签发" + (f"，{inv_st['drafts']} 张待签发" if inv_st["drafts"] else "")
+        if inv_st["total"] else "尚无发票记录",
         label_key="voyage.closeout.invoices.label",
-        detail_key=("voyage.closeout.invoices.none" if not invs
-                    else ("voyage.closeout.invoices.detail_pending" if drafts
+        detail_key=("voyage.closeout.invoices.none" if not inv_st["total"]
+                    else ("voyage.closeout.invoices.detail_pending" if inv_st["drafts"]
                           else "voyage.closeout.invoices.detail")),
-        detail_vars={"issued": len(issued), "pending": len(drafts)},
+        detail_vars={"issued": inv_st["issued"], "pending": inv_st["drafts"]},
         task_title="签发待开航次发票",
         task_title_key="voyage.closeout.task.invoices",
         assign_role="finance", due_days=3,
     )
 
     # 6) 加油订单已交付
-    orders = list(db.scalars(
-        select(BunkerOrder).where(BunkerOrder.tenant_id == tenant_id, BunkerOrder.voyage_id == vid)
-    ).all())
-    undelivered = [o for o in orders if o.status not in ("delivered", "cancelled")]
+    bk_st = bunker_state(db, tenant_id, vid)
     add(
-        "bunker", not undelivered, "加油订单已交付",
-        f"{len(orders) - len(undelivered)}/{len(orders)} 单已交付" if orders else "无加油订单",
+        "bunker", bk_st["ok"], "加油订单已交付",
+        f"{bk_st['done']}/{bk_st['total']} 单已交付" if bk_st["total"] else "无加油订单",
         label_key="voyage.closeout.bunker.label",
-        detail_key=("voyage.closeout.bunker.detail" if orders
+        detail_key=("voyage.closeout.bunker.detail" if bk_st["total"]
                     else "voyage.closeout.bunker.none"),
-        detail_vars={"done": len(orders) - len(undelivered), "total": len(orders)},
+        detail_vars={"done": bk_st["done"], "total": bk_st["total"]},
         task_title="交付未完成的加油订单",
         task_title_key="voyage.closeout.task.bunker",
         assign_role="operations", due_days=2,
     )
 
     # 7) 排放已记录（info：由排放引擎/手工补录）
-    emissions = db.scalar(
-        select(EmissionRecord.id).where(
-            EmissionRecord.tenant_id == tenant_id, EmissionRecord.voyage_id == vid
-        ).limit(1)
-    )
-    noons = db.scalar(
-        select(NoonReport.id).where(
-            NoonReport.tenant_id == tenant_id, NoonReport.voyage_id == vid
-        ).limit(1)
-    )
+    em_st = emissions_state(db, tenant_id, vid)
     add(
-        "emissions", bool(emissions or noons), "排放数据已记录",
-        "有排放记录" if emissions else ("有午报（可推算排放）" if noons else "无排放/午报记录"),
+        "emissions", em_st["ok"], "排放数据已记录",
+        "有排放记录" if em_st["has_emissions"] else ("有午报（可推算排放）" if em_st["has_noon"] else "无排放/午报记录"),
         label_key="voyage.closeout.emissions.label",
-        detail_key=("voyage.closeout.emissions.detail" if emissions
-                    else ("voyage.closeout.emissions.detail_noon" if noons
+        detail_key=("voyage.closeout.emissions.detail" if em_st["has_emissions"]
+                    else ("voyage.closeout.emissions.detail_noon" if em_st["has_noon"]
                           else "voyage.closeout.emissions.none")),
         severity="info",
     )
 
     # 8) 计提 vs 实际发票差异（posted accrual 合计 vs 已签发发票合计）
-    accruals = list(db.scalars(
-        select(VoyageAccrual).where(
-            VoyageAccrual.tenant_id == tenant_id,
-            VoyageAccrual.voyage_id == vid,
-            VoyageAccrual.status == "posted",
-        )
-    ).all())
-    if accruals:
-        accr_total = sum(Decimal(str(a.amount or 0)) for a in accruals)
-        inv_total = sum(
-            Decimal(str(i.base_amount if i.base_amount is not None else i.amount or 0)) for i in issued
-        )
-        diff = abs(accr_total - inv_total)
-        threshold = abs(accr_total) * Decimal("0.05")
-        accr_ok = diff <= max(threshold, Decimal("1"))
+    ac_st = accruals_state(db, tenant_id, vid)
+    if ac_st["has_accruals"]:
         add(
-            "accruals", accr_ok, "计提与实际发票已对平",
-            f"计提合计 {float(accr_total):.2f} vs 发票合计 {float(inv_total):.2f}，差异 {float(diff):.2f}",
+            "accruals", ac_st["ok"], "计提与实际发票已对平",
+            f"计提合计 {float(ac_st['accrual']):.2f} vs 发票合计 {float(ac_st['invoice']):.2f}，差异 {float(ac_st['diff']):.2f}",
             label_key="voyage.closeout.accruals.label",
             detail_key="voyage.closeout.accruals.detail",
             detail_vars={
-                "accrual": f"{float(accr_total):.2f}",
-                "invoice": f"{float(inv_total):.2f}",
-                "diff": f"{float(diff):.2f}",
+                "accrual": f"{float(ac_st['accrual']):.2f}",
+                "invoice": f"{float(ac_st['invoice']):.2f}",
+                "diff": f"{float(ac_st['diff']):.2f}",
             },
             task_title="核对计提与实际发票差异",
             task_title_key="voyage.closeout.task.accruals",

@@ -471,6 +471,16 @@
 .wb-task-check{width:16px;height:16px;border:1px solid var(--chrome-border);border-radius:50%;background:var(--surface);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--ok);flex-shrink:0}
 .wb-task-check:hover{border-color:var(--ok)}
 .wb-task-pri-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+/* 优先级色点改用 data-priority（主题 token）—— 不再用内联 style */
+.wb-task-pri-dot[data-priority="urgent"]{background:var(--danger)}
+.wb-task-pri-dot[data-priority="high"]{background:var(--warn-text)}
+.wb-task-pri-dot[data-priority="normal"]{background:var(--accent)}
+.wb-task-pri-dot[data-priority="low"]{background:var(--muted)}
+.wb-task-title{cursor:pointer}
+.wb-task-title:hover{text-decoration:underline}
+/* 分桶标题：工作台任务面板按 逾期/今日/本周/稍后/已完成 分组 */
+.wb-task-group{border-bottom:1px solid var(--border-light)}
+.wb-task-group-head{display:flex;align-items:center;justify-content:space-between;gap:var(--gap-sm);padding:2px var(--gap-sm);background:var(--toolbar-bg);font-size:var(--font-label);color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .wb-task-due{font-size:9px;color:var(--muted);flex-shrink:0}
 .wb-task-due.overdue{color:var(--danger);font-weight:700}
 .wb-task-assignee{font-size:9px;color:var(--muted);flex-shrink:0}
