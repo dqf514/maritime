@@ -980,11 +980,22 @@ function VoyagesPageInner() {
         />
       ),
     },
-    // 窄列表：仅勾选/操作列定宽，其余列均分剩余宽度 → 任何栏宽下都不出现横向滚动条
+    // 窄列表：仅勾选列定宽，其余列均分剩余宽度 → 任何栏宽下都不出现横向滚动条
+    // 航次编号本身即入口 —— 点编号直达 360° 航次工作台（原「⤢」图标列已移除）
     {
       key: "voyage_no",
       title: t("page.voyages.no", "No"),
       value: (r) => r.voyage_no,
+      render: (v, r) => (
+        <Link
+          href={`/operations/voyages/${r.id}/workspace`}
+          className="row-link"
+          title={t("page.voyages.view360", "360° view")}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {String(v ?? "")}
+        </Link>
+      ),
     },
     {
       key: "cargo",
@@ -999,23 +1010,6 @@ function VoyagesPageInner() {
       value: (r) => r.updated_at ?? null,
       // 窄列表：只显示 MM-DD HH:mm（省略年份与秒）
       render: (v) => (v ? toLocalInput(v as string).replace("T", " ").slice(5, 16) : "—"),
-    },
-    {
-      key: "_actions",
-      title: "",
-      width: 26,
-      align: "center",
-      render: (_v, r) => (
-        <Link
-          href={`/operations/voyages/${r.id}/workspace`}
-          className="icon-btn icon-btn-xs"
-          title={t("page.voyages.view360", "360° view")}
-          aria-label={t("page.voyages.view360", "360° view")}
-          onClick={(e) => e.stopPropagation()}
-        >
-          ⤢
-        </Link>
-      ),
     },
   ], [picked, t]);
 
